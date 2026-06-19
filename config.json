@@ -1,0 +1,42 @@
+{
+  "styles": [
+    { "name": "主标题", "font": "方正小标宋简体", "size": "二号", "bold": false, "pattern": "", "lang": "中文", "indent": 0, "align": "居中" },
+    { "name": "一级标题", "font": "黑体", "size": "三号", "bold": false, "pattern": "{a}、", "lang": "中文", "indent": 2, "align": "左对齐" },
+    { "name": "二级标题", "font": "楷体_GB2312", "size": "三号", "bold": true, "pattern": "（{b}）", "lang": "中文", "indent": 2, "align": "左对齐" },
+    { "name": "三级标题", "font": "仿宋_GB2312", "size": "三号", "bold": true, "pattern": "{c}.", "lang": "阿拉伯数字", "indent": 2, "align": "左对齐" },
+    { "name": "四级标题", "font": "仿宋_GB2312", "size": "三号", "bold": false, "pattern": "（{d}）", "lang": "阿拉伯数字", "indent": 2, "align": "左对齐" },
+    { "name": "正文", "font": "仿宋_GB2312", "size": "三号", "bold": false, "pattern": "", "lang": "", "indent": 2, "align": "两端对齐" },
+    { "name": "数字", "font": "Times New Roman", "size": "", "bold": false, "pattern": "", "lang": "", "indent": 0, "align": "左对齐" },
+    { "name": "字母", "font": "Times New Roman", "size": "", "bold": false, "pattern": "", "lang": "", "indent": 0, "align": "左对齐" },
+    { "name": "页码设置", "font": "宋体", "size": "四号", "bold": false, "pattern": "— 1 —", "lang": "阿拉伯数字", "indent": 0, "align": "奇右|偶左" },
+    { "name": "正文上标", "font": "Times New Roman", "size": "三号", "bold": false, "pattern": "[n]", "lang": "阿拉伯数字", "indent": 0, "align": "左对齐" },
+    { "name": "称呼", "font": "仿宋_GB2312", "size": "三号", "bold": false, "pattern": "", "lang": "", "indent": 2, "align": "左对齐", "spacing_before": 1, "spacing_after": 0, "left_indent": 0, "right_indent": 0, "page_break_before": false },
+    { "name": "日期行", "font": "楷体_GB2312", "size": "三号", "bold": false, "pattern": "", "lang": "", "indent": 0, "align": "居中", "spacing_before": 1, "spacing_after": 0, "left_indent": 0, "right_indent": 0, "page_break_before": false },
+    { "name": "作者行", "font": "楷体_GB2312", "size": "三号", "bold": true, "pattern": "", "lang": "", "indent": 0, "align": "居中", "spacing_before": 0, "spacing_after": 0, "left_indent": 0, "right_indent": 0, "page_break_before": false },
+    { "name": "职务名称", "font": "楷体_GB2312", "size": "三号", "bold": true, "pattern": "", "lang": "", "indent": 0, "align": "居中", "spacing_before": 0, "spacing_after": 0, "left_indent": 0, "right_indent": 0, "page_break_before": false },
+    { "name": "居中小标题", "font": "黑体", "size": "三号", "bold": false, "pattern": "", "lang": "", "indent": 0, "align": "居中", "spacing_before": 1, "spacing_after": 1, "left_indent": 0, "right_indent": 0, "page_break_before": false },
+    { "name": "结束语", "font": "黑体", "size": "三号", "bold": false, "pattern": "", "lang": "", "indent": 0, "align": "居中", "spacing_before": 0, "spacing_after": 0, "left_indent": 0, "right_indent": 0, "page_break_before": false },
+    { "name": "名词解释条目", "font": "仿宋_GB2312", "size": "三号", "bold": false, "pattern": "", "lang": "", "indent": 2, "align": "两端对齐", "spacing_before": 0, "spacing_after": 0, "left_indent": 0, "right_indent": 0, "page_break_before": false },
+    { "name": "附件说明", "font": "仿宋_GB2312", "size": "三号", "bold": false, "pattern": "", "lang": "", "indent": 0, "align": "左对齐", "spacing_before": 1, "spacing_after": 0, "left_indent": 2, "right_indent": 0, "page_break_before": false },
+    { "name": "附件说明续项", "font": "仿宋_GB2312", "size": "三号", "bold": false, "pattern": "", "lang": "", "indent": 0, "align": "左对齐", "spacing_before": 0, "spacing_after": 0, "left_indent": 5, "right_indent": 0, "page_break_before": false },
+    { "name": "附件正文标记", "font": "黑体", "size": "三号", "bold": false, "pattern": "", "lang": "", "indent": 0, "align": "左对齐", "spacing_before": 0, "spacing_after": 1, "left_indent": 0, "right_indent": 0, "page_break_before": true },
+    { "name": "附件正文标题", "font": "方正小标宋简体", "size": "二号", "bold": false, "pattern": "", "lang": "", "indent": 0, "align": "居中", "spacing_before": 0, "spacing_after": 0, "left_indent": 0, "right_indent": 0, "page_break_before": false },
+    { "name": "附件正文", "font": "仿宋_GB2312", "size": "三号", "bold": false, "pattern": "", "lang": "", "indent": 2, "align": "两端对齐", "spacing_before": 0, "spacing_after": 0, "left_indent": 0, "right_indent": 0, "page_break_before": false },
+    { "name": "落款署名", "font": "仿宋_GB2312", "size": "三号", "bold": false, "pattern": "", "lang": "", "indent": 0, "align": "右对齐", "spacing_before": 1, "spacing_after": 0, "left_indent": 0, "right_indent": 0, "page_break_before": false },
+    { "name": "落款日期", "font": "仿宋_GB2312", "size": "三号", "bold": false, "pattern": "", "lang": "", "indent": 0, "align": "右对齐", "spacing_before": 0, "spacing_after": 0, "left_indent": 0, "right_indent": 2, "page_break_before": false }
+  ],
+  "page": {
+    "width_cm": 21.0,
+    "height_cm": 29.7,
+    "margin_top_cm": 3.7,
+    "margin_bottom_cm": 3.5,
+    "margin_left_cm": 2.8,
+    "margin_right_cm": 2.6,
+    "lines_per_page": 22,
+    "chars_per_line": 28,
+    "line_spacing_pt": 28,
+    "space_before_line": 0,
+    "space_after_line": 0,
+    "grid_alignment": "文字对齐字符网络"
+  }
+}
