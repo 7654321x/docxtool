@@ -13,6 +13,8 @@
 - `requirements.txt`: Python 依赖。
 - `logs/`, `outputs/`: 运行时目录，服务会写入日志和生成文件。
 
+详细 HTTP 接口、鉴权方式、错误码和调用示例见 `API.md`。
+
 ## 快速启动
 
 ```bash
