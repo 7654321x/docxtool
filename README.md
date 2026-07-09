@@ -21,6 +21,8 @@
 
 详细 HTTP 接口、鉴权方式、错误码和调用示例见 `API.md`。
 
+新版前端会把当前排版设置编码到 `X-Format-Config` 请求头，后端只在当前上传任务内转换为样式规则和页面设置，不覆盖全局 `config.json`。
+
 ## 快速启动
 
 ```bash
@@ -28,6 +30,8 @@ cd docxtool
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+export ADMIN_TOKEN='换成你的长随机管理密钥'
+export PROXY_SECRET='换成你的长随机代理密钥'
 python3 server.py
 ```
 
@@ -39,12 +43,7 @@ python3 server.py
 BIND_HOST=0.0.0.0 PORT=9527 python3 server.py
 ```
 
-后台监控和文件接口都必须显式配置密钥。`ADMIN_TOKEN` 和 `PROXY_SECRET` 未设置时，后端会启动失败：
-
-```bash
-export ADMIN_TOKEN='换成你的长随机管理密钥'
-export PROXY_SECRET='换成你的长随机代理密钥'
-```
+后台监控和文件接口都必须显式配置密钥。`ADMIN_TOKEN` 和 `PROXY_SECRET` 未设置时，后端会启动失败。
 
 生产推荐部署方式见 `DEPLOY.md`：Cloudflare Pages 前端同源 `/api/*` → `_worker.js` → 腾讯云 Nginx 80 → `127.0.0.1:9527` Python 后端。
 

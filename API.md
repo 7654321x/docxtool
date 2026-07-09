@@ -68,7 +68,7 @@ HTTP 状态码为 `403`。
 
 - `Access-Control-Allow-Origin`
 - `Access-Control-Allow-Methods: GET, PUT, OPTIONS`
-- `Access-Control-Allow-Headers: Content-Type, X-Filename, X-Admin-Token, X-Proxy-Secret, X-Docxtool-Proxy, X-Preset-Id, X-Preset-Name, X-Template-Type, X-Processing-Mode, X-Format-Config`
+- `Access-Control-Allow-Headers: Content-Type, X-Filename, X-Admin-Token, X-Proxy-Secret, X-Docxtool-Proxy, X-Preset-Id, X-Preset-Name, X-Template-Type, X-Processing-Mode, X-Format-Config, X-Format-Config-Encoding`
 
 `OPTIONS` 预检请求固定返回 `204`。
 
@@ -160,6 +160,52 @@ PUT /api/upload
 - `Content-Length: 文件字节数`
 - `X-Filename: URL 编码后的原始文件名`
 - `X-Proxy-Secret: 必填，必须等于服务端环境变量 PROXY_SECRET`
+- `X-Preset-Id: 可选，当前模板 ID`
+- `X-Preset-Name: 可选，URL 编码后的当前模板名称`
+- `X-Template-Type: 可选，`builtin` 或 `custom`
+- `X-Processing-Mode: 可选，处理模式，例如 `smart`
+- `X-Format-Config-Encoding: 可选；传入前端设置时必须为 `base64url-json`
+- `X-Format-Config: 可选，base64url 编码后的 JSON 配置`
+
+`X-Format-Config` 用于把前端“排版设置”随本次上传传入后端，不新增接口、不改变请求体格式。后端只把它作为当前任务的临时配置使用，不会覆盖全局 `config.json`。
+
+配置 JSON 结构示例：
+
+```json
+{
+  "styles": [
+    {
+      "name": "正文",
+      "font": "仿宋_GB2312",
+      "size": "三号",
+      "bold": false,
+      "pattern": "",
+      "lang": "",
+      "indent": 2,
+      "align": "左对齐"
+    }
+  ],
+  "page": {
+    "width_cm": 21,
+    "height_cm": 29.7,
+    "margin_top_cm": 3.7,
+    "margin_bottom_cm": 3.5,
+    "margin_left_cm": 2.8,
+    "margin_right_cm": 2.6,
+    "lines_per_page": 22,
+    "chars_per_line": 28,
+    "line_spacing_pt": 28,
+    "space_before_line": 0,
+    "space_after_line": 0,
+    "grid_alignment": true
+  },
+  "features": {
+    "numbered_bold_enabled": true,
+    "punctuation_enabled": true,
+    "page_number_enabled": true
+  }
+}
+```
 
 限制：
 
@@ -207,10 +253,12 @@ curl -X PUT "https://你的域名/api/upload" \
 | --- | --- | --- |
 | 400 | `INVALID_DOCX` | 文件不是有效 docx |
 | 400 | `INCOMPLETE_UPLOAD` | 上传内容读取不完整 |
+| 400 | `FORMAT_CONFIG_INVALID` | `X-Format-Config` 不是合法的 base64url JSON 配置 |
 | 403 | `PROXY_REQUIRED` | 缺少或错误的 `X-Proxy-Secret` |
 | 403 | `IP_BANNED` | 当前 IP 已被封禁 |
 | 408 | `UPLOAD_TIMEOUT` | 文件读取超时 |
 | 413 | `FILE_TOO_LARGE` | 文件为空或超过大小限制 |
+| 413 | `FORMAT_CONFIG_TOO_LARGE` | `X-Format-Config` 请求头或解码后的配置过大 |
 | 429 | `RATE_LIMITED` | 请求过于频繁 |
 | 429 | `UPLOAD_LIMIT_EXCEEDED` | 当前 IP 在限额窗口内已达上限 |
 | 503 | `QUEUE_FULL` | 任务队列已满 |
@@ -483,13 +531,16 @@ GET /log/{task_id}?token={ADMIN_TOKEN}
 
 1. 用户选择 `.docx` 文件。
 2. 前端检查扩展名和大小，小于 10 MB 才上传。
-3. `PUT /api/upload` 上传原始二进制。
-4. 读取响应中的 `task_id`。
-5. 每秒轮询 `GET /api/status/{task_id}`。
-6. 状态为 `queued` 时显示排队位置。
-7. 状态为 `processing` 时显示处理中。
-8. 状态为 `done` 时请求 `GET /api/download/{task_id}` 并触发浏览器下载。
-9. 状态为 `error` 时显示错误摘要。
+3. 从当前模板和排版设置生成后端兼容配置，结构为 `styles`、`page`、`features`。
+4. 对配置执行 `base64url(JSON.stringify(config))`，写入 `X-Format-Config`，同时写入 `X-Format-Config-Encoding: base64url-json`。
+5. `PUT /api/upload` 上传原始二进制，请求体仍然只是 `.docx` 文件。
+6. 后端在当前任务内把配置转换为 `StyleRule`、`PageSettings` 和功能开关，传入 engine 排版。
+7. 读取响应中的 `task_id`。
+8. 每秒轮询 `GET /api/status/{task_id}`。
+9. 状态为 `queued` 时显示排队位置。
+10. 状态为 `processing` 时显示处理中。
+11. 状态为 `done` 时请求 `GET /api/download/{task_id}` 并触发浏览器下载。
+12. 状态为 `error` 时显示错误摘要。
 
 前端默认使用同源 `/api/*` 路径。Cloudflare Pages 的 `pages_dist/_worker.js` 负责把这些请求转发到后端不带 `/api` 的直连路径：
 

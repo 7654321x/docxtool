@@ -441,8 +441,8 @@ const styleRows=[
   {key:'title',name:'主标题',font:'方正小标宋简体',size:'二号',bold:false,pattern:'无样式',language:'无样式',indent:'0',align:'居中'},
   {key:'level1',name:'一级标题',font:'黑体',size:'三号',bold:false,pattern:'一、',language:'中文数字',indent:'2字符',align:'左对齐'},
   {key:'level2',name:'二级标题',font:'楷体_GB2312',size:'三号',bold:true,pattern:'（一）',language:'中文数字',indent:'2字符',align:'左对齐'},
-  {key:'level3',name:'三级标题',font:'仿宋_GB2312',size:'三号',bold:true,pattern:'(1)',language:'阿拉伯数字',indent:'2字符',align:'左对齐'},
-  {key:'level4',name:'四级标题',font:'仿宋_GB2312',size:'三号',bold:false,pattern:'1.',language:'阿拉伯数字',indent:'2字符',align:'左对齐'},
+  {key:'level3',name:'三级标题',font:'仿宋_GB2312',size:'三号',bold:true,pattern:'1.',language:'阿拉伯数字',indent:'2字符',align:'左对齐'},
+  {key:'level4',name:'四级标题',font:'仿宋_GB2312',size:'三号',bold:false,pattern:'(1)',language:'阿拉伯数字',indent:'2字符',align:'左对齐'},
   {key:'body',name:'正文',font:'仿宋_GB2312',size:'三号',bold:false,pattern:'无样式',language:'无样式',indent:'2字符',align:'两端对齐'}
 ];
 const margins=[];for(let i=20;i<=40;i++)margins.push((i/10).toFixed(1).replace('.0','')+'cm');
@@ -537,6 +537,35 @@ function parseNumberingFormat(pattern){
     has_numbering:true
   };
 }
+function cmNumber(value, fallback){const n=Number(String(value||'').replace(/cm$/,''));return Number.isFinite(n)?n:fallback}
+function ptNumber(value, fallback){const n=Number(String(value||'').replace(/磅$/,''));return Number.isFinite(n)?n:fallback}
+function indentNumber(value, fallback){const n=Number(String(value||'').replace(/字符$/,''));return Number.isFinite(n)?n:fallback}
+function backendPattern(pattern,key){
+  const raw=(pattern||'').trim();
+  if(!raw||raw==='无样式'||raw==='无编号')return {pattern:'',lang:''};
+  if(raw==='一、'||raw==='{a}、')return {pattern:'{a}、',lang:'中文'};
+  if(raw==='（一）'||raw==='({一})'||raw==='（{b}）')return {pattern:'（{b}）',lang:'中文'};
+  if(raw==='1.'||raw==='{c}.')return {pattern:'{c}.',lang:'阿拉伯数字'};
+  if(raw==='(1)'||raw==='（1）'||raw==='（{d}）')return {pattern:'（{d}）',lang:'阿拉伯数字'};
+  const info=parseNumberingFormat(raw);
+  return {pattern:raw,lang:info.number_type==='无样式'?'':info.number_type};
+}
+function displayPattern(pattern){
+  const raw=(pattern||'').trim();
+  if(!raw)return '无样式';
+  if(raw==='{a}、')return '一、';
+  if(raw==='（{b}）')return '（一）';
+  if(raw==='{c}.')return '1.';
+  if(raw==='（{d}）')return '(1)';
+  return raw;
+}
+function base64UrlJson(value){
+  const bytes=new TextEncoder().encode(JSON.stringify(value));
+  let binary='';
+  const chunk=0x8000;
+  for(let i=0;i<bytes.length;i+=chunk)binary+=String.fromCharCode(...bytes.subarray(i,i+chunk));
+  return btoa(binary).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+}
 function updateNumberingType(row){
   const pattern=row.querySelector('[data-field="pattern"]')?.value||'';
   const info=parseNumberingFormat(pattern);
@@ -568,63 +597,53 @@ function renderStyleMatrix(){
 function collectConfig(){
   const get=id=>document.getElementById(id)?.value;
   const checked=id=>!!document.getElementById(id)?.checked;
-  const modeValue=get('settingMode')||'smart';
-  const tpl=templateStore.find(t=>t.id===currentPresetId)||templateStore[0];
   const rows=[...document.querySelectorAll('#styleMatrixBody .style-card-row')].map(row=>{
     const field=f=>row.querySelector(`[data-field="${f}"]`);
     const pattern=field('pattern')?.value||'无样式';
-    const numbering=parseNumberingFormat(pattern);
+    const mapped=backendPattern(pattern,row.dataset.key);
     return {
-      key:row.dataset.key,
       name:row.querySelector('.style-card-title')?.textContent||'',
       font:field('font')?.value||'仿宋_GB2312',
       size:field('size')?.value||'三号',
       bold:!!field('bold')?.checked,
-      pattern,
-      pattern_raw:pattern,
-      normalized_pattern:numbering.normalized_pattern,
-      language:numbering.number_type,
-      number_format:numbering.format_label,
-      numbering,
-      first_line_indent:field('indent')?.value||'0',
-      alignment:field('align')?.value||'左对齐'
+      pattern:mapped.pattern,
+      lang:mapped.lang,
+      indent:indentNumber(field('indent')?.value,0),
+      align:field('align')?.value||'左对齐'
     };
   });
+  const styleByName=Object.fromEntries(rows.map(r=>[r.name,r]));
+  const styles=[
+    styleByName['主标题']||{name:'主标题',font:'方正小标宋简体',size:'二号',bold:false,pattern:'',lang:'中文',indent:0,align:'居中'},
+    styleByName['一级标题']||{name:'一级标题',font:'黑体',size:'三号',bold:false,pattern:'{a}、',lang:'中文',indent:2,align:'左对齐'},
+    styleByName['二级标题']||{name:'二级标题',font:'楷体_GB2312',size:'三号',bold:true,pattern:'（{b}）',lang:'中文',indent:2,align:'左对齐'},
+    styleByName['三级标题']||{name:'三级标题',font:'仿宋_GB2312',size:'三号',bold:true,pattern:'{c}.',lang:'阿拉伯数字',indent:2,align:'左对齐'},
+    styleByName['四级标题']||{name:'四级标题',font:'仿宋_GB2312',size:'三号',bold:false,pattern:'（{d}）',lang:'阿拉伯数字',indent:2,align:'左对齐'},
+    styleByName['正文']||{name:'正文',font:'仿宋_GB2312',size:'三号',bold:false,pattern:'',lang:'',indent:2,align:'两端对齐'},
+    {name:'数字',font:get('numberFont')||'Times New Roman',size:get('numberSize')||'',bold:false,pattern:'',lang:'',indent:0,align:'左对齐'},
+    {name:'字母',font:get('letterFont')||'Times New Roman',size:get('letterSize')||'',bold:false,pattern:'',lang:'',indent:0,align:'左对齐'},
+    {name:'页码设置',font:get('pageFont')||'宋体',size:get('pageSize')||'四号',bold:false,pattern:get('pageStyle')||'— 1 —',lang:get('pageLanguage')||'阿拉伯数字',indent:0,align:get('pagePosition')||'奇右|偶左'}
+  ];
   return {
-    schema_version:1,
-    preset_id:normalizePresetId(currentPresetId),
-    preset_name:get('settingPresetName')||tpl?.name||'党政机关公文格式',
-    template_type:templateType(tpl),
-    base_preset_id:normalizePresetId(tpl?.base_preset_id||DEFAULT_PRESET_ID),
-    mode:modeValue,
-    processing_mode:modeValue,
-    output_suffix:get('outputSuffix')||'_排版',
-    source:tpl?.remote?'database':(get('configSource')||'builtin'),
-    style_rules:rows,
+    styles,
     page:{
-      paper_size:get('paperSize')||'A4',
-      margin_top:get('marginTop')||'3.7cm',
-      margin_bottom:get('marginBottom')||'3.5cm',
-      margin_left:get('marginLeft')||'2.8cm',
-      margin_right:get('marginRight')||'2.6cm',
-      line_spacing:get('lineSpacing')||'28磅',
+      width_cm:get('paperSize')==='A3'?29.7:21.0,
+      height_cm:get('paperSize')==='A3'?42.0:29.7,
+      margin_top_cm:cmNumber(get('marginTop'),3.7),
+      margin_bottom_cm:cmNumber(get('marginBottom'),3.5),
+      margin_left_cm:cmNumber(get('marginLeft'),2.8),
+      margin_right_cm:cmNumber(get('marginRight'),2.6),
       lines_per_page:Number(get('linesPerPage'))||22,
       chars_per_line:Number(get('charsPerLine'))||28,
-      grid_align:get('gridAlign')||'指定行和字符网格',
-      space_before:lineValue(get('spaceBefore')),
-      space_after:lineValue(get('spaceAfter'))
-    },
-    global:{
-      number:{font:get('numberFont')||'Times New Roman',size:get('numberSize')||''},
-      letter:{font:get('letterFont')||'Times New Roman',size:get('letterSize')||''},
-      page_number:{enabled:checked('pageNumberEnabled'),font:get('pageFont')||'宋体',size:get('pageSize')||'四号',style:get('pageStyle')||'— 1 —',position:get('pagePosition')||'奇右偶左'},
-      body_superscript:{font:get('supFont')||'Times New Roman',size:get('supSize')||'',style:get('supPattern')||'[n]',language:get('supLanguage')||'阿拉伯数字'}
+      line_spacing_pt:ptNumber(get('lineSpacing'),28),
+      space_before_line:Number(lineValue(get('spaceBefore')))||0,
+      space_after_line:Number(lineValue(get('spaceAfter')))||0,
+      grid_alignment:get('gridAlign')||'文字对齐字符网络'
     },
     features:{
-      punctuation:checked('punctuationEnabled'),
-      table_optimize:checked('tableEnabled'),
-      page_number:checked('pageNumberEnabled'),
-      special_bold:checked('specialBold')
+      numbered_bold_enabled:checked('specialBold'),
+      punctuation_enabled:checked('punctuationEnabled'),
+      page_number_enabled:checked('pageNumberEnabled')
     }
   };
 }
@@ -733,13 +752,22 @@ async function selectTemplate(id){
 function applyConfigToForm(config,keepTemplate=true){
   const set=(id,val)=>{const el=document.getElementById(id);if(el&&val!==undefined&&val!==null)el.value=val};
   const cfg=normalizeConfig(config,templateStore.find(t=>t.id===currentPresetId))||{};
-  if(keepTemplate!==false)currentPresetId=normalizePresetId(cfg.preset_id||currentPresetId);
+  if(keepTemplate!==false&&cfg.preset_id)currentPresetId=normalizePresetId(cfg.preset_id||currentPresetId);
   set('settingPresetName',cfg.preset_name);
   set('settingMode',cfg.mode||cfg.processing_mode);
   set('outputSuffix',cfg.output_suffix);
   set('configSource',cfg.source);
-  if(Array.isArray(cfg.style_rules)){
-    styleRows.splice(0,styleRows.length,...cfg.style_rules.map(r=>({
+  const incomingStyles=Array.isArray(cfg.styles)?cfg.styles.slice(0,6).map((r,i)=>({
+      key:['title','level1','level2','level3','level4','body'][i],
+      name:r.name,
+      font:r.font,
+      size:r.size,
+      bold:!!r.bold,
+      pattern:displayPattern(r.pattern),
+      language:r.lang||parseNumberingFormat(displayPattern(r.pattern)).number_type,
+      indent:(r.indent??0)+'字符',
+      align:r.align||'左对齐'
+    })):Array.isArray(cfg.style_rules)?cfg.style_rules.map(r=>({
       key:r.key,
       name:r.name,
       font:r.font,
@@ -749,21 +777,25 @@ function applyConfigToForm(config,keepTemplate=true){
       language:r.language||parseNumberingFormat(r.pattern||'无样式').number_type,
       indent:r.first_line_indent||r.indent||'2字符',
       align:r.alignment||r.align||'左对齐'
-    })));
+    })):null;
+  if(incomingStyles){
+    styleRows.splice(0,styleRows.length,...incomingStyles);
     renderStyleMatrix();
   }
   const page=cfg.page||{};
   set('paperSize',page.paper_size||page.paper);
-  set('marginTop',page.margin_top);
-  set('marginBottom',page.margin_bottom);
-  set('marginLeft',page.margin_left);
-  set('marginRight',page.margin_right);
-  set('lineSpacing',page.line_spacing);
+  set('marginTop',page.margin_top||((page.margin_top_cm??'')&&page.margin_top_cm+'cm'));
+  set('marginBottom',page.margin_bottom||((page.margin_bottom_cm??'')&&page.margin_bottom_cm+'cm'));
+  set('marginLeft',page.margin_left||((page.margin_left_cm??'')&&page.margin_left_cm+'cm'));
+  set('marginRight',page.margin_right||((page.margin_right_cm??'')&&page.margin_right_cm+'cm'));
+  set('lineSpacing',page.line_spacing||((page.line_spacing_pt??'')&&page.line_spacing_pt+'磅'));
   set('linesPerPage',page.lines_per_page);
   set('charsPerLine',page.chars_per_line);
-  set('gridAlign',page.grid_align);
-  set('spaceBefore',page.space_before&&String(page.space_before).endsWith('行')?page.space_before:String(page.space_before||'0')+'行');
-  set('spaceAfter',page.space_after&&String(page.space_after).endsWith('行')?page.space_after:String(page.space_after||'0')+'行');
+  set('gridAlign',page.grid_align||page.grid_alignment);
+  const before=page.space_before!==undefined?page.space_before:page.space_before_line;
+  const after=page.space_after!==undefined?page.space_after:page.space_after_line;
+  set('spaceBefore',before&&String(before).endsWith('行')?before:String(before||'0')+'行');
+  set('spaceAfter',after&&String(after).endsWith('行')?after:String(after||'0')+'行');
   const g=cfg.global||{};
   ['number','letter'].forEach(name=>{
     const obj=g[name]||{};
@@ -783,10 +815,11 @@ function applyConfigToForm(config,keepTemplate=true){
   set('supPattern',sup.style||sup.pattern);
   set('supLanguage',sup.language);
   const f=cfg.features||{};
-  const featureMap={punctuationEnabled:'punctuation',tableEnabled:'table_optimize',specialBold:'special_bold'};
+  const featureMap={punctuationEnabled:'punctuation',tableEnabled:'table_optimize',specialBold:'special_bold',pageNumberEnabled:'page_number'};
   Object.keys(featureMap).forEach(id=>{
     const key=featureMap[id];
-    const fallbackKey=key==='table_optimize'?'table':key;
+    const fallbackMap={table_optimize:'table',special_bold:'numbered_bold_enabled',punctuation:'punctuation_enabled',page_number:'page_number_enabled'};
+    const fallbackKey=fallbackMap[key]||key;
     const val=f[key]!==undefined?f[key]:f[fallbackKey];
     if(document.getElementById(id)&&val!==undefined)document.getElementById(id).checked=!!val;
   });
@@ -797,7 +830,7 @@ async function createTemplateFromCurrent(){
   const cleanName=name.trim()||'新的排版模板';
   const base=collectConfig();
   const localId='custom_'+Date.now();
-  let tpl={id:localId,name:cleanName,type:'custom',template_type:'custom',is_system:false,is_default:false,base_preset_id:base.preset_id||DEFAULT_PRESET_ID,description:'基于当前排版设置新增，可继续修改字体、字号、页边距等规则。',config:{...base,preset_id:localId,preset_name:cleanName,template_type:'custom',source:'custom'}};
+  let tpl={id:localId,name:cleanName,type:'custom',template_type:'custom',is_system:false,is_default:false,base_preset_id:DEFAULT_PRESET_ID,description:'基于当前排版设置新增，可继续修改字体、字号、页边距等规则。',config:base};
   if(templateApiAvailable){
     try{
       const created=await requestJson('/presets',{method:'POST',body:JSON.stringify({name:cleanName,description:tpl.description,config_json:tpl.config})});
@@ -820,7 +853,7 @@ async function saveCurrentTemplate(){
   const tpl=templateStore.find(t=>t.id===currentPresetId);
   if(!tpl||!isCustomTemplate(tpl)){createTemplateFromCurrent();return}
   const config=collectConfig();
-  tpl.name=config.preset_name;
+  tpl.name=document.getElementById('settingPresetName').value||tpl.name;
   tpl.config=config;
   tpl.description='自定义模板，已保存当前排版设置。';
   if(tpl.remote){
@@ -831,7 +864,7 @@ async function saveCurrentTemplate(){
     }catch(_){
       tpl.remote=false;
       tpl.id='custom_'+Date.now();
-      tpl.config={...config,preset_id:tpl.id,source:'custom'};
+      tpl.config=config;
       currentPresetId=tpl.id;
       mergeTemplate(tpl);
       persistLocalTemplates();
@@ -850,8 +883,8 @@ function resetDefaults(){styleRows.splice(0,styleRows.length,...[
   {key:'title',name:'主标题',font:'方正小标宋简体',size:'二号',bold:false,pattern:'无样式',language:'无样式',indent:'0',align:'居中'},
   {key:'level1',name:'一级标题',font:'黑体',size:'三号',bold:false,pattern:'一、',language:'中文数字',indent:'2字符',align:'左对齐'},
   {key:'level2',name:'二级标题',font:'楷体_GB2312',size:'三号',bold:true,pattern:'（一）',language:'中文数字',indent:'2字符',align:'左对齐'},
-  {key:'level3',name:'三级标题',font:'仿宋_GB2312',size:'三号',bold:true,pattern:'(1)',language:'阿拉伯数字',indent:'2字符',align:'左对齐'},
-  {key:'level4',name:'四级标题',font:'仿宋_GB2312',size:'三号',bold:false,pattern:'1.',language:'阿拉伯数字',indent:'2字符',align:'左对齐'},
+  {key:'level3',name:'三级标题',font:'仿宋_GB2312',size:'三号',bold:true,pattern:'1.',language:'阿拉伯数字',indent:'2字符',align:'左对齐'},
+  {key:'level4',name:'四级标题',font:'仿宋_GB2312',size:'三号',bold:false,pattern:'(1)',language:'阿拉伯数字',indent:'2字符',align:'左对齐'},
   {key:'body',name:'正文',font:'仿宋_GB2312',size:'三号',bold:false,pattern:'无样式',language:'无样式',indent:'2字符',align:'两端对齐'}
 ]);currentPresetId=DEFAULT_PRESET_ID;document.getElementById('settingPresetName').value='党政机关公文格式';document.getElementById('configSource').value='builtin';initSettings();renderTemplateOptions();status('已恢复默认排版设置','done')}
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeSettings()});document.getElementById('settingsModal').addEventListener('click',e=>{if(e.target.id==='settingsModal')closeSettings()});
@@ -859,8 +892,8 @@ zone.addEventListener('dragover',e=>{e.preventDefault();zone.classList.add('drag
 function status(text,cls){msg.textContent=text;msg.className='status-msg';if(cls)msg.classList.add(cls)}
 function sizeLabel(bytes){const kb=bytes/1024;return kb>=1024?(kb/1024).toFixed(1)+' MB':kb.toFixed(1)+' KB'}
 function setStep(n){document.querySelectorAll('.mini-step').forEach(el=>{const s=Number(el.dataset.step);el.classList.toggle('done',s<n);el.classList.toggle('active',s===n)})}
-function friendlyError(text,code){if(code==='PROXY_REQUIRED')return'请通过前端页面或本机 localhost:9527 访问，当前请求缺少前端代理校验。';if(!text)return'处理失败，请检查文档是否损坏或包含特殊对象。';if(text.includes('too large')||text.includes('过大'))return'文件过大，请压缩到 10MB 以内后重试。';if(text.includes('format')||text.includes('docx'))return'文件格式不支持，请上传 .docx 文件。';if(text.includes('network')||text.includes('网络'))return'网络异常，请检查网络后重新上传。';return text}
-function safeCollectConfig(){try{return collectConfig()}catch(_){resetDefaults();try{return collectConfig()}catch(__){return{schema_version:1,preset_id:DEFAULT_PRESET_ID,preset_name:'党政机关公文格式',template_type:'system',mode:'smart',processing_mode:'smart',style_rules:[],page:{paper_size:'A4'},global:{number:{font:'Times New Roman',size:''},letter:{font:'Times New Roman',size:''},page_number:{enabled:true,font:'宋体',size:'四号',style:'— 1 —',position:'奇右偶左'},body_superscript:{font:'Times New Roman',size:'',style:'[n]',language:'阿拉伯数字'}},features:{punctuation:true,table_optimize:true,page_number:true,special_bold:false}}}}}
+function friendlyError(text,code){if(code==='PROXY_REQUIRED')return'当前请求缺少前端代理校验，请通过 Cloudflare Pages 前端页面或同源 /api 代理访问。';if(code==='FORMAT_CONFIG_INVALID')return'排版设置格式无效，请重新保存设置后再上传。';if(code==='FORMAT_CONFIG_TOO_LARGE')return'排版设置内容过大，请减少自定义规则后再上传。';if(!text)return'处理失败，请检查文档是否损坏或包含特殊对象。';if(text.includes('too large')||text.includes('过大'))return'文件过大，请压缩到 10MB 以内后重试。';if(text.includes('format')||text.includes('docx'))return'文件格式不支持，请上传 .docx 文件。';if(text.includes('network')||text.includes('网络'))return'网络异常，请检查网络后重新上传。';return text}
+function safeCollectConfig(){try{return collectConfig()}catch(_){resetDefaults();try{return collectConfig()}catch(__){return{styles:[],page:{width_cm:21.0,height_cm:29.7,margin_top_cm:3.7,margin_bottom_cm:3.5,margin_left_cm:2.8,margin_right_cm:2.6,lines_per_page:22,chars_per_line:28,line_spacing_pt:28,space_before_line:0,space_after_line:0,grid_alignment:'文字对齐字符网络'},features:{numbered_bold_enabled:true,punctuation_enabled:true,page_number_enabled:true}}}}}
 async function upload(f){
   if(!f)return;
   resultCard.style.display='none';
@@ -872,16 +905,20 @@ async function upload(f){
   try{
     const buf=await f.arrayBuffer();
     config=safeCollectConfig();
+    const tpl=templateStore.find(t=>t.id===currentPresetId)||templateStore[0];
+    const presetName=document.getElementById('settingPresetName')?.value||tpl?.name||'党政机关公文格式';
+    const processingMode=document.getElementById('settingMode')?.value||'smart';
     resp=await fetch(api('/upload'),{
       method:'PUT',
       headers:{
         'Content-Type':'application/octet-stream',
         'X-Filename':encodeURIComponent(f.name),
-        'X-Preset-Id':config.preset_id||DEFAULT_PRESET_ID,
-        'X-Preset-Name':encodeURIComponent(config.preset_name||''),
-        'X-Template-Type':config.template_type||'system',
-        'X-Processing-Mode':config.processing_mode||config.mode||'smart',
-        'X-Format-Config':encodeURIComponent(JSON.stringify(config))
+        'X-Preset-Id':normalizePresetId(currentPresetId),
+        'X-Preset-Name':encodeURIComponent(presetName),
+        'X-Template-Type':templateType(tpl)==='custom'?'custom':'builtin',
+        'X-Processing-Mode':processingMode,
+        'X-Format-Config':base64UrlJson(config),
+        'X-Format-Config-Encoding':'base64url-json'
       },
       body:buf
     });

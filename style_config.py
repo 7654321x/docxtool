@@ -106,6 +106,28 @@ def _safe_float(value, default: float = 0.0) -> float:
         return default
 
 
+def _safe_bool(value, default: bool = False) -> bool:
+    """配置布尔值兜底转换，兼容 JSON 布尔值和字符串。"""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on", "启用", "是"}:
+            return True
+        if normalized in {"0", "false", "no", "off", "禁用", "否"}:
+            return False
+    return bool(value)
+
+
+def _grid_alignment(value, default: str = "文字对齐字符网络") -> str:
+    """兼容旧字符串配置和新前端布尔开关。"""
+    if isinstance(value, str):
+        return value or default
+    return default if _safe_bool(value, True) else "无"
+
+
 def parse_alignment(s: str) -> Tuple[str, str]:
     """解析对齐："Union[奇右, 偶左]" → ("right", "left")，
     "左对齐" → ("left", "left")。"""
@@ -414,6 +436,41 @@ class StyleRule:
             ))
         return rules
 
+    @staticmethod
+    def from_config_dict(config_dict: dict = None) -> List["StyleRule"]:
+        """从前端传入的 config.json 兼容 dict 生成排版规则。
+
+        不修改全局 config.json；字段缺失时按默认规则兜底，并补齐 24 行。
+        """
+        if not config_dict:
+            return StyleRule.from_config()
+        styles = config_dict.get("styles") if isinstance(config_dict, dict) else None
+        if not isinstance(styles, list):
+            return [StyleRule.default_for_row(i) for i in range(24)]
+        rules = []
+        for i in range(24):
+            default = StyleRule.default_for_row(i)
+            item = styles[i] if i < len(styles) and isinstance(styles[i], dict) else {}
+            size = item.get("size", default.font_size_label)
+            rules.append(StyleRule(
+                row_index=i,
+                level_name=item.get("name", default.level_name),
+                font=item.get("font", default.font),
+                font_size_label=size,
+                font_size_pt=cn_size_to_pt(size),
+                bold=_safe_bool(item.get("bold", default.bold), default.bold),
+                numbering_pattern=item.get("pattern", default.numbering_pattern),
+                language=item.get("lang", default.language),
+                first_line_indent=_safe_float(item.get("indent", default.first_line_indent), default.first_line_indent),
+                alignment=item.get("align", default.alignment),
+                spacing_before=_safe_float(item.get("spacing_before", default.spacing_before), default.spacing_before),
+                spacing_after=_safe_float(item.get("spacing_after", default.spacing_after), default.spacing_after),
+                left_indent=_safe_float(item.get("left_indent", default.left_indent), default.left_indent),
+                right_indent=_safe_float(item.get("right_indent", default.right_indent), default.right_indent),
+                page_break_before=_safe_bool(item.get("page_break_before", default.page_break_before), default.page_break_before),
+            ))
+        return rules
+
 
 @dataclass
 class PageSettings:
@@ -458,6 +515,52 @@ class PageSettings:
             space_after_line=_safe_float(p.get("space_after_line", 0.0), 0.0),
             grid_alignment=p.get("grid_alignment", "文字对齐字符网络"),
         )
+
+    @staticmethod
+    def from_config_dict(config_dict: dict = None) -> "PageSettings":
+        """从前端传入的 config.json 兼容 dict 生成页面设置。"""
+        if not config_dict:
+            return PageSettings.from_config()
+        p = config_dict.get("page", {}) if isinstance(config_dict, dict) else {}
+        if not isinstance(p, dict):
+            p = {}
+        return PageSettings(
+            page_width_cm=_safe_float(p.get("width_cm", 21.0), 21.0),
+            page_height_cm=_safe_float(p.get("height_cm", 29.7), 29.7),
+            margin_top_cm=_safe_float(p.get("margin_top_cm", 3.7), 3.7),
+            margin_bottom_cm=_safe_float(p.get("margin_bottom_cm", 3.5), 3.5),
+            margin_left_cm=_safe_float(p.get("margin_left_cm", 2.8), 2.8),
+            margin_right_cm=_safe_float(p.get("margin_right_cm", 2.6), 2.6),
+            lines_per_page=int(_safe_float(p.get("lines_per_page", 22), 22)),
+            chars_per_line=int(_safe_float(p.get("chars_per_line", 28), 28)),
+            line_spacing_value=_safe_float(p.get("line_spacing_pt", 28.0), 28.0),
+            space_before_line=_safe_float(p.get("space_before_line", 0.0), 0.0),
+            space_after_line=_safe_float(p.get("space_after_line", 0.0), 0.0),
+            grid_alignment=_grid_alignment(p.get("grid_alignment", "文字对齐字符网络")),
+        )
+
+
+def load_rules_and_settings(config_dict: dict = None):
+    """加载本次任务的 rules/settings/features。
+
+    config_dict 为空时使用服务器 config.json；不为空时只对当前任务生效。
+    """
+    if config_dict:
+        rules = StyleRule.from_config_dict(config_dict)
+        settings = PageSettings.from_config_dict(config_dict)
+        raw_features = config_dict.get("features", {}) if isinstance(config_dict, dict) else {}
+        if not isinstance(raw_features, dict):
+            raw_features = {}
+    else:
+        rules = StyleRule.from_config()
+        settings = PageSettings.from_config()
+        raw_features = {}
+    features = {
+        "numbered_bold_enabled": _safe_bool(raw_features.get("numbered_bold_enabled", True), True),
+        "punctuation_enabled": _safe_bool(raw_features.get("punctuation_enabled", True), True),
+        "page_number_enabled": _safe_bool(raw_features.get("page_number_enabled", True), True),
+    }
+    return rules, settings, features
 
 
 # ═══════════════════════════════════════════════════════════════

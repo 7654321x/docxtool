@@ -11,6 +11,8 @@
 import os
 import sys
 import json
+import base64
+import binascii
 import uuid
 import time
 import hashlib
@@ -31,7 +33,7 @@ from urllib.request import Request, urlopen
 from importer import DocxImporter
 from engine import export_doc
 from style_config import (
-    StyleRule, PageSettings, configure_logging, get_logger,
+    StyleRule, PageSettings, load_rules_and_settings, configure_logging, get_logger,
     make_document_log_path, set_context_log_path, reset_context_log_path,
 )
 
@@ -333,6 +335,8 @@ FILE_TTL = 86400
 MAX_TASKS = 200
 DEFAULT_UPLOAD_LIMIT_WINDOW_SECONDS = 3600
 DEFAULT_UPLOAD_LIMIT_COUNT = 10
+MAX_FORMAT_CONFIG_HEADER_BYTES = 96 * 1024
+MAX_FORMAT_CONFIG_JSON_BYTES = 64 * 1024
 
 RATE_LIMIT = {}
 RATE_LOCK = threading.Lock()
@@ -529,7 +533,8 @@ def _public_task_state(task_id: str) -> dict:
         task.update({"queue_position": 0, "queue_ahead": 0, "message": "排版失败"})
     return task
 
-def _enqueue_task(task_id: str, input_path: str, orig_name: str, ip: str, ua: str) -> dict:
+def _enqueue_task(task_id: str, input_path: str, orig_name: str, ip: str, ua: str,
+                  format_config: dict = None, request_meta: dict = None) -> dict:
     now = time.time()
     try:
         file_size = os.path.getsize(input_path) if input_path and os.path.exists(input_path) else 0
@@ -537,9 +542,16 @@ def _enqueue_task(task_id: str, input_path: str, orig_name: str, ip: str, ua: st
         file_size = 0
     record_task_queued(task_id, ip, ua, orig_name, file_size)
     with TASKS_LOCK:
-        TASKS[task_id] = {"status": "queued", "time": now, "queued_at": now}
+        TASKS[task_id] = {
+            "status": "queued",
+            "time": now,
+            "queued_at": now,
+            "uses_format_config": bool(format_config),
+            "preset_name": (request_meta or {}).get("preset_name", ""),
+            "processing_mode": (request_meta or {}).get("processing_mode", ""),
+        }
     with QUEUE_COND:
-        TASK_QUEUE[task_id] = (input_path, orig_name, ip, ua)
+        TASK_QUEUE[task_id] = (input_path, orig_name, ip, ua, format_config, request_meta or {})
         info = _task_queue_info(task_id)
         QUEUE_COND.notify()
     return info
@@ -550,7 +562,7 @@ def _worker_loop():
             while not TASK_QUEUE:
                 QUEUE_COND.wait()
             task_id, payload = TASK_QUEUE.popitem(last=False)
-        input_path, orig_name, ip, ua = payload
+        input_path, orig_name, ip, ua, format_config, request_meta = payload
         with TASKS_LOCK:
             task = TASKS.get(task_id, {})
             task["status"] = "processing"
@@ -558,7 +570,7 @@ def _worker_loop():
             task["queue_ahead"] = 0
             task["queue_position"] = 0
             TASKS[task_id] = task
-        _process_task(task_id, input_path, orig_name, ip, ua)
+        _process_task(task_id, input_path, orig_name, ip, ua, format_config, request_meta)
 
 def _ensure_workers_started():
     global WORKERS_STARTED
@@ -571,7 +583,8 @@ def _ensure_workers_started():
             WORKER_THREADS.append(t)
         WORKERS_STARTED = True
 
-def _process_task(task_id: str, input_path: str, orig_name: str = "upload.docx", ip: str = "", ua: str = ""):
+def _process_task(task_id: str, input_path: str, orig_name: str = "upload.docx", ip: str = "", ua: str = "",
+                  format_config: dict = None, request_meta: dict = None):
     t0 = time.time(); output_path = None
     log_path = make_document_log_path(orig_name, log_dir=LOG_DIR, suffix=task_id[:8])
     log_filename = os.path.basename(log_path)
@@ -585,12 +598,22 @@ def _process_task(task_id: str, input_path: str, orig_name: str = "upload.docx",
         t["log_url"] = f"/log/{task_id}"
         TASKS[task_id] = t
     try:
-        logger.info(f"[Task] {task_id[:8]} start file={orig_name} ip={ip} log={log_filename}")
-        rules = StyleRule.from_config(); settings = PageSettings.from_config()
+        request_meta = request_meta or {}
+        rules, settings, features = load_rules_and_settings(format_config)
+        body_rule = rules[5] if len(rules) > 5 else StyleRule.default_for_row(5)
+        logger.info(
+            f"[Task] {task_id[:8]} start file={orig_name} ip={ip} log={log_filename} "
+            f"preset={request_meta.get('preset_name','')} mode={request_meta.get('processing_mode','smart')} "
+            f"frontend_config={bool(format_config)} body={body_rule.font}/{body_rule.font_size_label} "
+            f"margins=top{settings.margin_top_cm} bottom{settings.margin_bottom_cm} "
+            f"left{settings.margin_left_cm} right{settings.margin_right_cm} "
+            f"line_spacing={settings.line_spacing_value} numbered_bold_enabled={features['numbered_bold_enabled']}"
+        )
         importer = DocxImporter(); doc_data = importer.load(input_path, rules)
         base = os.path.splitext(orig_name)[0]
         output_path = os.path.join(OUTPUT_DIR, f"{base}_排版文件.docx")
-        export_doc(doc_data, rules, settings, output_path, numbered_bold_enabled=True)
+        export_doc(doc_data, rules, settings, output_path,
+                   numbered_bold_enabled=features["numbered_bold_enabled"])
         duration = round(time.time() - t0, 2)
         hc = sum(1 for pd in doc_data.paragraphs if pd.type_id.startswith("heading"))
         bc = sum(1 for pd in doc_data.paragraphs if pd.type_id == "body")
@@ -672,6 +695,40 @@ def _admin_authorized(parsed, headers, cookie_header: str = "") -> bool:
 def _file_api_authorized(headers) -> bool:
     header_token = headers.get("X-Proxy-Secret", "") if headers else ""
     return bool(header_token) and hmac.compare_digest(header_token, PROXY_SECRET)
+
+def _decode_format_config(headers) -> dict:
+    raw = headers.get("X-Format-Config", "") if headers else ""
+    if not raw:
+        return None
+    encoding = (headers.get("X-Format-Config-Encoding", "") if headers else "").strip().lower()
+    if len(raw.encode("ascii", "ignore")) > MAX_FORMAT_CONFIG_HEADER_BYTES:
+        raise ValueError("FORMAT_CONFIG_TOO_LARGE: 配置请求头过大")
+    if encoding != "base64url-json":
+        raise ValueError("FORMAT_CONFIG_INVALID: 不支持的配置编码")
+    try:
+        padding = "=" * (-len(raw) % 4)
+        decoded = base64.urlsafe_b64decode((raw + padding).encode("ascii"))
+    except (binascii.Error, UnicodeEncodeError, ValueError) as exc:
+        raise ValueError("FORMAT_CONFIG_INVALID: 配置解码失败") from exc
+    if len(decoded) > MAX_FORMAT_CONFIG_JSON_BYTES:
+        raise ValueError("FORMAT_CONFIG_TOO_LARGE: 配置内容过大")
+    try:
+        config = json.loads(decoded.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("FORMAT_CONFIG_INVALID: 配置 JSON 无效") from exc
+    if not isinstance(config, dict):
+        raise ValueError("FORMAT_CONFIG_INVALID: 配置必须是 JSON 对象")
+    if "styles" not in config or "page" not in config:
+        raise ValueError("FORMAT_CONFIG_INVALID: 配置缺少 styles 或 page")
+    return config
+
+def _upload_request_meta(headers) -> dict:
+    return {
+        "processing_mode": headers.get("X-Processing-Mode", "smart") if headers else "smart",
+        "preset_id": headers.get("X-Preset-Id", "") if headers else "",
+        "preset_name": unquote(headers.get("X-Preset-Name", "")) if headers else "",
+        "template_type": headers.get("X-Template-Type", "") if headers else "",
+    }
 
 def _admin_token_from(parsed) -> str:
     return (parse_qs(parsed.query).get("token") or [""])[0]
@@ -997,7 +1054,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header(
             "Access-Control-Allow-Headers",
             "Content-Type, X-Filename, X-Admin-Token, X-Proxy-Secret, X-Docxtool-Proxy, "
-            "X-Preset-Id, X-Preset-Name, X-Template-Type, X-Processing-Mode, X-Format-Config",
+            "X-Preset-Id, X-Preset-Name, X-Template-Type, X-Processing-Mode, "
+            "X-Format-Config, X-Format-Config-Encoding",
         )
         self.send_header("Access-Control-Max-Age", "86400")
 
@@ -1094,6 +1152,15 @@ class Handler(BaseHTTPRequestHandler):
         if _task_load() >= MAX_QUEUE:
             self._json_error("QUEUE_FULL", "服务器繁忙，请稍后再试", 503); return
         try:
+            try:
+                format_config = _decode_format_config(self.headers)
+            except ValueError as cfg_error:
+                message = str(cfg_error)
+                code = message.split(":", 1)[0]
+                text = message.split(":", 1)[1].strip() if ":" in message else "格式配置无效"
+                status = 413 if code == "FORMAT_CONFIG_TOO_LARGE" else 400
+                self._json_error(code, text, status); return
+            request_meta = _upload_request_meta(self.headers)
             length = int(self.headers.get("Content-Length", 0))
             if length <= 0 or length > MAX_SIZE:
                 self._json_error("FILE_TOO_LARGE", "文件过大或无内容", 413); return
@@ -1108,9 +1175,14 @@ class Handler(BaseHTTPRequestHandler):
                 f.write(file_data); input_path = f.name
             raw_name = unquote(self.headers.get("X-Filename", "upload.docx"))
             h = hashlib.md5(file_data).hexdigest()
-            logger.info(f"[Upload] size={len(file_data)} expect={length} md5={h} task={task_id[:8]}")
+            logger.info(
+                f"[Upload] size={len(file_data)} expect={length} md5={h} task={task_id[:8]} "
+                f"preset={request_meta.get('preset_name','')} mode={request_meta.get('processing_mode','smart')} "
+                f"frontend_config={bool(format_config)}"
+            )
             _ensure_workers_started()
-            info = _enqueue_task(task_id, input_path, raw_name, ip, self.headers.get("User-Agent", ""))
+            info = _enqueue_task(task_id, input_path, raw_name, ip, self.headers.get("User-Agent", ""),
+                                 format_config=format_config, request_meta=request_meta)
             self._json({"task_id": task_id, "status": "queued", **info})
         except Exception as e:
             self._json_error("INTERNAL_ERROR", str(e)[:200], 500)
