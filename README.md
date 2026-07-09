@@ -13,6 +13,8 @@
 - `importer.py`, `style_config.py`, `engine/`: 文档识别与排版核心代码。
 - `config.json`: 默认排版规则。
 - `requirements.txt`: Python 依赖。
+- `.env.example`: 环境变量示例，不包含真实密钥。
+- `UPLOAD_MANIFEST.md`: 让 AI 修改项目前应上传的核心文件清单。
 - `hermes_skills/official-document-formatting/`: 给 Hermes 使用的公文格式排版 skill。
 - `logs/`, `outputs/`: 运行时目录，服务会写入日志和生成文件。
 
