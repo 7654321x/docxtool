@@ -1,6 +1,6 @@
 # 公文排版 Web 服务接口说明
 
-本文档说明 `server.py` 暴露的 HTTP 接口，适用于本地部署、Nginx 反向代理、Cloudflare Tunnel 或前端代理接入。
+本文档说明 `server.py` 暴露的 HTTP 接口，适用于本地部署、Nginx 反向代理或 Cloudflare Pages Worker 代理接入。
 
 维护约定：后续只要修改 `server.py` 中的接口路径、请求方法、鉴权方式、请求头、请求体、响应字段、状态码或错误码，必须同步更新本文档，并与代码一起提交推送。
 
@@ -29,12 +29,9 @@ BIND_HOST=0.0.0.0 PORT=9527 python3 server.py
 - `GET /download/{task_id}`
 - `GET /api/download/{task_id}`
 
-文件接口允许两种访问方式：
+文件接口始终要求请求头携带 `X-Proxy-Secret`，值必须等于服务端环境变量 `PROXY_SECRET`。不要依赖 `Host`、`localhost`、服务器本机地址或来源 IP 作为鉴权依据。
 
-1. 本机直接访问：`Host` 为 `127.0.0.1:{PORT}`、`localhost:{PORT}` 或 `[::1]:{PORT}` 时自动允许。
-2. 远程/代理访问：请求头必须带 `X-Proxy-Secret`，值等于服务端环境变量 `PROXY_SECRET`。
-
-生产环境建议显式设置：
+后端启动前必须显式设置：
 
 ```bash
 export PROXY_SECRET='换成足够长的随机字符串'
@@ -42,13 +39,13 @@ export PROXY_SECRET='换成足够长的随机字符串'
 
 ### 1.2 管理接口鉴权
 
-监控、统计、封禁、日志等管理接口需要管理员权限。支持三种传递方式：
+监控、统计、封禁、日志等管理接口需要管理员权限。优先使用请求头或 Cookie，兼容 URL 参数：
 
-- URL 参数：`?token=你的_ADMIN_TOKEN`
 - 请求头：`X-Admin-Token: 你的_ADMIN_TOKEN`
 - Cookie：`admin_token=你的_ADMIN_TOKEN`
+- URL 参数：`?token=你的_ADMIN_TOKEN`
 
-生产环境建议显式设置：
+后端启动前必须显式设置：
 
 ```bash
 export ADMIN_TOKEN='换成后台管理密码或随机 token'
@@ -71,7 +68,7 @@ HTTP 状态码为 `403`。
 
 - `Access-Control-Allow-Origin`
 - `Access-Control-Allow-Methods: GET, PUT, OPTIONS`
-- `Access-Control-Allow-Headers: Content-Type, X-Filename, X-Admin-Token, X-Proxy-Secret, X-Docxtool-Proxy`
+- `Access-Control-Allow-Headers: Content-Type, X-Filename, X-Admin-Token, X-Proxy-Secret, X-Docxtool-Proxy, X-Preset-Id, X-Preset-Name, X-Template-Type, X-Processing-Mode, X-Format-Config`
 
 `OPTIONS` 预检请求固定返回 `204`。
 
@@ -162,7 +159,7 @@ PUT /api/upload
 - `Content-Type: application/octet-stream`
 - `Content-Length: 文件字节数`
 - `X-Filename: URL 编码后的原始文件名`
-- `X-Proxy-Secret: 远程访问时必填`
+- `X-Proxy-Secret: 必填，必须等于服务端环境变量 PROXY_SECRET`
 
 限制：
 
@@ -179,6 +176,7 @@ PUT /api/upload
 curl -X PUT "http://127.0.0.1:9527/upload" \
   -H "Content-Type: application/octet-stream" \
   -H "X-Filename: %E6%B5%8B%E8%AF%95.docx" \
+  -H "X-Proxy-Secret: $PROXY_SECRET" \
   --data-binary "@/path/to/测试.docx"
 ```
 
@@ -188,7 +186,6 @@ curl -X PUT "http://127.0.0.1:9527/upload" \
 curl -X PUT "https://你的域名/api/upload" \
   -H "Content-Type: application/octet-stream" \
   -H "X-Filename: %E6%B5%8B%E8%AF%95.docx" \
-  -H "X-Proxy-Secret: $PROXY_SECRET" \
   --data-binary "@/path/to/测试.docx"
 ```
 
@@ -210,7 +207,7 @@ curl -X PUT "https://你的域名/api/upload" \
 | --- | --- | --- |
 | 400 | `INVALID_DOCX` | 文件不是有效 docx |
 | 400 | `INCOMPLETE_UPLOAD` | 上传内容读取不完整 |
-| 403 | `PROXY_REQUIRED` | 远程访问缺少 `X-Proxy-Secret` |
+| 403 | `PROXY_REQUIRED` | 缺少或错误的 `X-Proxy-Secret` |
 | 403 | `IP_BANNED` | 当前 IP 已被封禁 |
 | 408 | `UPLOAD_TIMEOUT` | 文件读取超时 |
 | 413 | `FILE_TOO_LARGE` | 文件为空或超过大小限制 |
@@ -230,7 +227,8 @@ GET /api/status/{task_id}
 请求示例：
 
 ```bash
-curl "http://127.0.0.1:9527/status/b3e4d8a8-0f3a-4f1b-b8c3-5f8b35d02c11"
+curl "http://127.0.0.1:9527/status/b3e4d8a8-0f3a-4f1b-b8c3-5f8b35d02c11" \
+  -H "X-Proxy-Secret: $PROXY_SECRET"
 ```
 
 排队中响应示例：
@@ -297,7 +295,7 @@ curl "http://127.0.0.1:9527/status/b3e4d8a8-0f3a-4f1b-b8c3-5f8b35d02c11"
 | HTTP 状态码 | code | 含义 |
 | --- | --- | --- |
 | 400 | `INVALID_TASK_ID` | 任务 ID 格式错误 |
-| 403 | `PROXY_REQUIRED` | 远程访问缺少 `X-Proxy-Secret` |
+| 403 | `PROXY_REQUIRED` | 缺少或错误的 `X-Proxy-Secret` |
 | 404 | `TASK_NOT_FOUND` | 任务不存在或已过期 |
 
 ### 3.3 下载排版结果
@@ -318,6 +316,7 @@ GET /api/download/{task_id}
 
 ```bash
 curl "http://127.0.0.1:9527/download/b3e4d8a8-0f3a-4f1b-b8c3-5f8b35d02c11" \
+  -H "X-Proxy-Secret: $PROXY_SECRET" \
   -o "排版结果.docx"
 ```
 
@@ -327,7 +326,7 @@ curl "http://127.0.0.1:9527/download/b3e4d8a8-0f3a-4f1b-b8c3-5f8b35d02c11" \
 | --- | --- | --- |
 | 400 | `INVALID_TASK_ID` | 任务 ID 格式错误 |
 | 400 | `FILE_NOT_READY` | 文件尚未生成 |
-| 403 | `PROXY_REQUIRED` | 远程访问缺少 `X-Proxy-Secret` |
+| 403 | `PROXY_REQUIRED` | 缺少或错误的 `X-Proxy-Secret` |
 | 410 | `FILE_EXPIRED` | 输出文件已过期或被清理 |
 
 输出文件默认保留 86400 秒，后台清理线程每 60 秒检查一次过期文件。
@@ -492,7 +491,11 @@ GET /log/{task_id}?token={ADMIN_TOKEN}
 8. 状态为 `done` 时请求 `GET /api/download/{task_id}` 并触发浏览器下载。
 9. 状态为 `error` 时显示错误摘要。
 
-前端默认使用 `/api/*` 路径，适合通过代理把 `/api` 转发到后端。后端同时支持不带 `/api` 的直连路径。
+前端默认使用同源 `/api/*` 路径。Cloudflare Pages 的 `pages_dist/_worker.js` 负责把这些请求转发到后端不带 `/api` 的直连路径：
+
+- `/api/upload` → `/upload`
+- `/api/status/{task_id}` → `/status/{task_id}`
+- `/api/download/{task_id}` → `/download/{task_id}`
 
 ## 6. 统一错误格式
 
@@ -509,9 +512,10 @@ GET /log/{task_id}?token={ADMIN_TOKEN}
 
 ## 7. 部署注意事项
 
-1. 生产环境必须设置 `ADMIN_TOKEN` 和 `PROXY_SECRET`，不要依赖代码里的默认值。
-2. 如果直接暴露公网，建议只开放反向代理入口，不要直接暴露 Python 服务端口。
-3. Nginx 或隧道代理需要允许 `PUT` 方法，并转发 `X-Filename`、`X-Proxy-Secret`、`X-Admin-Token` 等请求头。
-4. 如果部署在 Cloudflare Pages 前端代理后，前端访问 `/api/*`，代理再转发到后端 `/api/*` 或对应直连路径。
-5. `logs/` 和 `outputs/` 是运行时目录，仓库中只保留 `.gitkeep`，实际日志和生成文件不应提交。
-6. `stats.db` 是运行时 SQLite 数据库，不应提交到仓库。
+1. 生产环境必须设置 `ADMIN_TOKEN` 和 `PROXY_SECRET`，代码不提供默认密钥。
+2. 只开放 Nginx 80，不要直接暴露 Python 服务端口 9527。
+3. Nginx 需要允许 `PUT` 方法并转发请求头。
+4. Cloudflare Pages 前端访问同源 `/api/*`，Worker 通过 `BACKEND_BASE_URL` 转发到 Nginx，再由 Nginx 转发到 `127.0.0.1:9527`。
+5. 推荐部署细节见 `DEPLOY.md`。
+6. `logs/` 和 `outputs/` 是运行时目录，仓库中只保留 `.gitkeep`，实际日志和生成文件不应提交。
+7. `stats.db` 是运行时 SQLite 数据库，不应提交到仓库。

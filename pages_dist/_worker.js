@@ -1,8 +1,6 @@
 const API_UPLOAD = "/api/upload";
 const API_STATUS = "/api/status/";
 const API_DOWNLOAD = "/api/download/";
-const DEFAULT_BACKEND_BASE_URL = "";
-const DEFAULT_PROXY_SECRET = "docxtool-proxy-20260601-9ec0d6e2443a4f5f9784f0f04bb62917";
 
 function jsonError(code, error, status) {
   return new Response(JSON.stringify({ code, error }), {
@@ -41,10 +39,14 @@ async function proxyApi(request, env, url) {
       return jsonError("METHOD_NOT_ALLOWED", "Method not allowed", 405);
     }
 
-    const backendBase = String(env.BACKEND_BASE_URL || DEFAULT_BACKEND_BASE_URL).trim().replace(/\/+$/, "");
-    const proxySecret = env.PROXY_SECRET || DEFAULT_PROXY_SECRET;
-    if (!backendBase) return jsonError("BACKEND_NOT_CONFIGURED", "Backend is not configured", 500);
-    if (!proxySecret) return jsonError("PROXY_SECRET_NOT_CONFIGURED", "Proxy secret is not configured", 500);
+    const backendBase = String(env.BACKEND_BASE_URL || "").trim().replace(/\/+$/, "");
+    const proxySecret = String(env.PROXY_SECRET || "").trim();
+    if (!backendBase) {
+      return jsonError("BACKEND_NOT_CONFIGURED", "Cloudflare Pages env BACKEND_BASE_URL is not configured", 500);
+    }
+    if (!proxySecret) {
+      return jsonError("PROXY_SECRET_NOT_CONFIGURED", "Cloudflare Pages env PROXY_SECRET is not configured", 500);
+    }
 
     const target = new URL(backendBase + path);
     target.search = url.search;

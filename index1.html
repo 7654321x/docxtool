@@ -424,7 +424,6 @@ h1{font-size:clamp(36px,6vw,66px);letter-spacing:-2px;line-height:1.05;margin-bo
 const msg=document.getElementById('msg'),bar=document.getElementById('bar'),meta=document.getElementById('meta'),zone=document.getElementById('dropZone'),progressArea=document.getElementById('progressArea'),resultCard=document.getElementById('resultCard');
 const DEFAULT_PRESET_ID='official_document';
 const LOCAL_TEMPLATE_KEY='docxtool_custom_templates_v2';
-const API_BASE=window.API_BASE||'';
 const API_PREFIX='/api';
 let lastDownloadUrl='',lastDownloadName='',templateApiAvailable=false;
 document.getElementById('today').textContent=new Date().toLocaleDateString('zh-CN',{year:'numeric',month:'long',day:'numeric',weekday:'long'});
@@ -449,7 +448,7 @@ const styleRows=[
 const margins=[];for(let i=20;i<=40;i++)margins.push((i/10).toFixed(1).replace('.0','')+'cm');
 const lineSpacings=[];for(let i=20;i<=40;i++)lineSpacings.push(i+'磅');
 const beforeAfter=['0行','0.25行','0.5行','0.75行','1行','1.5行','2行'];
-function api(path){const base=API_BASE?API_BASE.replace(/\/$/,''):'';const prefix=API_BASE?'':API_PREFIX;return base+prefix+path}
+function api(path){return API_PREFIX+path}
 function escapeHtml(value){return String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]))}
 function normalizePresetId(id){return id==='official'?DEFAULT_PRESET_ID:(id||DEFAULT_PRESET_ID)}
 function templateType(tpl){return tpl?.template_type||tpl?.type||(tpl?.is_system?'system':'custom')}

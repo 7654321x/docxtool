@@ -381,13 +381,10 @@ zone.addEventListener('drop',e=>{e.preventDefault();zone.classList.remove('drag'
 
 function status(text,cls){msg.textContent=text;msg.className='status-msg';if(cls)msg.classList.add(cls)}
 function sizeLabel(bytes){const kb=bytes/1024;return kb>=1024?(kb/1024).toFixed(1)+' MB':kb.toFixed(1)+' KB'}
-// Pages 通过 _worker.js 代理 /api/* 到真实后端，前端不暴露 Tunnel 地址。
-const API_BASE = window.API_BASE || '';
+// Pages 通过 _worker.js 代理同源 /api/* 到真实后端，前端不暴露后端地址。
 const API_PREFIX = '/api';
 function api(path){
-  const base=API_BASE ? API_BASE.replace(/\/$/,'') : '';
-  const prefix=API_BASE ? '' : API_PREFIX;
-  return base + prefix + path;
+  return API_PREFIX + path;
 }
 
 async function upload(f){

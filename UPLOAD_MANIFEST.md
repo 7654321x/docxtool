@@ -9,6 +9,7 @@
 | 文件路径 | 文件作用 | 是否必须上传 | 关联功能 |
 | --- | --- | --- | --- |
 | `README.md` | 项目功能、启动方式、部署说明 | 是 | 项目总览 |
+| `DEPLOY.md` | 腾讯云 + Cloudflare Pages 部署说明 | 是 | 生产部署、安全组、Nginx |
 | `API.md` | HTTP 接口、鉴权、错误码说明 | 是 | 前后端联调、接口排查 |
 | `UPLOAD_MANIFEST.md` | 本清单 | 是 | AI 上下文选择 |
 | `requirements.txt` | Python 依赖 | 是 | 环境安装 |
@@ -94,7 +95,7 @@
 | 修 Cloudflare Pages 代理 | `pages_dist/_worker.js`, `pages_dist/index.html`, `server.py`, `API.md`, `tests/test_pages_proxy_packaging.py` |
 | 修默认模板/样式配置 | `config.json`, `style_config.py`, `index1.html`, `engine/_core.py`, 相关配置测试 |
 | 修 Hermes 公文格式规则 | `hermes_skills/official-document-formatting/SKILL.md`, `agents/openai.yaml`, 当前已验证的格式样例 |
-| 部署或 GitHub 发布 | `README.md`, `API.md`, `.env.example`, `requirements.txt`, `run.sh`, 所有源代码文件，排除运行数据 |
+| 部署或 GitHub 发布 | `README.md`, `DEPLOY.md`, `API.md`, `.env.example`, `requirements.txt`, `run.sh`, 所有源代码文件，排除运行数据 |
 
 ## 8. 不要上传
 

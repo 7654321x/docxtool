@@ -314,10 +314,15 @@ PORT = int(os.environ.get("PORT", "9527"))
 BIND_HOST = os.environ.get("BIND_HOST", "127.0.0.1")
 APP_VERSION = "2026.06.01"
 STARTED_AT = time.strftime("%Y-%m-%d %H:%M:%S")
-DEFAULT_ADMIN_TOKEN = "7654321xxx"
-DEFAULT_PROXY_SECRET = "docxtool-proxy-20260601-9ec0d6e2443a4f5f9784f0f04bb62917"
-ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", DEFAULT_ADMIN_TOKEN)
-PROXY_SECRET = os.environ.get("PROXY_SECRET", DEFAULT_PROXY_SECRET)
+
+def _required_secret(name: str) -> str:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        raise SystemExit(f"[配置错误] 缺少必需环境变量 {name}，请在启动前设置后再运行 server.py。")
+    return value
+
+ADMIN_TOKEN = _required_secret("ADMIN_TOKEN")
+PROXY_SECRET = _required_secret("PROXY_SECRET")
 FRONTEND_ORIGIN = ""  # 例如 "https://xxx.pages.dev"；留空表示允许任意来源，方便临时测试。
 MAX_SIZE = 10 * 1024 * 1024
 MAX_WORKERS = 4
@@ -655,26 +660,20 @@ def _cookie_value(cookie_header: str, name: str) -> str:
     return ""
 
 def _admin_authorized(parsed, headers, cookie_header: str = "") -> bool:
-    if not ADMIN_TOKEN:
-        return False
     qs = parse_qs(parsed.query)
     token = (qs.get("token") or [""])[0]
     header_token = headers.get("X-Admin-Token", "") if headers else ""
     cookie_token = _cookie_value(cookie_header, "admin_token")
-    return ADMIN_TOKEN in (token, header_token, cookie_token)
+    return any(
+        candidate and hmac.compare_digest(candidate, ADMIN_TOKEN)
+        for candidate in (header_token, cookie_token, token)
+    )
 
 def _file_api_authorized(headers) -> bool:
-    host = (headers.get("Host", "") if headers else "").split(",", 1)[0].strip().lower()
-    if host in {f"127.0.0.1:{PORT}", f"localhost:{PORT}", f"[::1]:{PORT}"}:
-        return True
-    if not PROXY_SECRET:
-        return False
     header_token = headers.get("X-Proxy-Secret", "") if headers else ""
-    return hmac.compare_digest(header_token, PROXY_SECRET)
+    return bool(header_token) and hmac.compare_digest(header_token, PROXY_SECRET)
 
 def _admin_token_from(parsed) -> str:
-    if not ADMIN_TOKEN:
-        return ""
     return (parse_qs(parsed.query).get("token") or [""])[0]
 
 def _admin_url(path: str, token: str = "") -> str:
@@ -737,8 +736,7 @@ def _startup_urls() -> dict:
     base = f"http://{BIND_HOST}:{PORT}"
     return {
         "tool": base,
-        "monitor": f"{base}{_admin_url('/monitor', ADMIN_TOKEN)}",
-        "tunnel_command": f"cloudflared tunnel --url {base}",
+        "monitor": f"{base}/monitor",
     }
 
 def _monitor_url(admin_token: str, query: dict, **overrides) -> str:
@@ -996,7 +994,11 @@ class Handler(BaseHTTPRequestHandler):
         allow_origin = FRONTEND_ORIGIN or origin or "*"
         self.send_header("Access-Control-Allow-Origin", allow_origin)
         self.send_header("Access-Control-Allow-Methods", "GET, PUT, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Filename, X-Admin-Token, X-Proxy-Secret, X-Docxtool-Proxy")
+        self.send_header(
+            "Access-Control-Allow-Headers",
+            "Content-Type, X-Filename, X-Admin-Token, X-Proxy-Secret, X-Docxtool-Proxy, "
+            "X-Preset-Id, X-Preset-Name, X-Template-Type, X-Processing-Mode, X-Format-Config",
+        )
         self.send_header("Access-Control-Max-Age", "86400")
 
     def do_OPTIONS(self):
@@ -1076,7 +1078,7 @@ class Handler(BaseHTTPRequestHandler):
     def _require_file_api(self) -> bool:
         if _file_api_authorized(self.headers):
             return True
-        self._json_error("PROXY_REQUIRED", "请从前端页面访问", 403)
+        self._json_error("PROXY_REQUIRED", "缺少或无效的代理密钥", 403)
         return False
 
     def _handle_upload_raw(self):
@@ -1248,13 +1250,12 @@ def main():
     urls = _startup_urls()
     print(f"排版工具:   {urls['tool']}")
     print(f"监控面板:   {urls['monitor']}")
-    print(f"隧道命令:   {urls['tunnel_command']}")
-    print(f"后台密码:   {ADMIN_TOKEN}")
+    print("鉴权配置:   ADMIN_TOKEN 已设置 | PROXY_SECRET 已设置")
     print(f"线程池: {MAX_WORKERS} | 队列: {MAX_QUEUE} | 上限: {MAX_SIZE//1048576}MB")
     print(f"限流: {RATE_WINDOW}s/IP | 文件TTL: {FILE_TTL}s")
     for line in _startup_time_check_lines():
         print(line)
-    print("外网访问:   Pages 前端填写 BACKEND_BASE_URL 后访问 docxtool.pages.dev")
+    print("外网访问:   Cloudflare Pages /api/* -> Nginx 80 -> 127.0.0.1:9527")
     print("Ctrl+C 停止")
     try: server.serve_forever()
     except KeyboardInterrupt:

@@ -14,6 +14,7 @@
 - `config.json`: 默认排版规则。
 - `requirements.txt`: Python 依赖。
 - `.env.example`: 环境变量示例，不包含真实密钥。
+- `DEPLOY.md`: 腾讯云海外服务器 + Cloudflare Pages 直连部署说明。
 - `UPLOAD_MANIFEST.md`: 让 AI 修改项目前应上传的核心文件清单。
 - `hermes_skills/official-document-formatting/`: 给 Hermes 使用的公文格式排版 skill。
 - `logs/`, `outputs/`: 运行时目录，服务会写入日志和生成文件。
@@ -38,12 +39,14 @@ python3 server.py
 BIND_HOST=0.0.0.0 PORT=9527 python3 server.py
 ```
 
-后台监控默认地址会在启动时打印，默认管理密码来自 `ADMIN_TOKEN`，未设置时使用代码里的默认值。生产环境建议设置：
+后台监控和文件接口都必须显式配置密钥。`ADMIN_TOKEN` 和 `PROXY_SECRET` 未设置时，后端会启动失败：
 
 ```bash
-export ADMIN_TOKEN='换成你的后台密码'
-export PROXY_SECRET='换成你的前端代理密钥'
+export ADMIN_TOKEN='换成你的长随机管理密钥'
+export PROXY_SECRET='换成你的长随机代理密钥'
 ```
+
+生产推荐部署方式见 `DEPLOY.md`：Cloudflare Pages 前端同源 `/api/*` → `_worker.js` → 腾讯云 Nginx 80 → `127.0.0.1:9527` Python 后端。
 
 ## 可选 systemd 示例
 
@@ -57,8 +60,10 @@ After=network.target
 [Service]
 WorkingDirectory=/opt/docxtool
 ExecStart=/opt/docxtool/.venv/bin/python /opt/docxtool/server.py
-Environment=ADMIN_TOKEN=换成你的后台密码
-Environment=PROXY_SECRET=换成你的前端代理密钥
+Environment=BIND_HOST=127.0.0.1
+Environment=PORT=9527
+Environment=ADMIN_TOKEN=换成你的长随机管理密钥
+Environment=PROXY_SECRET=换成和 Cloudflare Pages 一致的长随机代理密钥
 Restart=always
 
 [Install]
