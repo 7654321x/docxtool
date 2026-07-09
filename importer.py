@@ -668,10 +668,10 @@ def _score_02_title_cont(text: str, feats, ctx) -> Tuple[int, dict, str]:
 
 
 def _score_03_date_line(text: str, feats, ctx) -> Tuple[int, dict, str]:
-    """③ 日期行（楷体 居中）：上段 title/续行 + 括号开头或含年份 + <50字。"""
+    """③ 日期行（楷体 居中）：上段 title/续行/署名 + 括号开头或含年份 + <50字。"""
     if ctx.has_seen_body:
         return 0, {}, ""
-    if ctx.prev_type_id not in ("title", "title_cont"):
+    if ctx.prev_type_id not in ("title", "title_cont", "role_name", "author_line"):
         return 0, {}, ""
     tid, _ = _match_numbering(text)
     if tid:
@@ -733,6 +733,10 @@ def _score_05_role_name(text: str, feats, ctx) -> Tuple[int, dict, str]:
                      '|汇报|总结|方案|报告|要点|计划|规划|意见|通知|通报'
                      '|请示|批复|函|纪要|公报|条例|规定|办法|细则')
     prev_title = ctx.title_texts[-1] if ctx.title_texts else ""
+    # 发言/讲话类材料常见头部为“标题 → 姓名 → 日期”，姓名通常是 2-4 个中文字符。
+    if (re.search(r'发言|讲话|致辞|主持词', prev_title)
+            and re.fullmatch(r'[\u4e00-\u9fff]{2,6}', text)):
+        return 92, {}, ""
     if re.search(_DOC_TYPE_KW, prev_title) and len(text) < 20 and not _contains_colon(text):
         return 75, {}, ""
     return 0, {}, ""
@@ -931,7 +935,7 @@ FLOW = {
     "title_cont":       ["title_cont", "date_line", "author_line", "role_name", "addressing", "heading1", "title2"],
     "date_line":        ["author_line", "addressing", "heading1", "heading2", "title2", "body"],
     "author_line":      ["addressing", "heading1", "heading2", "title2", "body"],
-    "role_name":        ["addressing", "heading1", "heading2", "title2", "body"],
+    "role_name":        ["date_line", "addressing", "heading1", "heading2", "title2", "body"],
     "heading1":         ["heading1", "heading2", "heading3", "body", "addressing", "title2"],
     "heading1_report":  ["heading2", "heading3", "body", "addressing", "title2"],
     "heading2":         ["heading1", "heading2", "heading3", "heading4", "body", "addressing", "title2", "glossary_title"],
@@ -1078,8 +1082,10 @@ def detect_paragraph_type(text: str, feats: ParagraphFeatures,
         cp = _colon_bold_match(text)
         if cp >= 0:
             meta["colon_bold"] = True
-        # 报告首句加粗（current_level==1 + 首句≤30字 + 非报告回顾/称呼）
-        if ctx.current_level == 1 and not text.startswith((*_REPORT_HEADING_STARTS, '各位委员', '各位同志')):
+        # 报告首句加粗（current_level==1 + 首句≤30字 + 非报告回顾/称呼）。
+        # 一是/二是/三是类段落已有 numbered_bold，避免两套 run 重写规则叠加。
+        if (ctx.current_level == 1 and not meta.get("numbered_bold")
+                and not text.startswith((*_REPORT_HEADING_STARTS, '各位委员', '各位同志'))):
             period = text.find('。')
             if 0 < period <= 26:  # 首句≤26字加粗
                 meta["report_first_sentence_bold"] = True

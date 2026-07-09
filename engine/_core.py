@@ -40,6 +40,46 @@ def _set_unique(pPr, tag, element):
     pPr.append(element)
 
 
+def _copy_run_style(src_run, dst_run) -> None:
+    """Copy the resolved run properties so rewritten inline segments keep the paragraph font."""
+    src_rpr = getattr(src_run._element, "rPr", None)
+    if src_rpr is None:
+        return
+    dst_rpr = getattr(dst_run._element, "rPr", None)
+    if dst_rpr is not None:
+        dst_run._element.remove(dst_rpr)
+    dst_run._element.insert(0, copy.deepcopy(src_rpr))
+
+
+def _segment_writer(para):
+    """Return a writer that replaces all existing run text without losing base styling."""
+    if not para.runs:
+        para.add_run("")
+    base_run = para.runs[0]
+    for run in para.runs:
+        run.text = ""
+    used_base = False
+
+    def write(text: str, *, bold=None, cn_font=None, size_pt=None):
+        nonlocal used_base
+        if not text:
+            return None
+        run = base_run if not used_base else para.add_run("")
+        if used_base:
+            _copy_run_style(base_run, run)
+        used_base = True
+        run.text = text
+        if cn_font:
+            _set_run_fonts(run, cn_font=cn_font, en_font="Times New Roman")
+        if size_pt is not None:
+            run.font.size = Pt(size_pt)
+        if bold is not None:
+            run.font.bold = bold
+        return run
+
+    return write
+
+
 def _line_spacing_twips(settings: PageSettings) -> int:
     """PageSettings 行距 pt → Word twips。"""
     try:
@@ -128,17 +168,28 @@ def _apply_special_bold(para, text: str) -> None:
     _fixed = "|".join(map(_re.escape, _NBF))
     XSHI = rf'(?:[一二三四五六七八九十]+(?:{_suffixes})|{_fixed})'
     parts = _re.split(f'(?={XSHI})', text)
-    para.runs[0].text = ""
+    write = _segment_writer(para)
     for pi, part in enumerate(parts):
         if not part:
             continue
         if pi == 0:
-            para.runs[0].text = part
-            para.runs[0].font.bold = False
+            write(part, bold=False)
         elif _NBF and any(part.startswith(f) for f in _NBF):
-            _apply_fixed_bold(para, part)
+            colon = part.find('：')
+            if colon < 0:
+                colon = part.find(':')
+            if colon >= 0:
+                write(part[:colon + 1], bold=True)
+                write(part[colon + 1:], bold=False)
+            else:
+                write(part, bold=True)
         else:
-            _apply_numbered_bold(para, part)
+            m = _re.match(rf'([一二三四五六七八九十]+(?:{_suffixes}).*?。)(.*)', part)
+            if m:
+                write(m.group(1), bold=True)
+                write(m.group(2), bold=False)
+            else:
+                write(part, bold=True)
 
 def _apply_fixed_bold(para, part: str) -> None:
     """固定词组：加粗到冒号止（如'比如：xxx' → 加粗'比如：'）。"""
@@ -250,17 +301,11 @@ def _apply_report_first_sentence(para, text: str, rule) -> None:
     # 首句（含句号）→ 楷体加粗
     first = text[:period + 1]
     rest = text[period + 1:]
-    para.runs[0].text = ""
-    br = para.add_run(first)
-    _set_run_fonts(br, cn_font="楷体_GB2312", en_font="Times New Roman")
-    br.font.size = Pt(rule.font_size_pt)
-    br.font.bold = True
+    write = _segment_writer(para)
+    write(first, bold=True, cn_font="楷体_GB2312", size_pt=rule.font_size_pt)
     # 剩余 → 仿宋
     if rest:
-        nr = para.add_run(rest)
-        _set_run_fonts(nr, cn_font=rule.font, en_font="Times New Roman")
-        nr.font.size = Pt(rule.font_size_pt)
-        nr.font.bold = False
+        write(rest, bold=False, cn_font=rule.font, size_pt=rule.font_size_pt)
 
 
 def _set_para_spacing(para, before_lines: float = 0, after_lines: float = 0,
@@ -497,14 +542,14 @@ def apply_numbering(paragraph, rule: StyleRule, counter: NumberingCounter) -> No
     # XML 层：先创建 run，补齐字体，再移到最前
     if paragraph.runs:
         first_run = paragraph.runs[0]
-        new_run = paragraph.add_run(numbering + " ")
+        new_run = paragraph.add_run(numbering)
         _set_run_fonts(new_run, cn_font=rule.font, en_font="Times New Roman")
         new_run.font.size = Pt(rule.font_size_pt)
         if rule.bold is not None:
             new_run.font.bold = rule.bold
         first_run._element.addprevious(new_run._element)
     else:
-        new_run = paragraph.add_run(numbering + " ")
+        new_run = paragraph.add_run(numbering)
         _set_run_fonts(new_run, cn_font=rule.font, en_font="Times New Roman")
         new_run.font.size = Pt(rule.font_size_pt)
         if rule.bold is not None:
@@ -1050,8 +1095,9 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
             resolved = _resolve_rule(pd, raw_rule, rules)
 
             # 空行插入（三号 16pt 行距 28 磅）
+            # date_line 后的留白由段后间距控制，避免生成真实空段落。
             need_gap = (prev_was_title and pd.type_id in HEAD_GAP_FOLLOW_TYPES
-                        and pd.text.strip())
+                        and prev_type_id != "date_line" and pd.text.strip())
 
             if need_gap:
                 spacer = doc.add_paragraph("")
@@ -1107,6 +1153,13 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
                 _apply_hanging_indent_chars(para, first_start, follow_start)
 
             _apply_rule_paragraph_format(para, resolved, line_twips)
+
+            # 头部署名/日期的相邻间距：
+            # “职务姓名 + 日期”连续出现时，中间段后为 0；日期之后用段后 1 行。
+            if pd.type_id in ("role_name", "author_line"):
+                _set_para_spacing(para, before_lines=0, after_lines=0, line_twips=line_twips)
+            elif pd.type_id == "date_line":
+                _set_para_spacing(para, before_lines=0, after_lines=1, line_twips=line_twips)
 
             # (colon_inline_body removed — scheme mode deleted)            # date_line 强制适应一行（自动计算压缩量）
             if getattr(resolved, 'date_line_compress', False):
@@ -1205,7 +1258,7 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
             if numbering and para.runs:
                 new_r = OxmlElement('w:r')
                 t = OxmlElement('w:t')
-                t.text = numbering + " "
+                t.text = numbering
                 new_r.append(t)
                 # 设置字体
                 rPr = OxmlElement('w:rPr')

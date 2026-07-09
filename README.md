@@ -7,10 +7,13 @@
 ## 文件说明
 
 - `server.py`: Web 服务入口，上传 `.docx` 后生成排版文件。
-- `index.html`: 浏览器访问的前端页面。
+- `index.html`: 旧版浏览器访问页面，保留兼容。
+- `index1.html`: 当前新版前端页面，已接入上传、状态轮询、下载和格式配置请求头。
+- `pages_dist/`: Cloudflare Pages 前端与 Worker 代理文件。
 - `importer.py`, `style_config.py`, `engine/`: 文档识别与排版核心代码。
 - `config.json`: 默认排版规则。
 - `requirements.txt`: Python 依赖。
+- `hermes_skills/official-document-formatting/`: 给 Hermes 使用的公文格式排版 skill。
 - `logs/`, `outputs/`: 运行时目录，服务会写入日志和生成文件。
 
 详细 HTTP 接口、鉴权方式、错误码和调用示例见 `API.md`。
