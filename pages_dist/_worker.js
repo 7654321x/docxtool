@@ -1,6 +1,23 @@
 const API_UPLOAD = "/api/upload";
 const API_STATUS = "/api/status/";
 const API_DOWNLOAD = "/api/download/";
+const API_PRESETS = "/api/presets";
+const API_ADMIN_SESSION = "/api/admin/session";
+const ADMIN_PATHS = [
+  "/admin/login",
+  "/admin/logout",
+  "/admin/session",
+  "/monitor",
+  "/stats",
+  "/ip",
+  "/ban",
+  "/unban",
+  "/limit",
+  "/cleanup",
+  "/log/",
+  "/presets",
+];
+const DEFAULT_PROXY_SECRET = "docxtool-proxy-20260601-9ec0d6e2443a4f5f9784f0f04bb62917";
 
 function jsonError(code, error, status) {
   return new Response(JSON.stringify({ code, error }), {
@@ -13,9 +30,16 @@ function backendPath(pathname) {
   if (pathname === API_UPLOAD) return "/upload";
   if (pathname.startsWith(API_STATUS)) return "/status/" + pathname.slice(API_STATUS.length);
   if (pathname.startsWith(API_DOWNLOAD)) return "/download/" + pathname.slice(API_DOWNLOAD.length);
+  if (pathname === API_PRESETS) return "/presets";
+  if (pathname.startsWith(API_PRESETS + "/")) return "/presets/" + pathname.slice((API_PRESETS + "/").length);
+  if (pathname === API_ADMIN_SESSION) return "/admin/session";
+  if (pathname.startsWith("/api/admin/")) return "/admin/" + pathname.slice("/api/admin/".length);
   if (pathname === "/api/health") return "/health";
   if (pathname === "/api/ready") return "/ready";
   if (pathname === "/api/version") return "/version";
+  if (ADMIN_PATHS.some((prefix) => pathname === prefix || pathname.startsWith(prefix + "/"))) {
+    return pathname;
+  }
   return "";
 }
 
@@ -23,10 +47,31 @@ function methodAllowed(pathname, method) {
   if (pathname === API_UPLOAD) return method === "PUT";
   if (pathname.startsWith(API_STATUS)) return method === "GET";
   if (pathname.startsWith(API_DOWNLOAD)) return method === "GET";
+  if (pathname === API_PRESETS) return method === "GET" || method === "POST";
+  if (pathname.startsWith(API_PRESETS + "/")) return method === "GET" || method === "PUT" || method === "DELETE";
+  if (pathname === API_ADMIN_SESSION) return method === "GET";
+  if (pathname === "/admin/login") return method === "GET" || method === "POST";
+  if (pathname === "/admin/logout") return method === "POST";
+  if (pathname === "/monitor" || pathname === "/stats" || pathname === "/ip" || pathname === "/log/" || pathname.startsWith("/log/")) {
+    return method === "GET";
+  }
+  if (pathname === "/ban" || pathname === "/unban" || pathname === "/limit" || pathname === "/cleanup") {
+    return method === "POST";
+  }
   if (pathname === "/api/health" || pathname === "/api/ready" || pathname === "/api/version") {
     return method === "GET";
   }
   return false;
+}
+
+function filterCookieHeader(cookieHeader) {
+  const allowed = [];
+  for (const part of String(cookieHeader || "").split(";")) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    if (trimmed.startsWith("docxtool_admin_session=")) allowed.push(trimmed);
+  }
+  return allowed.join("; ");
 }
 
 async function proxyApi(request, env, url) {
@@ -52,14 +97,39 @@ async function proxyApi(request, env, url) {
     target.search = url.search;
 
     const headers = new Headers(request.headers);
+    const clientIp = request.headers.get("CF-Connecting-IP") || "";
+    for (const key of [
+      "Host",
+      "Forwarded",
+      "X-Proxy-Secret",
+      "X-Docxtool-Proxy",
+      "X-Forwarded-For",
+      "X-Real-IP",
+      "X-Forwarded-Host",
+      "X-Forwarded-Proto",
+      "CF-Connecting-IP",
+      "X-Admin-Token",
+      "Cookie",
+      "Authorization",
+      "Proxy-Authorization",
+    ]) {
+      headers.delete(key);
+    }
+    const cookieHeader = filterCookieHeader(request.headers.get("Cookie"));
+    if (cookieHeader) {
+      headers.set("Cookie", cookieHeader);
+    } else {
+      headers.delete("Cookie");
+    }
     headers.set("X-Proxy-Secret", proxySecret);
     headers.set("X-Docxtool-Proxy", "cloudflare-pages");
     headers.set("X-Forwarded-Host", url.host);
     headers.set("X-Forwarded-Proto", "https");
-
-    const clientIp = request.headers.get("CF-Connecting-IP");
-    if (clientIp) headers.set("X-Forwarded-For", clientIp);
-    headers.delete("Host");
+    if (clientIp) {
+      headers.set("CF-Connecting-IP", clientIp);
+      headers.set("X-Forwarded-For", clientIp);
+      headers.set("X-Real-IP", clientIp);
+    }
 
     const init = {
       method: request.method,

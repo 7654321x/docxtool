@@ -318,7 +318,7 @@ h1{font-size:clamp(36px,6vw,66px);letter-spacing:-2px;line-height:1.05;margin-bo
     <div class="settings-toolbar">
       <div class="field"><label>当前格式</label><select id="templateSelect" onchange="selectTemplate(this.value)"></select></div>
       <div class="field"><label>规则名称</label><input id="settingPresetName" value="党政机关公文格式"></div>
-      <div class="field"><label>处理模式</label><select id="settingMode"><option value="smart">智能处理</option><option value="format_only">仅排版</option><option value="analyze_only">仅诊断</option><option value="punctuation_only">仅标点</option></select></div>
+      <div class="field"><label>处理模式</label><select id="settingMode" disabled><option value="smart">智能处理（当前唯一模式）</option></select></div>
       <div class="field"><label>输出后缀</label><input id="outputSuffix" value="_排版"></div>
       <select id="configSource" style="display:none"><option value="builtin">内置默认</option><option value="custom">用户自定义</option><option value="database">数据库模板</option></select>
       <button class="btn btn-secondary" onclick="createTemplateFromCurrent()">＋ 添加模板</button>
@@ -405,7 +405,7 @@ h1{font-size:clamp(36px,6vw,66px);letter-spacing:-2px;line-height:1.05;margin-bo
           <div class="block-head"><div><h3>功能开关</h3></div></div>
           <div class="switch-grid full">
             <label class="switch-card"><span><strong>标点修复</strong><small>修复中英文标点和空格</small></span><span class="switch"><input type="checkbox" id="punctuationEnabled" checked><span></span></span></label>
-            <label class="switch-card"><span><strong>表格优化</strong><small>处理表格宽度、边框和对齐</small></span><span class="switch"><input type="checkbox" id="tableEnabled" checked><span></span></span></label>
+            <label class="switch-card"><span><strong>表格优化</strong><small>暂未实现，保留为后续扩展入口</small></span><span class="switch"><input type="checkbox" id="tableEnabled" checked disabled><span></span></span></label>
             <label class="switch-card"><span><strong>页码处理</strong><small>统一页码样式和位置</small></span><span class="switch"><input type="checkbox" id="pageNumberEnabled" checked><span></span></span></label>
             <label class="switch-card"><span><strong>特殊加粗</strong><small>识别标题和关键段落加粗</small></span><span class="switch"><input type="checkbox" id="specialBold" checked><span></span></span></label>
           </div>
@@ -424,8 +424,9 @@ h1{font-size:clamp(36px,6vw,66px);letter-spacing:-2px;line-height:1.05;margin-bo
 const msg=document.getElementById('msg'),bar=document.getElementById('bar'),meta=document.getElementById('meta'),zone=document.getElementById('dropZone'),progressArea=document.getElementById('progressArea'),resultCard=document.getElementById('resultCard');
 const DEFAULT_PRESET_ID='official_document';
 const LOCAL_TEMPLATE_KEY='docxtool_custom_templates_v2';
-const API_PREFIX='/api';
+const API_PREFIX = '/api';
 let lastDownloadUrl='',lastDownloadName='',templateApiAvailable=false;
+let adminCsrfToken='';
 document.getElementById('today').textContent=new Date().toLocaleDateString('zh-CN',{year:'numeric',month:'long',day:'numeric',weekday:'long'});
 let currentPresetId=DEFAULT_PRESET_ID;
 let templateStore=[
@@ -640,6 +641,8 @@ function collectConfig(){
       space_after_line:Number(lineValue(get('spaceAfter')))||0,
       grid_alignment:get('gridAlign')||'文字对齐字符网络'
     },
+    mode:'smart',
+    processing_mode:'smart',
     features:{
       numbered_bold_enabled:checked('specialBold'),
       punctuation_enabled:checked('punctuationEnabled'),
@@ -705,6 +708,10 @@ function renderTemplateOptions(){
 async function requestJson(path,options={}){
   const init={...options,headers:{...(options.headers||{})}};
   if(init.body&&!init.headers['Content-Type'])init.headers['Content-Type']='application/json';
+  init.credentials='same-origin';
+  if(init.method&&init.method!=='GET'&&init.method!=='HEAD'&&adminCsrfToken&&!init.headers['X-CSRF-Token']){
+    init.headers['X-CSRF-Token']=adminCsrfToken;
+  }
   const resp=await fetch(api(path),init);
   if(!resp.ok){
     let err={};
@@ -712,6 +719,14 @@ async function requestJson(path,options={}){
     throw new Error(err.error||resp.statusText||'request failed');
   }
   return resp.json();
+}
+async function refreshAdminSession(){
+  try{
+    const data=await requestJson('/admin/session');
+    adminCsrfToken=data?.csrf_token||'';
+  }catch(_){
+    adminCsrfToken='';
+  }
 }
 async function loadRemoteTemplates(){
   try{
@@ -754,7 +769,7 @@ function applyConfigToForm(config,keepTemplate=true){
   const cfg=normalizeConfig(config,templateStore.find(t=>t.id===currentPresetId))||{};
   if(keepTemplate!==false&&cfg.preset_id)currentPresetId=normalizePresetId(cfg.preset_id||currentPresetId);
   set('settingPresetName',cfg.preset_name);
-  set('settingMode',cfg.mode||cfg.processing_mode);
+  set('settingMode','smart');
   set('outputSuffix',cfg.output_suffix);
   set('configSource',cfg.source);
   const incomingStyles=Array.isArray(cfg.styles)?cfg.styles.slice(0,6).map((r,i)=>({
@@ -892,7 +907,8 @@ zone.addEventListener('dragover',e=>{e.preventDefault();zone.classList.add('drag
 function status(text,cls){msg.textContent=text;msg.className='status-msg';if(cls)msg.classList.add(cls)}
 function sizeLabel(bytes){const kb=bytes/1024;return kb>=1024?(kb/1024).toFixed(1)+' MB':kb.toFixed(1)+' KB'}
 function setStep(n){document.querySelectorAll('.mini-step').forEach(el=>{const s=Number(el.dataset.step);el.classList.toggle('done',s<n);el.classList.toggle('active',s===n)})}
-function friendlyError(text,code){if(code==='PROXY_REQUIRED')return'当前请求缺少前端代理校验，请通过 Cloudflare Pages 前端页面或同源 /api 代理访问。';if(code==='FORMAT_CONFIG_INVALID')return'排版设置格式无效，请重新保存设置后再上传。';if(code==='FORMAT_CONFIG_TOO_LARGE')return'排版设置内容过大，请减少自定义规则后再上传。';if(!text)return'处理失败，请检查文档是否损坏或包含特殊对象。';if(text.includes('too large')||text.includes('过大'))return'文件过大，请压缩到 10MB 以内后重试。';if(text.includes('format')||text.includes('docx'))return'文件格式不支持，请上传 .docx 文件。';if(text.includes('network')||text.includes('网络'))return'网络异常，请检查网络后重新上传。';return text}
+function friendlyError(text,code){if(code==='PROXY_REQUIRED')return'当前请求缺少前端代理校验，请通过 Cloudflare Pages 前端页面或同源 /api 代理访问。';if(code==='UNAUTHORIZED'||code==='CSRF_INVALID')return'管理员会话已失效，请重新登录后再试。';if(code==='FORMAT_CONFIG_INVALID')return'排版设置格式无效，请重新保存设置后再上传。';if(code==='FORMAT_CONFIG_TOO_LARGE')return'排版设置内容过大，请减少自定义规则后再上传。';if(!text)return'处理失败，请检查文档是否损坏或包含特殊对象。';if(text.includes('too large')||text.includes('过大'))return'文件过大，请压缩到 10MB 以内后重试。';if(text.includes('format')||text.includes('docx'))return'文件格式不支持，请上传 .docx 文件。';if(text.includes('network')||text.includes('网络'))return'网络异常，请检查网络后重新上传。';return text}
+function warnSuffix(task){const list=Array.isArray(task?.compatibility_warnings)?task.compatibility_warnings.filter(Boolean):[];return list.length?'；'+list.join('；'):''}
 function safeCollectConfig(){try{return collectConfig()}catch(_){resetDefaults();try{return collectConfig()}catch(__){return{styles:[],page:{width_cm:21.0,height_cm:29.7,margin_top_cm:3.7,margin_bottom_cm:3.5,margin_left_cm:2.8,margin_right_cm:2.6,lines_per_page:22,chars_per_line:28,line_spacing_pt:28,space_before_line:0,space_after_line:0,grid_alignment:'文字对齐字符网络'},features:{numbered_bold_enabled:true,punctuation_enabled:true,page_number_enabled:true}}}}}
 async function upload(f){
   if(!f)return;
@@ -926,14 +942,14 @@ async function upload(f){
   if(!resp.ok){let e={};try{e=await resp.json()}catch(_){}status(friendlyError(e.error||'服务器异常',e.code),'error');return}
   const task=await resp.json();
   const task_id=task.task_id;
-  bar.style.width='36%';setStep(2);status(task.status==='queued'?(task.message||`排队中，前方还有 ${task.queue_ahead||0} 个任务`):'正在读取文档结构','');
+  bar.style.width='36%';setStep(2);status((task.status==='queued'?(task.message||`排队中，前方还有 ${task.queue_ahead||0} 个任务`):'正在读取文档结构')+warnSuffix(task),'');
   for(let i=0;i<40;i++){
     await new Promise(r=>setTimeout(r,1000));
     try{
       const r=await fetch(api('/status/'+task_id));const t=await r.json();
-      if(t.status==='queued'){bar.style.width='36%';setStep(2);status(t.message||`排队中，前方还有 ${t.queue_ahead||0} 个任务`,'');continue}
-      if(t.status==='processing'){const pct=48+Math.min(i*2,36);bar.style.width=pct+'%';setStep(pct<72?3:4);status(t.message||'正在应用公文格式','');continue}
-      if(t.status==='done'){bar.style.width='100%';setStep(4);status('排版完成，正在下载','done');const dl=await fetch(api('/download/'+task_id));const blob=await dl.blob();if(lastDownloadUrl)URL.revokeObjectURL(lastDownloadUrl);lastDownloadUrl=URL.createObjectURL(blob);lastDownloadName=f.name.replace(/\.docx$/i,(config?.output_suffix||'_排版')+'.docx');triggerDownload(lastDownloadUrl,lastDownloadName);status('下载完成','done');resultCard.style.display='block';return}
+      if(t.status==='queued'){bar.style.width='36%';setStep(2);status((t.message||`排队中，前方还有 ${t.queue_ahead||0} 个任务`)+warnSuffix(t),'');continue}
+      if(t.status==='processing'){const pct=48+Math.min(i*2,36);bar.style.width=pct+'%';setStep(pct<72?3:4);status((t.message||'正在应用公文格式')+warnSuffix(t),'');continue}
+      if(t.status==='done'){bar.style.width='100%';setStep(4);status('排版完成，正在下载'+warnSuffix(t),'done');const dl=await fetch(api('/download/'+task_id));const blob=await dl.blob();if(lastDownloadUrl)URL.revokeObjectURL(lastDownloadUrl);lastDownloadUrl=URL.createObjectURL(blob);lastDownloadName=f.name.replace(/\.docx$/i,(config?.output_suffix||'_排版')+'.docx');triggerDownload(lastDownloadUrl,lastDownloadName);status('下载完成','done');resultCard.style.display='block';return}
       if(t.status==='error'){status(friendlyError(t.error||'排版失败',t.code),'error');return}
       bar.style.width=(50+Math.min(i*2,42))+'%';
     }catch(_){}
@@ -941,7 +957,8 @@ async function upload(f){
   status('排版超时，请稍后重试或重新上传','error');
 }
 function triggerDownload(url,name){const a=document.createElement('a');a.href=url;a.download=name;a.click()}function redownload(){if(lastDownloadUrl)triggerDownload(lastDownloadUrl,lastDownloadName)}function resetUpload(){document.getElementById('file').value='';meta.textContent='还没有选择文件';progressArea.style.display='none';resultCard.style.display='none';bar.style.width='0';status('',null);setStep(0)}
-loadLocalTemplates();initSettings();renderTemplateOptions();loadRemoteTemplates();
+async function bootstrap(){loadLocalTemplates();initSettings();renderTemplateOptions();await refreshAdminSession();await loadRemoteTemplates()}
+bootstrap();
 </script>
 </body>
 </html>

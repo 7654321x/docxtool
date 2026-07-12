@@ -130,6 +130,28 @@ def _apply_left_indent_chars(para, chars: float):
     ind.set(qn('w:leftChars'), str(int(chars * 100)))
     ind.set(qn('w:left'), str(int(chars * 320)))
 
+
+def _apply_hanging_indent_chars(para, first_chars: float, follow_chars: float) -> None:
+    """兼容旧分支的兜底缩进，避免落回未定义变量路径。"""
+    base = max(float(first_chars or 0), 0.0)
+    follow = max(float(follow_chars or base), base)
+    pPr = para._element.get_or_add_pPr()
+    ind = pPr.find(qn('w:ind'))
+    if ind is None:
+        ind = OxmlElement('w:ind')
+        pPr.append(ind)
+    for attr in (qn('w:firstLine'), qn('w:firstLineChars'),
+                 qn('w:left'), qn('w:leftChars'),
+                 qn('w:hanging'), qn('w:hangingChars')):
+        if attr in ind.attrib:
+            del ind.attrib[attr]
+    ind.set(qn('w:firstLineChars'), str(int(base * 100)))
+    ind.set(qn('w:firstLine'), str(int(base * 320)))
+    if follow > base:
+        hanging = int(max(0, round((follow - base) * 100)))
+        if hanging:
+            ind.set(qn('w:hangingChars'), str(hanging))
+
 def _attachment_note_wrap_start_chars(text: str) -> int:
     """附件说明首行回行列。
 
@@ -1020,7 +1042,8 @@ HEAD_GAP_FOLLOW_TYPES = ("body", "attachment_body", "heading1")
 
 def export_doc(doc_data: DocumentData, rules: List[StyleRule],
                settings: PageSettings, output_path: str,
-               numbered_bold_enabled: bool = True) -> dict:
+               numbered_bold_enabled: bool = True,
+               page_number_enabled: bool = True) -> dict:
     """排版引擎主入口。DocumentData → .docx 文件。
 
     Returns:
@@ -1147,10 +1170,8 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
             # 应用样式（带降级）
             if not apply_style_safe(para, resolved):
                 logger.warning(f"[引擎] 段落 {i} 样式降级，继续后续")
-                num, htext = _contact_wrap_data
                 first_start = getattr(resolved, 'first_line_indent', 2.0) or 2.0
-                follow_start = first_start + len(num + htext)
-                _apply_hanging_indent_chars(para, first_start, follow_start)
+                _apply_hanging_indent_chars(para, first_start, first_start)
 
             _apply_rule_paragraph_format(para, resolved, line_twips)
 
@@ -1344,7 +1365,8 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
     apply_page_settings(doc, settings, doc_data.doc_mode)
 
     # 页码
-    apply_header_footer(doc, page_rule)
+    if page_number_enabled:
+        apply_header_footer(doc, page_rule)
 
     # 页面行数诊断
     page_h_cm = 29.7 - settings.margin_top_cm - settings.margin_bottom_cm

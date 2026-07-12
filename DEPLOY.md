@@ -37,6 +37,7 @@ PROXY_SECRET=替换为和服务器一致的长随机代理密钥
 - `BACKEND_BASE_URL` 只允许在 `pages_dist/_worker.js` 代理层使用。
 - 不要在前端页面里写后端 IP。
 - `PROXY_SECRET` 必须是足够长的随机字符串，并与服务器环境变量完全一致。
+- 前端只需要同源 `/api/*`，不要把后端 IP 写进浏览器代码。
 
 ## Python 后端环境变量
 
@@ -47,12 +48,18 @@ export BIND_HOST=127.0.0.1
 export PORT=9527
 export ADMIN_TOKEN="替换为长随机管理密钥"
 export PROXY_SECRET="替换为和 Cloudflare Pages 一致的长随机代理密钥"
+export TASK_RETENTION_HOURS=24
+export MAX_CACHED_TASKS=500
+export CLEANUP_INTERVAL_MINUTES=30
+export TRUST_PROXY_HEADERS=true
+export TRUSTED_PROXY_IPS=127.0.0.1,::1
+export FRONTEND_ORIGIN="https://你的Pages域名"
 python3 server.py
 ```
 
 说明：
 
-- `ADMIN_TOKEN` 和 `PROXY_SECRET` 都是必需项，缺失时后端会启动失败。
+- `ADMIN_TOKEN` 和 `PROXY_SECRET` 都是必需项，缺失或弱口令时后端会启动失败。
 - 不要把真实 `ADMIN_TOKEN`、`PROXY_SECRET` 写入 GitHub。
 - Python 后端只监听 `127.0.0.1:9527`，不直接暴露到公网。
 
@@ -71,7 +78,8 @@ server {
 
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header CF-Connecting-IP $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
 
         proxy_read_timeout 300;
@@ -89,6 +97,7 @@ Nginx 监听公网 80，转发到本机 `127.0.0.1:9527`。
 - `9527`: 不要开放。
 - `3389`: 不要允许全部 IPv4，建议只允许自己的公网 IP。
 - `Ping`: 可开可不开。
+- 如需直接从本机管理后台访问，登录会话使用 `HttpOnly`、`SameSite=Strict` 和独立 `csrf_token`。
 
 ## 验证命令
 

@@ -424,7 +424,7 @@ h1{font-size:clamp(36px,6vw,66px);letter-spacing:-2px;line-height:1.05;margin-bo
 const msg=document.getElementById('msg'),bar=document.getElementById('bar'),meta=document.getElementById('meta'),zone=document.getElementById('dropZone'),progressArea=document.getElementById('progressArea'),resultCard=document.getElementById('resultCard');
 const DEFAULT_PRESET_ID='official_document';
 const LOCAL_TEMPLATE_KEY='docxtool_custom_templates_v2';
-const API_PREFIX='/api';
+const API_PREFIX = '/api';
 let lastDownloadUrl='',lastDownloadName='',templateApiAvailable=false;
 document.getElementById('today').textContent=new Date().toLocaleDateString('zh-CN',{year:'numeric',month:'long',day:'numeric',weekday:'long'});
 let currentPresetId=DEFAULT_PRESET_ID;

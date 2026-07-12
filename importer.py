@@ -1223,12 +1223,15 @@ def _repair_broken_rels(filepath: str) -> str:
 class DocxImporter:
     """.docx 文件导入器。"""
 
-    def load(self, filepath: str, rules: List[StyleRule]) -> DocumentData:
+    def load(self, filepath: str, rules: List[StyleRule], features: dict = None) -> DocumentData:
         """加载 .docx，识别段落类型，返回 DocumentData。"""
         try:
             from docx import Document as DocxDocument
         except ImportError:
             raise ImportError("请安装 python-docx: pip install python-docx")
+
+        features = features or {}
+        punctuation_enabled = str(features.get("punctuation_enabled", True)).strip().lower() not in {"0", "false", "no", "off", "禁用", "否"}
 
         # 自动修复损坏的 .rels 引用
         filepath = _repair_broken_rels(filepath)
@@ -1270,9 +1273,13 @@ class DocxImporter:
                 flat_lines.append(block)
                 continue
             _, para, pf = block
-            text = _to_chinese_punctuation(_normalize_quotes(para.text.strip()))
+            text = para.text.strip()
+            if punctuation_enabled:
+                text = _to_chinese_punctuation(_normalize_quotes(text))
             for li, line in enumerate(text.split('\n')):
-                line = _to_chinese_punctuation(_normalize_quotes(line.strip()))
+                line = line.strip()
+                if punctuation_enabled:
+                    line = _to_chinese_punctuation(_normalize_quotes(line))
                 if not line: continue
                 line_numbering = pf.numbering_prefix if li == 0 else _detect_numbering_prefix(line)
                 sub_pf = ParagraphFeatures(

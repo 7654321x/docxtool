@@ -1,0 +1,15 @@
+line-length = 100
+target-version = "py311"
+extend-exclude = [
+  ".git",
+  ".idea",
+  ".pytest_cache",
+  "__pycache__",
+  "build",
+  "dist",
+  "docxtool",
+  "logs",
+  "outputs",
+  "runtime",
+  "tmp_wheels",
+]
