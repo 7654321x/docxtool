@@ -2,7 +2,7 @@
 
 这是一个公文排版 Web 服务，支持 `.docx` 上传、格式识别、自动排版、任务状态查询、文件下载、管理后台和 Cloudflare Pages Worker 代理。
 
-当前项目以 Web 服务为主。旧 PyQt 桌面端文件 `main.py`、`untitled.py`、`untitled.ui` 仍在本地保留，但不属于默认 GitHub 发布清单。
+当前项目只保留 Web 服务新架构。重构前的桌面端文件和旧前端入口已从发布树移除。
 
 ## 当前入口
 
@@ -12,7 +12,7 @@
 - Pages Worker：`resources/frontend/pages/_worker.js`
 - Pages 静态页面：`resources/frontend/pages/index.html`
 
-`index1.html` 已退役，不再作为前端入口。重构前的根目录页面已保留到 `resources/frontend/legacy/index-before-restructure.html` 供人工比对。
+重构前的旧前端入口已退役并移除，不再作为前端入口。
 
 ## 主要文件
 

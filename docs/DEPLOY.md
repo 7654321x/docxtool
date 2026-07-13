@@ -27,7 +27,7 @@ resources/frontend/pages/index.html
 resources/frontend/pages/_worker.js
 ```
 
-`index1.html` 已退役，不再部署。旧 PyQt 桌面端 `main.py`、`untitled.py`、`untitled.ui` 不属于默认 Web 发布范围。
+重构前的根目录前端、旧构建产物、legacy 页面和旧 PyQt 桌面端文件已移除，不再部署。当前唯一前端发布目录是 `resources/frontend/pages/`。
 
 ## 安装依赖
 

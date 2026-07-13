@@ -131,7 +131,6 @@ $requiredFiles = @(
     "scripts/publish_to_github.ps1",
     "resources/frontend/pages/index.html",
     "resources/frontend/pages/_worker.js",
-    "resources/frontend/legacy/index-before-restructure.html",
     "var/data/.gitkeep",
     "var/logs/.gitkeep",
     "var/outputs/.gitkeep",

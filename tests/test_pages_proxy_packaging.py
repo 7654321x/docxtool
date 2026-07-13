@@ -9,11 +9,10 @@ class PagesProxyPackagingTest(unittest.TestCase):
     def test_pages_directory_is_authoritative_frontend(self):
         frontend = ROOT / "resources" / "frontend"
         pages = frontend / "pages"
-        legacy = frontend / "legacy" / "index-before-restructure.html"
 
         self.assertTrue((pages / "index.html").exists(), "resources/frontend/pages/index.html should be the production page")
         self.assertTrue((pages / "_worker.js").exists(), "resources/frontend/pages/_worker.js should be the production Worker")
-        self.assertTrue(legacy.exists(), "legacy page should remain available for audit comparison")
+        self.assertFalse((frontend / "legacy").exists(), "legacy frontend should be removed from the published tree")
 
         production_entrypoints = [
             path.relative_to(frontend).as_posix()
@@ -66,7 +65,8 @@ class PagesProxyPackagingTest(unittest.TestCase):
         self.assertIn("Remote $Branch changed after clone", script)
         self.assertIn('"resources/frontend/pages/index.html"', script)
         self.assertIn('"resources/frontend/pages/_worker.js"', script)
-        self.assertIn('"resources/frontend/legacy/index-before-restructure.html"', script)
+        retired_legacy_entry = '"' + "resources/frontend/" + "legacy/index-before-restructure.html" + '"'
+        self.assertNotIn(retired_legacy_entry, script)
         self.assertNotIn('"resources/frontend/index.html"', script)
         self.assertIn('(^|/)\\.env(\\.|$)', script)
         self.assertIn('\\.(pem|key|db|sqlite|sqlite3|log|zip)$', script)

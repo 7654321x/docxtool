@@ -240,7 +240,7 @@ import os as _os
 LOGGER_NAME = "docx_tool"
 LOG_FORMAT = "%(asctime)s [%(levelname)-5s] %(name)s | %(message)s"
 LOG_TO_FILE = True                     # 全局开关：True=写日志文件，False=仅控制台
-_LOG_DIR: Optional[str] = None         # 日志输出目录（由 main.py 调用 configure 设置）
+_LOG_DIR: Optional[str] = None         # 日志输出目录（由 Web 服务启动时配置）
 _FILE_HANDLER: Optional[logging.Handler] = None
 _CONTEXT_FILE_HANDLER: Optional[logging.Handler] = None
 _CURRENT_LOG_PATH: Optional[str] = None
@@ -336,7 +336,7 @@ def _set_file_handler(log_path: str) -> str:
 
 
 def configure_logging(log_dir: str, to_file: bool = True) -> None:
-    """设置日志输出目录和文件开关（main.py 启动时调用一次）。"""
+    """设置日志输出目录和文件开关（Web 服务启动时调用一次）。"""
     global LOG_TO_FILE, _LOG_DIR
     LOG_TO_FILE = to_file
     _LOG_DIR = log_dir
@@ -495,9 +495,9 @@ class StyleRule:
 
     @staticmethod
     def from_config_dict(config_dict: dict = None) -> List["StyleRule"]:
-        """从前端传入的 config.json 兼容 dict 生成排版规则。
+        """从前端传入的格式配置对象生成排版规则。
 
-        不修改全局 config.json；字段缺失时按默认规则兜底，并补齐 24 行。
+        不修改包内默认配置；字段缺失时按默认规则兜底，并补齐 24 行。
         """
         if not config_dict:
             return StyleRule.from_config()
@@ -577,7 +577,7 @@ class PageSettings:
 
     @staticmethod
     def from_config_dict(config_dict: dict = None) -> "PageSettings":
-        """从前端传入的 config.json 兼容 dict 生成页面设置。"""
+        """从前端传入的格式配置对象生成页面设置。"""
         if not config_dict:
             return PageSettings.from_config()
         p = config_dict.get("page", {}) if isinstance(config_dict, dict) else {}
@@ -856,4 +856,4 @@ if __name__ == "__main__":
         timestamp="20260531_160000",
     ).endswith(r"D:\logs\20260531_160000_新建 DOCX 文档 (2).log")
 
-    print("✅ style_config.py 纯函数验证全部通过")
+    print("✅ 样式配置纯函数验证全部通过")

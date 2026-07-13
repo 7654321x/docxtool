@@ -2,20 +2,19 @@
 
 ## 核心原则
 
-1. **引擎稳定性优先** — `engine/_core.py` 不作模式特性开发，新模式差异只在 `engine/normal.py` / `report.py` / `scheme.py` 打补丁
+1. **引擎稳定性优先** — 通用渲染逻辑集中在 `src/docxtool/document/engine` 包内，新模式差异只在对应模式模块中处理
 2. **先验证再上线** — 每改完一轮，用 `005班子对照检查材料.docx` 跑一遍确认格式不退化
 3. **通用模式不动** — 加方案/报告功能时，原公文格式不能乱
 
 ## 代码架构
 
-```
-engine/
-├── __init__.py     → 入口，导出 export_doc
-├── _core.py        → 通用渲染引擎（段落/编号/页面/间距） — 尽量不改
-├── normal.py       → 通用公文样式重写
-├── report.py       → 报告模式样式重写（继承 normal）
-└── scheme.py       → 方案模式样式重写（继承 normal + 方案特有）
-```
+当前排版核心位于 `src/docxtool/document/engine`：
+
+- `__init__.py`：入口，导出 `export_doc`
+- `core.py`：通用渲染引擎（段落、编号、页面、间距）
+- `normal.py`：通用公文样式重写
+
+如果以后重新引入报告或方案模式，应继续放在该包内，并补齐对应测试。
 
 ## 模式差异速查
 

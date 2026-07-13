@@ -78,9 +78,8 @@ resources/frontend/pages/_worker.js
 
 说明：
 
-- `index1.html` 已退役，不再上传。
 - `resources/frontend/pages/index.html` 是唯一权威生产前端。
-- `resources/frontend/legacy/` 只保留旧页面用于人工比对。旧页面只有基础上传、轮询和下载；生产页面还包含排版设置、模板/预设、管理会话 CSRF、格式配置请求头、重新下载和继续处理等增强功能。
+- 重构前的旧前端入口和 legacy 页面已移除，不再上传。
 
 运行目录只上传空目录占位文件：
 
@@ -106,25 +105,9 @@ tests/worker-routing.test.mjs
 
 ## 5. 已退役或非默认发布文件
 
-这些文件不进入默认 GitHub 发布清单：
+这些重构前文件已移除，不再进入 GitHub 发布清单。旧桌面端、旧前端入口、旧技能目录和临时演示文件如需重新维护，应在独立目录重新引入。
 
-```text
-SKILLS.md
-docxtool_index_numbering_label_width_adjusted.html
-hermes_skills/official-document-formatting/SKILL.md
-hermes_skills/official-document-formatting/agents/openai.yaml
-index1.html
-```
-
-旧 PyQt 桌面端文件目前不属于默认 Web 发布清单：
-
-```text
-main.py
-untitled.py
-untitled.ui
-```
-
-如果以后重新维护桌面端，应单独建立桌面端发布清单和依赖说明。
+如果以后重新维护桌面端，应单独建立发布清单和依赖说明。
 
 ## 6. 禁止上传
 

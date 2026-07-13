@@ -1782,4 +1782,4 @@ if __name__ == "__main__":
     )
     assert item_type == "attachment_note_item", f"自动编号附件续项识别失败: {item_type}"
     assert fixed_text.startswith("2. "), f"自动编号附件续项补号失败: {fixed_text}"
-    print("✅ importer.py 验证全部通过")
+    print("✅ DOCX 导入器验证全部通过")

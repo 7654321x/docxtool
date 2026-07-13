@@ -78,7 +78,7 @@ class ConfigDrivenStylesTest(unittest.TestCase):
         self.assertEqual(TYPE_TO_RULE_INDEX["sign_date"], names.index("落款日期"))
 
     def test_from_config_reads_spacing_and_side_indent_fields(self):
-        config_path = self.tmp_path / "config.json"
+        config_path = self.tmp_path / "format-rules.json"
         styles = [
             {
                 "name": f"row{i}",

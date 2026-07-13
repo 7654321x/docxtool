@@ -51,13 +51,13 @@ pwsh -NoProfile -Command "git ls-remote git@github.com:7654321x/docxtool.git ref
 - 配置：`.env.example`、`.gitignore`、`.gitattributes`、`pytest.ini`、`ruff.toml`、`pyproject.toml`、`.github/workflows/ci.yml`
 - 后端和排版核心：`server.py`、`src/docxtool/`、`src/docxtool/resources/config/default-format.json`
 - 脚本：`scripts/generate_secrets.py`、`scripts/migrate_legacy_database.ps1`、`scripts/publish_to_github.ps1`
-- 前端和 Cloudflare Pages：`resources/frontend/pages/index.html`、`resources/frontend/pages/_worker.js`、`resources/frontend/legacy/index-before-restructure.html`
+- 前端和 Cloudflare Pages：`resources/frontend/pages/index.html`、`resources/frontend/pages/_worker.js`
 - 运行目录占位：`var/data/.gitkeep`、`var/logs/.gitkeep`、`var/outputs/.gitkeep`、`var/runtime/.gitkeep`
 - 测试：`tests/test_*.py`、`tests/worker-routing.test.mjs`
 
-当前唯一生产前端源入口是 `resources/frontend/pages/index.html`。`index1.html` 已退役；`resources/frontend/legacy/index-before-restructure.html` 只保留待人工比对的旧页面。旧页面只有基础上传、轮询和下载；生产页面包含排版设置、模板/预设、管理会话 CSRF、格式配置请求头等增强功能。
+当前唯一生产前端源入口是 `resources/frontend/pages/index.html`。重构前的旧前端入口和 legacy 页面已移除。
 
-`main.py`、`untitled.py`、`untitled.ui` 属于旧 PyQt 桌面端，本次不列为默认 Web 发布必传文件。
+旧 PyQt 桌面端文件已移除；当前发布范围只保留 Web 服务新架构。
 
 ## 4. 绝对不要上传
 
