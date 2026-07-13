@@ -80,7 +80,7 @@ resources/frontend/pages/_worker.js
 
 - `index1.html` 已退役，不再上传。
 - `resources/frontend/pages/index.html` 是唯一权威生产前端。
-- `resources/frontend/legacy/` 只保留未确认用途的旧页面，发布前应人工确认是否需要。
+- `resources/frontend/legacy/` 只保留旧页面用于人工比对。旧页面只有基础上传、轮询和下载；生产页面还包含排版设置、模板/预设、管理会话 CSRF、格式配置请求头、重新下载和继续处理等增强功能。
 
 运行目录只上传空目录占位文件：
 
@@ -190,4 +190,5 @@ pwsh -NoProfile -File .\scripts\publish_to_github.ps1 -Push
 pwsh -NoProfile -Command "python -m pytest"
 pwsh -NoProfile -Command "python -m ruff check src tests scripts"
 pwsh -NoProfile -Command "node --test tests/worker-routing.test.mjs"
+pwsh -NoProfile -Command "python -m build"
 ```

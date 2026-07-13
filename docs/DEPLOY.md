@@ -65,7 +65,8 @@ export DATABASE_PATH=var/data/stats.db
 - Python 后端只监听 `127.0.0.1:9527`，不直接暴露到公网。
 - `FRONTEND_ORIGIN` 必须是精确 Origin，例如 `https://example.pages.dev`，不要带路径、查询参数或末尾多余斜杠。
 - `COOKIE_SECURE` 未设置时会根据 `FRONTEND_ORIGIN` 自动推导。
-- 如果根目录仍有旧版 `stats.db` 且未设置 `DATABASE_PATH`，程序会继续使用旧库，避免生成第二份空数据库。迁移前先停服务、备份并执行 SQLite `integrity_check`。
+- 如果根目录仍有旧版 `stats.db` 且未设置 `DATABASE_PATH`，程序会继续使用旧库，避免生成第二份空数据库。迁移前先停服务，运行 `scripts/migrate_legacy_database.ps1` 做 dry run；加 `-Execute` 时脚本会先备份旧库，再复制到目标位置，并在复制前后执行 SQLite `integrity_check`。
+- wheel 安装后默认运行数据根不在 `site-packages`。如需固定生产数据位置，显式设置 `DATABASE_PATH`、`LOG_DIR`、`OUTPUT_DIR` 和 `RUNTIME_DIR`。
 
 ## Cloudflare Pages 环境变量
 

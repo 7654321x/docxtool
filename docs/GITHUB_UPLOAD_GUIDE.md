@@ -46,15 +46,16 @@ pwsh -NoProfile -Command "git ls-remote git@github.com:7654321x/docxtool.git ref
 
 默认发布以下类型文件：
 
-- 项目文档：`README.md`、`docs/DEPLOY.md`、`docs/API.md`、`docs/UPLOAD_MANIFEST.md`、`docs/GITHUB_UPLOAD_GUIDE.md`、`AGENTS.md`
+- 项目文档：`README.md`、`docs/DEPLOY.md`、`docs/API.md`、`docs/UPLOAD_MANIFEST.md`、`docs/GITHUB_UPLOAD_GUIDE.md`、`AGENTS.md`、`CONVENTIONS.md`
 - 依赖和启动：`requirements.txt`、`run.sh`
-- 配置：`.env.example`、`.gitignore`、`pytest.ini`、`ruff.toml`、`pyproject.toml`、`.github/workflows/ci.yml`
+- 配置：`.env.example`、`.gitignore`、`.gitattributes`、`pytest.ini`、`ruff.toml`、`pyproject.toml`、`.github/workflows/ci.yml`
 - 后端和排版核心：`server.py`、`src/docxtool/`、`src/docxtool/resources/config/default-format.json`
-- 脚本：`scripts/generate_secrets.py`、`scripts/publish_to_github.ps1`
-- 前端和 Cloudflare Pages：`resources/frontend/pages/index.html`、`resources/frontend/pages/_worker.js`
+- 脚本：`scripts/generate_secrets.py`、`scripts/migrate_legacy_database.ps1`、`scripts/publish_to_github.ps1`
+- 前端和 Cloudflare Pages：`resources/frontend/pages/index.html`、`resources/frontend/pages/_worker.js`、`resources/frontend/legacy/index-before-restructure.html`
+- 运行目录占位：`var/data/.gitkeep`、`var/logs/.gitkeep`、`var/outputs/.gitkeep`、`var/runtime/.gitkeep`
 - 测试：`tests/test_*.py`、`tests/worker-routing.test.mjs`
 
-当前唯一前端源入口是 `resources/frontend/pages/index.html`。`index1.html` 已退役；`resources/frontend/legacy/` 只保留待人工比对的旧页面。
+当前唯一生产前端源入口是 `resources/frontend/pages/index.html`。`index1.html` 已退役；`resources/frontend/legacy/index-before-restructure.html` 只保留待人工比对的旧页面。旧页面只有基础上传、轮询和下载；生产页面包含排版设置、模板/预设、管理会话 CSRF、格式配置请求头等增强功能。
 
 `main.py`、`untitled.py`、`untitled.ui` 属于旧 PyQt 桌面端，本次不列为默认 Web 发布必传文件。
 
@@ -87,6 +88,7 @@ pwsh -NoProfile -File .\scripts\publish_to_github.ps1
 - 清空临时克隆工作区，但保留 `.git`
 - 复制允许发布的真实项目文件
 - 运行 `pytest`、Ruff、Node Worker 测试
+- 验证 Python 包构建
 - 执行 `git diff --cached --check`
 - 展示 staged diff
 - 不提交、不推送
@@ -117,4 +119,5 @@ pwsh -NoProfile -Command "git status --short --branch"
 pwsh -NoProfile -Command "python -m pytest"
 pwsh -NoProfile -Command "python -m ruff check src tests scripts"
 pwsh -NoProfile -Command "node --test tests/worker-routing.test.mjs"
+pwsh -NoProfile -Command "python -m build"
 ```

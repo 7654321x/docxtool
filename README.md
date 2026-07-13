@@ -87,12 +87,15 @@ pwsh -NoProfile -File .\scripts\migrate_legacy_database.ps1 -Execute
 DATABASE_PATH=var/data/stats.db
 ```
 
+数据库父目录只会在实际建立 SQLite 连接时创建；仅导入包、读取默认配置或执行 `python -m docxtool --help` 不会创建 `stats.db`。源码树以仓库根目录作为运行数据根；wheel 安装后默认使用用户数据目录，避免把数据库、日志或输出写入 `site-packages`。可用 `DOCXTOOL_HOME`、`LOG_DIR`、`OUTPUT_DIR`、`RUNTIME_DIR` 和 `DATABASE_PATH` 显式覆盖。
+
 ## 测试
 
 ```pwsh
 pwsh -NoProfile -Command "python -m pytest"
 pwsh -NoProfile -Command "python -m ruff check src tests scripts"
 pwsh -NoProfile -Command "node --test tests/worker-routing.test.mjs"
+pwsh -NoProfile -Command "python -m build"
 ```
 
 ## GitHub 发布

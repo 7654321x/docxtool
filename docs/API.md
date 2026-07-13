@@ -583,4 +583,4 @@ Worker 还会代理管理页面直接使用的后端路径：
 4. Cloudflare Pages 前端访问同源 `/api/*`，Worker 通过 `BACKEND_BASE_URL` 转发到 Nginx，再由 Nginx 转发到 `127.0.0.1:9527`。
 5. 推荐部署细节见 `docs/DEPLOY.md`。
 6. `var/logs/` 和 `var/outputs/` 是运行时目录，仓库中只保留 `.gitkeep`，实际日志和生成文件不应提交。
-7. `var/data/stats.db` 是新的运行时 SQLite 数据库位置，不应提交到仓库。若根目录已有旧版 `stats.db` 且未设置 `DATABASE_PATH`，后端会继续使用旧库，迁移需人工停服务后执行。
+7. `var/data/stats.db` 是源码树运行时 SQLite 数据库位置，不应提交到仓库。若根目录已有旧版 `stats.db` 且未设置 `DATABASE_PATH`，后端会继续使用旧库，迁移需人工停服务后执行。仅解析默认路径不会创建数据库目录，首次实际连接时才会创建父目录；wheel 安装后默认运行数据根不在 `site-packages`。
