@@ -51,10 +51,8 @@ _DB_PATH = os.path.join(BASE_DIR, "stats.db")
 LOG_DIR = os.path.join(BASE_DIR, "logs")
 RUNTIME_DIR = os.path.join(BASE_DIR, "runtime")
 RUNTIME_TMP_DIR = os.path.join(RUNTIME_DIR, "tmp")
-os.makedirs(LOG_DIR, exist_ok=True)
-os.makedirs(RUNTIME_TMP_DIR, exist_ok=True)
-DEFAULT_ADMIN_TOKEN = "7654321xxx"
-DEFAULT_PROXY_SECRET = "docxtool-proxy-20260601-9ec0d6e2443a4f5f9784f0f04bb62917"
+DEFAULT_ADMIN_TOKEN = ""
+DEFAULT_PROXY_SECRET = ""
 ADMIN_SESSION_COOKIE = "docxtool_admin_session"
 ADMIN_CSRF_HEADER = "X-CSRF-Token"
 DEFAULT_ADMIN_SESSION_TTL_SECONDS = 12 * 60 * 60
@@ -66,8 +64,6 @@ _WEAK_SECRETS = {
     "change-me-admin-token",
     "change-me-proxy-secret",
     "change-me-in-production",
-    DEFAULT_ADMIN_TOKEN,
-    DEFAULT_PROXY_SECRET,
 }
 
 def _parse_bool(value: str, default: bool = True) -> bool:
@@ -279,9 +275,6 @@ def _seed_default_presets(conn):
         conn.commit()
     except Exception:
         conn.rollback()
-
-_sql_init()
-
 DEFAULT_MONITOR_PAGE_SIZE = 50
 MAX_MONITOR_PAGE_SIZE = 100
 
@@ -540,6 +533,7 @@ COOKIE_SECURE = _parse_bool(
     os.environ.get("COOKIE_SECURE", "false" if not FRONTEND_ORIGIN.startswith("https://") else "true"),
     FRONTEND_ORIGIN.startswith("https://"),
 )
+ALLOW_LOCAL_FILE_API = _parse_bool(os.environ.get("ALLOW_LOCAL_FILE_API", "false"), False)
 MAX_SIZE = _parse_int_env("MAX_UPLOAD_SIZE_MB", 10) * 1024 * 1024
 UPLOAD_READ_TIMEOUT_SECONDS = _parse_int_env("UPLOAD_READ_TIMEOUT_SECONDS", 15)
 UPLOAD_READ_CHUNK_SIZE = 64 * 1024
@@ -591,7 +585,6 @@ WORKERS_LOCK = threading.Lock()
 WORKER_THREADS = []
 
 OUTPUT_DIR = os.path.join(BASE_DIR, "outputs")
-os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 def _startup_cleanup():
     removed = 0
@@ -671,15 +664,35 @@ def _recover_inflight_tasks_on_startup() -> int:
         conn.close()
     return len(rows)
 
-configure_logging(LOG_DIR, to_file=True)
-logger = get_logger()
-logging.getLogger("docx_tool").setLevel(logging.DEBUG)
-for h in logging.getLogger("docx_tool").handlers:
-    if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler):
-        h.setLevel(logging.WARNING)
+logger = logging.getLogger("docx_tool")
+_RUNTIME_INITIALIZED = False
+_CLEANER_STARTED = False
+_CLEANER_THREAD = None
 
-_startup_cleanup()
-_recover_inflight_tasks_on_startup()
+def _ensure_runtime_dirs() -> None:
+    os.makedirs(LOG_DIR, exist_ok=True)
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    os.makedirs(RUNTIME_TMP_DIR, exist_ok=True)
+
+def _configure_runtime_logging() -> None:
+    global logger
+    configure_logging(LOG_DIR, to_file=True)
+    logger = get_logger()
+    logging.getLogger("docx_tool").setLevel(logging.DEBUG)
+    for h in logging.getLogger("docx_tool").handlers:
+        if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler):
+            h.setLevel(logging.WARNING)
+
+def initialize_runtime(cleanup: bool = True, recover: bool = True) -> None:
+    global _RUNTIME_INITIALIZED
+    _ensure_runtime_dirs()
+    _configure_runtime_logging()
+    _sql_init()
+    if cleanup:
+        _startup_cleanup()
+    if recover:
+        _recover_inflight_tasks_on_startup()
+    _RUNTIME_INITIALIZED = True
 
 def _read_exact(rfile, length: int, timeout: int = 10) -> bytes:
     data = b""; remaining = length; t0 = time.time()
@@ -987,12 +1000,15 @@ def _task_process_body(task_id: str, input_path: str, orig_name: str, ip: str, u
     """Run the actual DOCX pipeline and return a structured result."""
     t0 = time.time()
     request_meta = request_meta or {}
+    os.makedirs(LOG_DIR, exist_ok=True)
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
     log_path = make_document_log_path(orig_name, log_dir=LOG_DIR, suffix=task_id[:8])
     log_filename = os.path.basename(log_path)
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
     with open(log_path, "a", encoding="utf-8") as f:
         f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} [INFO ] docx_tool | [Task] {task_id[:8]} log created file={orig_name}\n")
     token = set_context_log_path(log_path)
+    task_logger = get_logger()
     try:
         rules, settings, features = load_rules_and_settings(format_config)
         rules = rules or [StyleRule.default_for_row(i) for i in range(10)]
@@ -1002,7 +1018,7 @@ def _task_process_body(task_id: str, input_path: str, orig_name: str, ip: str, u
         features.setdefault("punctuation_enabled", True)
         features.setdefault("page_number_enabled", True)
         body_rule = rules[5] if len(rules) > 5 else StyleRule.default_for_row(5)
-        logger.info(
+        task_logger.info(
             f"[Task] {task_id[:8]} start file={orig_name} ip={ip} log={log_filename} "
             f"preset={request_meta.get('preset_name','')} mode={request_meta.get('processing_mode','smart')} "
             f"frontend_config={bool(format_config)} body={body_rule.font}/{body_rule.font_size_label} "
@@ -1055,7 +1071,7 @@ def _task_process_body(task_id: str, input_path: str, orig_name: str, ip: str, u
             "error": "",
         }
     except Exception as exc:
-        logger.exception(f"[Task] {task_id[:8]} error: {exc}")
+        task_logger.exception(f"[Task] {task_id[:8]} error: {exc}")
         return {
             "status": "error",
             "log_filename": log_filename,
@@ -1343,7 +1359,18 @@ def _cleaner_loop():
                 f"[Cleaner] removed files={file_result['removed']} tasks={db_result['removed']}"
             )
 
-threading.Thread(target=_cleaner_loop, daemon=True).start()
+def start_background_services() -> None:
+    global _CLEANER_STARTED, _CLEANER_THREAD
+    _ensure_workers_started()
+    if _CLEANER_STARTED:
+        return
+    _CLEANER_THREAD = threading.Thread(
+        target=_cleaner_loop,
+        name="docx-cleaner",
+        daemon=True,
+    )
+    _CLEANER_THREAD.start()
+    _CLEANER_STARTED = True
 
 def _error_payload(code: str, message: str) -> dict:
     return {"error": message, "code": code}
@@ -1463,10 +1490,7 @@ def _file_api_authorized(headers, client_address=None) -> bool:
     header_token = headers.get("X-Proxy-Secret", "") if headers else ""
     if _compare_secret(header_token, PROXY_SECRET):
         return True
-    host = headers.get("Host", "") if headers else ""
-    if _is_local_host(host):
-        return True
-    return bool(client_address and client_address[0] in {"127.0.0.1", "::1"})
+    return _local_file_api_allowed(client_address)
 
 def _decode_format_config(headers) -> dict:
     raw = headers.get("X-Format-Config", "") if headers else ""
@@ -2062,6 +2086,26 @@ def _is_local_host(host: str) -> bool:
         return host in {"localhost", "127.0.0.1", "::1"}
     host = host.split(":", 1)[0]
     return host in {"localhost", "127.0.0.1", "::1"}
+
+def _is_loopback_ip(value: str) -> bool:
+    try:
+        return ipaddress.ip_address(str(value or "").strip()).is_loopback
+    except ValueError:
+        return False
+
+def _is_bind_host_loopback() -> bool:
+    host = str(BIND_HOST or "").strip().lower()
+    return host in {"localhost"} or _is_loopback_ip(host)
+
+def _is_production_mode() -> bool:
+    return bool(FRONTEND_ORIGIN.startswith("https://") or not _is_bind_host_loopback())
+
+def _local_file_api_allowed(client_address) -> bool:
+    if not ALLOW_LOCAL_FILE_API or _is_production_mode():
+        return False
+    if not client_address:
+        return False
+    return _is_loopback_ip(client_address[0])
 
 def _trusted_proxy_source(client_address) -> bool:
     if not TRUST_PROXY_HEADERS:
@@ -2737,7 +2781,8 @@ button{margin-top:16px;height:42px;border:0;border-radius:10px;background:#b71c1
 
 def main():
     _validate_secrets_or_exit()
-    _ensure_workers_started()
+    initialize_runtime()
+    start_background_services()
     server = ThreadingHTTPServer(_server_bind_address(), Handler)
     server.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     urls = _startup_urls()
@@ -2748,7 +2793,7 @@ def main():
     print(f"限流: {RATE_WINDOW}s/IP | 文件TTL: {FILE_TTL}s")
     for line in _startup_time_check_lines():
         print(line)
-    print("外网访问:   Cloudflare Pages /api/* -> Nginx 80 -> 127.0.0.1:9527")
+    print("外网访问:   Cloudflare Pages /api/* -> Tunnel/HTTPS 源站 -> 127.0.0.1:9527")
     print("Ctrl+C 停止")
     try: server.serve_forever()
     except KeyboardInterrupt:

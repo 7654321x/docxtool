@@ -564,7 +564,7 @@ GET /log/{task_id}?token={ADMIN_TOKEN}
 ## 7. 部署注意事项
 
 1. 生产环境必须设置 `ADMIN_TOKEN` 和 `PROXY_SECRET`，代码不提供默认密钥。
-2. 只开放 Nginx 80，不要直接暴露 Python 服务端口 9527。
+2. 推荐使用 Cloudflare Tunnel；如使用源站反代，Cloudflare 到源站必须使用 HTTPS，不要把公网 HTTP 80 作为正式生产入口。
 3. Nginx 需要允许 `PUT` 方法并转发请求头。
 4. Cloudflare Pages 前端访问同源 `/api/*`，Worker 通过 `BACKEND_BASE_URL` 转发到 Nginx，再由 Nginx 转发到 `127.0.0.1:9527`。
 5. 推荐部署细节见 `DEPLOY.md`。

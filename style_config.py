@@ -37,6 +37,12 @@ def cn_size_to_pt(label: str) -> float:
     return FONT_SIZE_MAP.get(label.strip(), 12.0)
 
 
+def _size_pt_from_label(label: str, default: float, allow_empty: bool = False) -> float:
+    if label is None or not str(label).strip():
+        return 0.0 if allow_empty else default
+    return cn_size_to_pt(str(label))
+
+
 # ═══════════════════════════════════════════════════════════════
 # 对齐映射（python-docx 枚举值占位，实际值在 engine.py 中按需导入）
 # ═══════════════════════════════════════════════════════════════
@@ -133,6 +139,8 @@ def parse_alignment(s: str) -> Tuple[str, str]:
     "左对齐" → ("left", "left")。"""
     if not s:
         return ("left", "left")
+    if s.strip() == "奇右偶左":
+        return ("right", "left")
     if "|" in s:
         parts = s.split("|", 1)
         odd_part = parts[0].strip()
@@ -382,8 +390,8 @@ class StyleRule:
             StyleRule(3, "三级标题", "仿宋_GB2312", "三号", 16.0, True, "{c}.", "阿拉伯数字", 2.0, "左对齐"),
             StyleRule(4, "四级标题", "仿宋_GB2312", "三号", 16.0, False, "（{d}）", "阿拉伯数字", 2.0, "左对齐"),
             StyleRule(5, "正文", "仿宋_GB2312", "三号", 16.0, False, "", "", 2.0, "两端对齐"),
-            StyleRule(6, "数字", "Times New Roman", "三号", 16.0, False, "", "", 0.0, "左对齐"),
-            StyleRule(7, "字母", "Times New Roman", "三号", 16.0, False, "", "", 0.0, "左对齐"),
+            StyleRule(6, "数字", "Times New Roman", "", 0.0, False, "", "", 0.0, "左对齐"),
+            StyleRule(7, "字母", "Times New Roman", "", 0.0, False, "", "", 0.0, "左对齐"),
             StyleRule(8, "页码设置", "宋体", "四号", 14.0, False, "— 1 —", "阿拉伯数字", 0.0, "奇右|偶左"),
             StyleRule(9, "正文上标", "Times New Roman", "三号", 16.0, False, "[n]", "阿拉伯数字", 0.0, "左对齐"),
             StyleRule(10, "称呼", "仿宋_GB2312", "三号", 16.0, False, "", "", 2.0, "左对齐", 1.0, 0.0),
@@ -417,12 +425,13 @@ class StyleRule:
         rules = []
         for i, item in enumerate(data.get("styles", [])):
             default = StyleRule.default_for_row(i)
+            size = item.get("size", default.font_size_label)
             rules.append(StyleRule(
                 row_index=i,
                 level_name=item.get("name", ""),
                 font=item.get("font", "仿宋_GB2312"),
-                font_size_label=item.get("size", "三号"),
-                font_size_pt=cn_size_to_pt(item.get("size", "三号")),
+                font_size_label=size,
+                font_size_pt=_size_pt_from_label(size, default.font_size_pt, allow_empty=i in (6, 7)),
                 bold=item.get("bold", False),
                 numbering_pattern=item.get("pattern", ""),
                 language=item.get("lang", ""),
@@ -457,7 +466,7 @@ class StyleRule:
                 level_name=item.get("name", default.level_name),
                 font=item.get("font", default.font),
                 font_size_label=size,
-                font_size_pt=cn_size_to_pt(size),
+                font_size_pt=_size_pt_from_label(size, default.font_size_pt, allow_empty=i in (6, 7)),
                 bold=_safe_bool(item.get("bold", default.bold), default.bold),
                 numbering_pattern=item.get("pattern", default.numbering_pattern),
                 language=item.get("lang", default.language),

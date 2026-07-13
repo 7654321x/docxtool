@@ -17,8 +17,6 @@ const ADMIN_PATHS = [
   "/log/",
   "/presets",
 ];
-const DEFAULT_PROXY_SECRET = "docxtool-proxy-20260601-9ec0d6e2443a4f5f9784f0f04bb62917";
-
 function jsonError(code, error, status) {
   return new Response(JSON.stringify({ code, error }), {
     status,

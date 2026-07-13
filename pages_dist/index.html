@@ -297,7 +297,7 @@ h1{font-size:clamp(36px,6vw,66px);letter-spacing:-2px;line-height:1.05;margin-bo
 
   <section class="section" id="compare"><div class="shell"><div class="section-head reveal"><div class="section-title"><div class="section-label">Before / After</div><h2>处理前后，用户能直接看懂的变化</h2></div></div><div class="compare-grid"><div class="compare bad reveal"><h3>处理前常见问题</h3><ul class="check-list"><li>标题字体、字号不统一</li><li>正文首行缩进和行距混乱</li><li>页边距、每页行数不规范</li><li>页码样式和位置需要手动调整</li></ul></div><div class="compare good reveal d1"><h3>处理后预期效果</h3><ul class="check-list"><li>主标题、各级标题按规则统一</li><li>正文仿宋三号、首行缩进 2 字符</li><li>A4 页面、固定行距、页边距统一</li><li>输出可下载的规范 Word 文件</li></ul></div></div></div></section>
 
-  <section class="section"><div class="shell"><div class="section-head reveal"><div class="section-title"><div class="section-label">What It Fixes</div><h2>系统主要帮你处理这些格式问题</h2></div></div><div class="fix-grid"><div class="fix-card reveal"><b>🔤</b><h3>字体字号</h3><p>统一标题、正文、页码和数字英文的字体字号规则。</p></div><div class="fix-card reveal d1"><b>📐</b><h3>页面版式</h3><p>设置 A4、页边距、行距、每页行数和每行字数。</p></div><div class="fix-card reveal d2"><b>🧩</b><h3>结构识别</h3><p>自动判断主标题、层级标题、正文、落款等段落类型。</p></div><div class="fix-card reveal"><b>#</b><h3>页码样式</h3><p>统一页码字体、字号、样式和奇偶页位置。</p></div><div class="fix-card reveal d1"><b>▦</b><h3>表格优化</h3><p>可作为后端扩展入口，处理表格边框、宽度和对齐。</p></div><div class="fix-card reveal d2"><b>✨</b><h3>标点修复</h3><p>可选开启标点和空格规范化，减少中英文混排问题。</p></div></div></div></section>
+  <section class="section"><div class="shell"><div class="section-head reveal"><div class="section-title"><div class="section-label">What It Fixes</div><h2>系统主要帮你处理这些格式问题</h2></div></div><div class="fix-grid"><div class="fix-card reveal"><b>🔤</b><h3>字体字号</h3><p>统一标题、正文、页码和数字英文的字体字号规则。</p></div><div class="fix-card reveal d1"><b>📐</b><h3>页面版式</h3><p>设置 A4、页边距、行距、每页行数和每行字数。</p></div><div class="fix-card reveal d2"><b>🧩</b><h3>结构识别</h3><p>自动判断主标题、层级标题、正文、落款等段落类型。</p></div><div class="fix-card reveal"><b>#</b><h3>页码样式</h3><p>统一页码字体、字号、样式和奇偶页位置。</p></div><div class="fix-card reveal d1"><b>▦</b><h3>版面检查</h3><p>聚焦页边距、行距、字数和页码等版式一致性。</p></div><div class="fix-card reveal d2"><b>✨</b><h3>标点修复</h3><p>可选开启标点和空格规范化，减少中英文混排问题。</p></div></div></div></section>
 
   <section class="section" id="tips"><div class="shell"><div class="section-head reveal"><div class="section-title"><div class="section-label">Tips</div><h2>上传前注意这三点</h2></div></div><div class="tips"><div class="tip reveal"><h3>不要上传涉密文件</h3><p>系统适合处理普通办公文档，涉密或敏感材料请在本地安全环境处理。</p></div><div class="tip reveal d1"><h3>优先使用 .docx</h3><p>如果是 .doc 或 WPS 文件，建议先另存为 .docx 后再上传。</p></div><div class="tip reveal d2"><h3>处理后建议复核</h3><p>复杂表格、图片、特殊对象和特殊编号，建议下载后人工检查一次。</p></div></div></div></section>
 
@@ -352,7 +352,7 @@ h1{font-size:clamp(36px,6vw,66px);letter-spacing:-2px;line-height:1.05;margin-bo
                 <div class="field"><label>下边距</label><select id="marginBottom"></select></div>
                 <div class="field"><label>左边距</label><select id="marginLeft"></select></div>
                 <div class="field"><label>右边距</label><select id="marginRight"></select></div>
-                <div class="field"><label>纸张规格</label><select id="paperSize"><option>A4</option><option>A3</option><option>Letter</option></select></div>
+                <div class="field"><label>纸张规格</label><select id="paperSize"><option>A4</option></select></div>
                 <div class="field"><label>固定行距</label><select id="lineSpacing"></select></div>
                 <div class="field"><label>每页行数</label><select id="linesPerPage"></select></div>
                 <div class="field"><label>每行字数</label><select id="charsPerLine"></select></div>
@@ -388,24 +388,14 @@ h1{font-size:clamp(36px,6vw,66px);letter-spacing:-2px;line-height:1.05;margin-bo
                 <div class="field"><label>位置</label><select id="pagePosition"></select></div>
               </div>
             </div>
-
-            <div class="global-card">
-              <div class="global-card-title"><i>¹</i><div><h4>正文上标</h4></div></div>
-              <div class="compact-grid">
-                <div class="field"><label>字体</label><select id="supFont"></select></div>
-                <div class="field"><label>字号</label><select id="supSize"></select></div>
-                <div class="field"><label>样式</label><select id="supPattern"><option>[n]</option><option>〔n〕</option><option>(n)</option><option>①</option><option>1</option><option>n</option></select></div>
-                <div class="field"><label>语言</label><select id="supLanguage"></select></div>
-              </div>
-            </div>
           </div>
         </section>
 
-        <section class="settings-block" id="settingFeatures">
+        
+          <section class="settings-block" id="settingFeatures">
           <div class="block-head"><div><h3>功能开关</h3></div></div>
           <div class="switch-grid full">
             <label class="switch-card"><span><strong>标点修复</strong><small>修复中英文标点和空格</small></span><span class="switch"><input type="checkbox" id="punctuationEnabled" checked><span></span></span></label>
-            <label class="switch-card"><span><strong>表格优化</strong><small>暂未实现，保留为后续扩展入口</small></span><span class="switch"><input type="checkbox" id="tableEnabled" checked disabled><span></span></span></label>
             <label class="switch-card"><span><strong>页码处理</strong><small>统一页码样式和位置</small></span><span class="switch"><input type="checkbox" id="pageNumberEnabled" checked><span></span></span></label>
             <label class="switch-card"><span><strong>特殊加粗</strong><small>识别标题和关键段落加粗</small></span><span class="switch"><input type="checkbox" id="specialBold" checked><span></span></span></label>
           </div>
@@ -578,11 +568,11 @@ function initSettings(){
   document.getElementById('settingMode').value='smart';
   ['marginTop','marginBottom','marginLeft','marginRight'].forEach((id,i)=>fillSelect(id,margins,['3.7cm','3.5cm','2.8cm','2.6cm'][i]));
   fillSelect('lineSpacing',lineSpacings,'28磅');fillSelect('linesPerPage',Array.from({length:13},(_,i)=>String(18+i)),'22');fillSelect('charsPerLine',Array.from({length:12},(_,i)=>String(24+i)),'28');fillSelect('spaceBefore',beforeAfter,'0行');fillSelect('spaceAfter',beforeAfter,'0行');
-  ['numberFont','letterFont','pageFont','supFont'].forEach(id=>fillSelect(id,fonts,id==='pageFont'?'宋体':id==='supFont'?'仿宋_GB2312':'Times New Roman'));
+  ['numberFont','letterFont','pageFont'].forEach(id=>fillSelect(id,fonts,id==='pageFont'?'宋体':'Times New Roman'));
   fillNullableSizeSelect('numberSize','');
   fillNullableSizeSelect('letterSize','');
-  ['pageSize','supSize'].forEach(id=>fillSelect(id,sizes,id==='pageSize'?'四号':'三号'));
-  ['pageLanguage','supLanguage'].forEach(id=>fillSelect(id,languages,{pageLanguage:'阿拉伯数字',supLanguage:'阿拉伯数字'}[id]||'中文'));
+  fillSelect('pageSize',sizes,'四号');
+  fillSelect('pageLanguage',languages,'阿拉伯数字');
   fillSelect('pagePosition',alignments,'奇右偶左');
   renderStyleMatrix();
 }
@@ -628,8 +618,8 @@ function collectConfig(){
   return {
     styles,
     page:{
-      width_cm:get('paperSize')==='A3'?29.7:21.0,
-      height_cm:get('paperSize')==='A3'?42.0:29.7,
+      width_cm:21.0,
+      height_cm:29.7,
       margin_top_cm:cmNumber(get('marginTop'),3.7),
       margin_bottom_cm:cmNumber(get('marginBottom'),3.5),
       margin_left_cm:cmNumber(get('marginLeft'),2.8),
@@ -824,16 +814,11 @@ function applyConfigToForm(config,keepTemplate=true){
   set('pageStyle',pn.style);
   set('pagePosition',pn.position);
   if(document.getElementById('pageNumberEnabled')&&pn.enabled!==undefined)document.getElementById('pageNumberEnabled').checked=!!pn.enabled;
-  const sup=g.body_superscript||{};
-  set('supFont',sup.font);
-  set('supSize',sup.size);
-  set('supPattern',sup.style||sup.pattern);
-  set('supLanguage',sup.language);
   const f=cfg.features||{};
-  const featureMap={punctuationEnabled:'punctuation',tableEnabled:'table_optimize',specialBold:'special_bold',pageNumberEnabled:'page_number'};
+  const featureMap={punctuationEnabled:'punctuation',specialBold:'special_bold',pageNumberEnabled:'page_number'};
   Object.keys(featureMap).forEach(id=>{
     const key=featureMap[id];
-    const fallbackMap={table_optimize:'table',special_bold:'numbered_bold_enabled',punctuation:'punctuation_enabled',page_number:'page_number_enabled'};
+    const fallbackMap={special_bold:'numbered_bold_enabled',punctuation:'punctuation_enabled',page_number:'page_number_enabled'};
     const fallbackKey=fallbackMap[key]||key;
     const val=f[key]!==undefined?f[key]:f[fallbackKey];
     if(document.getElementById(id)&&val!==undefined)document.getElementById(id).checked=!!val;

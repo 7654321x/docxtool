@@ -48,7 +48,7 @@ BIND_HOST=0.0.0.0 PORT=9527 python3 server.py
 后台监控和文件接口都必须显式配置密钥。`ADMIN_TOKEN` 和 `PROXY_SECRET` 未设置或仍是示例值时，后端会启动失败。
 可选环境变量包括 `TASK_RETENTION_HOURS`、`MAX_CACHED_TASKS`、`CLEANUP_INTERVAL_MINUTES`、`TRUST_PROXY_HEADERS`、`TRUSTED_PROXY_IPS`、`FRONTEND_ORIGIN`、`COOKIE_SECURE`。
 
-生产推荐部署方式见 `DEPLOY.md`：Cloudflare Pages 前端同源 `/api/*` → `_worker.js` → 腾讯云 Nginx 80 → `127.0.0.1:9527` Python 后端。
+生产推荐部署方式见 `DEPLOY.md`：Cloudflare Pages 前端同源 `/api/*` → `_worker.js` → Cloudflare Tunnel 或 HTTPS 源站 → `127.0.0.1:9527` Python 后端。
 
 ## 可选 systemd 示例
 
