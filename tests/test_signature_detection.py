@@ -5,8 +5,8 @@ from pathlib import Path
 
 from docx import Document
 
-from importer import DocxImporter
-from style_config import StyleRule, logger
+from docxtool.document.importer import DocxImporter
+from docxtool.document.style_config import StyleRule, logger
 
 
 def _rules():

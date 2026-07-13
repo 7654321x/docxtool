@@ -1,6 +1,7 @@
-# Python
+# Python caches
 __pycache__/
 *.py[cod]
+*.pyc
 *.pyo
 *.pyd
 .pytest_cache/
@@ -14,34 +15,49 @@ htmlcov/
 venv/
 env/
 
-# Local runtime data
-logs/
-outputs/
-**/logs/
-**/outputs/
-*.log
+# Runtime data
+var/data/*
+!var/data/.gitkeep
+var/logs/*
+!var/logs/.gitkeep
+var/outputs/*
+!var/outputs/.gitkeep
+var/runtime/*
+!var/runtime/.gitkeep
+/logs/
+/outputs/
+/runtime/
+/stats.db
+/stats.db-wal
+/stats.db-shm
+/stats.db-*
+*.db-wal
+*.db-shm
 *.db
 *.sqlite
 *.sqlite3
+*.log
 
-# Build artifacts
+# Build artifacts and local packages
 build/
 dist/
-pages_dist/
-**/build/
-**/dist/
-**/pages_dist/
+*.egg-info/
 *.spec
-
-# Local dependencies/cache
+*.zip
 tmp_wheels/
 
-# Environment and secrets
+# Secrets and local env files
 .env
 .env.*
 !.env.example
 *.pem
 *.key
+id_rsa
+id_ed25519
+
+# Root-level user DOCX samples. Keep explicit test fixtures under tests/ only when reviewed.
+/*.docx
+~$*.docx
 
 # IDE and OS files
 .idea/
@@ -50,14 +66,12 @@ tmp_wheels/
 Thumbs.db
 
 # Local tool/workspace metadata
-%USERPROFILE%/
 .agents/
 .codex/
 .firecrawl/
+.playwright-mcp/
 .reasonix/
+%USERPROFILE%/
 
-# Nested standalone repository
-docxtool/
-
-# Nested repository metadata; keep the files, not the embedded Git history.
+# Nested standalone repository and nested Git metadata
 **/.git/

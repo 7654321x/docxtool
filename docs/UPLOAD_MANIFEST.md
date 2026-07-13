@@ -1,0 +1,193 @@
+# Docxtool 上传清单
+
+本清单用于 AI 协作、代码审阅和 GitHub 发布。以当前本地项目结构为准，不沿用旧目录名或已退役文件。
+
+当前项目根目录：
+
+```text
+D:\PycharmProjects\project8
+```
+
+目标 GitHub 仓库：
+
+```text
+git@github.com:7654321x/docxtool.git
+```
+
+## 1. 每次都应上传或保留的项目文件
+
+| 文件路径 | 作用 | 说明 |
+| --- | --- | --- |
+| `README.md` | 项目说明和本地运行方式 | GitHub 首页会使用 |
+| `docs/DEPLOY.md` | 生产部署说明 | Cloudflare Pages + Python 后端 |
+| `docs/API.md` | HTTP 接口、鉴权、错误码 | 前后端联调和排错 |
+| `docs/UPLOAD_MANIFEST.md` | 本清单 | 上传范围依据 |
+| `docs/GITHUB_UPLOAD_GUIDE.md` | GitHub 发布说明 | 不包含私钥 |
+| `AGENTS.md` | 本地协作规则 | Codex/AI 工作规则 |
+| `CONVENTIONS.md` | 开发约定 | 排版边界和人工验证说明 |
+| `requirements.txt` | Python 依赖 | 当前位于仓库根目录 |
+| `pyproject.toml` | Python 包配置 | `src` 布局和 wheel 资源打包 |
+| `run.sh` | Linux 启动脚本 | 调用 `server.py` |
+| `.env.example` | 环境变量示例 | 不含真实密钥 |
+| `.gitignore` | Git 忽略规则 | 不会自动移除已跟踪文件 |
+| `.gitattributes` | Git 文本/二进制规则 | 控制换行和二进制文件处理 |
+| `pytest.ini` | pytest 配置 | 测试配置 |
+| `ruff.toml` | Ruff 配置 | 代码检查配置 |
+| `.github/workflows/ci.yml` | GitHub Actions | CI 测试 |
+
+## 2. 后端和排版核心
+
+| 文件路径 | 作用 |
+| --- | --- |
+| `server.py` | 兼容入口，调用新包 |
+| `src/docxtool/__init__.py` | Python 包入口 |
+| `src/docxtool/__main__.py` | `python -m docxtool` 入口 |
+| `src/docxtool/paths.py` | 项目路径、运行目录和默认资源定位 |
+| `src/docxtool/web/__init__.py` | Web 包入口 |
+| `src/docxtool/web/app.py` | Web 服务入口、上传下载、任务队列、管理后台、健康检查 |
+| `src/docxtool/document/__init__.py` | 文档处理包入口 |
+| `src/docxtool/document/importer.py` | DOCX 结构识别、段落分类、元数据生成 |
+| `src/docxtool/document/style_config.py` | 样式规则、页面设置、日志配置、默认配置读取 |
+| `src/docxtool/resources/__init__.py` | 打包资源包入口 |
+| `src/docxtool/resources/config/default-format.json` | 默认公文格式配置，随 wheel 安装 |
+| `src/docxtool/document/engine/__init__.py` | 排版引擎导出入口 |
+| `src/docxtool/document/engine/core.py` | DOCX 导出和实际排版逻辑 |
+| `src/docxtool/document/engine/normal.py` | 常规文种规则分派 |
+| `src/docxtool/security/__init__.py` | 安全模块入口 |
+| `src/docxtool/security/docx_validator.py` | DOCX 上传安全校验 |
+| `src/docxtool/storage/__init__.py` | 存储包入口 |
+| `src/docxtool/storage/database.py` | SQLite 路径和连接辅助 |
+| `scripts/generate_secrets.py` | 生成随机密钥辅助脚本 |
+| `scripts/migrate_legacy_database.ps1` | 旧数据库复制迁移辅助脚本，默认 dry run |
+| `scripts/publish_to_github.ps1` | 安全发布到 GitHub 的脚本 |
+
+## 3. 前端和 Cloudflare Pages
+
+当前唯一前端源入口：
+
+```text
+resources/frontend/pages/index.html
+```
+
+Cloudflare Pages 部署文件：
+
+```text
+resources/frontend/pages/index.html
+resources/frontend/pages/_worker.js
+```
+
+说明：
+
+- `index1.html` 已退役，不再上传。
+- `resources/frontend/pages/index.html` 是唯一权威生产前端。
+- `resources/frontend/legacy/` 只保留未确认用途的旧页面，发布前应人工确认是否需要。
+
+运行目录只上传空目录占位文件：
+
+```text
+var/data/.gitkeep
+var/logs/.gitkeep
+var/outputs/.gitkeep
+var/runtime/.gitkeep
+```
+
+这些目录中的数据库、日志、输出文件和运行时临时文件禁止上传。
+
+## 4. 测试文件
+
+默认上传：
+
+```text
+tests/test_*.py
+tests/worker-routing.test.mjs
+```
+
+`tests/` 下的 `.docx` 样例只在确实需要回归测试样例时保留或上传。当前安全发布脚本默认不复制任何 `.docx`，因此不会把根目录用户文档或测试样例文档推送到 GitHub。若以后确需上传测试 fixture，应先脱敏并显式加入清单。
+
+## 5. 已退役或非默认发布文件
+
+这些文件不进入默认 GitHub 发布清单：
+
+```text
+SKILLS.md
+docxtool_index_numbering_label_width_adjusted.html
+hermes_skills/official-document-formatting/SKILL.md
+hermes_skills/official-document-formatting/agents/openai.yaml
+index1.html
+```
+
+旧 PyQt 桌面端文件目前不属于默认 Web 发布清单：
+
+```text
+main.py
+untitled.py
+untitled.ui
+```
+
+如果以后重新维护桌面端，应单独建立桌面端发布清单和依赖说明。
+
+## 6. 禁止上传
+
+不要上传或提交：
+
+```text
+.env
+.env.*
+真实 ADMIN_TOKEN
+真实 PROXY_SECRET
+API Key
+Authorization 请求头
+Cookie
+SSH 私钥
+证书私钥
+stats.db
+stats.db-*
+var/data/*
+var/logs/*
+var/outputs/*
+var/runtime/*
+logs/
+outputs/
+runtime/
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
+.pytest_cache/
+.ruff_cache/
+.playwright-mcp/
+.idea/
+build/
+dist/
+tmp_wheels/
+*.zip
+根目录 *.docx
+未脱敏用户 Word 文档
+```
+
+`.gitignore` 只能阻止未跟踪文件被自动加入，不能自动移除已经被 Git 跟踪的文件。若某个敏感文件已经进入 Git 历史，单纯更新 `.gitignore` 不会清除历史。
+
+## 7. GitHub 发布方式
+
+推荐使用：
+
+```pwsh
+pwsh -NoProfile -File .\scripts\publish_to_github.ps1
+```
+
+默认只演练，不提交、不推送。确认无误后：
+
+```pwsh
+pwsh -NoProfile -File .\scripts\publish_to_github.ps1 -Push
+```
+
+发布脚本会使用临时干净克隆，把本清单允许的文件复制进去，并让远端已退役文件在新提交中删除。它不会清除远端旧 Git 历史，也不会 force push。
+
+## 8. 发布前检查
+
+```pwsh
+pwsh -NoProfile -Command "python -m pytest"
+pwsh -NoProfile -Command "python -m ruff check src tests scripts"
+pwsh -NoProfile -Command "node --test tests/worker-routing.test.mjs"
+```

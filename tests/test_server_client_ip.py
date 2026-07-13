@@ -1,6 +1,6 @@
 import unittest
 
-import server
+from docxtool.web import app as server
 
 
 class ClientIpTest(unittest.TestCase):

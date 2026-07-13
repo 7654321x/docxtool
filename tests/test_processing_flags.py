@@ -5,9 +5,9 @@ from zipfile import ZipFile
 
 from docx import Document
 
-from engine import export_doc
-from importer import DocxImporter, DocumentData, ParagraphData, ParagraphFeatures
-from style_config import PageSettings, StyleRule
+from docxtool.document.engine import export_doc
+from docxtool.document.importer import DocxImporter, DocumentData, ParagraphData, ParagraphFeatures
+from docxtool.document.style_config import PageSettings, StyleRule
 
 
 def _rules():

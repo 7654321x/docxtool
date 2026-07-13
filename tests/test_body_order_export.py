@@ -1,6 +1,5 @@
 import base64
 import logging
-import sys
 import tempfile
 import unittest
 import zipfile
@@ -12,13 +11,9 @@ from docx.enum.text import WD_BREAK
 from docx.oxml.ns import qn
 from docx.shared import Cm
 
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
-from engine import export_doc
-from importer import DocxImporter
-from style_config import PageSettings, StyleRule, logger
+from docxtool.document.engine import export_doc
+from docxtool.document.importer import DocxImporter
+from docxtool.document.style_config import PageSettings, StyleRule, logger
 
 
 def _rules():

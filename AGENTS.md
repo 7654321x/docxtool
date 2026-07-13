@@ -1,6 +1,6 @@
 # AGENTS.md
 
-本文件是本项目的 Codex 工作规则。适用于 `D:\PycharmProjects\project8` 及其子目录中的开发、排错、测试和审阅任务。
+本文件记录本项目的本地协作规则，适用于仓库根目录及其子目录。
 
 ## 基本原则
 
@@ -11,164 +11,38 @@
 5. 不执行 `git commit` 或 `git push`，除非用户明确要求。
 6. 不静默忽略测试失败；失败时说明命令、错误和已排查内容。
 
-## 常用检查命令
+## Windows 命令
 
-以下命令默认在 PowerShell 7 (`pwsh`) 中执行。开始较大任务前，先执行：
-
-```pwsh
-Get-Location
-git status --short --branch
-git log -1 --oneline
-```
-
-常规验证优先使用：
+在 Windows 上需要显式调用 PowerShell 时，固定使用 PowerShell 7：
 
 ```pwsh
-python -m pytest
-python -m ruff check server.py importer.py style_config.py engine security tests scripts
+pwsh -NoProfile -Command "..."
 ```
 
-如果任务只改了很小范围，可以先运行相关的定向测试；最终报告中说明已运行哪些命令，以及哪些命令未运行。
+不要默认调用 Windows PowerShell 5.1。只有在明确要求兼容性测试时，才调用 `powershell.exe`。
 
-## 外部 GPT 求助规则
+## 常用检查
 
-侧边内置浏览器可能已经登录 ChatGPT。遇到真正阻塞时，可以主动向侧边 GPT 提问，把它作为排错和方案评审的辅助来源。
-
-不要在第一次遇到问题时立刻询问 GPT。默认流程是：
-
-```text
-阅读相关源码
--> 找到调用链和配置入口
--> 构造最小复现或运行相关测试
--> 分析错误
--> 尝试一次低风险修复
--> 再次测试
--> 如果仍不明确，再询问侧边 GPT
--> 审核 GPT 建议
--> 本地实现最小修复
--> 增加或更新回归测试
--> 运行验证命令
-```
-
-适合询问 GPT 的情况：
-
-1. 同一个问题经过两次合理尝试仍未解决。
-2. 测试失败，但 traceback、断言或日志无法直接定位根因。
-3. 多种修复方案都可行，但风险、兼容性或回归面难以判断。
-4. 涉及不熟悉的 DOCX、OOXML、Cloudflare Worker、HTTP、Cookie、CORS、CSRF、SQLite、Python 标准库或浏览器行为细节。
-5. 怀疑需求与现有实现冲突，需要第三方视角帮助拆解边界条件。
-6. 准备进行较大改动，但无法证明必要性或无法确定最小方案。
-7. 需要设计边界测试、并发测试、安全测试或 XML 级回归测试。
-
-不适合询问 GPT 的情况：
-
-1. 简单语法错误、明显拼写错误或本地测试已经明确指出的问题。
-2. 只需要读取项目已有文件即可确认的事实。
-3. 会暴露密钥、Cookie、用户文档正文、私有域名或生产日志的问题。
-4. GPT 答案无法通过本地源码和自动化测试验证的问题。
-
-## 向 GPT 提问时的格式
-
-向侧边 GPT 提问时，提供足够但最小化的上下文：
-
-```text
-项目：docxtool
-
-当前目标：
-说明本阶段要完成什么。
-
-相关文件：
-列出涉及的文件、函数或测试。
-
-当前行为：
-说明程序现在如何运行。
-
-期望行为：
-说明修改后应该怎样运行。
-
-已执行命令：
-列出已经运行的测试或检查命令。
-
-完整错误：
-粘贴相关 traceback、断言失败或日志，但必须先脱敏。
-
-已尝试方案：
-说明尝试过什么，以及为什么失败。
-
-限制条件：
-说明不能破坏的兼容性、安全规则和测试。
-
-请给出：
-1. 最可能的根因；
-2. 风险最低的修复方案；
-3. 应修改的代码位置；
-4. 必须增加的回归测试；
-5. 该方案可能引起的副作用。
+```pwsh
+pwsh -NoProfile -Command "Get-Location"
+pwsh -NoProfile -Command "git status --short --branch"
+pwsh -NoProfile -Command "git log -1 --oneline"
+pwsh -NoProfile -Command "python -m pytest"
+pwsh -NoProfile -Command "python -m ruff check src tests scripts"
+pwsh -NoProfile -Command "node --test tests/worker-routing.test.mjs"
 ```
 
 ## 数据和密钥保护
 
-向 GPT 提问前必须脱敏。禁止发送：
+不要提交或上传：
 
-1. `ADMIN_TOKEN`
-2. `PROXY_SECRET`
-3. API Key、访问令牌、Authorization 请求头
-4. Cookie、会话 ID、验证码、一次性登录码
-5. SSH 私钥、证书私钥
-6. Cloudflare 密钥或生产部署密钥
-7. 真实服务器地址、私有域名、内网 IP
-8. 数据库中的用户信息
-9. 用户上传文档的正文
-10. 未脱敏日志、`.env` 的真实内容
+- `.env`
+- 真实 `ADMIN_TOKEN`、`PROXY_SECRET`
+- API key、访问令牌、Cookie、会话 ID
+- SSH 私钥、证书私钥
+- `stats.db`、日志、生成的 Word 文件
+- 用户隐私文档正文
 
-使用以下占位符替换敏感内容：
+## GitHub 发布
 
-```text
-<REDACTED_TOKEN>
-<REDACTED_COOKIE>
-<REDACTED_DOMAIN>
-<REDACTED_IP>
-<REDACTED_USER_CONTENT>
-```
-
-可以发送与问题直接相关的最小代码片段，但不要无必要地上传整个私有项目、完整用户文件或大段日志。
-
-## 使用 GPT 回答的原则
-
-1. GPT 的回答只是建议，不是事实来源。
-2. 采用任何建议前，必须回到本地源码确认函数、调用链、依赖版本和接口真实存在。
-3. 不得把 GPT 生成的代码未经审查直接覆盖到项目中。
-4. 采用建议后必须运行相关测试或检查命令。
-5. 如果 GPT 建议与本地源码、项目需求或测试结果冲突，以本地可验证事实为准。
-6. 多个方案并存时，优先选择改动小、可测试、向后兼容、不降低安全性、容易回滚的方案。
-7. 如果 GPT 无法确认，继续阅读源码、构造最小复现并运行测试，不凭猜测修改。
-
-## 浏览器不可用时
-
-如果侧边浏览器未打开、未登录、页面加载失败、会话失效，或当前环境无法控制内置浏览器：
-
-1. 跳过询问 GPT 的环节，不要因此停止所有工作。
-2. 继续完成可以独立完成的源码分析、修复和测试。
-3. 不要声称已经询问 GPT。
-4. 在最终报告中说明 GPT 求助未使用，并写清原因。
-5. 只有在缺少外部建议会导致高风险误改时，才暂停相关部分并请求用户介入。
-
-## 最终报告
-
-完成较大任务后，最终报告应包含：
-
-```text
-完成情况
-修改的文件
-问题根因
-实现方案
-向侧边 GPT 询问的问题
-采用的 GPT 建议
-未采用的 GPT 建议
-新增或修改的测试
-执行的命令与结果
-尚存风险
-建议人工审阅位置
-```
-
-如果本次没有使用 GPT，写明“本次未使用”。
+GitHub 发布以 `docs/GITHUB_UPLOAD_GUIDE.md` 和 `scripts/publish_to_github.ps1` 为准。默认使用临时干净克隆发布，不直接推送当前工作树。

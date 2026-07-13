@@ -6,9 +6,9 @@ from pathlib import Path
 from docx import Document
 from docx.oxml.ns import qn
 
-from engine import export_doc
-from importer import DocumentData, ParagraphData, ParagraphFeatures
-from style_config import PageSettings, StyleRule, logger
+from docxtool.document.engine import export_doc
+from docxtool.document.importer import DocumentData, ParagraphData, ParagraphFeatures
+from docxtool.document.style_config import PageSettings, StyleRule, logger
 
 
 def _rules():

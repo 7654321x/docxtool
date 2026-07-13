@@ -7,7 +7,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 from unittest.mock import patch
 
-import server
+from docxtool.web import app as server
 
 
 class ServerProductionControlsTest(unittest.TestCase):

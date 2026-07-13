@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import server
+from docxtool.web import app as server
 
 
 class ServerPresetsApiTest(unittest.TestCase):

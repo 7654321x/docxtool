@@ -2,7 +2,7 @@
 
 职责边界：
   - StyleRule / PageSettings 数据模型 + 默认值
-  - config.json 读取（Web 端）+ UI 表格读取（桌面端）
+  - default-format.json 读取（Web 端）+ UI 表格读取（桌面端）
   - 中文数字/字号/对齐等纯函数转换
   - PyQt5 可选依赖（桌面端），Web 端通过 from_config() 替代
 """
@@ -10,6 +10,8 @@
 import logging
 import math
 import re
+
+from docxtool.paths import default_format_config_path
 import contextvars
 from datetime import datetime
 from dataclasses import dataclass, field
@@ -461,11 +463,10 @@ class StyleRule:
 
     @staticmethod
     def from_config(config_path: str = None) -> List["StyleRule"]:
-        """从 config.json 加载排版规则（Web 服务用）。"""
+        """从默认格式配置加载排版规则（Web 服务用）。"""
         import json as _json
         if config_path is None:
-            config_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
-                                       "config.json")
+            config_path = str(default_format_config_path())
         if not _os.path.exists(config_path):
             return [StyleRule.default_for_row(i) for i in range(24)]
         with open(config_path, "r", encoding="utf-8") as f:
@@ -550,11 +551,10 @@ class PageSettings:
 
     @staticmethod
     def from_config(config_path: str = None) -> "PageSettings":
-        """从 config.json 加载页面设置。"""
+        """从默认格式配置加载页面设置。"""
         import json as _json
         if config_path is None:
-            config_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
-                                       "config.json")
+            config_path = str(default_format_config_path())
         if not _os.path.exists(config_path):
             return PageSettings()
         with open(config_path, "r", encoding="utf-8") as f:
@@ -621,7 +621,7 @@ def validate_format_config(config_dict: dict) -> dict:
 def load_rules_and_settings(config_dict: dict = None):
     """加载本次任务的 rules/settings/features。
 
-    config_dict 为空时使用服务器 config.json；不为空时只对当前任务生效。
+    config_dict 为空时使用服务器默认格式配置；不为空时只对当前任务生效。
     """
     if config_dict:
         rules = StyleRule.from_config_dict(config_dict)

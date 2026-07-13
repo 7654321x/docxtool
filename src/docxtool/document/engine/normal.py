@@ -1,7 +1,7 @@
 """engine_normal — 通用公文排版样式重写。"""
 
 import copy
-from style_config import StyleRule
+from docxtool.document.style_config import StyleRule
 
 
 def _copy(rule):

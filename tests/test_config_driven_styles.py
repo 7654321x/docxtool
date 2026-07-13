@@ -7,10 +7,10 @@ from pathlib import Path
 from docx import Document
 from docx.oxml.ns import qn
 
-from engine import export_doc
-from engine._core import TYPE_TO_RULE_INDEX
-from importer import DocumentData, ParagraphData, ParagraphFeatures
-from style_config import ConfigValidationError, PageSettings, StyleRule, logger
+from docxtool.document.engine import export_doc
+from docxtool.document.engine.core import TYPE_TO_RULE_INDEX
+from docxtool.document.importer import DocumentData, ParagraphData, ParagraphFeatures
+from docxtool.document.style_config import ConfigValidationError, PageSettings, StyleRule, logger
 
 
 def _xml_attr(element, attr):

@@ -168,7 +168,7 @@ PUT /api/upload
 - `X-Format-Config-Encoding: 可选；传入前端设置时必须为 `base64url-json`
 - `X-Format-Config: 可选，base64url 编码后的 JSON 配置`
 
-`X-Format-Config` 用于把前端“排版设置”随本次上传传入后端，不新增接口、不改变请求体格式。后端只把它作为当前任务的临时配置使用，不会覆盖全局 `config.json`。
+`X-Format-Config` 用于把前端“排版设置”随本次上传传入后端，不新增接口、不改变请求体格式。后端只把它作为当前任务的临时配置使用，不会覆盖随包安装的 `src/docxtool/resources/config/default-format.json`。
 
 配置 JSON 结构示例：
 
@@ -543,7 +543,7 @@ GET /log/{task_id}?token={ADMIN_TOKEN}
 11. 状态为 `done` 时请求 `GET /api/download/{task_id}` 并触发浏览器下载。
 12. 状态为 `error` 时显示错误摘要。
 
-前端默认使用同源 `/api/*` 路径。Cloudflare Pages 的 `pages_dist/_worker.js` 负责把公开 API 请求转发到后端不带 `/api` 的直连路径：
+前端默认使用同源 `/api/*` 路径。Cloudflare Pages 的 `resources/frontend/pages/_worker.js` 负责把公开 API 请求转发到后端不带 `/api` 的直连路径：
 
 - `/api/upload` → `/upload`
 - `/api/status/{task_id}` → `/status/{task_id}`
@@ -581,6 +581,6 @@ Worker 还会代理管理页面直接使用的后端路径：
 2. 只开放 Nginx 80，不要直接暴露 Python 服务端口 9527。
 3. Nginx 需要允许 `PUT` 方法并转发请求头。
 4. Cloudflare Pages 前端访问同源 `/api/*`，Worker 通过 `BACKEND_BASE_URL` 转发到 Nginx，再由 Nginx 转发到 `127.0.0.1:9527`。
-5. 推荐部署细节见 `DEPLOY.md`。
-6. `logs/` 和 `outputs/` 是运行时目录，仓库中只保留 `.gitkeep`，实际日志和生成文件不应提交。
-7. `stats.db` 是运行时 SQLite 数据库，不应提交到仓库。
+5. 推荐部署细节见 `docs/DEPLOY.md`。
+6. `var/logs/` 和 `var/outputs/` 是运行时目录，仓库中只保留 `.gitkeep`，实际日志和生成文件不应提交。
+7. `var/data/stats.db` 是新的运行时 SQLite 数据库位置，不应提交到仓库。若根目录已有旧版 `stats.db` 且未设置 `DATABASE_PATH`，后端会继续使用旧库，迁移需人工停服务后执行。

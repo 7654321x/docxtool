@@ -6,8 +6,8 @@ import zipfile
 import unittest
 from pathlib import Path
 
-import server
-from security.docx_validator import DocxValidationError, detect_docx_complexity, validate_docx_upload
+from docxtool.web import app as server
+from docxtool.security.docx_validator import DocxValidationError, detect_docx_complexity, validate_docx_upload
 
 
 def _valid_docx_bytes(extra_members=None, document_xml=None):

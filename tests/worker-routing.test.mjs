@@ -7,7 +7,7 @@ import { after, test } from "node:test";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, "..");
-const workerSource = await readFile(join(root, "pages_dist", "_worker.js"), "utf8");
+const workerSource = await readFile(join(root, "resources", "frontend", "pages", "_worker.js"), "utf8");
 const tempDir = await mkdtemp(join(tmpdir(), "docxtool-worker-"));
 const workerModulePath = join(tempDir, "worker.mjs");
 

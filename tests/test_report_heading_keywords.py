@@ -1,14 +1,8 @@
 import logging
-import sys
 import unittest
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
-from importer import DetectionContext, ParagraphFeatures, detect_paragraph_type
-from style_config import StyleRule, logger
+from docxtool.document.importer import DetectionContext, ParagraphFeatures, detect_paragraph_type
+from docxtool.document.style_config import StyleRule, logger
 
 
 def _rules():

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from docx import Document
 
-import server
+from docxtool.web import app as server
 
 
 class ServerTaskLoggingTest(unittest.TestCase):
