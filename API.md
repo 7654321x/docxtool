@@ -67,8 +67,9 @@ HTTP 状态码为 `403`。
 服务会返回跨域响应头：
 
 - `Access-Control-Allow-Origin`
-- `Access-Control-Allow-Methods: GET, PUT, OPTIONS`
-- `Access-Control-Allow-Headers: Content-Type, X-Filename, X-Admin-Token, X-Proxy-Secret, X-Docxtool-Proxy, X-Preset-Id, X-Preset-Name, X-Template-Type, X-Processing-Mode, X-Format-Config, X-Format-Config-Encoding`
+- `Access-Control-Allow-Credentials: true`
+- `Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS`
+- `Access-Control-Allow-Headers: Content-Type, X-Filename, X-Proxy-Secret, X-Docxtool-Proxy, X-Preset-Id, X-Preset-Name, X-Template-Type, X-Processing-Mode, X-Format-Config, X-Format-Config-Encoding, X-CSRF-Token`
 
 `OPTIONS` 预检请求固定返回 `204`。
 
@@ -542,11 +543,24 @@ GET /log/{task_id}?token={ADMIN_TOKEN}
 11. 状态为 `done` 时请求 `GET /api/download/{task_id}` 并触发浏览器下载。
 12. 状态为 `error` 时显示错误摘要。
 
-前端默认使用同源 `/api/*` 路径。Cloudflare Pages 的 `pages_dist/_worker.js` 负责把这些请求转发到后端不带 `/api` 的直连路径：
+前端默认使用同源 `/api/*` 路径。Cloudflare Pages 的 `pages_dist/_worker.js` 负责把公开 API 请求转发到后端不带 `/api` 的直连路径：
 
 - `/api/upload` → `/upload`
 - `/api/status/{task_id}` → `/status/{task_id}`
 - `/api/download/{task_id}` → `/download/{task_id}`
+- `/api/presets`、`/api/presets/{preset_id}` → `/presets`、`/presets/{preset_id}`
+- `/api/admin/*` → `/admin/*`
+- `/api/health`、`/api/ready`、`/api/version` → `/health`、`/ready`、`/version`
+
+Worker 还会代理管理页面直接使用的后端路径：
+
+- `/admin/login`、`/admin/logout`、`/admin/session`
+- `/monitor`、`/stats`、`/ip`
+- `/ban`、`/unban`、`/limit`、`/cleanup`
+- `/log/{task_id}`
+- `/presets`
+
+相似但不匹配的路径不会代理，例如 `/apiary`、`/monitor-evil`、`/unknown` 会按静态资源处理。
 
 ## 6. 统一错误格式
 
@@ -564,7 +578,7 @@ GET /log/{task_id}?token={ADMIN_TOKEN}
 ## 7. 部署注意事项
 
 1. 生产环境必须设置 `ADMIN_TOKEN` 和 `PROXY_SECRET`，代码不提供默认密钥。
-2. 推荐使用 Cloudflare Tunnel；如使用源站反代，Cloudflare 到源站必须使用 HTTPS，不要把公网 HTTP 80 作为正式生产入口。
+2. 只开放 Nginx 80，不要直接暴露 Python 服务端口 9527。
 3. Nginx 需要允许 `PUT` 方法并转发请求头。
 4. Cloudflare Pages 前端访问同源 `/api/*`，Worker 通过 `BACKEND_BASE_URL` 转发到 Nginx，再由 Nginx 转发到 `127.0.0.1:9527`。
 5. 推荐部署细节见 `DEPLOY.md`。

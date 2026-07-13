@@ -3,7 +3,7 @@ const API_STATUS = "/api/status/";
 const API_DOWNLOAD = "/api/download/";
 const API_PRESETS = "/api/presets";
 const API_ADMIN_SESSION = "/api/admin/session";
-const ADMIN_PATHS = [
+const ADMIN_EXACT_PATHS = new Set([
   "/admin/login",
   "/admin/logout",
   "/admin/session",
@@ -14,9 +14,10 @@ const ADMIN_PATHS = [
   "/unban",
   "/limit",
   "/cleanup",
-  "/log/",
   "/presets",
-];
+]);
+const ADMIN_LOG_PREFIX = "/log/";
+
 function jsonError(code, error, status) {
   return new Response(JSON.stringify({ code, error }), {
     status,
@@ -35,10 +36,22 @@ function backendPath(pathname) {
   if (pathname === "/api/health") return "/health";
   if (pathname === "/api/ready") return "/ready";
   if (pathname === "/api/version") return "/version";
-  if (ADMIN_PATHS.some((prefix) => pathname === prefix || pathname.startsWith(prefix + "/"))) {
+  if (isAdminProxyPath(pathname)) {
     return pathname;
   }
   return "";
+}
+
+function isApiPath(pathname) {
+  return pathname.startsWith("/api/");
+}
+
+function isAdminProxyPath(pathname) {
+  return ADMIN_EXACT_PATHS.has(pathname) || pathname === ADMIN_LOG_PREFIX || pathname.startsWith(ADMIN_LOG_PREFIX);
+}
+
+function shouldProxyPath(pathname) {
+  return isApiPath(pathname) || isAdminProxyPath(pathname);
 }
 
 function methodAllowed(pathname, method) {
@@ -50,6 +63,7 @@ function methodAllowed(pathname, method) {
   if (pathname === API_ADMIN_SESSION) return method === "GET";
   if (pathname === "/admin/login") return method === "GET" || method === "POST";
   if (pathname === "/admin/logout") return method === "POST";
+  if (pathname === "/admin/session") return method === "GET";
   if (pathname === "/monitor" || pathname === "/stats" || pathname === "/ip" || pathname === "/log/" || pathname.startsWith("/log/")) {
     return method === "GET";
   }
@@ -139,8 +153,8 @@ async function proxyApi(request, env, url) {
     }
 
     return fetch(target, init);
-  } catch (error) {
-    return jsonError("PROXY_WORKER_ERROR", error && error.message ? error.message : "Worker proxy failed", 502);
+  } catch (_) {
+    return jsonError("PROXY_WORKER_ERROR", "Worker proxy failed", 502);
   }
 }
 
@@ -148,12 +162,12 @@ export default {
   async fetch(request, env) {
     try {
       const url = new URL(request.url);
-      if (url.pathname.startsWith("/api/")) {
+      if (shouldProxyPath(url.pathname)) {
         return proxyApi(request, env, url);
       }
       return env.ASSETS.fetch(request);
-    } catch (error) {
-      return jsonError("WORKER_ERROR", error && error.message ? error.message : "Worker failed", 500);
+    } catch (_) {
+      return jsonError("WORKER_ERROR", "Worker failed", 500);
     }
   },
 };

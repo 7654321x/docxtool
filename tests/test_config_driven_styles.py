@@ -10,7 +10,7 @@ from docx.oxml.ns import qn
 from engine import export_doc
 from engine._core import TYPE_TO_RULE_INDEX
 from importer import DocumentData, ParagraphData, ParagraphFeatures
-from style_config import PageSettings, StyleRule, logger
+from style_config import ConfigValidationError, PageSettings, StyleRule, logger
 
 
 def _xml_attr(element, attr):
@@ -149,6 +149,77 @@ class ConfigDrivenStylesTest(unittest.TestCase):
 
         self.assertEqual(_xml_attr(spacing, "w:line"), "600")
         self.assertEqual(_xml_attr(doc_grid, "w:linePitch"), "600")
+
+    def test_frontend_page_config_accepts_missing_fields_and_numeric_strings(self):
+        settings = PageSettings.from_config_dict({
+            "styles": [],
+            "page": {
+                "width_cm": "21",
+                "height_cm": "29.7",
+                "lines_per_page": "22",
+                "chars_per_line": "28",
+            },
+        })
+
+        self.assertEqual(settings.page_width_cm, 21.0)
+        self.assertEqual(settings.page_height_cm, 29.7)
+        self.assertEqual(settings.margin_top_cm, 3.7)
+        self.assertEqual(settings.lines_per_page, 22)
+        self.assertEqual(settings.chars_per_line, 28)
+
+    def test_frontend_page_config_rejects_invalid_numeric_values(self):
+        invalid_values = [None, "", "abc", "NaN", "Infinity", "-Infinity", -1, 0, 1e300]
+
+        for value in invalid_values:
+            with self.subTest(value=value), self.assertRaises(ConfigValidationError) as ctx:
+                PageSettings.from_config_dict({"styles": [], "page": {"width_cm": value}})
+            self.assertEqual(ctx.exception.code, "FORMAT_CONFIG_INVALID")
+            self.assertEqual(ctx.exception.field, "page.width_cm")
+
+    def test_frontend_page_config_rejects_non_positive_layout_area(self):
+        invalid_pages = [
+            {"width_cm": 21, "margin_left_cm": 10.5, "margin_right_cm": 10.5},
+            {"height_cm": 29.7, "margin_top_cm": 15, "margin_bottom_cm": 14.7},
+            {"lines_per_page": 0},
+            {"chars_per_line": 0},
+        ]
+
+        for page in invalid_pages:
+            with self.subTest(page=page), self.assertRaises(ConfigValidationError):
+                PageSettings.from_config_dict({"styles": [], "page": page})
+
+    def test_frontend_style_config_rejects_invalid_style_numbers(self):
+        invalid_styles = [
+            {"size": 0},
+            {"size": "不存在字号"},
+            {"indent": "NaN"},
+            {"spacing_before": -1},
+            {"left_indent": -1},
+        ]
+
+        for style in invalid_styles:
+            with self.subTest(style=style), self.assertRaises(ConfigValidationError):
+                StyleRule.from_config_dict({"styles": [style], "page": {}})
+
+    def test_frontend_style_config_keeps_legacy_valid_config(self):
+        rules = StyleRule.from_config_dict({
+            "styles": [{
+                "name": "正文",
+                "font": "仿宋_GB2312",
+                "size": "三号",
+                "bold": False,
+                "indent": "2",
+                "spacing_before": "1",
+                "spacing_after": "0",
+                "left_indent": "0",
+                "right_indent": "0",
+            }],
+            "page": {},
+        })
+
+        self.assertEqual(rules[0].font_size_pt, 16.0)
+        self.assertEqual(rules[0].first_line_indent, 2.0)
+        self.assertEqual(rules[0].spacing_before, 1.0)
 
 
 if __name__ == "__main__":

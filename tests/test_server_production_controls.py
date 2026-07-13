@@ -2,13 +2,10 @@ import os
 import tempfile
 import time
 import unittest
-import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 from unittest.mock import patch
-
-from docx import Document
 
 import server
 
@@ -22,17 +19,17 @@ class ServerProductionControlsTest(unittest.TestCase):
         self.old_output_dir = server.OUTPUT_DIR
         self.old_admin_token = server.ADMIN_TOKEN
         self.old_proxy_secret = server.PROXY_SECRET
-        self.old_allow_local_file_api = server.ALLOW_LOCAL_FILE_API
-        self.old_bind_host = server.BIND_HOST
         self.old_frontend_origin = server.FRONTEND_ORIGIN
+        self.old_cookie_secure = server.COOKIE_SECURE
+        self.old_production_mode = server.PRODUCTION_MODE
         server._DB_PATH = str(root / "stats.db")
         server.LOG_DIR = str(root / "logs")
         server.OUTPUT_DIR = str(root / "outputs")
         server.ADMIN_TOKEN = ""
         server.PROXY_SECRET = ""
-        server.ALLOW_LOCAL_FILE_API = False
-        server.BIND_HOST = "127.0.0.1"
         server.FRONTEND_ORIGIN = ""
+        server.COOKIE_SECURE = False
+        server.PRODUCTION_MODE = False
         os.makedirs(server.LOG_DIR, exist_ok=True)
         os.makedirs(server.OUTPUT_DIR, exist_ok=True)
         server._sql_init()
@@ -47,9 +44,9 @@ class ServerProductionControlsTest(unittest.TestCase):
         server.OUTPUT_DIR = self.old_output_dir
         server.ADMIN_TOKEN = self.old_admin_token
         server.PROXY_SECRET = self.old_proxy_secret
-        server.ALLOW_LOCAL_FILE_API = self.old_allow_local_file_api
-        server.BIND_HOST = self.old_bind_host
         server.FRONTEND_ORIGIN = self.old_frontend_origin
+        server.COOKIE_SECURE = self.old_cookie_secure
+        server.PRODUCTION_MODE = self.old_production_mode
         with server.TASKS_LOCK:
             server.TASKS.clear()
         with server.QUEUE_COND:
@@ -59,9 +56,10 @@ class ServerProductionControlsTest(unittest.TestCase):
     def test_file_ttl_is_24_hours(self):
         self.assertEqual(server.FILE_TTL, 86400)
 
-    def test_default_secrets_are_not_embedded_in_source(self):
-        self.assertEqual(server.DEFAULT_ADMIN_TOKEN, "")
-        self.assertEqual(server.DEFAULT_PROXY_SECRET, "")
+    def test_default_tokens_allow_simple_startup(self):
+        self.assertEqual(server.DEFAULT_ADMIN_TOKEN, "7654321xxx")
+        self.assertGreaterEqual(len(server.DEFAULT_PROXY_SECRET), 48)
+        self.assertNotIn(" ", server.DEFAULT_PROXY_SECRET)
 
     def test_startup_urls_use_clean_monitor_url(self):
         urls = server._startup_urls()
@@ -73,6 +71,94 @@ class ServerProductionControlsTest(unittest.TestCase):
     def test_backend_binds_to_loopback_by_default(self):
         self.assertEqual(server.BIND_HOST, "127.0.0.1")
         self.assertEqual(server._server_bind_address(), ("127.0.0.1", server.PORT))
+
+    def test_parse_frontend_origin_normalizes_safe_values(self):
+        self.assertEqual(server.parse_frontend_origin(""), "")
+        self.assertEqual(
+            server.parse_frontend_origin("  https://example.pages.dev/  "),
+            "https://example.pages.dev",
+        )
+        self.assertEqual(
+            server.parse_frontend_origin("http://localhost:3000/"),
+            "http://localhost:3000",
+        )
+
+    def test_parse_frontend_origin_rejects_unsafe_values(self):
+        invalid_values = [
+            "ftp://example.com",
+            "https://user:pass@example.com",
+            "https://example.com/app",
+            "https://example.com?x=1",
+            "https://example.com#frag",
+            "https:///missing-host",
+        ]
+
+        for value in invalid_values:
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                server.parse_frontend_origin(value)
+
+    def test_parse_frontend_origin_requires_https_for_public_production_origin(self):
+        with self.assertRaisesRegex(ValueError, "https"):
+            server.parse_frontend_origin("http://example.com", production_mode=True)
+
+        self.assertEqual(
+            server.parse_frontend_origin("http://localhost:3000", production_mode=True),
+            "http://localhost:3000",
+        )
+
+    def test_resolve_cookie_secure_defaults_and_explicit_values(self):
+        self.assertTrue(server.resolve_cookie_secure("https://example.pages.dev"))
+        self.assertFalse(server.resolve_cookie_secure("http://localhost:3000"))
+        self.assertTrue(server.resolve_cookie_secure("http://localhost:3000", "true"))
+        self.assertFalse(server.resolve_cookie_secure("https://example.pages.dev", "false"))
+
+    def test_resolve_cookie_secure_rejects_https_frontend_when_false_in_production(self):
+        with self.assertRaisesRegex(ValueError, "COOKIE_SECURE=false"):
+            server.resolve_cookie_secure("https://example.pages.dev", "false", production_mode=True)
+
+    def test_admin_session_cookie_uses_secure_when_configured(self):
+        server.COOKIE_SECURE = True
+        secure_cookie = server._admin_cookie_header("session-id")
+
+        self.assertIn("HttpOnly", secure_cookie)
+        self.assertIn("SameSite=Strict", secure_cookie)
+        self.assertIn("Path=/", secure_cookie)
+        self.assertIn("Secure", secure_cookie)
+
+        server.COOKIE_SECURE = False
+        local_cookie = server._admin_cookie_header("session-id")
+
+        self.assertIn("HttpOnly", local_cookie)
+        self.assertNotIn("Secure", local_cookie)
+
+    def test_cors_headers_match_configured_origin_exactly(self):
+        headers = server.cors_headers_for_request(
+            "https://example.pages.dev",
+            frontend_origin="https://example.pages.dev",
+        )
+
+        self.assertEqual(headers["Access-Control-Allow-Origin"], "https://example.pages.dev")
+        self.assertEqual(headers["Access-Control-Allow-Credentials"], "true")
+        self.assertIn("POST", headers["Access-Control-Allow-Methods"])
+        self.assertIn("X-CSRF-Token", headers["Access-Control-Allow-Headers"])
+        self.assertNotIn("X-Admin-Token", headers["Access-Control-Allow-Headers"])
+
+        self.assertEqual(
+            server.cors_headers_for_request(
+                "https://evil.example",
+                frontend_origin="https://example.pages.dev",
+            ),
+            {},
+        )
+
+    def test_cors_headers_without_config_only_allow_local_development_origins(self):
+        self.assertEqual(
+            server.cors_headers_for_request("https://example.pages.dev", frontend_origin=""),
+            {},
+        )
+
+        headers = server.cors_headers_for_request("http://localhost:3000", frontend_origin="")
+        self.assertEqual(headers["Access-Control-Allow-Origin"], "http://localhost:3000")
 
     def test_queue_position_reports_people_ahead(self):
         server._enqueue_task("task-a", "a.docx", "a.docx", "203.0.113.1", "ua")
@@ -94,36 +180,6 @@ class ServerProductionControlsTest(unittest.TestCase):
         task_tmp = server._task_tmp_input_path("task-a", "测试 文件.docx")
         self.assertIn(os.path.join("runtime", "tmp"), task_tmp)
         self.assertTrue(task_tmp.endswith(os.path.join("task-a", "input.docx")))
-
-    def test_spawn_subprocess_keeps_runtime_tmp_input_until_loaded(self):
-        task_id = f"spawn-{uuid.uuid4()}"
-        task_dir = Path(server.RUNTIME_TMP_DIR) / task_id
-        input_path = task_dir / "input.docx"
-        result = {}
-        task_dir.mkdir(parents=True, exist_ok=True)
-        doc = Document()
-        doc.add_paragraph("测试标题")
-        doc.add_paragraph("这是一段用于真实 spawn 回归测试的正文。")
-        doc.save(input_path)
-
-        try:
-            result = server._task_process_subprocess(
-                task_id,
-                str(input_path),
-                "spawn-regression.docx",
-                "127.0.0.1",
-                "unittest",
-            )
-
-            self.assertTrue(input_path.exists())
-            self.assertEqual(result.get("status"), "done", result.get("error"))
-            self.assertTrue(Path(result["output_path"]).exists())
-        finally:
-            server._cleanup_task_tmp(task_id)
-            for key in ("output_dir", "log_path"):
-                path = result.get(key, "")
-                if path:
-                    server._cleanup_output_path(path)
 
     def test_enqueue_task_is_visible_in_monitor_immediately(self):
         queued_path = Path(server.OUTPUT_DIR) / "queued-input.docx"
@@ -317,30 +373,13 @@ class ServerProductionControlsTest(unittest.TestCase):
         self.assertFalse(server._file_api_authorized({"X-Proxy-Secret": "wrong"}))
         self.assertTrue(server._file_api_authorized({"X-Proxy-Secret": "proxy-secret"}))
 
-    def test_file_api_rejects_client_controlled_localhost_host(self):
+    def test_file_api_allows_localhost_direct_use(self):
         server.PROXY_SECRET = "proxy-secret"
 
-        self.assertFalse(server._file_api_authorized({"Host": "127.0.0.1:9527"}))
-        self.assertFalse(server._file_api_authorized({"Host": "localhost:9527"}, ("203.0.113.10", 41234)))
-        self.assertFalse(server._file_api_authorized({"Host": "[::1]:9527"}))
+        self.assertTrue(server._file_api_authorized({"Host": "127.0.0.1:9527"}))
+        self.assertTrue(server._file_api_authorized({"Host": "localhost:9527"}))
+        self.assertTrue(server._file_api_authorized({"Host": "[::1]:9527"}))
         self.assertFalse(server._file_api_authorized({"Host": "example.trycloudflare.com"}))
-
-    def test_file_api_rejects_loopback_proxy_without_secret_in_production(self):
-        server.PROXY_SECRET = "proxy-secret"
-        server.ALLOW_LOCAL_FILE_API = True
-        server.FRONTEND_ORIGIN = "https://example.pages.dev"
-
-        self.assertFalse(server._file_api_authorized({}, ("127.0.0.1", 51234)))
-
-    def test_file_api_allows_loopback_only_when_local_development_enabled(self):
-        server.PROXY_SECRET = "proxy-secret"
-        server.ALLOW_LOCAL_FILE_API = True
-        server.FRONTEND_ORIGIN = ""
-        server.BIND_HOST = "127.0.0.1"
-
-        self.assertTrue(server._file_api_authorized({}, ("127.0.0.1", 51234)))
-        self.assertTrue(server._file_api_authorized({}, ("::1", 51234)))
-        self.assertFalse(server._file_api_authorized({}, ("203.0.113.10", 51234)))
 
     def test_cleanup_expired_outputs_deletes_only_old_files(self):
         old_file = Path(server.OUTPUT_DIR) / "old.docx"

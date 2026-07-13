@@ -11,6 +11,7 @@
 """
 
 import logging
+import copy
 import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Union
@@ -42,6 +43,13 @@ class ParagraphFeatures:
 
 
 @dataclass
+class InlineToken:
+    """Inline paragraph content that must survive re-rendering."""
+    kind: str                     # "text" / "tab" / "line_break" / "page_break"
+    text: str = ""
+
+
+@dataclass
 class ParagraphData:
     """段落数据（导入后的中间表示）。"""
     text: str                     # 剥离编号后的纯文本
@@ -49,6 +57,7 @@ class ParagraphData:
     original_text: str            # 原始文本（含编号）
     features: ParagraphFeatures
     meta: dict = field(default_factory=dict)  # {"is_title": True, …}
+    inline_tokens: List[InlineToken] = field(default_factory=list)
 
 
 @dataclass
@@ -67,6 +76,7 @@ class DocumentData:
     filepath: str = ""
     has_cover: bool = False
     doc_mode: str = ""  # 文种：REPORT / NORMAL / ""
+    body_sectPr: object = None
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -166,6 +176,61 @@ def extract_features(paragraph, index: int) -> ParagraphFeatures:
         pass
 
     return pf
+
+
+def extract_inline_tokens(paragraph) -> List[InlineToken]:
+    """Extract supported inline tokens without duplicating rendered page breaks."""
+    from docx.oxml.ns import qn as _qn
+
+    tokens: List[InlineToken] = []
+    for run in paragraph._element.findall(".//" + _qn("w:r")):
+        for child in run.iterchildren():
+            if child.tag == _qn("w:t"):
+                tokens.append(InlineToken("text", child.text or ""))
+            elif child.tag == _qn("w:tab"):
+                tokens.append(InlineToken("tab"))
+            elif child.tag == _qn("w:br"):
+                break_type = child.get(_qn("w:type"))
+                tokens.append(InlineToken("page_break" if break_type == "page" else "line_break"))
+            elif child.tag == _qn("w:cr"):
+                tokens.append(InlineToken("line_break"))
+            elif child.tag == _qn("w:lastRenderedPageBreak"):
+                continue
+    return tokens
+
+
+def inline_tokens_text(tokens: List[InlineToken]) -> str:
+    parts = []
+    for token in tokens or []:
+        if token.kind == "text":
+            parts.append(token.text)
+        elif token.kind == "tab":
+            parts.append("\t")
+        elif token.kind == "line_break":
+            parts.append("\n")
+    return "".join(parts)
+
+
+def _normalize_inline_tokens(tokens: List[InlineToken], punctuation_enabled: bool) -> List[InlineToken]:
+    if not punctuation_enabled:
+        return list(tokens or [])
+    normalized = []
+    for token in tokens or []:
+        if token.kind == "text":
+            normalized.append(InlineToken("text", _to_chinese_punctuation(_normalize_quotes(token.text))))
+        else:
+            normalized.append(token)
+    return normalized
+
+
+def extract_paragraph_sectPr(paragraph):
+    from docx.oxml.ns import qn as _qn
+
+    pPr = paragraph._element.find(_qn("w:pPr"))
+    if pPr is None:
+        return None
+    sectPr = pPr.find(_qn("w:sectPr"))
+    return copy.deepcopy(sectPr) if sectPr is not None else None
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1254,28 +1319,80 @@ class DocxImporter:
             if child.tag == _qn_body('w:p'):
                 para = DocxParagraph(child, doc._body)
                 pf = extract_features(para, para_index)
+                inline_tokens = extract_inline_tokens(para)
+                sectPr = extract_paragraph_sectPr(para)
                 para_index += 1
                 if pf.contains_image:
                     raw_blocks.append(("paragraph_xml", para))
-                elif para.text.strip():
-                    raw_blocks.append(("paragraph", para, pf))
+                elif para.text.strip() or sectPr is not None or any(token.kind == "page_break" for token in inline_tokens):
+                    raw_blocks.append(("paragraph", para, pf, inline_tokens, sectPr))
             elif child.tag == _qn_body('w:tbl'):
                 table = DocxTable(child, doc._body)
                 raw_blocks.append(("table", table))
                 data.tables.append(table)
+            elif child.tag == _qn_body('w:sectPr'):
+                data.body_sectPr = copy.deepcopy(child)
 
         # 第二步：按换行符拆分段落（解决 3/4 级标题合并在同一段的问题）
 
         # ── 扁平化 + 单次分类（单 pass，传真实 next_line）──
-        flat_lines = []  # ("text", line_text, pf) / ("table", table) / ("paragraph_xml", para)
+        flat_lines = []  # ("text", line_text, pf, inline_tokens, sectPr) / ("table", table) / ("paragraph_xml", para)
         for block in raw_blocks:
             if block[0] != "paragraph":
                 flat_lines.append(block)
                 continue
-            _, para, pf = block
+            _, para, pf, inline_tokens, sectPr = block
             text = para.text.strip()
             if punctuation_enabled:
                 text = _to_chinese_punctuation(_normalize_quotes(text))
+            if not text and sectPr is not None:
+                sub_pf = ParagraphFeatures(
+                    font_name=pf.font_name, font_size_pt=pf.font_size_pt,
+                    bold=pf.bold, alignment=pf.alignment,
+                    style_name=pf.style_name,
+                    numbering_prefix=pf.numbering_prefix,
+                    paragraph_index=len(flat_lines),
+                    is_new_line=False,
+                )
+                flat_lines.append(("text", "", sub_pf, [], sectPr))
+                continue
+            has_structural_inline = any(token.kind in {"tab", "line_break", "page_break"} for token in inline_tokens)
+            if has_structural_inline:
+                normalized_tokens = _normalize_inline_tokens(inline_tokens, punctuation_enabled)
+                line = inline_tokens_text(normalized_tokens).strip()
+                has_page_break = any(token.kind == "page_break" for token in normalized_tokens)
+                has_tab = any(token.kind == "tab" for token in normalized_tokens)
+                has_line_break = any(token.kind == "line_break" for token in normalized_tokens)
+                split_lines = [part.strip() for part in line.split("\n")]
+                if has_line_break and not has_page_break and not has_tab and any(_detect_numbering_prefix(part) for part in split_lines[1:]):
+                    for li, split_line in enumerate(split_lines):
+                        if not split_line:
+                            continue
+                        line_numbering = pf.numbering_prefix if li == 0 else _detect_numbering_prefix(split_line)
+                        sub_pf = ParagraphFeatures(
+                            font_name=pf.font_name, font_size_pt=pf.font_size_pt,
+                            bold=pf.bold, alignment=pf.alignment,
+                            style_name=pf.style_name,
+                            numbering_prefix=line_numbering,
+                            paragraph_index=len(flat_lines),
+                            is_new_line=(li > 0),
+                        )
+                        flat_lines.append(("text", split_line, sub_pf, [], sectPr if li == len(split_lines) - 1 else None))
+                    continue
+                if not line and has_page_break:
+                    line = text
+                if not line and not has_page_break:
+                    continue
+                sub_pf = ParagraphFeatures(
+                    font_name=pf.font_name, font_size_pt=pf.font_size_pt,
+                    bold=pf.bold, alignment=pf.alignment,
+                    style_name=pf.style_name,
+                    numbering_prefix=pf.numbering_prefix,
+                    paragraph_index=len(flat_lines),
+                    is_new_line=False,
+                )
+                flat_lines.append(("text", line, sub_pf, normalized_tokens, sectPr))
+                continue
             for li, line in enumerate(text.split('\n')):
                 line = line.strip()
                 if punctuation_enabled:
@@ -1290,7 +1407,7 @@ class DocxImporter:
                     paragraph_index=len(flat_lines),
                     is_new_line=(li > 0),
                 )
-                flat_lines.append(("text", line, sub_pf))
+                flat_lines.append(("text", line, sub_pf, [], sectPr if li == len(text.split('\n')) - 1 else None))
 
         ctx = DetectionContext()
         # 预扫描：找到最后一个正文/标题行的位置，之后的区域视为文档尾部
@@ -1320,7 +1437,7 @@ class DocxImporter:
                 data.paragraphs.append(pd)
                 continue
 
-            _, line, sub_pf = item
+            _, line, sub_pf, inline_tokens, sectPr = item
             next_line = ""
             next_pf = None
             for next_item in flat_lines[i + 1:]:
@@ -1373,9 +1490,13 @@ class DocxImporter:
             if type_id == "sign_date":
                 ctx.signature_complete = True; ctx.attachment_page_mode = False
 
+            if sectPr is not None:
+                meta_patch = dict(meta_patch or {})
+                meta_patch["sectPr"] = sectPr
             pd = ParagraphData(
                 text=clean_text, type_id=type_id,
                 original_text=line, features=sub_pf, meta=meta_patch,
+                inline_tokens=inline_tokens if clean_text == line else [],
             )
             data.paragraphs.append(pd)
             # 分类日志

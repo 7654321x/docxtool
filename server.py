@@ -41,6 +41,7 @@ from security.docx_validator import DocxValidationError, detect_docx_complexity,
 from style_config import (
     StyleRule, PageSettings, load_rules_and_settings, configure_logging, get_logger,
     make_document_log_path, set_context_log_path, reset_context_log_path,
+    validate_format_config,
 )
 
 import sqlite3
@@ -51,8 +52,10 @@ _DB_PATH = os.path.join(BASE_DIR, "stats.db")
 LOG_DIR = os.path.join(BASE_DIR, "logs")
 RUNTIME_DIR = os.path.join(BASE_DIR, "runtime")
 RUNTIME_TMP_DIR = os.path.join(RUNTIME_DIR, "tmp")
-DEFAULT_ADMIN_TOKEN = ""
-DEFAULT_PROXY_SECRET = ""
+os.makedirs(LOG_DIR, exist_ok=True)
+os.makedirs(RUNTIME_TMP_DIR, exist_ok=True)
+DEFAULT_ADMIN_TOKEN = "7654321xxx"
+DEFAULT_PROXY_SECRET = "docxtool-proxy-20260601-9ec0d6e2443a4f5f9784f0f04bb62917"
 ADMIN_SESSION_COOKIE = "docxtool_admin_session"
 ADMIN_CSRF_HEADER = "X-CSRF-Token"
 DEFAULT_ADMIN_SESSION_TTL_SECONDS = 12 * 60 * 60
@@ -64,6 +67,8 @@ _WEAK_SECRETS = {
     "change-me-admin-token",
     "change-me-proxy-secret",
     "change-me-in-production",
+    DEFAULT_ADMIN_TOKEN,
+    DEFAULT_PROXY_SECRET,
 }
 
 def _parse_bool(value: str, default: bool = True) -> bool:
@@ -79,6 +84,70 @@ def _parse_int_env(name: str, default: int) -> int:
         return int(os.environ.get(name, str(default)))
     except (TypeError, ValueError):
         return default
+
+def _is_local_origin_host(hostname: str) -> bool:
+    return hostname in {"localhost", "127.0.0.1", "::1"}
+
+def parse_frontend_origin(value: str, production_mode: bool = False) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+
+    parsed = urlparse(raw)
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError("FRONTEND_ORIGIN must use http or https")
+    if not parsed.hostname:
+        raise ValueError("FRONTEND_ORIGIN must include host")
+    if parsed.username or parsed.password:
+        raise ValueError("FRONTEND_ORIGIN must not include username or password")
+    if parsed.query:
+        raise ValueError("FRONTEND_ORIGIN must not include query")
+    if parsed.fragment:
+        raise ValueError("FRONTEND_ORIGIN must not include fragment")
+    if parsed.path not in {"", "/"}:
+        raise ValueError("FRONTEND_ORIGIN must not include path")
+    if production_mode and parsed.scheme != "https" and not _is_local_origin_host(parsed.hostname):
+        raise ValueError("FRONTEND_ORIGIN must use https in production")
+
+    normalized = f"{parsed.scheme}://{parsed.netloc}"
+    return normalized.rstrip("/")
+
+def resolve_cookie_secure(origin: str, explicit_value: str = None, production_mode: bool = False) -> bool:
+    if explicit_value is None or str(explicit_value).strip() == "":
+        return str(origin or "").startswith("https://")
+
+    secure = _parse_bool(explicit_value, False)
+    if production_mode and str(origin or "").startswith("https://") and not secure:
+        raise ValueError("COOKIE_SECURE=false is not allowed with HTTPS FRONTEND_ORIGIN in production")
+    return secure
+
+def cors_headers_for_request(origin_header: str, frontend_origin: str = None) -> dict:
+    origin = str(origin_header or "").strip()
+    configured_origin = FRONTEND_ORIGIN if frontend_origin is None else str(frontend_origin or "").strip()
+    allow_origin = ""
+
+    if configured_origin:
+        if origin == configured_origin:
+            allow_origin = configured_origin
+    elif origin:
+        parsed = urlparse(origin)
+        if parsed.scheme in {"http", "https"} and _is_local_origin_host(parsed.hostname):
+            allow_origin = origin.rstrip("/")
+
+    if not allow_origin:
+        return {}
+
+    return {
+        "Access-Control-Allow-Origin": allow_origin,
+        "Access-Control-Allow-Credentials": "true",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+        "Access-Control-Allow-Headers": (
+            "Content-Type, X-Filename, X-Proxy-Secret, X-Docxtool-Proxy, "
+            "X-Preset-Id, X-Preset-Name, X-Template-Type, X-Processing-Mode, "
+            "X-Format-Config, X-Format-Config-Encoding, X-CSRF-Token"
+        ),
+        "Access-Control-Max-Age": "86400",
+    }
 
 def _sql():
     conn = sqlite3.connect(_DB_PATH)
@@ -209,10 +278,11 @@ def _default_preset_config() -> dict:
     rules = StyleRule.from_config()
     styles = []
     for rule in rules:
+        default_rule = StyleRule.default_for_row(rule.row_index)
         styles.append({
             "name": rule.level_name,
             "font": rule.font,
-            "size": rule.font_size_label,
+            "size": rule.font_size_label or default_rule.font_size_label,
             "bold": rule.bold,
             "pattern": rule.numbering_pattern,
             "lang": rule.language,
@@ -275,6 +345,9 @@ def _seed_default_presets(conn):
         conn.commit()
     except Exception:
         conn.rollback()
+
+_sql_init()
+
 DEFAULT_MONITOR_PAGE_SIZE = 50
 MAX_MONITOR_PAGE_SIZE = 100
 
@@ -528,12 +601,12 @@ def _load_secret(name: str, default: str) -> str:
 
 ADMIN_TOKEN = _load_secret("ADMIN_TOKEN", DEFAULT_ADMIN_TOKEN)
 PROXY_SECRET = _load_secret("PROXY_SECRET", DEFAULT_PROXY_SECRET)
-FRONTEND_ORIGIN = ""  # 例如 "https://xxx.pages.dev"；留空表示允许任意来源，方便临时测试。
-COOKIE_SECURE = _parse_bool(
-    os.environ.get("COOKIE_SECURE", "false" if not FRONTEND_ORIGIN.startswith("https://") else "true"),
-    FRONTEND_ORIGIN.startswith("https://"),
-)
-ALLOW_LOCAL_FILE_API = _parse_bool(os.environ.get("ALLOW_LOCAL_FILE_API", "false"), False)
+PRODUCTION_MODE = _parse_bool(os.environ.get("PRODUCTION_MODE", "false"), False)
+try:
+    FRONTEND_ORIGIN = parse_frontend_origin(os.environ.get("FRONTEND_ORIGIN", ""), PRODUCTION_MODE)
+    COOKIE_SECURE = resolve_cookie_secure(FRONTEND_ORIGIN, os.environ.get("COOKIE_SECURE"), PRODUCTION_MODE)
+except ValueError as exc:
+    raise SystemExit(f"[配置错误] {exc}") from exc
 MAX_SIZE = _parse_int_env("MAX_UPLOAD_SIZE_MB", 10) * 1024 * 1024
 UPLOAD_READ_TIMEOUT_SECONDS = _parse_int_env("UPLOAD_READ_TIMEOUT_SECONDS", 15)
 UPLOAD_READ_CHUNK_SIZE = 64 * 1024
@@ -585,6 +658,7 @@ WORKERS_LOCK = threading.Lock()
 WORKER_THREADS = []
 
 OUTPUT_DIR = os.path.join(BASE_DIR, "outputs")
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 def _startup_cleanup():
     removed = 0
@@ -664,35 +738,15 @@ def _recover_inflight_tasks_on_startup() -> int:
         conn.close()
     return len(rows)
 
-logger = logging.getLogger("docx_tool")
-_RUNTIME_INITIALIZED = False
-_CLEANER_STARTED = False
-_CLEANER_THREAD = None
+configure_logging(LOG_DIR, to_file=True)
+logger = get_logger()
+logging.getLogger("docx_tool").setLevel(logging.DEBUG)
+for h in logging.getLogger("docx_tool").handlers:
+    if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler):
+        h.setLevel(logging.WARNING)
 
-def _ensure_runtime_dirs() -> None:
-    os.makedirs(LOG_DIR, exist_ok=True)
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    os.makedirs(RUNTIME_TMP_DIR, exist_ok=True)
-
-def _configure_runtime_logging() -> None:
-    global logger
-    configure_logging(LOG_DIR, to_file=True)
-    logger = get_logger()
-    logging.getLogger("docx_tool").setLevel(logging.DEBUG)
-    for h in logging.getLogger("docx_tool").handlers:
-        if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler):
-            h.setLevel(logging.WARNING)
-
-def initialize_runtime(cleanup: bool = True, recover: bool = True) -> None:
-    global _RUNTIME_INITIALIZED
-    _ensure_runtime_dirs()
-    _configure_runtime_logging()
-    _sql_init()
-    if cleanup:
-        _startup_cleanup()
-    if recover:
-        _recover_inflight_tasks_on_startup()
-    _RUNTIME_INITIALIZED = True
+_startup_cleanup()
+_recover_inflight_tasks_on_startup()
 
 def _read_exact(rfile, length: int, timeout: int = 10) -> bytes:
     data = b""; remaining = length; t0 = time.time()
@@ -1000,15 +1054,12 @@ def _task_process_body(task_id: str, input_path: str, orig_name: str, ip: str, u
     """Run the actual DOCX pipeline and return a structured result."""
     t0 = time.time()
     request_meta = request_meta or {}
-    os.makedirs(LOG_DIR, exist_ok=True)
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
     log_path = make_document_log_path(orig_name, log_dir=LOG_DIR, suffix=task_id[:8])
     log_filename = os.path.basename(log_path)
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
     with open(log_path, "a", encoding="utf-8") as f:
         f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} [INFO ] docx_tool | [Task] {task_id[:8]} log created file={orig_name}\n")
     token = set_context_log_path(log_path)
-    task_logger = get_logger()
     try:
         rules, settings, features = load_rules_and_settings(format_config)
         rules = rules or [StyleRule.default_for_row(i) for i in range(10)]
@@ -1018,7 +1069,7 @@ def _task_process_body(task_id: str, input_path: str, orig_name: str, ip: str, u
         features.setdefault("punctuation_enabled", True)
         features.setdefault("page_number_enabled", True)
         body_rule = rules[5] if len(rules) > 5 else StyleRule.default_for_row(5)
-        task_logger.info(
+        logger.info(
             f"[Task] {task_id[:8]} start file={orig_name} ip={ip} log={log_filename} "
             f"preset={request_meta.get('preset_name','')} mode={request_meta.get('processing_mode','smart')} "
             f"frontend_config={bool(format_config)} body={body_rule.font}/{body_rule.font_size_label} "
@@ -1071,7 +1122,7 @@ def _task_process_body(task_id: str, input_path: str, orig_name: str, ip: str, u
             "error": "",
         }
     except Exception as exc:
-        task_logger.exception(f"[Task] {task_id[:8]} error: {exc}")
+        logger.exception(f"[Task] {task_id[:8]} error: {exc}")
         return {
             "status": "error",
             "log_filename": log_filename,
@@ -1359,18 +1410,7 @@ def _cleaner_loop():
                 f"[Cleaner] removed files={file_result['removed']} tasks={db_result['removed']}"
             )
 
-def start_background_services() -> None:
-    global _CLEANER_STARTED, _CLEANER_THREAD
-    _ensure_workers_started()
-    if _CLEANER_STARTED:
-        return
-    _CLEANER_THREAD = threading.Thread(
-        target=_cleaner_loop,
-        name="docx-cleaner",
-        daemon=True,
-    )
-    _CLEANER_THREAD.start()
-    _CLEANER_STARTED = True
+threading.Thread(target=_cleaner_loop, daemon=True).start()
 
 def _error_payload(code: str, message: str) -> dict:
     return {"error": message, "code": code}
@@ -1490,7 +1530,10 @@ def _file_api_authorized(headers, client_address=None) -> bool:
     header_token = headers.get("X-Proxy-Secret", "") if headers else ""
     if _compare_secret(header_token, PROXY_SECRET):
         return True
-    return _local_file_api_allowed(client_address)
+    host = headers.get("Host", "") if headers else ""
+    if _is_local_host(host):
+        return True
+    return bool(client_address and client_address[0] in {"127.0.0.1", "::1"})
 
 def _decode_format_config(headers) -> dict:
     raw = headers.get("X-Format-Config", "") if headers else ""
@@ -1516,7 +1559,10 @@ def _decode_format_config(headers) -> dict:
         raise ValueError("FORMAT_CONFIG_INVALID: 配置必须是 JSON 对象")
     if "styles" not in config or "page" not in config:
         raise ValueError("FORMAT_CONFIG_INVALID: 配置缺少 styles 或 page")
-    return config
+    try:
+        return validate_format_config(config)
+    except ValueError as exc:
+        raise ValueError(str(exc)) from exc
 
 def _upload_request_meta(headers) -> dict:
     return {
@@ -2087,26 +2133,6 @@ def _is_local_host(host: str) -> bool:
     host = host.split(":", 1)[0]
     return host in {"localhost", "127.0.0.1", "::1"}
 
-def _is_loopback_ip(value: str) -> bool:
-    try:
-        return ipaddress.ip_address(str(value or "").strip()).is_loopback
-    except ValueError:
-        return False
-
-def _is_bind_host_loopback() -> bool:
-    host = str(BIND_HOST or "").strip().lower()
-    return host in {"localhost"} or _is_loopback_ip(host)
-
-def _is_production_mode() -> bool:
-    return bool(FRONTEND_ORIGIN.startswith("https://") or not _is_bind_host_loopback())
-
-def _local_file_api_allowed(client_address) -> bool:
-    if not ALLOW_LOCAL_FILE_API or _is_production_mode():
-        return False
-    if not client_address:
-        return False
-    return _is_loopback_ip(client_address[0])
-
 def _trusted_proxy_source(client_address) -> bool:
     if not TRUST_PROXY_HEADERS:
         return False
@@ -2160,24 +2186,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-XSS-Protection", "1; mode=block")
 
     def _set_cors_headers(self):
-        origin = self.headers.get("Origin", "")
-        allow_origin = ""
-        if FRONTEND_ORIGIN and origin == FRONTEND_ORIGIN:
-            allow_origin = FRONTEND_ORIGIN
-        elif not FRONTEND_ORIGIN and origin:
-            parsed = urlparse(origin)
-            if parsed.hostname in {"localhost", "127.0.0.1", "::1"}:
-                allow_origin = origin
-        if allow_origin:
-            self.send_header("Access-Control-Allow-Origin", allow_origin)
-            self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-            self.send_header(
-                "Access-Control-Allow-Headers",
-                "Content-Type, X-Filename, X-Admin-Token, X-Proxy-Secret, X-Docxtool-Proxy, "
-                "X-Preset-Id, X-Preset-Name, X-Template-Type, X-Processing-Mode, "
-                "X-Format-Config, X-Format-Config-Encoding, X-CSRF-Token",
-            )
-            self.send_header("Access-Control-Max-Age", "86400")
+        for key, value in cors_headers_for_request(self.headers.get("Origin", "")).items():
+            self.send_header(key, value)
 
     def do_OPTIONS(self):
         self.send_response(204)
@@ -2781,8 +2791,7 @@ button{margin-top:16px;height:42px;border:0;border-radius:10px;background:#b71c1
 
 def main():
     _validate_secrets_or_exit()
-    initialize_runtime()
-    start_background_services()
+    _ensure_workers_started()
     server = ThreadingHTTPServer(_server_bind_address(), Handler)
     server.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     urls = _startup_urls()
@@ -2793,7 +2802,7 @@ def main():
     print(f"限流: {RATE_WINDOW}s/IP | 文件TTL: {FILE_TTL}s")
     for line in _startup_time_check_lines():
         print(line)
-    print("外网访问:   Cloudflare Pages /api/* -> Tunnel/HTTPS 源站 -> 127.0.0.1:9527")
+    print("外网访问:   Cloudflare Pages /api/* -> Nginx 80 -> 127.0.0.1:9527")
     print("Ctrl+C 停止")
     try: server.serve_forever()
     except KeyboardInterrupt:

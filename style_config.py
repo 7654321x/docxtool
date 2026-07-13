@@ -8,6 +8,7 @@
 """
 
 import logging
+import math
 import re
 import contextvars
 from datetime import datetime
@@ -35,12 +36,6 @@ FONT_SIZE_MAP: Dict[str, float] = {
 def cn_size_to_pt(label: str) -> float:
     """中文字号标签 → pt。未知返回 12.0。"""
     return FONT_SIZE_MAP.get(label.strip(), 12.0)
-
-
-def _size_pt_from_label(label: str, default: float, allow_empty: bool = False) -> float:
-    if label is None or not str(label).strip():
-        return 0.0 if allow_empty else default
-    return cn_size_to_pt(str(label))
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -111,6 +106,61 @@ def _safe_float(value, default: float = 0.0) -> float:
     except (ValueError, TypeError):
         return default
 
+class ConfigValidationError(ValueError):
+    def __init__(self, field_path: str, reason: str):
+        self.code = "FORMAT_CONFIG_INVALID"
+        self.field = field_path
+        self.reason = reason
+        super().__init__(f"{self.code}: {field_path}: {reason}")
+
+def finite_float(field_path: str, value, minimum: float, maximum: float) -> float:
+    try:
+        if isinstance(value, str):
+            value = value.strip()
+            if value == "":
+                raise ValueError
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ConfigValidationError(field_path, "必须是数字") from exc
+    if not math.isfinite(number):
+        raise ConfigValidationError(field_path, "必须是有限数字")
+    if number < minimum or number > maximum:
+        raise ConfigValidationError(field_path, f"必须在 {minimum:g} 到 {maximum:g} 之间")
+    return number
+
+def finite_int(field_path: str, value, minimum: int, maximum: int) -> int:
+    number = finite_float(field_path, value, minimum, maximum)
+    if int(number) != number:
+        raise ConfigValidationError(field_path, "必须是整数")
+    return int(number)
+
+def _float_field(data: dict, key: str, field_path: str, default: float, minimum: float, maximum: float) -> float:
+    if key not in data:
+        return default
+    return finite_float(field_path, data.get(key), minimum, maximum)
+
+def _int_field(data: dict, key: str, field_path: str, default: int, minimum: int, maximum: int) -> int:
+    if key not in data:
+        return default
+    return finite_int(field_path, data.get(key), minimum, maximum)
+
+def _font_size_from_config(field_path: str, value) -> tuple[str, float]:
+    if value is None:
+        raise ConfigValidationError(field_path, "不能为空")
+    if isinstance(value, (int, float)):
+        size_pt = finite_float(field_path, value, 1.0, 72.0)
+        return f"{size_pt:g}pt", size_pt
+    label = str(value).strip()
+    if not label:
+        raise ConfigValidationError(field_path, "不能为空")
+    if label in FONT_SIZE_MAP:
+        return label, FONT_SIZE_MAP[label]
+    try:
+        size_pt = finite_float(field_path, label.removesuffix("pt").removesuffix("磅"), 1.0, 72.0)
+    except ConfigValidationError as exc:
+        raise ConfigValidationError(field_path, f"未知字号 {label}") from exc
+    return f"{size_pt:g}pt", size_pt
+
 
 def _safe_bool(value, default: bool = False) -> bool:
     """配置布尔值兜底转换，兼容 JSON 布尔值和字符串。"""
@@ -139,8 +189,6 @@ def parse_alignment(s: str) -> Tuple[str, str]:
     "左对齐" → ("left", "left")。"""
     if not s:
         return ("left", "left")
-    if s.strip() == "奇右偶左":
-        return ("right", "left")
     if "|" in s:
         parts = s.split("|", 1)
         odd_part = parts[0].strip()
@@ -390,8 +438,8 @@ class StyleRule:
             StyleRule(3, "三级标题", "仿宋_GB2312", "三号", 16.0, True, "{c}.", "阿拉伯数字", 2.0, "左对齐"),
             StyleRule(4, "四级标题", "仿宋_GB2312", "三号", 16.0, False, "（{d}）", "阿拉伯数字", 2.0, "左对齐"),
             StyleRule(5, "正文", "仿宋_GB2312", "三号", 16.0, False, "", "", 2.0, "两端对齐"),
-            StyleRule(6, "数字", "Times New Roman", "", 0.0, False, "", "", 0.0, "左对齐"),
-            StyleRule(7, "字母", "Times New Roman", "", 0.0, False, "", "", 0.0, "左对齐"),
+            StyleRule(6, "数字", "Times New Roman", "三号", 16.0, False, "", "", 0.0, "左对齐"),
+            StyleRule(7, "字母", "Times New Roman", "三号", 16.0, False, "", "", 0.0, "左对齐"),
             StyleRule(8, "页码设置", "宋体", "四号", 14.0, False, "— 1 —", "阿拉伯数字", 0.0, "奇右|偶左"),
             StyleRule(9, "正文上标", "Times New Roman", "三号", 16.0, False, "[n]", "阿拉伯数字", 0.0, "左对齐"),
             StyleRule(10, "称呼", "仿宋_GB2312", "三号", 16.0, False, "", "", 2.0, "左对齐", 1.0, 0.0),
@@ -425,13 +473,12 @@ class StyleRule:
         rules = []
         for i, item in enumerate(data.get("styles", [])):
             default = StyleRule.default_for_row(i)
-            size = item.get("size", default.font_size_label)
             rules.append(StyleRule(
                 row_index=i,
                 level_name=item.get("name", ""),
                 font=item.get("font", "仿宋_GB2312"),
-                font_size_label=size,
-                font_size_pt=_size_pt_from_label(size, default.font_size_pt, allow_empty=i in (6, 7)),
+                font_size_label=item.get("size", "三号"),
+                font_size_pt=cn_size_to_pt(item.get("size", "三号")),
                 bold=item.get("bold", False),
                 numbering_pattern=item.get("pattern", ""),
                 language=item.get("lang", ""),
@@ -460,22 +507,25 @@ class StyleRule:
         for i in range(24):
             default = StyleRule.default_for_row(i)
             item = styles[i] if i < len(styles) and isinstance(styles[i], dict) else {}
-            size = item.get("size", default.font_size_label)
+            if "size" in item:
+                size, size_pt = _font_size_from_config(f"styles[{i}].size", item.get("size"))
+            else:
+                size, size_pt = default.font_size_label, default.font_size_pt
             rules.append(StyleRule(
                 row_index=i,
                 level_name=item.get("name", default.level_name),
                 font=item.get("font", default.font),
                 font_size_label=size,
-                font_size_pt=_size_pt_from_label(size, default.font_size_pt, allow_empty=i in (6, 7)),
+                font_size_pt=size_pt,
                 bold=_safe_bool(item.get("bold", default.bold), default.bold),
                 numbering_pattern=item.get("pattern", default.numbering_pattern),
                 language=item.get("lang", default.language),
-                first_line_indent=_safe_float(item.get("indent", default.first_line_indent), default.first_line_indent),
+                first_line_indent=_float_field(item, "indent", f"styles[{i}].indent", default.first_line_indent, -20.0, 50.0),
                 alignment=item.get("align", default.alignment),
-                spacing_before=_safe_float(item.get("spacing_before", default.spacing_before), default.spacing_before),
-                spacing_after=_safe_float(item.get("spacing_after", default.spacing_after), default.spacing_after),
-                left_indent=_safe_float(item.get("left_indent", default.left_indent), default.left_indent),
-                right_indent=_safe_float(item.get("right_indent", default.right_indent), default.right_indent),
+                spacing_before=_float_field(item, "spacing_before", f"styles[{i}].spacing_before", default.spacing_before, 0.0, 20.0),
+                spacing_after=_float_field(item, "spacing_after", f"styles[{i}].spacing_after", default.spacing_after, 0.0, 20.0),
+                left_indent=_float_field(item, "left_indent", f"styles[{i}].left_indent", default.left_indent, 0.0, 50.0),
+                right_indent=_float_field(item, "right_indent", f"styles[{i}].right_indent", default.right_indent, 0.0, 50.0),
                 page_break_before=_safe_bool(item.get("page_break_before", default.page_break_before), default.page_break_before),
             ))
         return rules
@@ -533,21 +583,40 @@ class PageSettings:
         p = config_dict.get("page", {}) if isinstance(config_dict, dict) else {}
         if not isinstance(p, dict):
             p = {}
-        return PageSettings(
-            page_width_cm=_safe_float(p.get("width_cm", 21.0), 21.0),
-            page_height_cm=_safe_float(p.get("height_cm", 29.7), 29.7),
-            margin_top_cm=_safe_float(p.get("margin_top_cm", 3.7), 3.7),
-            margin_bottom_cm=_safe_float(p.get("margin_bottom_cm", 3.5), 3.5),
-            margin_left_cm=_safe_float(p.get("margin_left_cm", 2.8), 2.8),
-            margin_right_cm=_safe_float(p.get("margin_right_cm", 2.6), 2.6),
-            lines_per_page=int(_safe_float(p.get("lines_per_page", 22), 22)),
-            chars_per_line=int(_safe_float(p.get("chars_per_line", 28), 28)),
-            line_spacing_value=_safe_float(p.get("line_spacing_pt", 28.0), 28.0),
-            space_before_line=_safe_float(p.get("space_before_line", 0.0), 0.0),
-            space_after_line=_safe_float(p.get("space_after_line", 0.0), 0.0),
+        settings = PageSettings(
+            page_width_cm=_float_field(p, "width_cm", "page.width_cm", 21.0, 5.0, 100.0),
+            page_height_cm=_float_field(p, "height_cm", "page.height_cm", 29.7, 5.0, 150.0),
+            margin_top_cm=_float_field(p, "margin_top_cm", "page.margin_top_cm", 3.7, 0.0, 50.0),
+            margin_bottom_cm=_float_field(p, "margin_bottom_cm", "page.margin_bottom_cm", 3.5, 0.0, 50.0),
+            margin_left_cm=_float_field(p, "margin_left_cm", "page.margin_left_cm", 2.8, 0.0, 50.0),
+            margin_right_cm=_float_field(p, "margin_right_cm", "page.margin_right_cm", 2.6, 0.0, 50.0),
+            lines_per_page=_int_field(p, "lines_per_page", "page.lines_per_page", 22, 1, 200),
+            chars_per_line=_int_field(p, "chars_per_line", "page.chars_per_line", 28, 1, 200),
+            line_spacing_value=_float_field(p, "line_spacing_pt", "page.line_spacing_pt", 28.0, 1.0, 200.0),
+            space_before_line=_float_field(p, "space_before_line", "page.space_before_line", 0.0, 0.0, 20.0),
+            space_after_line=_float_field(p, "space_after_line", "page.space_after_line", 0.0, 0.0, 20.0),
             grid_alignment=_grid_alignment(p.get("grid_alignment", "文字对齐字符网络")),
         )
+        validate_page_settings(settings)
+        return settings
 
+
+def validate_page_settings(settings: PageSettings) -> None:
+    if settings.margin_left_cm + settings.margin_right_cm >= settings.page_width_cm:
+        raise ConfigValidationError("page.margin_left_cm", "左右边距之和必须小于页面宽度")
+    if settings.margin_top_cm + settings.margin_bottom_cm >= settings.page_height_cm:
+        raise ConfigValidationError("page.margin_top_cm", "上下边距之和必须小于页面高度")
+    if settings.page_width_cm - settings.margin_left_cm - settings.margin_right_cm <= 0:
+        raise ConfigValidationError("page.width_cm", "可排版宽度必须大于 0")
+    if settings.page_height_cm - settings.margin_top_cm - settings.margin_bottom_cm <= 0:
+        raise ConfigValidationError("page.height_cm", "可排版高度必须大于 0")
+
+def validate_format_config(config_dict: dict) -> dict:
+    if not isinstance(config_dict, dict):
+        raise ConfigValidationError("config", "必须是 JSON 对象")
+    StyleRule.from_config_dict(config_dict)
+    PageSettings.from_config_dict(config_dict)
+    return config_dict
 
 def load_rules_and_settings(config_dict: dict = None):
     """加载本次任务的 rules/settings/features。

@@ -25,7 +25,7 @@ from engine.normal import resolve as _resolve_rule
 # ── python-docx 模块级导入 ──
 from docx import Document
 from docx.shared import Pt, Cm, Emu
-from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
+from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK, WD_LINE_SPACING
 from docx.enum.section import WD_ORIENT
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
@@ -78,6 +78,40 @@ def _segment_writer(para):
         return run
 
     return write
+
+
+def _write_inline_tokens(para, tokens) -> None:
+    for token in tokens or []:
+        run = para.add_run("")
+        kind = getattr(token, "kind", "")
+        if kind == "text":
+            run.text = getattr(token, "text", "")
+        elif kind == "tab":
+            run.add_tab()
+        elif kind == "line_break":
+            run.add_break()
+        elif kind == "page_break":
+            run.add_break(WD_BREAK.PAGE)
+
+
+def _copy_paragraph_sectPr(para, sectPr) -> None:
+    if sectPr is None:
+        return
+    pPr = para._element.get_or_add_pPr()
+    old = pPr.find(qn("w:sectPr"))
+    if old is not None:
+        pPr.remove(old)
+    pPr.append(copy.deepcopy(sectPr))
+
+
+def _replace_body_sectPr(doc, sectPr) -> None:
+    if sectPr is None:
+        return
+    body = doc._body._element
+    old = body.find(qn("w:sectPr"))
+    if old is not None:
+        body.remove(old)
+    body.append(copy.deepcopy(sectPr))
 
 
 def _line_spacing_twips(settings: PageSettings) -> int:
@@ -789,65 +823,6 @@ def apply_page_settings(doc, settings: PageSettings, doc_mode: str = "") -> None
 # 页码（Union[奇右, 偶左]）
 # ═══════════════════════════════════════════════════════════════
 
-def _wd_page_align(align_id: str):
-    mapping = {
-        "left": WD_ALIGN_PARAGRAPH.LEFT,
-        "center": WD_ALIGN_PARAGRAPH.CENTER,
-        "right": WD_ALIGN_PARAGRAPH.RIGHT,
-    }
-    return mapping.get(align_id, WD_ALIGN_PARAGRAPH.CENTER)
-
-def _style_page_run(run, page_rule: StyleRule) -> None:
-    run.font.name = page_rule.font
-    if page_rule.font_size_pt and page_rule.font_size_pt > 0:
-        run.font.size = Pt(page_rule.font_size_pt)
-    run.font.bold = page_rule.bold
-
-    rPr = run._element.get_or_add_rPr()
-    rFonts = rPr.find(qn('w:rFonts'))
-    if rFonts is None:
-        rFonts = OxmlElement('w:rFonts')
-        rPr.append(rFonts)
-    rFonts.set(qn('w:eastAsia'), page_rule.font)
-    rFonts.set(qn('w:ascii'), page_rule.font)
-    rFonts.set(qn('w:hAnsi'), page_rule.font)
-
-def _add_page_text_run(para, text: str, page_rule: StyleRule) -> None:
-    if not text:
-        return
-    run = para.add_run(text)
-    _style_page_run(run, page_rule)
-
-def _add_page_field_run(para, field_name: str, page_rule: StyleRule) -> None:
-    run = para.add_run("")
-    _style_page_run(run, page_rule)
-    fld = OxmlElement('w:fldChar')
-    fld.set(qn('w:fldCharType'), 'begin')
-    run._element.append(fld)
-    instr = OxmlElement('w:instrText')
-    instr.set(qn('xml:space'), 'preserve')
-    instr.text = f' {field_name} '
-    run._element.append(instr)
-    fld = OxmlElement('w:fldChar')
-    fld.set(qn('w:fldCharType'), 'separate')
-    run._element.append(fld)
-    t = OxmlElement('w:t')
-    t.text = '1'
-    run._element.append(t)
-    fld = OxmlElement('w:fldChar')
-    fld.set(qn('w:fldCharType'), 'end')
-    run._element.append(fld)
-
-def _write_page_number_pattern(para, page_rule: StyleRule) -> None:
-    pattern = (page_rule.numbering_pattern or "— 1 —").strip() or "— 1 —"
-    for part in re.split(r'(1|n)', pattern):
-        if part == "1":
-            _add_page_field_run(para, "PAGE", page_rule)
-        elif part == "n":
-            _add_page_field_run(para, "NUMPAGES", page_rule)
-        else:
-            _add_page_text_run(para, part, page_rule)
-
 def apply_header_footer(doc, page_rule: StyleRule) -> None:
     """设置页码：开启奇偶页不同，奇右偶左，格式 "- 1 -"。"""
 
@@ -857,21 +832,20 @@ def apply_header_footer(doc, page_rule: StyleRule) -> None:
     if even_and_odd is None:
         even_and_odd = OxmlElement('w:evenAndOddHeaders')
         settings_element.append(even_and_odd)
-    odd_align, even_align = parse_alignment(page_rule.alignment)
-    even_and_odd.set(qn('w:val'), '1' if odd_align != even_align else '0')
+    even_and_odd.set(qn('w:val'), '1')  # 必须设置值才生效
 
     for section in doc.sections:
         # 奇数页页脚（默认页脚）— 右对齐
         footer_odd = section.footer
         footer_odd.is_linked_to_previous = False
-        _setup_page_number_paragraph(footer_odd, _wd_page_align(odd_align),
+        _setup_page_number_paragraph(footer_odd, WD_ALIGN_PARAGRAPH.RIGHT,
                                      page_rule)
 
         # 偶数页页脚 — 左对齐
         try:
             footer_even = section.even_page_footer
             footer_even.is_linked_to_previous = False
-            _setup_page_number_paragraph(footer_even, _wd_page_align(even_align),
+            _setup_page_number_paragraph(footer_even, WD_ALIGN_PARAGRAPH.LEFT,
                                          page_rule)
         except Exception as e:
             logger.warning(f"[引擎] 偶数页页脚设置失败: {e}（部分 Word 版本不支持）")
@@ -896,7 +870,43 @@ def _setup_page_number_paragraph(footer, alignment, page_rule: StyleRule) -> Non
         ind.set(qn('w:leftChars'), '100')   # 左缩进 1 字符
     pPr.append(ind)
 
-    _write_page_number_pattern(para, page_rule)
+    # 添加文本 "— " + PAGE 域 + " —"
+    for text, is_field in [("— ", False), ("PAGE", True), (" —", False)]:
+        run = para.add_run(text)
+        run.font.name = page_rule.font
+        run.font.size = Pt(page_rule.font_size_pt)
+        run.font.bold = page_rule.bold
+
+        rPr = run._element.get_or_add_rPr()
+        rFonts = OxmlElement('w:rFonts')
+        rFonts.set(qn('w:eastAsia'), page_rule.font)
+        rFonts.set(qn('w:ascii'), page_rule.font)
+        rFonts.set(qn('w:hAnsi'), page_rule.font)
+        rPr.append(rFonts)
+
+        if is_field:
+            # 完整 PAGE 域：begin → instrText → separate → 默认文本 → end
+            run.text = ""
+            fldChar_begin = OxmlElement('w:fldChar')
+            fldChar_begin.set(qn('w:fldCharType'), 'begin')
+            run._element.append(fldChar_begin)
+
+            instrText = OxmlElement('w:instrText')
+            instrText.set(qn('xml:space'), 'preserve')
+            instrText.text = ' PAGE '
+            run._element.append(instrText)
+
+            fldChar_sep = OxmlElement('w:fldChar')
+            fldChar_sep.set(qn('w:fldCharType'), 'separate')
+            run._element.append(fldChar_sep)
+
+            t = OxmlElement('w:t')
+            t.text = '1'
+            run._element.append(t)
+
+            fldChar_end = OxmlElement('w:fldChar')
+            fldChar_end.set(qn('w:fldCharType'), 'end')
+            run._element.append(fldChar_end)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -904,12 +914,8 @@ def _setup_page_number_paragraph(footer, alignment, page_rule: StyleRule) -> Non
 # ═══════════════════════════════════════════════════════════════
 
 _DIGIT_LATIN_RE = re.compile(r'([0-9]+|[a-zA-Z]+)')
-_DIGIT_RE = re.compile(r'^[0-9]+$')
-_LATIN_RE = re.compile(r'^[a-zA-Z]+$')
 
-def _apply_digit_latin_font(paragraph, digit_rule: StyleRule = None, latin_rule: StyleRule = None) -> None:
-    digit_rule = digit_rule or StyleRule.default_for_row(6)
-    latin_rule = latin_rule or StyleRule.default_for_row(7)
+def _apply_digit_latin_font(paragraph) -> None:
     """遍历段落所有 run，把数字和拉丁字母拆分，设为 Times New Roman。"""
 
     # 跳过含换行符的段落（如标题中的 <w:br/>），避免破坏换行
@@ -943,8 +949,7 @@ def _apply_digit_latin_font(paragraph, digit_rule: StyleRule = None, latin_rule:
             t.set(qn('xml:space'), 'preserve')
             t.text = part
             new_r.append(t)
-            if _DIGIT_RE.fullmatch(part) or _LATIN_RE.fullmatch(part):
-                rule = digit_rule if _DIGIT_RE.fullmatch(part) else latin_rule
+            if _DIGIT_LATIN_RE.fullmatch(part):
                 nrPr = new_r.find(qn('w:rPr'))
                 if nrPr is None:
                     nrPr = OxmlElement('w:rPr')
@@ -953,14 +958,8 @@ def _apply_digit_latin_font(paragraph, digit_rule: StyleRule = None, latin_rule:
                 if rf is None:
                     rf = OxmlElement('w:rFonts')
                     nrPr.append(rf)
-                rf.set(qn('w:ascii'), rule.font)
-                rf.set(qn('w:hAnsi'), rule.font)
-                if rule.font_size_pt and rule.font_size_pt > 0:
-                    sz = nrPr.find(qn('w:sz'))
-                    if sz is None:
-                        sz = OxmlElement('w:sz')
-                        nrPr.append(sz)
-                    sz.set(qn('w:val'), str(int(rule.font_size_pt * 2)))
+                rf.set(qn('w:ascii'), 'Times New Roman')
+                rf.set(qn('w:hAnsi'), 'Times New Roman')
             insert_after.addnext(new_r)
             insert_after = new_r
 
@@ -1106,6 +1105,7 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
     render_items = doc_data.paragraphs
     paragraph_i = 0
     _deferred_body_log = []  # heading1 拆出的 body 日志
+    section_paragraphs = []
 
     for i, pd in enumerate(render_items):
         # 表格占位符 → 原位复制
@@ -1174,7 +1174,12 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
                 if pd.type_id in ("heading1", "heading2"):
                     text = _handle_heading_period(text)
 
-            para = doc.add_paragraph(text)
+            inline_tokens = getattr(pd, "inline_tokens", None)
+            if inline_tokens and text == pd.text:
+                para = doc.add_paragraph("")
+                _write_inline_tokens(para, inline_tokens)
+            else:
+                para = doc.add_paragraph(text)
 
             # 逐段写入 XML 属性
             pPr = para._element.get_or_add_pPr()
@@ -1345,6 +1350,9 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
             snap = OxmlElement('w:snapToGrid')
             snap.set(qn('w:val'), snap_val)
             _set_unique(pPr_final, qn('w:snapToGrid'), snap)
+            if pd.meta.get("sectPr") is not None:
+                section_paragraphs.append((para, pd.meta.get("sectPr")))
+                _copy_paragraph_sectPr(para, pd.meta.get("sectPr"))
             # 段落排版日志（每段汇总格式信息）
             text_preview = pd.text[:28].replace('\n', ' ')
             indent = getattr(resolved, 'first_line_indent', 0)
@@ -1390,23 +1398,25 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
 
     # 后处理：上标统一
     for para in doc.paragraphs:
-        pass
+        _apply_universal_superscript(para)
 
     # 后处理：数字/字母 → Times New Roman
-    digit_rule = rules[6] if len(rules) > 6 else StyleRule.default_for_row(6)
-    latin_rule = rules[7] if len(rules) > 7 else StyleRule.default_for_row(7)
     for para in doc.paragraphs:
-        _apply_digit_latin_font(para, digit_rule, latin_rule)
+        _apply_digit_latin_font(para)
 
     # 页面设置（边距 + compat + Normal 样式）
     apply_page_settings(doc, settings, doc_data.doc_mode)
+    for para, sectPr in section_paragraphs:
+        _copy_paragraph_sectPr(para, sectPr)
 
     # 页码
     if page_number_enabled:
         apply_header_footer(doc, page_rule)
 
+    _replace_body_sectPr(doc, getattr(doc_data, "body_sectPr", None))
+
     # 页面行数诊断
-    page_h_cm = settings.page_height_cm - settings.margin_top_cm - settings.margin_bottom_cm
+    page_h_cm = 29.7 - settings.margin_top_cm - settings.margin_bottom_cm
     max_lines = page_h_cm / (settings.line_spacing_value * 0.0353)  # pt→cm
     logger.info(f"[页面] 版心高度={page_h_cm:.1f}cm 行距={settings.line_spacing_value}pt → 理论最大={max_lines:.1f}行 设定={settings.lines_per_page}行")
 

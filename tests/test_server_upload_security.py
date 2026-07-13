@@ -1,4 +1,6 @@
+import base64
 import io
+import json
 import tempfile
 import zipfile
 import unittest
@@ -20,6 +22,15 @@ def _valid_docx_bytes(extra_members=None, document_xml=None):
         for name, content in (extra_members or []):
             zf.writestr(name, content)
     return bio.getvalue()
+
+
+def _format_config_headers(config):
+    raw = json.dumps(config, ensure_ascii=False).encode("utf-8")
+    encoded = base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+    return {
+        "X-Format-Config": encoded,
+        "X-Format-Config-Encoding": "base64url-json",
+    }
 
 
 class UploadSecurityTest(unittest.TestCase):
@@ -78,6 +89,35 @@ class UploadSecurityTest(unittest.TestCase):
 
         self.assertTrue(any("页眉" in item for item in warnings))
         self.assertTrue(any("文本框" in item or "图片" in item for item in warnings))
+
+    def test_decode_format_config_rejects_invalid_numeric_fields(self):
+        headers = _format_config_headers({
+            "styles": [],
+            "page": {"width_cm": "NaN"},
+        })
+
+        with self.assertRaisesRegex(ValueError, "FORMAT_CONFIG_INVALID: page.width_cm"):
+            server._decode_format_config(headers)
+
+    def test_decode_format_config_accepts_legacy_valid_numeric_strings(self):
+        headers = _format_config_headers({
+            "styles": [{"size": "三号", "indent": "2"}],
+            "page": {
+                "width_cm": "21",
+                "height_cm": "29.7",
+                "margin_top_cm": "3.7",
+                "margin_bottom_cm": "3.5",
+                "margin_left_cm": "2.8",
+                "margin_right_cm": "2.6",
+                "lines_per_page": "22",
+                "chars_per_line": "28",
+                "line_spacing_pt": "28",
+            },
+        })
+
+        config = server._decode_format_config(headers)
+
+        self.assertEqual(config["page"]["width_cm"], "21")
 
 
 if __name__ == "__main__":

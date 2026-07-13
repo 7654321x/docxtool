@@ -46,9 +46,9 @@ BIND_HOST=0.0.0.0 PORT=9527 python3 server.py
 ```
 
 后台监控和文件接口都必须显式配置密钥。`ADMIN_TOKEN` 和 `PROXY_SECRET` 未设置或仍是示例值时，后端会启动失败。
-可选环境变量包括 `TASK_RETENTION_HOURS`、`MAX_CACHED_TASKS`、`CLEANUP_INTERVAL_MINUTES`、`TRUST_PROXY_HEADERS`、`TRUSTED_PROXY_IPS`、`FRONTEND_ORIGIN`、`COOKIE_SECURE`。
+可选环境变量包括 `TASK_RETENTION_HOURS`、`MAX_CACHED_TASKS`、`CLEANUP_INTERVAL_MINUTES`、`TRUST_PROXY_HEADERS`、`TRUSTED_PROXY_IPS`、`FRONTEND_ORIGIN`、`COOKIE_SECURE`、`PRODUCTION_MODE`。生产环境应把 `FRONTEND_ORIGIN` 设置为 Cloudflare Pages 的精确 `https://` Origin；未显式设置 `COOKIE_SECURE` 时，HTTPS Origin 会自动启用 Secure Cookie。
 
-生产推荐部署方式见 `DEPLOY.md`：Cloudflare Pages 前端同源 `/api/*` → `_worker.js` → Cloudflare Tunnel 或 HTTPS 源站 → `127.0.0.1:9527` Python 后端。
+生产推荐部署方式见 `DEPLOY.md`：Cloudflare Pages 前端同源 `/api/*` → `_worker.js` → 腾讯云 Nginx 80 → `127.0.0.1:9527` Python 后端。
 
 ## 可选 systemd 示例
 
@@ -72,6 +72,7 @@ Environment=CLEANUP_INTERVAL_MINUTES=30
 Environment=TRUST_PROXY_HEADERS=true
 Environment=TRUSTED_PROXY_IPS=127.0.0.1,::1
 Environment=FRONTEND_ORIGIN=https://你的Pages域名
+Environment=PRODUCTION_MODE=true
 Restart=always
 
 [Install]

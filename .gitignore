@@ -1,20 +1,63 @@
+# Python
 __pycache__/
 *.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
 .venv/
 venv/
+env/
+
+# Local runtime data
+logs/
+outputs/
+**/logs/
+**/outputs/
+*.log
+*.db
+*.sqlite
+*.sqlite3
+
+# Build artifacts
+build/
+dist/
+pages_dist/
+**/build/
+**/dist/
+**/pages_dist/
+*.spec
+
+# Local dependencies/cache
+tmp_wheels/
+
+# Environment and secrets
 .env
 .env.*
 !.env.example
+*.pem
+*.key
 
-stats.db
-stats.db-*
-logs/*
-!logs/.gitkeep
-outputs/*
-!outputs/.gitkeep
+# IDE and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
 
-build/
-dist/
-*.zip
-*.log
-*.docx
+# Local tool/workspace metadata
+%USERPROFILE%/
+.agents/
+.codex/
+.firecrawl/
+.reasonix/
+
+# Nested standalone repository
+docxtool/
+
+# Nested repository metadata; keep the files, not the embedded Git history.
+**/.git/
