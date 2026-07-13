@@ -9,8 +9,19 @@ param(
 
 $ErrorActionPreference = "Stop"
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
-$sourcePath = Join-Path $root $Source
-$destinationPath = Join-Path $root $Destination
+
+function Resolve-DatabasePath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if ([System.IO.Path]::IsPathRooted($Path)) {
+        return [System.IO.Path]::GetFullPath($Path)
+    }
+
+    return [System.IO.Path]::GetFullPath((Join-Path $root $Path))
+}
+
+$sourcePath = Resolve-DatabasePath -Path $Source
+$destinationPath = Resolve-DatabasePath -Path $Destination
 
 function Test-SqliteIntegrity {
     param([Parameter(Mandatory = $true)][string]$Path)
@@ -48,10 +59,6 @@ if (-not $Execute) {
     Write-Host "Dry run complete. Re-run with -Execute to copy the database."
     return
 }
-
-$backupPath = "$sourcePath.backup-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
-Copy-Item -LiteralPath $sourcePath -Destination $backupPath -Force
-Write-Host "Backup created: $backupPath"
 
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destinationPath) | Out-Null
 Copy-Item -LiteralPath $sourcePath -Destination $destinationPath

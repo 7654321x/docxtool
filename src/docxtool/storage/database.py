@@ -23,10 +23,18 @@ def _warn_legacy_database(path: Path) -> None:
     )
 
 
+def _resolve_database_path(path: str | os.PathLike[str]) -> Path:
+    """Resolve database paths relative to the project root."""
+    db_path = Path(path)
+    if db_path.is_absolute():
+        return db_path
+    return project_path(str(db_path))
+
+
 def default_database_path() -> str:
     configured = os.environ.get("DATABASE_PATH")
     if configured:
-        path = Path(configured)
+        path = _resolve_database_path(configured)
     else:
         legacy_path = project_path("stats.db")
         if legacy_path.exists():
@@ -34,14 +42,11 @@ def default_database_path() -> str:
             path = legacy_path
         else:
             path = var_path("data", "stats.db")
-    if not path.is_absolute():
-        path = var_path().parent.joinpath(path).resolve()
-    path.parent.mkdir(parents=True, exist_ok=True)
     return str(path)
 
 
 def connect(path: str | os.PathLike[str] | None = None) -> sqlite3.Connection:
-    db_path = Path(path or default_database_path())
+    db_path = _resolve_database_path(path) if path is not None else Path(default_database_path())
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
