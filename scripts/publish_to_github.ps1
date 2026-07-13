@@ -79,7 +79,7 @@ function Assert-NoForbiddenFiles {
             if ($relative -match '^\.git/') {
                 return $false
             }
-            $relative -match '(^|/)\.env$' -or
+            $relative -match '(^|/)\.env(\.|$)' -or
             $relative -match '\.(pem|key|db|sqlite|sqlite3|log|zip)$' -or
             $relative -match '\.docx$' -or
             $relative -match '(^|/)(__pycache__|logs|outputs|runtime|build|dist|tmp_wheels|\.venv|\.pytest_cache|\.ruff_cache|\.playwright-mcp)(/|$)'

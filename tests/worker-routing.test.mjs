@@ -106,9 +106,16 @@ test("api upload proxies PUT and rejects other methods", async () => {
 test("admin and log routes proxy with strict method rules", async () => {
   const routes = [
     ["/monitor", "GET", "/monitor"],
+    ["/stats", "GET", "/stats"],
+    ["/ip", "GET", "/ip"],
     ["/admin/login", "GET", "/admin/login"],
     ["/admin/login", "POST", "/admin/login"],
+    ["/admin/logout", "POST", "/admin/logout"],
+    ["/admin/session", "GET", "/admin/session"],
     ["/ban?ip=203.0.113.10", "POST", "/ban?ip=203.0.113.10"],
+    ["/unban?ip=203.0.113.10", "POST", "/unban?ip=203.0.113.10"],
+    ["/limit", "POST", "/limit"],
+    ["/cleanup", "POST", "/cleanup"],
     ["/log/task-id", "GET", "/log/task-id"],
   ];
 
@@ -121,6 +128,16 @@ test("admin and log routes proxy with strict method rules", async () => {
   const rejected = await callWorker("/ban?ip=203.0.113.10", { method: "GET" });
   assert.equal(rejected.response.status, 405);
   assert.equal(rejected.fetchCalls.length, 0);
+});
+
+test("root and static assets fall through to pages assets", async () => {
+  for (const pathname of ["/", "/index.html", "/assets/app.css"]) {
+    const result = await callWorker(pathname);
+    assert.equal(result.response.status, 203, pathname);
+    assert.equal(await result.response.text(), `asset:${pathname}`, pathname);
+    assert.equal(result.fetchCalls.length, 0, pathname);
+    assert.equal(result.assetsCalls.length, 1, pathname);
+  }
 });
 
 test("similar non-proxy paths fall through to static assets", async () => {
