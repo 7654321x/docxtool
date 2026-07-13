@@ -8,7 +8,28 @@ from pathlib import Path
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
-PROJECT_ROOT = PACKAGE_ROOT.parents[1]
+
+
+def _is_source_tree() -> bool:
+    return PACKAGE_ROOT.parent.name == "src" and PACKAGE_ROOT.parents[1].joinpath("pyproject.toml").exists()
+
+
+def _user_data_root() -> Path:
+    override = os.environ.get("DOCXTOOL_HOME")
+    if override:
+        return Path(override)
+    if os.name == "nt":
+        base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
+        if base:
+            return Path(base).joinpath("docxtool")
+        return Path.home().joinpath("AppData", "Local", "docxtool")
+    base = os.environ.get("XDG_STATE_HOME")
+    if base:
+        return Path(base).joinpath("docxtool")
+    return Path.home().joinpath(".local", "state", "docxtool")
+
+
+PROJECT_ROOT = PACKAGE_ROOT.parents[1] if _is_source_tree() else _user_data_root()
 
 
 def project_path(*parts: str) -> Path:
