@@ -29,6 +29,10 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK, WD_LINE_SPACING
 from docx.enum.section import WD_ORIENT
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
+from docx.opc.constants import CONTENT_TYPE as CT, RELATIONSHIP_TYPE as RT
+from docx.opc.packuri import PackURI
+from docx.opc.part import Part
+from docx.parts.hdrftr import FooterPart, HeaderPart
 
 
 # ── XML 安全写入（防重复节点）──
@@ -94,24 +98,134 @@ def _write_inline_tokens(para, tokens) -> None:
             run.add_break(WD_BREAK.PAGE)
 
 
-def _copy_paragraph_sectPr(para, sectPr) -> None:
+class _SectionRelationshipCopier:
+    """Copy header/footer parts and their relationship trees into an output package."""
+
+    def __init__(self, package):
+        self._package = package
+        self._parts_by_source_id = {}
+        self._used_partnames = {str(part.partname) for part in package.iter_parts()}
+
+    def copy_part(self, source_part):
+        key = id(source_part)
+        if key in self._parts_by_source_id:
+            return self._parts_by_source_id[key]
+
+        partname = self._next_partname(source_part)
+        if source_part.content_type == CT.WML_HEADER:
+            copied = HeaderPart.load(partname, source_part.content_type, source_part.blob, self._package)
+        elif source_part.content_type == CT.WML_FOOTER:
+            copied = FooterPart.load(partname, source_part.content_type, source_part.blob, self._package)
+        else:
+            copied = Part.load(partname, source_part.content_type, source_part.blob, self._package)
+
+        self._parts_by_source_id[key] = copied
+
+        for rel in source_part.rels.values():
+            if rel.is_external:
+                copied.load_rel(rel.reltype, rel.target_ref, rel.rId, is_external=True)
+            else:
+                copied.load_rel(rel.reltype, self.copy_part(rel.target_part), rel.rId)
+
+        return copied
+
+    def _next_partname(self, source_part):
+        source_name = str(source_part.partname)
+        if source_part.content_type == CT.WML_HEADER:
+            pattern = "/word/header%d.xml"
+        elif source_part.content_type == CT.WML_FOOTER:
+            pattern = "/word/footer%d.xml"
+        else:
+            directory, filename = source_name.rsplit("/", 1)
+            if "." in filename:
+                stem, ext = filename.rsplit(".", 1)
+                stem = re.sub(r"\d+$", "", stem) or stem
+                pattern = f"{directory}/{stem}%d.{ext}"
+            else:
+                stem = re.sub(r"\d+$", "", filename) or filename
+                pattern = f"{directory}/{stem}%d"
+
+        for number in range(1, 10000):
+            candidate = pattern % number
+            if candidate not in self._used_partnames:
+                self._used_partnames.add(candidate)
+                return PackURI(candidate)
+        raise ExportError(f"无法为复制的部件分配唯一名称: {source_name}")
+
+
+def _sectPr_with_preserved_header_footer_refs(sectPr, doc_part, source_parts, part_copier):
+    if sectPr is None:
+        return None
+
+    copied_sectPr = copy.deepcopy(sectPr)
+    if not source_parts:
+        return copied_sectPr
+    if part_copier is None:
+        raise ExportError("缺少节页眉/页脚关系复制器，无法保留引用")
+
+    for tag, reltype in (
+        (qn("w:headerReference"), RT.HEADER),
+        (qn("w:footerReference"), RT.FOOTER),
+    ):
+        for ref in list(copied_sectPr.findall(tag)):
+            old_rid = ref.get(qn("r:id"))
+            source_part = source_parts.get(old_rid)
+            if source_part is None:
+                raise ExportError(f"无法解析节页眉/页脚引用: {old_rid}")
+            new_part = part_copier.copy_part(source_part)
+            ref.set(qn("r:id"), doc_part.relate_to(new_part, reltype))
+
+    return copied_sectPr
+
+
+def _copy_paragraph_sectPr(para, sectPr, source_parts=None, part_copier=None) -> None:
     if sectPr is None:
         return
     pPr = para._element.get_or_add_pPr()
     old = pPr.find(qn("w:sectPr"))
     if old is not None:
         pPr.remove(old)
-    pPr.append(copy.deepcopy(sectPr))
+    pPr.append(
+        _sectPr_with_preserved_header_footer_refs(
+            sectPr,
+            para.part,
+            source_parts or {},
+            part_copier,
+        )
+    )
 
 
-def _replace_body_sectPr(doc, sectPr) -> None:
+def _replace_body_sectPr(doc, sectPr, source_parts=None, part_copier=None) -> None:
     if sectPr is None:
         return
     body = doc._body._element
     old = body.find(qn("w:sectPr"))
     if old is not None:
         body.remove(old)
-    body.append(copy.deepcopy(sectPr))
+    body.append(
+        _sectPr_with_preserved_header_footer_refs(
+            sectPr,
+            doc.part,
+            source_parts or {},
+            part_copier,
+        )
+    )
+
+
+def _has_imported_header_footer_refs(doc_data: DocumentData) -> bool:
+    return bool(getattr(doc_data, "section_relationship_parts", None))
+
+
+def _preserve_even_and_odd_headers_setting(doc, doc_data: DocumentData) -> None:
+    setting = getattr(doc_data, "even_and_odd_headers", None)
+    if setting is None:
+        return
+
+    settings_element = doc.settings._element
+    old = settings_element.find(qn("w:evenAndOddHeaders"))
+    if old is not None:
+        settings_element.remove(old)
+    settings_element.append(copy.deepcopy(setting))
 
 
 def _line_spacing_twips(settings: PageSettings) -> int:
@@ -1088,6 +1202,12 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
     logger.info(f"[引擎] 共 {len(doc_data.paragraphs)} 段, {len(doc_data.tables)} 表格")
 
     doc = Document()
+    section_relationship_parts = getattr(doc_data, "section_relationship_parts", {}) or {}
+    section_part_copier = (
+        _SectionRelationshipCopier(doc.part.package)
+        if section_relationship_parts
+        else None
+    )
 
     stats = {
         "total": len(doc_data.paragraphs),
@@ -1352,7 +1472,12 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
             _set_unique(pPr_final, qn('w:snapToGrid'), snap)
             if pd.meta.get("sectPr") is not None:
                 section_paragraphs.append((para, pd.meta.get("sectPr")))
-                _copy_paragraph_sectPr(para, pd.meta.get("sectPr"))
+                _copy_paragraph_sectPr(
+                    para,
+                    pd.meta.get("sectPr"),
+                    section_relationship_parts,
+                    section_part_copier,
+                )
             # 段落排版日志（每段汇总格式信息）
             text_preview = pd.text[:28].replace('\n', ' ')
             indent = getattr(resolved, 'first_line_indent', 0)
@@ -1406,14 +1531,27 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
 
     # 页面设置（边距 + compat + Normal 样式）
     apply_page_settings(doc, settings, doc_data.doc_mode)
-    for para, sectPr in section_paragraphs:
-        _copy_paragraph_sectPr(para, sectPr)
+    _preserve_even_and_odd_headers_setting(doc, doc_data)
 
-    # 页码
-    if page_number_enabled:
+    if page_number_enabled and not _has_imported_header_footer_refs(doc_data):
         apply_header_footer(doc, page_rule)
+    elif page_number_enabled:
+        logger.info("[引擎] 检测到导入节页眉/页脚，跳过自动页码页脚以保留原始关系")
 
-    _replace_body_sectPr(doc, getattr(doc_data, "body_sectPr", None))
+    for para, sectPr in section_paragraphs:
+        _copy_paragraph_sectPr(
+            para,
+            sectPr,
+            section_relationship_parts,
+            section_part_copier,
+        )
+
+    _replace_body_sectPr(
+        doc,
+        getattr(doc_data, "body_sectPr", None),
+        section_relationship_parts,
+        section_part_copier,
+    )
 
     # 页面行数诊断
     page_h_cm = 29.7 - settings.margin_top_cm - settings.margin_bottom_cm

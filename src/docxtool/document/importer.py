@@ -77,6 +77,8 @@ class DocumentData:
     has_cover: bool = False
     doc_mode: str = ""  # 文种：REPORT / NORMAL / ""
     body_sectPr: object = None
+    section_relationship_parts: Dict[str, object] = field(default_factory=dict)
+    even_and_odd_headers: object = None
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -231,6 +233,23 @@ def extract_paragraph_sectPr(paragraph):
         return None
     sectPr = pPr.find(_qn("w:sectPr"))
     return copy.deepcopy(sectPr) if sectPr is not None else None
+
+
+def collect_section_header_footer_parts(doc, sectPr, data: DocumentData) -> None:
+    """Record source document relationships used by a section properties element."""
+    if sectPr is None:
+        return
+
+    from docx.oxml.ns import qn as _qn
+
+    for tag in ("w:headerReference", "w:footerReference"):
+        for ref in sectPr.findall(_qn(tag)):
+            rel_id = ref.get(_qn("r:id"))
+            if not rel_id or rel_id in data.section_relationship_parts:
+                continue
+            related = doc.part.related_parts.get(rel_id)
+            if related is not None:
+                data.section_relationship_parts[rel_id] = related
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1313,6 +1332,10 @@ class DocxImporter:
         from docx.table import Table as DocxTable
         from docx.oxml.ns import qn as _qn_body
 
+        data.even_and_odd_headers = copy.deepcopy(
+            doc.settings._element.find(_qn_body("w:evenAndOddHeaders"))
+        )
+
         raw_blocks = []
         para_index = 0
         for child in doc._body._element.iterchildren():
@@ -1321,6 +1344,7 @@ class DocxImporter:
                 pf = extract_features(para, para_index)
                 inline_tokens = extract_inline_tokens(para)
                 sectPr = extract_paragraph_sectPr(para)
+                collect_section_header_footer_parts(doc, sectPr, data)
                 para_index += 1
                 if pf.contains_image:
                     raw_blocks.append(("paragraph_xml", para))
@@ -1332,6 +1356,7 @@ class DocxImporter:
                 data.tables.append(table)
             elif child.tag == _qn_body('w:sectPr'):
                 data.body_sectPr = copy.deepcopy(child)
+                collect_section_header_footer_parts(doc, child, data)
 
         # 第二步：按换行符拆分段落（解决 3/4 级标题合并在同一段的问题）
 
