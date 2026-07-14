@@ -84,6 +84,30 @@ class SignatureDetectionTest(unittest.TestCase):
         self.assertEqual([p.type_id for p in data.paragraphs[-2:]], ["sign_org", "sign_date"])
         self.assertEqual(data.paragraphs[-1].text, "2025年10月15日")
 
+    def test_long_role_and_name_line_is_detected_in_head_area(self):
+        data = self._load_lines([
+            "2026年度测试材料",
+            "区政协办公室党组书记、主任  李弟弟",
+            "（2026年7月14日）",
+            "一、一级标题",
+            "这里是正文内容这里是正文内容这里是正文内容。",
+        ])
+
+        self.assertEqual(data.paragraphs[1].type_id, "role_name")
+        self.assertEqual(data.paragraphs[1].text, "区政协办公室党组书记、主任  李弟弟")
+
+    def test_office_director_and_name_line_is_detected_in_head_area(self):
+        data = self._load_lines([
+            "2026年度测试材料",
+            "区政协办公室主任  李弟弟",
+            "（2026年7月14日）",
+            "一、一级标题",
+            "这里是正文内容这里是正文内容这里是正文内容。",
+        ])
+
+        self.assertEqual(data.paragraphs[1].type_id, "role_name")
+        self.assertEqual(data.paragraphs[1].text, "区政协办公室主任  李弟弟")
+
     def test_contact_line_before_date_is_not_signature(self):
         data = self._load_lines([
             "总题目",

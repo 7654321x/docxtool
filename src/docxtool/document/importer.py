@@ -10,17 +10,17 @@
   - 不负责排版渲染（由 engine.py 负责）
 """
 
-import logging
 import copy
 import re
 from dataclasses import dataclass, field
 from types import SimpleNamespace
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple
 
 from docxtool.document.classifier import ClassificationOptions, classify_paragraphs
 from docxtool.document.style_config import (
-    StyleRule, cn_size_to_pt, chinese_number,
+    NB_FIXED, NB_SUFFIXES,
     logger, ImportError,
+    StyleRule,
 )
 
 # ═══════════════════════════════════════════════════════════════
@@ -160,7 +160,6 @@ def extract_features(paragraph, index: int) -> ParagraphFeatures:
 
     # Word 自动编号/样式检测
     try:
-        from docx.oxml.ns import qn as _qn
         # 样式名直接映射
         style_name = pf.style_name.lower()
         heading_styles = {
@@ -396,31 +395,40 @@ def _is_body_context(ctx) -> bool:
         "attachment_note", "attachment_note_item", "attachment_body")
 
 def _cn2int(s: str):
-    if not s: return None
+    if not s:
+        return None
     s = s.strip()
-    if s.isdigit(): return int(s)
-    if s in _CN_NUM2: return _CN_NUM2[s]
+    if s.isdigit():
+        return int(s)
+    if s in _CN_NUM2:
+        return _CN_NUM2[s]
     if "十" in s:
-        l, _, r = s.partition("十")
-        return (_CN_NUM2.get(l, 1) if l else 1) * 10 + (_CN_NUM2.get(r, 0) if r else 0)
+        left, _, right = s.partition("十")
+        return (_CN_NUM2.get(left, 1) if left else 1) * 10 + (
+            _CN_NUM2.get(right, 0) if right else 0
+        )
     return None
 
 def _cn_year2int(s: str):
-    if not s: return None
+    if not s:
+        return None
     s = s.strip()
-    if s.isdigit(): return int(s)
+    if s.isdigit():
+        return int(s)
     digits = "".join(_CN_YEAR_DIGITS.get(ch, "") for ch in s)
     return int(digits) if len(digits) == 4 else None
 
 def _norm_sign_date(text: str) -> str:
     m = _SIGN_DATE_RE2.match(text or "")
-    if not m: return text
+    if not m:
+        return text
     y, mo, d = _cn_year2int(m.group(1)), _cn2int(m.group(2)), _cn2int(m.group(3))
     return f"{y}年{mo}月{d}日" if mo and d else text
 
 def _norm_attach_mark(text: str) -> str:
     m = _ATT_PAGE_RE.match(text or "")
-    if not m: return text
+    if not m:
+        return text
     no = m.group(1)
     return f"附件 {no}" if no else "附件"
 
@@ -429,12 +437,18 @@ def _norm_sign_org(text: str) -> str:
 
 def _looks_like_sign_org(text: str, next_text: str, ctx) -> bool:
     t = (text or "").strip()
-    if not t or len(t) > 30: return False
-    if t.startswith(_SIGN_ORG_NEGATIVE_STARTS): return False
-    if any(c in t for c in ("。","；",";","：",":")): return False
-    if _ATT_NOTE_RE.match(t) or _SIGN_DATE_RE2.match(t): return False
-    if not _is_body_context(ctx): return False
-    if not _SIGN_DATE_RE2.match(next_text or ""): return False
+    if not t or len(t) > 30:
+        return False
+    if t.startswith(_SIGN_ORG_NEGATIVE_STARTS):
+        return False
+    if any(c in t for c in ("。","；",";","：",":")):
+        return False
+    if _ATT_NOTE_RE.match(t) or _SIGN_DATE_RE2.match(t):
+        return False
+    if not _is_body_context(ctx):
+        return False
+    if not _SIGN_DATE_RE2.match(next_text or ""):
+        return False
     return True
 
 def _heading_has_inline_body(text: str) -> bool:
@@ -466,11 +480,15 @@ def _is_auto_numbered_item(feats: Optional[ParagraphFeatures]) -> bool:
     return feats.numbering_prefix.startswith("@lvl_") or feats.numbering_prefix.startswith("@style_")
 
 
-_RESPONSIBILITY_LINE_RE = re.compile(r"^\s*责\s*任\s*单\s*位\s*[:：]")
+_RESPONSIBILITY_LINE_RE = re.compile(r"^\s*[“”\"'‘’「『]?\s*责\s*任\s*单\s*位\s*[:：]")
+_RESPONSIBILITY_LABEL_RE = re.compile(r"\s*责\s*任\s*单\s*位\s*[:：]\s*")
+_RESPONSIBILITY_WRAPPER_RE = re.compile(r"^\s*[“”\"'‘’「『]\s*(.*?)\s*[”\"'’」』]?\s*$")
 
 
 def _normalize_responsibility_line(text: str) -> str:
-    return _RESPONSIBILITY_LINE_RE.sub("责任单位：", text or "", count=1)
+    unwrapped = _RESPONSIBILITY_WRAPPER_RE.sub(r"\1", text or "")
+    normalized = _RESPONSIBILITY_LABEL_RE.sub("责任单位：", unwrapped)
+    return re.sub(r"(?<!^)(责任单位：)", r"\n\1", normalized)
 
 
 def detect_structural_type(line: str, next_line: str, ctx,
@@ -502,23 +520,27 @@ def detect_structural_type(line: str, next_line: str, ctx,
 
         if first_no and next_is_item:
             # A: 多附件，规范空格：附件：1.基本情况 → 附件：1. 基本情况
-            is_multi = True; ctx.attachment_note_next_no = int(first_no.group(1)) + 1
+            is_multi = True
+            ctx.attachment_note_next_no = int(first_no.group(1)) + 1
             fixed_text = re.sub(
                 r"^\s*附件\s*[:：]\s*(\d+)[.．、]\s*",
                 lambda x: f"附件：{x.group(1)}. ",
                 text, count=1)
         elif first_no and not next_is_item:
             # B: 首行有 1. 但下一行不是编号 → 单附件，去掉编号
-            is_multi = False; ctx.attachment_note_next_no = 1
+            is_multi = False
+            ctx.attachment_note_next_no = 1
             body_no = re.sub(r"^\d+[.．、]\s*", "", body, count=1).strip()
             fixed_text = f"附件：{body_no}"
         elif not first_no and next_is_item:
             # C: 首行无编号但下一行有 → 补 1.
-            is_multi = True; ctx.attachment_note_next_no = 2
+            is_multi = True
+            ctx.attachment_note_next_no = 2
             fixed_text = f"附件：1. {body}"
         else:
             # D: 单附件
-            is_multi = False; ctx.attachment_note_next_no = 1
+            is_multi = False
+            ctx.attachment_note_next_no = 1
             fixed_text = text
 
         ctx.attachment_note_seen = True
@@ -590,8 +612,6 @@ _HEADING_RE = [
 ]
 
 # ── 一是/二要/比如 ──
-
-from docxtool.document.style_config import NB_SUFFIXES, NB_FIXED
 _NB_RE = re.compile(rf'[一二三四五六七八九十]+(?:{"|".join(NB_SUFFIXES)})')
 _NB_FIXED_RE = re.compile(rf'^(?:{"|".join(map(re.escape, NB_FIXED))})') if NB_FIXED else None
 
@@ -605,7 +625,8 @@ def _normalize_text(text: str) -> str:
 
 def _to_chinese_punctuation(text: str) -> str:
     """英文标点 → 中文标点（仅中文语境，避免误伤 URL、时间、金额、缩写）。"""
-    if not text: return text
+    if not text:
+        return text
     text = re.sub(r'(?<=[\u4e00-\u9fff])[:：]\s*', '：', text)
     text = re.sub(r'(?<=[\u4e00-\u9fff]),\s*', '，', text)
     text = re.sub(r'(?<=[\u4e00-\u9fff0-9]);\s*', '；', text)
@@ -617,7 +638,8 @@ def _to_chinese_punctuation(text: str) -> str:
 
 def _normalize_quotes(text: str) -> str:
     """英文引号 → 中文引号。避免误伤英文单词内部的撇号（O'Reilly, don't）。"""
-    if not text: return text
+    if not text:
+        return text
     # 1. 双单引号作双引号：''text'' → "text"
     text = re.sub(r"''(?=\S)", '\u201c', text)
     text = re.sub(r"(?<=\S)''", '\u201d', text)
@@ -820,12 +842,13 @@ def _score_05_role_name(text: str, feats, ctx) -> Tuple[int, dict, str]:
         return 0, {}, ""
     if ctx.prev_type_id not in ("title", "title_cont", "date_line", "author_line"):
         return 0, {}, ""
-    if len(text) >= 20:
+    role_name_match = re.fullmatch(r"[\u4e00-\u9fff、，,·]{2,28}\s{2,}[\u4e00-\u9fff·]{2,6}", text)
+    if len(text) >= 20 and not role_name_match:
         return 0, {}, ""
     if _contains_colon(text):
         return 0, {}, ""
     # 含连续空格 → 署名（如 "韩 双 林"）
-    if re.search(r'\S\s{2,}\S', text):
+    if role_name_match or re.search(r'\S\s{2,}\S', text):
         return 80, {}, ""
     # 含职务关键词 → 署名/职务行
     _ROLE_KW = ('局长|主任|书记|主席|部长|处长|科长|司长|厅长|市长|县长'
@@ -1286,7 +1309,6 @@ def _repair_broken_rels(filepath: str) -> str:
     import zipfile as _zipfile
     import re as _re
     import tempfile as _tempfile
-    import shutil as _shutil
 
     # 检查是否需要修复
     need_fix = False
@@ -1302,7 +1324,7 @@ def _repair_broken_rels(filepath: str) -> str:
     if not need_fix:
         return filepath
 
-    logger.info(f"[修复] 检测到损坏引用 Target=\"../NULL\"，自动修复…")
+    logger.info("[修复] 检测到损坏引用 Target=\"../NULL\"，自动修复…")
     tmp = _tempfile.NamedTemporaryFile(delete=False, suffix='.docx')
     tmp.close()
 
@@ -1465,7 +1487,8 @@ class DocxImporter:
             for li, line in enumerate(text.split('\n')):
                 line = line.strip()
                 line = normalize_text(line)
-                if not line: continue
+                if not line:
+                    continue
                 line_numbering = pf.numbering_prefix if li == 0 else _detect_numbering_prefix(line)
                 sub_pf = ParagraphFeatures(
                     font_name=pf.font_name, font_size_pt=pf.font_size_pt,
@@ -1485,10 +1508,14 @@ class DocxImporter:
             if not line_text:
                 continue
             # 排除附件/落款/日期等非正文内容
-            if re.match(r'^附件', line_text): continue
-            if _SIGN_DATE_RE2.match(line_text): continue
-            if re.match(r'^\d+[.．、]', line_text): continue  # 附件条目
-            if _ATT_PAGE_RE.match(line_text): continue  # 附件页标记
+            if re.match(r'^附件', line_text):
+                continue
+            if _SIGN_DATE_RE2.match(line_text):
+                continue
+            if re.match(r'^\d+[.．、]', line_text):
+                continue  # 附件条目
+            if _ATT_PAGE_RE.match(line_text):
+                continue  # 附件页标记
             last_body_idx = j
         for i, item in enumerate(flat_lines):
             ctx._remaining_has_no_body = (i >= last_body_idx)
@@ -1518,7 +1545,9 @@ class DocxImporter:
             st, sm, sp, ft = detect_structural_type(line, next_line, ctx, sub_pf, next_pf)
             if st:
                 sm.pop("numbering", None)
-                type_id = st; meta_patch = sm; prefix = sp
+                type_id = st
+                meta_patch = sm
+                prefix = sp
                 clean_text = ft
                 ctx.prev_type_id = st
             else:
@@ -1546,7 +1575,8 @@ class DocxImporter:
 
             # 结构状态跟踪
             if type_id in ("body", "addressing", "responsibility_line"):
-                ctx.has_seen_real_body = True; ctx.last_structural_type = "body"
+                ctx.has_seen_real_body = True
+                ctx.last_structural_type = "body"
             elif type_id.startswith("heading") or type_id in ("title", "title2"):
                 if meta_patch.get("heading_inline_body"):
                     ctx.has_seen_real_body = True
@@ -1556,7 +1586,8 @@ class DocxImporter:
             else:
                 ctx.last_structural_type = type_id
             if type_id == "sign_date":
-                ctx.signature_complete = True; ctx.attachment_page_mode = False
+                ctx.signature_complete = True
+                ctx.attachment_page_mode = False
 
             if sectPr is not None:
                 meta_patch = dict(meta_patch or {})
@@ -1748,7 +1779,7 @@ class DocxImporter:
                         target = f"heading{min(parent_lvl + 1, 4)}"
                         # 保护：已有编号的段落不合并（防止吃掉并列标题如（一）（二）（三））
                         if any(paragraphs[s].meta.get("numbering") for s in siblings):
-                            logger.debug(f"[同级合并] 跳过：siblings 已有编号")
+                            logger.debug("[同级合并] 跳过：siblings 已有编号")
                             continue
                         if any(paragraphs[s].type_id != target for s in siblings):
                             for s in siblings:
@@ -1786,7 +1817,9 @@ class DocxImporter:
                     actual = expected["a"]  # 用修正后的值
                 if actual:
                     expected["a"] = actual + 1
-                    expected["b"] = {actual: 1}; expected["c"] = {}; expected["d"] = {}
+                    expected["b"] = {actual: 1}
+                    expected["c"] = {}
+                    expected["d"] = {}
             elif key == "2":
                 pa = expected["a"] - 1
                 ch = num[1] if num.startswith("（") else num[0]
@@ -1799,7 +1832,8 @@ class DocxImporter:
                     actual = exp
                 if actual:
                     expected["b"][pa] = actual + 1
-                expected["c"] = {}; expected["d"] = {}
+                expected["c"] = {}
+                expected["d"] = {}
             elif key == "3":
                 pa = expected["a"] - 1
                 pb = expected["b"].get(pa, 1) - 1

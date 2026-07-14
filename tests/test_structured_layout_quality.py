@@ -173,3 +173,76 @@ def test_import_export_keeps_input_sha256_unchanged(tmp_path: Path) -> None:
 
     assert hashlib.sha256(source.read_bytes()).hexdigest() == before
     assert validate_docx_integrity(output).ok is True
+
+
+def test_responsibility_line_normalizes_quotes_and_repeated_labels(tmp_path: Path) -> None:
+    source = tmp_path / "source.docx"
+    output = tmp_path / "output.docx"
+    document = Document()
+    document.add_paragraph("总题目")
+    document.add_paragraph("一、一级标题")
+    document.add_paragraph("正文内容正文内容正文内容。")
+    document.add_paragraph("“责任单位：区政府责任单位：商务局”")
+    document.save(source)
+
+    data = DocxImporter().load(str(source), _rules())
+    responsibility = next(paragraph for paragraph in data.paragraphs if paragraph.type_id == "responsibility_line")
+    assert responsibility.text == "责任单位：区政府\n责任单位：商务局"
+
+    export_doc(data, _rules(), PageSettings(), str(output))
+    root = _document_xml(output)
+    output_responsibility = next(paragraph for paragraph in _paragraphs(root) if "责任单位" in _text(paragraph))
+    assert _pstyle(output_responsibility) == "DCT-Responsibility"
+    assert output_responsibility.findall(".//w:br", NS)
+
+
+def test_heading4_does_not_insert_blank_paragraph_after_it(tmp_path: Path) -> None:
+    output = tmp_path / "output.docx"
+    data = DocumentData(
+        paragraphs=[
+            ParagraphData("一级标题", "heading1", "一、一级标题", ParagraphFeatures(), meta={"numbering": "一、"}),
+            ParagraphData("二级标题", "heading2", "（一）二级标题", ParagraphFeatures(), meta={"numbering": "（一）"}),
+            ParagraphData("三级标题", "heading3", "1.三级标题", ParagraphFeatures(), meta={"numbering": "1."}),
+            ParagraphData("四级标题", "heading4", "（1）四级标题", ParagraphFeatures(), meta={"numbering": "（1）"}),
+            ParagraphData("正文内容", "body", "正文内容", ParagraphFeatures()),
+        ],
+        filepath="generated.docx",
+    )
+
+    export_doc(data, _rules(), PageSettings(), str(output))
+    texts = [_text(paragraph) for paragraph in _paragraphs(_document_xml(output))]
+
+    assert "（1）四级标题" in texts
+    heading_index = texts.index("（1）四级标题")
+    assert texts[heading_index + 1] == "正文内容"
+
+
+def test_imported_heading3_heading4_and_responsibility_are_exported_without_blank_gap(tmp_path: Path) -> None:
+    source = tmp_path / "source.docx"
+    output = tmp_path / "output.docx"
+    document = Document()
+    for text in (
+        "总题目",
+        "一、一级标题",
+        "（一）二级标题",
+        "1.测试",
+        "（1）测试",
+        "正文内容正文内容正文内容。",
+        "责任单位：区政府责任单位：商务局",
+    ):
+        document.add_paragraph(text)
+    document.save(source)
+
+    data = DocxImporter().load(str(source), _rules())
+    type_by_original = {paragraph.original_text: paragraph.type_id for paragraph in data.paragraphs}
+
+    assert type_by_original["1.测试"] == "heading3"
+    assert type_by_original["（1）测试"] == "heading4"
+    responsibility = next(paragraph for paragraph in data.paragraphs if paragraph.type_id == "responsibility_line")
+    assert responsibility.text == "责任单位：区政府\n责任单位：商务局"
+
+    export_doc(data, _rules(), PageSettings(), str(output))
+    texts = [_text(paragraph) for paragraph in _paragraphs(_document_xml(output))]
+
+    heading4_index = texts.index("（1）测试")
+    assert texts[heading4_index + 1] == "正文内容正文内容正文内容。"
