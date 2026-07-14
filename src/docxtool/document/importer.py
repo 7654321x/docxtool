@@ -367,6 +367,7 @@ class DetectionContext:
     signature_complete: bool = False
     _remaining_has_no_body: bool = False  # 后面没有正文/标题了
     last_structural_type: str = ""
+    last_structural_text: str = ""
     attachment_note_next_no: int = 1
 
 
@@ -432,8 +433,27 @@ def _norm_attach_mark(text: str) -> str:
     no = m.group(1)
     return f"附件 {no}" if no else "附件"
 
+def _is_attachment_page_mark(text: str) -> bool:
+    return bool(_ATT_PAGE_RE.match((text or "").strip()))
+
+def _is_attachment_boundary(text: str) -> bool:
+    t = (text or "").strip()
+    return bool(_ATT_NOTE_RE.match(t) or _is_attachment_page_mark(t))
+
 def _norm_sign_org(text: str) -> str:
     return re.sub(r'^\s*[一二三四五六七八九十百]+、\s*', '', text or "", count=1).strip()
+
+def _record_structural(ctx, type_id: str, text: str) -> None:
+    ctx.last_structural_type = type_id
+    ctx.last_structural_text = (text or "").strip()
+
+def _blocks_independent_sign_date(ctx) -> bool:
+    prev = (ctx.last_structural_text or "").strip()
+    if not prev:
+        return False
+    if prev.startswith(_SIGN_ORG_NEGATIVE_STARTS):
+        return True
+    return _contains_colon(prev)
 
 def _looks_like_sign_org(text: str, next_text: str, ctx) -> bool:
     t = (text or "").strip()
@@ -547,7 +567,7 @@ def detect_structural_type(line: str, next_line: str, ctx,
         ctx.attachment_note_mode = is_multi
         ctx.signature_seen = had_signature_complete
         ctx.signature_complete = had_signature_complete
-        ctx.last_structural_type = "attachment_note"
+        _record_structural(ctx, "attachment_note", fixed_text)
         return "attachment_note", {"attachment_single": not is_multi,
                                     "attachment_multi": is_multi}, "", fixed_text
 
@@ -560,7 +580,7 @@ def detect_structural_type(line: str, next_line: str, ctx,
         else:
             fixed = f"{ctx.attachment_note_next_no}. {text.strip()}"
         ctx.attachment_note_next_no += 1
-        ctx.last_structural_type = "attachment_note_item"
+        _record_structural(ctx, "attachment_note_item", fixed)
         return "attachment_note_item", {}, "", fixed
 
     # 3. 落款单位：上段是 body / attachment_note / item，且下一行是日期
@@ -568,30 +588,45 @@ def detect_structural_type(line: str, next_line: str, ctx,
         if _looks_like_sign_org(text, next_text, ctx):
             ctx.attachment_note_mode = False
             ctx.signature_seen = True
-            ctx.last_structural_type = "sign_org"
-            return "sign_org", {}, "", _norm_sign_org(text)
+            fixed = _norm_sign_org(text)
+            _record_structural(ctx, "sign_org", fixed)
+            return "sign_org", {}, "", fixed
 
     # 4. 成文日期：紧接落款单位之后，自动规范化
     if ctx.last_structural_type == "sign_org" and _SIGN_DATE_RE2.match(text):
         ctx.signature_complete = True
-        ctx.last_structural_type = "sign_date"
-        return "sign_date", {}, "", _norm_sign_date(text)
+        fixed = _norm_sign_date(text)
+        _record_structural(ctx, "sign_date", fixed)
+        return "sign_date", {}, "", fixed
 
-    # 5. 附件正文页标识：必须有附件 + 落款完成，且在 sign_date/attachment_body 之后
-    if (ctx.attachment_note_seen and ctx.signature_complete
-            and ctx.last_structural_type in ("sign_date", "attachment_note", "attachment_note_item", "attachment_body", "attachment_title", "heading1", "heading2", "heading3", "heading4", "body")
-            and _ATT_PAGE_RE.match(text)
-            and "：" not in text and ":" not in text):
+    # 4b. 独立尾部日期：正文后、非附件页内，且后续只接附件边界或已到文末
+    if (ctx.has_seen_real_body and not ctx.attachment_page_mode
+            and _SIGN_DATE_RE2.match(text)
+            and (not next_text or _is_attachment_boundary(next_text))
+            and not _blocks_independent_sign_date(ctx)):
+        ctx.attachment_note_mode = False
+        ctx.signature_seen = True
+        ctx.signature_complete = True
+        fixed = _norm_sign_date(text)
+        _record_structural(ctx, "sign_date", fixed)
+        return "sign_date", {}, "", fixed
+
+    # 5. 附件正文页标识：由附件说明或成文日期形成强边界，不再依赖二者同时存在
+    if ((ctx.attachment_note_seen or ctx.signature_complete or ctx.attachment_page_mode)
+            and ctx.last_structural_type in ("sign_date", "attachment_note", "attachment_note_item",
+                                             "attachment_body", "attachment_title")
+            and _is_attachment_page_mark(text)):
         ctx.attachment_page_mode = True
-        ctx.last_structural_type = "attachment_page_mark"
-        return "attachment_page_mark", {}, "", _norm_attach_mark(text)
+        fixed = _norm_attach_mark(text)
+        _record_structural(ctx, "attachment_page_mark", fixed)
+        return "attachment_page_mark", {}, "", fixed
 
     # 6. 附件标题：附件页标识后 + 短句(<28字) + 无编号无冒号 → 标题
     if (ctx.last_structural_type == "attachment_page_mark" and ctx.attachment_page_mode
             and len(text) <= 28 and not _contains_colon(text)):
         tid, _ = _match_numbering(text)
         if not tid:
-            ctx.last_structural_type = "attachment_title"
+            _record_structural(ctx, "attachment_title", text)
             return "attachment_title", {}, "", text
 
     # 7. 附件正文：附件页内，不满足标题条件 → 走正常分类
@@ -1228,13 +1263,13 @@ def detect_paragraph_type(text: str, feats: ParagraphFeatures,
     # 附件/落款 结构状态跟踪
     if type_id in ("body", "addressing", "responsibility_line"):
         ctx.has_seen_real_body = True
-        ctx.last_structural_type = "body"
+        _record_structural(ctx, "body", text)
     elif type_id in ("attachment_note", "attachment_note_item",
                       "attachment_page_mark", "attachment_title",
                       "attachment_body", "sign_org", "sign_date"):
-        ctx.last_structural_type = type_id
+        _record_structural(ctx, type_id, text)
     elif type_id.startswith("heading") or type_id in ("title", "title2"):
-        ctx.last_structural_type = "body" if meta.get("heading_inline_body") else type_id
+        _record_structural(ctx, "body" if meta.get("heading_inline_body") else type_id, text)
 
     # 成文日期后重置附件页内状态，允许多个附件
     if type_id == "sign_date":
@@ -1576,15 +1611,15 @@ class DocxImporter:
             # 结构状态跟踪
             if type_id in ("body", "addressing", "responsibility_line"):
                 ctx.has_seen_real_body = True
-                ctx.last_structural_type = "body"
+                _record_structural(ctx, "body", clean_text)
             elif type_id.startswith("heading") or type_id in ("title", "title2"):
                 if meta_patch.get("heading_inline_body"):
                     ctx.has_seen_real_body = True
-                    ctx.last_structural_type = "body"
+                    _record_structural(ctx, "body", clean_text)
                 else:
-                    ctx.last_structural_type = type_id
+                    _record_structural(ctx, type_id, clean_text)
             else:
-                ctx.last_structural_type = type_id
+                _record_structural(ctx, type_id, clean_text)
             if type_id == "sign_date":
                 ctx.signature_complete = True
                 ctx.attachment_page_mode = False
