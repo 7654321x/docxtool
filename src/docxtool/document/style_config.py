@@ -615,7 +615,104 @@ def validate_format_config(config_dict: dict) -> dict:
         raise ConfigValidationError("config", "必须是 JSON 对象")
     StyleRule.from_config_dict(config_dict)
     PageSettings.from_config_dict(config_dict)
+    _parse_core_feature_options(config_dict)
     return config_dict
+
+
+def _safe_mode(field_path: str, value, allowed: set[str], default: str) -> str:
+    if value is None:
+        return default
+    normalized = str(value).strip().lower()
+    if normalized not in allowed:
+        raise ConfigValidationError(field_path, f"必须是 {', '.join(sorted(allowed))} 之一")
+    return normalized
+
+
+def _dict_field(config_dict: dict, key: str) -> dict:
+    value = config_dict.get(key, {})
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ConfigValidationError(key, "必须是对象")
+    return value
+
+
+def _scope_options(field_path: str, value) -> dict:
+    if value is None:
+        value = {}
+    if not isinstance(value, dict):
+        raise ConfigValidationError(field_path, "必须是对象")
+    return {
+        "body": _safe_bool(value.get("body", True), True),
+        "tables": _safe_bool(value.get("tables", False), False),
+        "headers": _safe_bool(value.get("headers", False), False),
+        "footers": _safe_bool(value.get("footers", False), False),
+    }
+
+
+def _parse_core_feature_options(config_dict: dict) -> dict:
+    punctuation = _dict_field(config_dict, "punctuation")
+    classification = _dict_field(config_dict, "classification")
+    numbering = _dict_field(config_dict, "numbering")
+    page_number = _dict_field(config_dict, "page_number")
+    table_format = _dict_field(config_dict, "table_format")
+    cleanup = _dict_field(config_dict, "cleanup")
+    return {
+        "punctuation": {
+            "enabled": _safe_bool(punctuation.get("enabled", False), False),
+            "mode": _safe_mode("punctuation.mode", punctuation.get("mode", "safe"), {"off", "safe", "standard"}, "safe"),
+            "scope": _scope_options("punctuation.scope", punctuation.get("scope", {})),
+        },
+        "classification": {
+            "enabled": _safe_bool(classification.get("enabled", True), True),
+            "minimum_auto_format_confidence": finite_float(
+                "classification.minimum_auto_format_confidence",
+                classification.get("minimum_auto_format_confidence", 0.85),
+                0,
+                1,
+            ),
+        },
+        "numbering": {
+            "enabled": _safe_bool(numbering.get("enabled", False), False),
+            "mode": _safe_mode("numbering.mode", numbering.get("mode", "safe"), {"off", "safe"}, "safe"),
+        },
+        "page_number": {
+            "enabled": _safe_bool(page_number.get("enabled", False), False),
+            "style": _safe_mode(
+                "page_number.style",
+                page_number.get("style", "dash"),
+                {"plain", "number", "page", "dash", "cn", "chinese", "cn_total", "chinese_total", "page_numpages"},
+                "dash",
+            ),
+            "position": _safe_mode(
+                "page_number.position",
+                page_number.get("position", "center"),
+                {"left", "center", "centre", "right", "outside"},
+                "center",
+            ),
+            "first_page": _safe_bool(page_number.get("first_page", False), False),
+            "section_numbering": _safe_mode(
+                "page_number.section_numbering",
+                page_number.get("section_numbering", "continue"),
+                {"continue", "restart", "restart_each_section", "new"},
+                "continue",
+            ),
+            "offset_from_text_mm": finite_float(
+                "page_number.offset_from_text_mm",
+                page_number.get("offset_from_text_mm", 7),
+                0,
+                30,
+            ),
+        },
+        "table_format": {
+            "enabled": _safe_bool(table_format.get("enabled", False), False),
+            "smart_alignment": _safe_bool(table_format.get("smart_alignment", False), False),
+        },
+        "cleanup": {
+            "enabled": _safe_bool(cleanup.get("enabled", False), False),
+            "mode": _safe_mode("cleanup.mode", cleanup.get("mode", "safe"), {"off", "safe"}, "safe"),
+        },
+    }
 
 def load_rules_and_settings(config_dict: dict = None):
     """加载本次任务的 rules/settings/features。
@@ -637,6 +734,10 @@ def load_rules_and_settings(config_dict: dict = None):
         "punctuation_enabled": _safe_bool(raw_features.get("punctuation_enabled", True), True),
         "page_number_enabled": _safe_bool(raw_features.get("page_number_enabled", True), True),
     }
+    if isinstance(config_dict, dict):
+        features.update(_parse_core_feature_options(config_dict))
+    else:
+        features.update(_parse_core_feature_options({}))
     return rules, settings, features
 
 

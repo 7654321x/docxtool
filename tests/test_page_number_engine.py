@@ -6,6 +6,7 @@ from docx import Document
 from docx.enum.section import WD_SECTION
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
+from docx.shared import Cm
 
 from docxtool.document.engine.page_number import apply_page_numbers
 from docxtool.security.docx_integrity import validate_docx_integrity
@@ -45,6 +46,7 @@ def _document_xml(path: Path) -> ET.Element:
 def test_page_number_fields_outside_position_and_first_page_hidden(tmp_path: Path) -> None:
     document = Document()
     first = document.sections[0]
+    first.bottom_margin = Cm(3.5)
     first.footer.is_linked_to_previous = False
     first.footer.paragraphs[0].text = "Confidential footer"
     old_page = first.footer.add_paragraph("old ")
@@ -68,6 +70,7 @@ def test_page_number_fields_outside_position_and_first_page_hidden(tmp_path: Pat
             "position": "outside",
             "first_page": "hide",
             "section_starts": [1, None],
+            "offset_from_text_mm": 7,
             "font_name": "SimSun",
             "font_size_pt": 10.5,
         },
@@ -93,6 +96,7 @@ def test_page_number_fields_outside_position_and_first_page_hidden(tmp_path: Pat
     with zipfile.ZipFile(output) as archive:
         settings_xml = archive.read("word/settings.xml").decode("utf-8")
     assert "evenAndOddHeaders" in settings_xml
+    assert abs(first.footer_distance.cm - 2.8) < 0.02
     sections = _document_xml(output).findall(".//" + qn("w:sectPr"))
     assert any(section.find(qn("w:titlePg")) is not None for section in sections)
     starts = [pg_num_type.get(qn("w:start")) for section in sections if (pg_num_type := section.find(qn("w:pgNumType"))) is not None]

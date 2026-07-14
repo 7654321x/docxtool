@@ -38,5 +38,39 @@
     "space_before_line": 0,
     "space_after_line": 0,
     "grid_alignment": "文字对齐字符网络"
+  },
+  "punctuation": {
+    "enabled": false,
+    "mode": "safe",
+    "scope": {
+      "body": true,
+      "tables": false,
+      "headers": false,
+      "footers": false
+    }
+  },
+  "classification": {
+    "enabled": true,
+    "minimum_auto_format_confidence": 0.85
+  },
+  "numbering": {
+    "enabled": false,
+    "mode": "safe"
+  },
+  "page_number": {
+    "enabled": false,
+    "style": "dash",
+    "position": "center",
+    "first_page": false,
+    "section_numbering": "continue",
+    "offset_from_text_mm": 7
+  },
+  "table_format": {
+    "enabled": false,
+    "smart_alignment": false
+  },
+  "cleanup": {
+    "enabled": false,
+    "mode": "safe"
   }
 }

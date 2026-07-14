@@ -21,6 +21,10 @@ import math
 
 from docxtool.document.importer import DocumentData, ParagraphData
 from docxtool.document.engine.normal import resolve as _resolve_rule
+from docxtool.document.engine.cleanup import cleanup_styles
+from docxtool.document.engine.numbering import normalize_numbering_text
+from docxtool.document.engine.page_number import apply_page_numbers
+from docxtool.document.engine.table import format_tables
 
 # ── python-docx 模块级导入 ──
 from docx import Document
@@ -1184,6 +1188,21 @@ HEAD_TYPES_REQUIRING_GAP = ("title", "title_cont", "date_line", "author_line", "
 HEAD_GAP_FOLLOW_TYPES = ("body", "attachment_body", "heading1")
 
 
+def _feature_options(options: dict | None) -> dict:
+    return options if isinstance(options, dict) else {}
+
+
+def _feature_enabled(options: dict | None, default: bool = False) -> bool:
+    opts = _feature_options(options)
+    value = opts.get("enabled", default)
+    raw = str(value).strip().lower()
+    if raw in {"1", "true", "yes", "on", "启用", "是"}:
+        return True
+    if raw in {"0", "false", "no", "off", "禁用", "否"}:
+        return False
+    return bool(default)
+
+
 # ═══════════════════════════════════════════════════════════════
 # 主入口
 # ═══════════════════════════════════════════════════════════════
@@ -1191,7 +1210,11 @@ HEAD_GAP_FOLLOW_TYPES = ("body", "attachment_body", "heading1")
 def export_doc(doc_data: DocumentData, rules: List[StyleRule],
                settings: PageSettings, output_path: str,
                numbered_bold_enabled: bool = True,
-               page_number_enabled: bool = True) -> dict:
+               page_number_enabled: bool = True,
+               numbering_options: dict | None = None,
+               page_number_options: dict | None = None,
+               table_format_options: dict | None = None,
+               cleanup_options: dict | None = None) -> dict:
     """排版引擎主入口。DocumentData → .docx 文件。
 
     Returns:
@@ -1221,6 +1244,8 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
     prev_was_title = False
     prev_type_id = ""
     line_twips = _line_spacing_twips(settings)
+    numbering_enabled = _feature_enabled(numbering_options, False)
+    numbering_mode = str(_feature_options(numbering_options).get("mode", "safe") or "safe").lower()
 
     render_items = doc_data.paragraphs
     paragraph_i = 0
@@ -1288,6 +1313,10 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
 
             # 标题先清理旧编号，再建段落
             text = pd.text
+            if numbering_enabled:
+                numbering_result = normalize_numbering_text(text, safe=numbering_mode != "off")
+                if numbering_result.changed:
+                    text = numbering_result.text
             if pd.type_id.startswith("heading"):
                 text = _strip_heading_numbering(text)
                 # 一/二级标题特殊处理：句号分割的行内标题（政协报告体例）
@@ -1533,7 +1562,18 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
     apply_page_settings(doc, settings, doc_data.doc_mode)
     _preserve_even_and_odd_headers_setting(doc, doc_data)
 
-    if page_number_enabled and not _has_imported_header_footer_refs(doc_data):
+    has_imported_header_footer_refs = _has_imported_header_footer_refs(doc_data)
+    if _feature_enabled(page_number_options, False) and not has_imported_header_footer_refs:
+        page_options = dict(_feature_options(page_number_options))
+        page_options.setdefault("font_name", page_rule.font)
+        page_options.setdefault("font_size_pt", page_rule.font_size_pt)
+        page_options.setdefault("bold", page_rule.bold)
+        if isinstance(page_options.get("first_page"), bool):
+            page_options["first_page"] = "show" if page_options["first_page"] else "hide"
+        apply_page_numbers(doc, page_options)
+    elif _feature_enabled(page_number_options, False):
+        logger.info("[引擎] 检测到导入节页眉/页脚，跳过新版自动页码以保留原始关系")
+    elif page_number_enabled and not has_imported_header_footer_refs:
         apply_header_footer(doc, page_rule)
     elif page_number_enabled:
         logger.info("[引擎] 检测到导入节页眉/页脚，跳过自动页码页脚以保留原始关系")
@@ -1552,6 +1592,11 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
         section_relationship_parts,
         section_part_copier,
     )
+
+    if _feature_enabled(table_format_options, False):
+        format_tables(doc, _feature_options(table_format_options))
+    if _feature_enabled(cleanup_options, False):
+        cleanup_styles(doc, _feature_options(cleanup_options))
 
     # 页面行数诊断
     page_h_cm = 29.7 - settings.margin_top_cm - settings.margin_bottom_cm

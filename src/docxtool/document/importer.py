@@ -14,8 +14,10 @@ import logging
 import copy
 import re
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Dict, List, Optional, Tuple, Union
 
+from docxtool.document.classifier import ClassificationOptions, classify_paragraphs
 from docxtool.document.style_config import (
     StyleRule, cn_size_to_pt, chinese_number,
     logger, ImportError,
@@ -620,6 +622,15 @@ def _normalize_quotes(text: str) -> str:
     text = re.sub(r"(?<![A-Za-z])'(?=[\u4e00-\u9fff])", '\u2018', text)
     text = re.sub(r"(?<=[\u4e00-\u9fff])'(?![A-Za-z])", '\u2019', text)
     return text
+
+
+def _feature_bool(value, default: bool = False) -> bool:
+    raw = str(value).strip().lower()
+    if raw in {"1", "true", "yes", "on", "启用", "是"}:
+        return True
+    if raw in {"0", "false", "no", "off", "禁用", "否"}:
+        return False
+    return default
 
 
 def _contains_colon(text: str) -> bool:
@@ -1315,7 +1326,30 @@ class DocxImporter:
             raise ImportError("请安装 python-docx: pip install python-docx")
 
         features = features or {}
-        punctuation_enabled = str(features.get("punctuation_enabled", True)).strip().lower() not in {"0", "false", "no", "off", "禁用", "否"}
+        punctuation_options = features.get("punctuation", {}) if isinstance(features.get("punctuation", {}), dict) else {}
+        new_punctuation_enabled = _feature_bool(punctuation_options.get("enabled", False), False)
+        punctuation_mode = str(punctuation_options.get("mode", "safe") or "safe")
+        punctuation_enabled = _feature_bool(features.get("punctuation_enabled", True), True)
+
+        def normalize_text(text: str) -> str:
+            if not text:
+                return text
+            if new_punctuation_enabled:
+                from docxtool.document.engine.punctuation import normalize_punctuation_text
+
+                return normalize_punctuation_text(text, mode=punctuation_mode)
+            if punctuation_enabled:
+                return _to_chinese_punctuation(_normalize_quotes(text))
+            return text
+
+        def normalize_tokens(tokens: List[InlineToken]) -> List[InlineToken]:
+            normalized = _normalize_inline_tokens(tokens, punctuation_enabled and not new_punctuation_enabled)
+            if not new_punctuation_enabled:
+                return normalized
+            return [
+                InlineToken(token.kind, normalize_text(token.text)) if token.kind == "text" else token
+                for token in normalized
+            ]
 
         # 自动修复损坏的 .rels 引用
         filepath = _repair_broken_rels(filepath)
@@ -1368,8 +1402,7 @@ class DocxImporter:
                 continue
             _, para, pf, inline_tokens, sectPr = block
             text = para.text.strip()
-            if punctuation_enabled:
-                text = _to_chinese_punctuation(_normalize_quotes(text))
+            text = normalize_text(text)
             if not text and sectPr is not None:
                 sub_pf = ParagraphFeatures(
                     font_name=pf.font_name, font_size_pt=pf.font_size_pt,
@@ -1383,7 +1416,7 @@ class DocxImporter:
                 continue
             has_structural_inline = any(token.kind in {"tab", "line_break", "page_break"} for token in inline_tokens)
             if has_structural_inline:
-                normalized_tokens = _normalize_inline_tokens(inline_tokens, punctuation_enabled)
+                normalized_tokens = normalize_tokens(inline_tokens)
                 line = inline_tokens_text(normalized_tokens).strip()
                 has_page_break = any(token.kind == "page_break" for token in normalized_tokens)
                 has_tab = any(token.kind == "tab" for token in normalized_tokens)
@@ -1420,8 +1453,7 @@ class DocxImporter:
                 continue
             for li, line in enumerate(text.split('\n')):
                 line = line.strip()
-                if punctuation_enabled:
-                    line = _to_chinese_punctuation(_normalize_quotes(line))
+                line = normalize_text(line)
                 if not line: continue
                 line_numbering = pf.numbering_prefix if li == 0 else _detect_numbering_prefix(line)
                 sub_pf = ParagraphFeatures(
@@ -1533,6 +1565,7 @@ class DocxImporter:
         self._reorder_attachment_note_before_signature(data.paragraphs)
         self._assign_numbering(data.paragraphs, rules)
         self._merge_siblings(data.paragraphs)
+        self._apply_core_classification(data, features)
         # (old classification loop removed — replaced by flat_lines single pass above)
 
         # 第三半：编号连续性检查（需在编号赋值之后）
@@ -1544,6 +1577,43 @@ class DocxImporter:
 
         logger.info(f"[导入] {filepath}: {len(data.paragraphs)} 段, {len(data.tables)} 表格")
         return data
+
+    def _apply_core_classification(self, data: DocumentData, features: dict) -> None:
+        classification_options = features.get("classification", {}) if isinstance(features.get("classification", {}), dict) else {}
+        if not _feature_bool(classification_options.get("enabled", True), True):
+            return
+        threshold = classification_options.get("minimum_auto_format_confidence", 0.85)
+        try:
+            threshold = float(threshold)
+        except (TypeError, ValueError):
+            threshold = 0.85
+        candidates = []
+        indexes = []
+        for index, paragraph in enumerate(data.paragraphs):
+            if paragraph.type_id.startswith("__"):
+                continue
+            pf = paragraph.features or ParagraphFeatures()
+            candidates.append(
+                SimpleNamespace(
+                    text=paragraph.original_text or paragraph.text,
+                    style_name=pf.style_name,
+                    alignment=pf.alignment,
+                    first_line_indent=pf.first_line_indent,
+                    font_size_pt=pf.font_size_pt,
+                    bold=pf.bold,
+                    native_numbering=bool(pf.numbering_prefix),
+                )
+            )
+            indexes.append(index)
+        if not candidates:
+            return
+        results = classify_paragraphs(candidates, ClassificationOptions(auto_format_threshold=threshold))
+        for paragraph_index, result in zip(indexes, results):
+            meta = dict(data.paragraphs[paragraph_index].meta or {})
+            meta["classification_kind"] = result.kind.value
+            meta["classification_confidence"] = round(result.confidence, 3)
+            meta["classification_auto_format"] = bool(result.auto_format)
+            data.paragraphs[paragraph_index].meta = meta
 
     def _reorder_attachment_note_before_signature(self, paragraphs: list) -> None:
         """Normalize sign/date before attachment note into official note→sign→date order."""

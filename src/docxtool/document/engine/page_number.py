@@ -10,7 +10,7 @@ from typing import Any
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
-from docx.shared import Pt
+from docx.shared import Cm, Pt
 
 
 _PAGE_INSTRUCTION_RE = re.compile(r"\b(?:PAGE|NUMPAGES)\b", re.IGNORECASE)
@@ -34,6 +34,7 @@ def apply_page_numbers(document, options: Mapping[str, Any] | None = None):
         _set_even_and_odd_headers(document, True)
 
     for section_index, section in enumerate(document.sections):
+        _set_footer_distance(section, opts)
         _set_section_numbering(section, section_numbering, restart_at, opts, section_index)
         first_page_snapshot = None
         first_page_owned = False
@@ -56,6 +57,17 @@ def apply_page_numbers(document, options: Mapping[str, Any] | None = None):
             _apply_to_footer(section.first_page_footer, _alignment_for(position, "first"), style, opts)
 
     return document
+
+
+def _set_footer_distance(section, options: Mapping[str, Any]) -> None:
+    if options.get("offset_from_text_mm") is None:
+        return
+    try:
+        offset_cm = float(options.get("offset_from_text_mm")) / 10
+    except (TypeError, ValueError):
+        return
+    bottom_margin_cm = section.bottom_margin.cm if section.bottom_margin else 3.5
+    section.footer_distance = Cm(max(0.3, bottom_margin_cm - offset_cm))
 
 
 def _replace_footer_content(footer, snapshot) -> None:

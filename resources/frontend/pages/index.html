@@ -408,6 +408,11 @@ h1{font-size:clamp(36px,6vw,66px);letter-spacing:-2px;line-height:1.05;margin-bo
             <label class="switch-card"><span><strong>表格优化</strong><small>暂未实现，保留为后续扩展入口</small></span><span class="switch"><input type="checkbox" id="tableEnabled" checked disabled><span></span></span></label>
             <label class="switch-card"><span><strong>页码处理</strong><small>统一页码样式和位置</small></span><span class="switch"><input type="checkbox" id="pageNumberEnabled" checked><span></span></span></label>
             <label class="switch-card"><span><strong>特殊加粗</strong><small>识别标题和关键段落加粗</small></span><span class="switch"><input type="checkbox" id="specialBold" checked><span></span></span></label>
+            <label class="switch-card"><span><strong>安全标点</strong><small>保护链接、邮箱、版本号等片段</small></span><span class="switch"><input type="checkbox" id="punctuationSafeEnabled"><span></span></span></label>
+            <label class="switch-card"><span><strong>序号规范</strong><small>修正常见人工序号格式</small></span><span class="switch"><input type="checkbox" id="numberingEnabled"><span></span></span></label>
+            <label class="switch-card"><span><strong>新版页码</strong><small>字段页码并保留页眉页脚关系</small></span><span class="switch"><input type="checkbox" id="pageNumberV2Enabled"><span></span></span></label>
+            <label class="switch-card"><span><strong>表格版式</strong><small>安全统一边框、宽度和单元格边距</small></span><span class="switch"><input type="checkbox" id="tableFormatEnabled"><span></span></span></label>
+            <label class="switch-card"><span><strong>样式清理</strong><small>移除显式高亮、底纹和杂色</small></span><span class="switch"><input type="checkbox" id="cleanupEnabled"><span></span></span></label>
           </div>
         </section>
       </div>
@@ -647,7 +652,13 @@ function collectConfig(){
       numbered_bold_enabled:checked('specialBold'),
       punctuation_enabled:checked('punctuationEnabled'),
       page_number_enabled:checked('pageNumberEnabled')
-    }
+    },
+    punctuation:{enabled:checked('punctuationSafeEnabled'),mode:'safe',scope:{body:true,tables:false,headers:false,footers:false}},
+    classification:{enabled:true,minimum_auto_format_confidence:0.85},
+    numbering:{enabled:checked('numberingEnabled'),mode:'safe'},
+    page_number:{enabled:checked('pageNumberV2Enabled'),style:'dash',position:'center',first_page:false,section_numbering:'continue',offset_from_text_mm:7},
+    table_format:{enabled:checked('tableFormatEnabled'),smart_alignment:false},
+    cleanup:{enabled:checked('cleanupEnabled'),mode:'safe'}
   };
 }
 function normalizeConfig(config,tpl){
@@ -838,6 +849,18 @@ function applyConfigToForm(config,keepTemplate=true){
     const val=f[key]!==undefined?f[key]:f[fallbackKey];
     if(document.getElementById(id)&&val!==undefined)document.getElementById(id).checked=!!val;
   });
+  const coreFeatureMap={
+    punctuationSafeEnabled:cfg.punctuation?.enabled,
+    numberingEnabled:cfg.numbering?.enabled,
+    pageNumberV2Enabled:cfg.page_number?.enabled,
+    tableFormatEnabled:cfg.table_format?.enabled,
+    cleanupEnabled:cfg.cleanup?.enabled
+  };
+  Object.keys(coreFeatureMap).forEach(id=>{
+    const el=document.getElementById(id);
+    const val=coreFeatureMap[id];
+    if(el&&val!==undefined)el.checked=!!val;
+  });
 }
 async function createTemplateFromCurrent(){
   const name=prompt('请输入新模板名称','新的排版模板');
@@ -909,7 +932,7 @@ function sizeLabel(bytes){const kb=bytes/1024;return kb>=1024?(kb/1024).toFixed(
 function setStep(n){document.querySelectorAll('.mini-step').forEach(el=>{const s=Number(el.dataset.step);el.classList.toggle('done',s<n);el.classList.toggle('active',s===n)})}
 function friendlyError(text,code){if(code==='PROXY_REQUIRED')return'当前请求缺少前端代理校验，请通过 Cloudflare Pages 前端页面或同源 /api 代理访问。';if(code==='UNAUTHORIZED'||code==='CSRF_INVALID')return'管理员会话已失效，请重新登录后再试。';if(code==='FORMAT_CONFIG_INVALID')return'排版设置格式无效，请重新保存设置后再上传。';if(code==='FORMAT_CONFIG_TOO_LARGE')return'排版设置内容过大，请减少自定义规则后再上传。';if(!text)return'处理失败，请检查文档是否损坏或包含特殊对象。';if(text.includes('too large')||text.includes('过大'))return'文件过大，请压缩到 10MB 以内后重试。';if(text.includes('format')||text.includes('docx'))return'文件格式不支持，请上传 .docx 文件。';if(text.includes('network')||text.includes('网络'))return'网络异常，请检查网络后重新上传。';return text}
 function warnSuffix(task){const list=Array.isArray(task?.compatibility_warnings)?task.compatibility_warnings.filter(Boolean):[];return list.length?'；'+list.join('；'):''}
-function safeCollectConfig(){try{return collectConfig()}catch(_){resetDefaults();try{return collectConfig()}catch(__){return{styles:[],page:{width_cm:21.0,height_cm:29.7,margin_top_cm:3.7,margin_bottom_cm:3.5,margin_left_cm:2.8,margin_right_cm:2.6,lines_per_page:22,chars_per_line:28,line_spacing_pt:28,space_before_line:0,space_after_line:0,grid_alignment:'文字对齐字符网络'},features:{numbered_bold_enabled:true,punctuation_enabled:true,page_number_enabled:true}}}}}
+function safeCollectConfig(){try{return collectConfig()}catch(_){resetDefaults();try{return collectConfig()}catch(__){return{styles:[],page:{width_cm:21.0,height_cm:29.7,margin_top_cm:3.7,margin_bottom_cm:3.5,margin_left_cm:2.8,margin_right_cm:2.6,lines_per_page:22,chars_per_line:28,line_spacing_pt:28,space_before_line:0,space_after_line:0,grid_alignment:'文字对齐字符网络'},features:{numbered_bold_enabled:true,punctuation_enabled:true,page_number_enabled:true},punctuation:{enabled:false,mode:'safe',scope:{body:true,tables:false,headers:false,footers:false}},classification:{enabled:true,minimum_auto_format_confidence:0.85},numbering:{enabled:false,mode:'safe'},page_number:{enabled:false,style:'dash',position:'center',first_page:false,section_numbering:'continue',offset_from_text_mm:7},table_format:{enabled:false,smart_alignment:false},cleanup:{enabled:false,mode:'safe'}}}}}
 async function upload(f){
   if(!f)return;
   resultCard.style.display='none';

@@ -292,7 +292,7 @@ def _default_preset_config() -> dict:
             "page_break_before": rule.page_break_before,
         })
     settings = PageSettings.from_config()
-    return {
+    config = {
         "schema_version": 1,
         "styles": styles,
         "page": {
@@ -313,6 +313,41 @@ def _default_preset_config() -> dict:
             "numbered_bold_enabled": True,
             "punctuation_enabled": True,
             "page_number_enabled": True,
+        },
+    }
+    config.update(_core_feature_config_defaults())
+    return config
+
+def _core_feature_config_defaults() -> dict:
+    return {
+        "punctuation": {
+            "enabled": False,
+            "mode": "safe",
+            "scope": {"body": True, "tables": False, "headers": False, "footers": False},
+        },
+        "classification": {
+            "enabled": True,
+            "minimum_auto_format_confidence": 0.85,
+        },
+        "numbering": {
+            "enabled": False,
+            "mode": "safe",
+        },
+        "page_number": {
+            "enabled": False,
+            "style": "dash",
+            "position": "center",
+            "first_page": False,
+            "section_numbering": "continue",
+            "offset_from_text_mm": 7,
+        },
+        "table_format": {
+            "enabled": False,
+            "smart_alignment": False,
+        },
+        "cleanup": {
+            "enabled": False,
+            "mode": "safe",
         },
     }
 
@@ -1069,6 +1104,8 @@ def _task_process_body(task_id: str, input_path: str, orig_name: str, ip: str, u
         features.setdefault("numbered_bold_enabled", True)
         features.setdefault("punctuation_enabled", True)
         features.setdefault("page_number_enabled", True)
+        for key, value in _core_feature_config_defaults().items():
+            features.setdefault(key, value)
         body_rule = rules[5] if len(rules) > 5 else StyleRule.default_for_row(5)
         logger.info(
             f"[Task] {task_id[:8]} start file={orig_name} ip={ip} log={log_filename} "
@@ -1095,6 +1132,10 @@ def _task_process_body(task_id: str, input_path: str, orig_name: str, ip: str, u
                 output_path,
                 numbered_bold_enabled=features["numbered_bold_enabled"],
                 page_number_enabled=features["page_number_enabled"],
+                numbering_options=features.get("numbering"),
+                page_number_options=features.get("page_number"),
+                table_format_options=features.get("table_format"),
+                cleanup_options=features.get("cleanup"),
             )
         except TypeError:
             export_doc(
@@ -1726,6 +1767,8 @@ def _validate_template_config(config_obj: dict) -> dict:
             "page_number_enabled": bool(features.get("page_number_enabled", True)),
         },
     }
+    for key in ("punctuation", "classification", "numbering", "page_number", "table_format", "cleanup"):
+        normalized[key] = features.get(key, _core_feature_config_defaults()[key])
     for key in ("mode", "processing_mode", "preset_id", "preset_name", "template_type", "source", "output_suffix", "global"):
         if key in config_obj:
             normalized[key] = config_obj[key]
