@@ -59,6 +59,26 @@ def test_core_feature_options_validate_modes() -> None:
         validate_format_config({"punctuation": {"mode": "unsafe"}})
 
 
+def test_core_feature_options_accept_legacy_boolean_flags() -> None:
+    _, _, features = load_rules_and_settings(
+        {
+            "styles": [],
+            "page": {},
+            "punctuation": True,
+            "numbering": "false",
+            "page_number": True,
+            "table_format": 0,
+            "cleanup": "on",
+        }
+    )
+
+    assert features["punctuation"]["enabled"] is True
+    assert features["numbering"]["enabled"] is False
+    assert features["page_number"]["enabled"] is True
+    assert features["table_format"]["enabled"] is False
+    assert features["cleanup"]["enabled"] is True
+
+
 def test_importer_uses_safe_punctuation_engine_and_records_classification(tmp_path: Path) -> None:
     source = tmp_path / "source.docx"
     document = Document()

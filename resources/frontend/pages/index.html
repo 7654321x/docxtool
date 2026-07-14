@@ -572,6 +572,57 @@ function base64UrlJson(value){
   for(let i=0;i<bytes.length;i+=chunk)binary+=String.fromCharCode(...bytes.subarray(i,i+chunk));
   return btoa(binary).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
 }
+const CORE_FEATURE_DEFAULTS={
+  punctuation:{enabled:false,mode:'safe',scope:{body:true,tables:false,headers:false,footers:false}},
+  classification:{enabled:true,minimum_auto_format_confidence:0.85},
+  numbering:{enabled:false,mode:'safe'},
+  page_number:{enabled:false,style:'dash',position:'center',first_page:false,section_numbering:'continue',offset_from_text_mm:7},
+  table_format:{enabled:false,smart_alignment:false},
+  cleanup:{enabled:false,mode:'safe'}
+};
+function clonePlain(value){return JSON.parse(JSON.stringify(value))}
+function boolValue(value,fallback=false){
+  if(value===undefined||value===null)return fallback;
+  if(typeof value==='boolean')return value;
+  if(typeof value==='number')return value!==0;
+  const raw=String(value).trim().toLowerCase();
+  if(['1','true','yes','on','启用','是'].includes(raw))return true;
+  if(['0','false','no','off','禁用','否'].includes(raw))return false;
+  return fallback;
+}
+function normalizeCoreFeatureOptions(value,defaults){
+  const base=clonePlain(defaults);
+  if(value&&typeof value==='object'&&!Array.isArray(value)){
+    const merged={...base,...value};
+    merged.enabled=boolValue(value.enabled,base.enabled);
+    if(base.scope||value.scope)merged.scope={...(base.scope||{}),...(value.scope||{})};
+    if(merged.offset_from_text_mm!==undefined){
+      const n=Number(merged.offset_from_text_mm);
+      merged.offset_from_text_mm=Number.isFinite(n)?n:base.offset_from_text_mm;
+    }
+    return merged;
+  }
+  if(value!==undefined)return {...base,enabled:boolValue(value,base.enabled)};
+  return base;
+}
+function normalizeTransportConfig(config){
+  const out={...(asObject(config)||{})};
+  Object.keys(CORE_FEATURE_DEFAULTS).forEach(key=>{
+    out[key]=normalizeCoreFeatureOptions(out[key],CORE_FEATURE_DEFAULTS[key]);
+  });
+  out.features={...(out.features||{})};
+  out.features.numbered_bold_enabled=boolValue(out.features.numbered_bold_enabled,true);
+  out.features.punctuation_enabled=boolValue(out.features.punctuation_enabled,true);
+  out.features.page_number_enabled=boolValue(out.features.page_number_enabled,true);
+  return out;
+}
+function defaultTransportConfig(){
+  return normalizeTransportConfig({
+    styles:[],
+    page:{width_cm:21.0,height_cm:29.7,margin_top_cm:3.7,margin_bottom_cm:3.5,margin_left_cm:2.8,margin_right_cm:2.6,lines_per_page:22,chars_per_line:28,line_spacing_pt:28,space_before_line:0,space_after_line:0,grid_alignment:'文字对齐字符网络'},
+    features:{numbered_bold_enabled:true,punctuation_enabled:true,page_number_enabled:true}
+  });
+}
 function updateNumberingType(row){
   const pattern=row.querySelector('[data-field="pattern"]')?.value||'';
   const info=parseNumberingFormat(pattern);
@@ -630,7 +681,7 @@ function collectConfig(){
     {name:'字母',font:get('letterFont')||'Times New Roman',size:get('letterSize')||'',bold:false,pattern:'',lang:'',indent:0,align:'左对齐'},
     {name:'页码设置',font:get('pageFont')||'宋体',size:get('pageSize')||'四号',bold:false,pattern:get('pageStyle')||'— 1 —',lang:get('pageLanguage')||'阿拉伯数字',indent:0,align:get('pagePosition')||'奇右|偶左'}
   ];
-  return {
+  return normalizeTransportConfig({
     styles,
     page:{
       width_cm:get('paperSize')==='A3'?29.7:21.0,
@@ -659,12 +710,12 @@ function collectConfig(){
     page_number:{enabled:checked('pageNumberV2Enabled'),style:'dash',position:'center',first_page:false,section_numbering:'continue',offset_from_text_mm:7},
     table_format:{enabled:checked('tableFormatEnabled'),smart_alignment:false},
     cleanup:{enabled:checked('cleanupEnabled'),mode:'safe'}
-  };
+  });
 }
 function normalizeConfig(config,tpl){
   const obj=asObject(config);
   if(!obj)return null;
-  const out={...obj};
+  const out=normalizeTransportConfig(obj);
   out.schema_version=Number(out.schema_version)||1;
   out.preset_id=normalizePresetId(out.preset_id||tpl?.id);
   out.preset_name=out.preset_name||tpl?.name||'党政机关公文格式';
@@ -932,7 +983,7 @@ function sizeLabel(bytes){const kb=bytes/1024;return kb>=1024?(kb/1024).toFixed(
 function setStep(n){document.querySelectorAll('.mini-step').forEach(el=>{const s=Number(el.dataset.step);el.classList.toggle('done',s<n);el.classList.toggle('active',s===n)})}
 function friendlyError(text,code){if(code==='PROXY_REQUIRED')return'当前请求缺少前端代理校验，请通过 Cloudflare Pages 前端页面或同源 /api 代理访问。';if(code==='UNAUTHORIZED'||code==='CSRF_INVALID')return'管理员会话已失效，请重新登录后再试。';if(code==='FORMAT_CONFIG_INVALID')return'排版设置格式无效，请重新保存设置后再上传。';if(code==='FORMAT_CONFIG_TOO_LARGE')return'排版设置内容过大，请减少自定义规则后再上传。';if(!text)return'处理失败，请检查文档是否损坏或包含特殊对象。';if(text.includes('too large')||text.includes('过大'))return'文件过大，请压缩到 10MB 以内后重试。';if(text.includes('format')||text.includes('docx'))return'文件格式不支持，请上传 .docx 文件。';if(text.includes('network')||text.includes('网络'))return'网络异常，请检查网络后重新上传。';return text}
 function warnSuffix(task){const list=Array.isArray(task?.compatibility_warnings)?task.compatibility_warnings.filter(Boolean):[];return list.length?'；'+list.join('；'):''}
-function safeCollectConfig(){try{return collectConfig()}catch(_){resetDefaults();try{return collectConfig()}catch(__){return{styles:[],page:{width_cm:21.0,height_cm:29.7,margin_top_cm:3.7,margin_bottom_cm:3.5,margin_left_cm:2.8,margin_right_cm:2.6,lines_per_page:22,chars_per_line:28,line_spacing_pt:28,space_before_line:0,space_after_line:0,grid_alignment:'文字对齐字符网络'},features:{numbered_bold_enabled:true,punctuation_enabled:true,page_number_enabled:true},punctuation:{enabled:false,mode:'safe',scope:{body:true,tables:false,headers:false,footers:false}},classification:{enabled:true,minimum_auto_format_confidence:0.85},numbering:{enabled:false,mode:'safe'},page_number:{enabled:false,style:'dash',position:'center',first_page:false,section_numbering:'continue',offset_from_text_mm:7},table_format:{enabled:false,smart_alignment:false},cleanup:{enabled:false,mode:'safe'}}}}}
+function safeCollectConfig(){try{return collectConfig()}catch(_){resetDefaults();try{return collectConfig()}catch(__){return defaultTransportConfig()}}}
 async function upload(f){
   if(!f)return;
   resultCard.style.display='none';

@@ -633,8 +633,25 @@ def _dict_field(config_dict: dict, key: str) -> dict:
     if value is None:
         return {}
     if not isinstance(value, dict):
-        raise ConfigValidationError(key, "必须是对象")
+        legacy_enabled = _legacy_feature_enabled(key, value)
+        if legacy_enabled is not None:
+            return {"enabled": legacy_enabled}
+        raise ConfigValidationError(key, "必须是对象或布尔值")
     return value
+
+
+def _legacy_feature_enabled(field_path: str, value) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return bool(value)
+    if isinstance(value, str):
+        raw = value.strip().lower()
+        if raw in {"1", "true", "yes", "on", "启用", "是"}:
+            return True
+        if raw in {"0", "false", "no", "off", "禁用", "否"}:
+            return False
+    return None
 
 
 def _scope_options(field_path: str, value) -> dict:
