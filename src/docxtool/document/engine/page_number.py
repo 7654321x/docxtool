@@ -15,6 +15,13 @@ from docx.shared import Cm, Pt
 
 _PAGE_INSTRUCTION_RE = re.compile(r"\b(?:PAGE|NUMPAGES)\b", re.IGNORECASE)
 _PAGE_ONLY_TEXT_RE = re.compile(r"[\s\d/\\\-–—第页共总计：:PagePAGEofNUMPAGES]+", re.IGNORECASE)
+_PAGE_DECORATION_TEXT_RE = re.compile(r"[\s\d/\\\-–—第页共总计：:Pageof]+", re.IGNORECASE)
+
+
+def apply_page_number(document, options: Mapping[str, Any] | None = None):
+    """Apply clean Word PAGE fields to document footers."""
+
+    return apply_page_numbers(document, options)
 
 
 def apply_page_numbers(document, options: Mapping[str, Any] | None = None):
@@ -26,12 +33,14 @@ def apply_page_numbers(document, options: Mapping[str, Any] | None = None):
 
     style = str(opts.get("style", opts.get("format", "dash"))).lower()
     position = str(opts.get("position", opts.get("alignment", "outside"))).lower()
-    first_page_policy = str(opts.get("first_page", opts.get("first_page_policy", "show"))).lower()
+    first_page_policy = _first_page_policy(opts)
     section_numbering = str(opts.get("section_numbering", "continue")).lower()
     restart_at = int(opts.get("restart_at", 1))
 
     if position == "outside":
         _set_even_and_odd_headers(document, True)
+    has_even_footer = position == "outside" or _even_and_odd_headers_enabled(document)
+    _set_update_fields_on_open(document)
 
     for section_index, section in enumerate(document.sections):
         _set_footer_distance(section, opts)
@@ -46,17 +55,35 @@ def apply_page_numbers(document, options: Mapping[str, Any] | None = None):
                 first_page_snapshot = copy.deepcopy(first_page_footer._element)
 
         _apply_to_footer(section.footer, _alignment_for(position, "default"), style, opts)
-        if position == "outside":
+        if has_even_footer:
             _apply_to_footer(section.even_page_footer, _alignment_for(position, "even"), style, opts)
 
         if first_page_policy in {"hide", "hidden", "no", "skip"}:
             if first_page_owned and first_page_snapshot is not None:
                 _replace_footer_content(section.first_page_footer, first_page_snapshot)
                 _remove_existing_page_numbers(section.first_page_footer)
-        elif first_page_policy in {"show", "same", "display"} and section.different_first_page_header_footer:
+        elif first_page_policy in {"show", "same", "display"} or section.different_first_page_header_footer:
+            section.different_first_page_header_footer = True
             _apply_to_footer(section.first_page_footer, _alignment_for(position, "first"), style, opts)
 
     return document
+
+
+def _first_page_policy(options: Mapping[str, Any]) -> str:
+    if "first_page" in options:
+        raw = options["first_page"]
+    elif "first_page_policy" in options:
+        raw = options["first_page_policy"]
+    else:
+        return "default"
+    if isinstance(raw, bool):
+        return "show" if raw else "hide"
+    normalized = str(raw).strip().lower()
+    if normalized in {"true", "yes", "1"}:
+        return "show"
+    if normalized in {"false", "no", "0"}:
+        return "hide"
+    return normalized or "default"
 
 
 def _set_footer_distance(section, options: Mapping[str, Any]) -> None:
@@ -119,6 +146,7 @@ def _add_field(paragraph, instruction: str, options: Mapping[str, Any]) -> None:
     _style_run(begin, options)
     field_begin = OxmlElement("w:fldChar")
     field_begin.set(qn("w:fldCharType"), "begin")
+    field_begin.set(qn("w:dirty"), "true")
     begin._r.append(field_begin)
 
     instr = paragraph.add_run()
@@ -133,9 +161,6 @@ def _add_field(paragraph, instruction: str, options: Mapping[str, Any]) -> None:
     field_separate = OxmlElement("w:fldChar")
     field_separate.set(qn("w:fldCharType"), "separate")
     separate._r.append(field_separate)
-
-    result = paragraph.add_run("1")
-    _style_run(result, options)
 
     end = paragraph.add_run()
     _style_run(end, options)
@@ -182,6 +207,22 @@ def _set_even_and_odd_headers(document, enabled: bool) -> None:
         existing = OxmlElement("w:evenAndOddHeaders")
         settings.append(existing)
     existing.set(qn("w:val"), "1")
+
+
+def _even_and_odd_headers_enabled(document) -> bool:
+    existing = document.settings._element.find(qn("w:evenAndOddHeaders"))
+    if existing is None:
+        return False
+    return existing.get(qn("w:val"), "1") not in {"0", "false", "False"}
+
+
+def _set_update_fields_on_open(document) -> None:
+    settings = document.settings._element
+    existing = settings.find(qn("w:updateFields"))
+    if existing is None:
+        existing = OxmlElement("w:updateFields")
+        settings.append(existing)
+    existing.set(qn("w:val"), "true")
 
 
 def _set_section_numbering(section, mode: str, restart_at: int, options: Mapping[str, Any], section_index: int) -> None:
@@ -253,6 +294,10 @@ def _remove_page_field_runs(paragraph) -> None:
         end = index
         while end < len(runs) - 1 and not _has_field_char(runs[end], "end"):
             end += 1
+        while start > 0 and _is_page_decoration_run(runs[start - 1]):
+            start -= 1
+        while end < len(runs) - 1 and _is_page_decoration_run(runs[end + 1]):
+            end += 1
         remove_indexes.update(range(start, end + 1))
     for element in paragraph._element.findall(qn("w:fldSimple")):
         instruction = element.get(qn("w:instr"), "")
@@ -267,6 +312,15 @@ def _has_field_char(run, field_char_type: str) -> bool:
         field_char.get(qn("w:fldCharType")) == field_char_type
         for field_char in run.findall(".//" + qn("w:fldChar"))
     )
+
+
+def _is_page_decoration_run(run) -> bool:
+    if run.find(".//" + qn("w:drawing")) is not None or run.find(".//" + qn("w:pict")) is not None:
+        return False
+    text = "".join(text_element.text or "" for text_element in run.findall(".//" + qn("w:t")))
+    if not text:
+        return False
+    return not _PAGE_DECORATION_TEXT_RE.sub("", text).strip()
 
 
 def _remove_literal_page_tokens(paragraph) -> None:
