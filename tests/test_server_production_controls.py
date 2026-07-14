@@ -2,6 +2,7 @@ import os
 import tempfile
 import time
 import unittest
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
@@ -306,6 +307,7 @@ class ServerProductionControlsTest(unittest.TestCase):
 
         with patch.object(server, "DocxImporter", FakeImporter), \
              patch.object(server, "export_doc", fake_export_doc), \
+             patch.object(server, "validate_docx_integrity"), \
              patch.object(server, "log_sql", fake_log_sql), \
              patch.object(server.StyleRule, "from_config", return_value=None), \
              patch.object(server.PageSettings, "from_config", return_value=None):
@@ -313,6 +315,89 @@ class ServerProductionControlsTest(unittest.TestCase):
 
         self.assertEqual(observed_statuses, ["processing"])
         self.assertEqual(server._public_task_state("task-a")["status"], "done")
+
+    def test_invalid_generated_docx_is_not_marked_done_or_downloadable(self):
+        input_path = Path(server.OUTPUT_DIR) / "input.docx"
+        input_path.write_bytes(b"PK input")
+
+        class FakeParagraph:
+            type_id = "body"
+
+        class FakeDocData:
+            doc_mode = "NORMAL"
+            paragraphs = [FakeParagraph()]
+
+        class FakeImporter:
+            def load(self, _input_path, _rules):
+                return FakeDocData()
+
+        def fake_export_doc(_doc_data, _rules, _settings, output_path, **_kwargs):
+            with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr(
+                    "[Content_Types].xml",
+                    "<?xml version='1.0' encoding='UTF-8'?>"
+                    "<Types xmlns='http://schemas.openxmlformats.org/package/2006/content-types'>"
+                    "<Default Extension='rels' ContentType='application/vnd.openxmlformats-package.relationships+xml'/>"
+                    "<Default Extension='xml' ContentType='application/xml'/>"
+                    "<Default Extension='png' ContentType='image/png'/>"
+                    "<Override PartName='/word/document.xml' "
+                    "ContentType='application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml'/>"
+                    "</Types>",
+                )
+                zf.writestr(
+                    "_rels/.rels",
+                    "<?xml version='1.0' encoding='UTF-8'?>"
+                    "<Relationships xmlns='http://schemas.openxmlformats.org/package/2006/relationships'>"
+                    "<Relationship Id='rId1' "
+                    "Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument' "
+                    "Target='word/document.xml'/>"
+                    "</Relationships>",
+                )
+                zf.writestr(
+                    "word/document.xml",
+                    "<?xml version='1.0' encoding='UTF-8'?>"
+                    "<w:document xmlns:w='http://schemas.openxmlformats.org/wordprocessingml/2006/main' "
+                    "xmlns:r='http://schemas.openxmlformats.org/officeDocument/2006/relationships'>"
+                    "<w:body><w:p><w:r><w:drawing r:embed='rIdBroken'/></w:r></w:p><w:sectPr/></w:body>"
+                    "</w:document>",
+                )
+                zf.writestr(
+                    "word/_rels/document.xml.rels",
+                    "<?xml version='1.0' encoding='UTF-8'?>"
+                    "<Relationships xmlns='http://schemas.openxmlformats.org/package/2006/relationships'>"
+                    "<Relationship Id='rIdBroken' "
+                    "Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/image' "
+                    "Target='media/missing.png'/>"
+                    "</Relationships>",
+                )
+
+        with server.TASKS_LOCK:
+            server.TASKS["task-invalid"] = {"status": "processing"}
+
+        with patch.object(server, "DocxImporter", FakeImporter), \
+             patch.object(server, "export_doc", fake_export_doc), \
+             patch.object(server.StyleRule, "from_config", return_value=None), \
+             patch.object(server.PageSettings, "from_config", return_value=None):
+            server._process_task("task-invalid", str(input_path), "input.docx", "203.0.113.7", "ua")
+
+        state = server._public_task_state("task-invalid")
+        self.assertEqual(state["status"], "error")
+        self.assertEqual(state["error_code"], "OUTPUT_DOCX_INVALID")
+        self.assertEqual(state["error"], "生成的 DOCX 未通过完整性检查")
+        self.assertNotIn("error_message", state)
+        self.assertFalse((Path(server.OUTPUT_DIR) / "task-invalid").exists())
+
+        with server._SQL_LOCK:
+            conn = server._sql()
+            row = conn.execute(
+                "SELECT status, error_code, error_message, output_path FROM tasks WHERE id=?",
+                ("task-invalid",),
+            ).fetchone()
+            conn.close()
+        self.assertEqual(row["status"], "error")
+        self.assertEqual(row["error_code"], "OUTPUT_DOCX_INVALID")
+        self.assertIn("MISSING_REL_TARGET", row["error_message"])
+        self.assertEqual(row["output_path"], "")
 
     def test_processing_task_has_no_queue_ahead(self):
         with server.TASKS_LOCK:

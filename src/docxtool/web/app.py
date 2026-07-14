@@ -36,6 +36,7 @@ from urllib.request import Request, urlopen
 
 from docxtool.document.importer import DocxImporter
 from docxtool.document.engine import export_doc
+from docxtool.security import DocxIntegrityError, validate_docx_integrity
 from docxtool.security.docx_validator import DocxValidationError, detect_docx_complexity, validate_docx_upload
 from docxtool.document.style_config import (
     StyleRule, PageSettings, load_rules_and_settings, configure_logging, get_logger,
@@ -430,7 +431,7 @@ def _page_count(total: int, size: int) -> int:
 def log_sql(task_id, ip, ua, filename, file_size, doc_type,
             paragraphs, headings, body, duration_ms, status="done", error="",
             log_filename="", log_path="", output_dir="", output_filename="", output_path="",
-            processing_options="", preset_id=""):
+            processing_options="", preset_id="", error_code="", error_message=""):
     now = _now_local()
     today = now[:10]
     with _SQL_LOCK:
@@ -439,9 +440,9 @@ def log_sql(task_id, ip, ua, filename, file_size, doc_type,
                        paragraphs,headings,body,duration_ms,status,error,
                        log_filename,log_path,output_dir,output_filename,output_path,
                        client_ip,original_filename,safe_download_filename,input_size,
-                       processing_options,preset_id,
+                       processing_options,preset_id,error_code,error_message,
                        created_at,done_at)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                        ON CONFLICT(id) DO UPDATE SET
                        ip=excluded.ip, ua=excluded.ua, filename=excluded.filename,
                        file_size=excluded.file_size, doc_type=excluded.doc_type,
@@ -457,11 +458,14 @@ def log_sql(task_id, ip, ua, filename, file_size, doc_type,
                        input_size=excluded.input_size,
                        processing_options=excluded.processing_options,
                        preset_id=excluded.preset_id,
+                       error_code=excluded.error_code,
+                       error_message=excluded.error_message,
                        done_at=excluded.done_at""",
                       (task_id, ip, ua, filename, file_size, doc_type,
                        paragraphs, headings, body, duration_ms, status, error,
                        log_filename, log_path, output_dir, output_filename, output_path,
-                       ip, filename, output_filename, file_size, processing_options, preset_id, now, now))
+                       ip, filename, output_filename, file_size, processing_options, preset_id,
+                       error_code, error_message, now, now))
         conn.execute("""INSERT INTO daily_stats (date,total,done,error,total_bytes,total_ms)
                        VALUES (?,1,?,?,?,?)
                        ON CONFLICT(date) DO UPDATE SET total=total+1,
@@ -931,7 +935,7 @@ def _public_task_state(task_id: str) -> dict:
         if not row:
             return {}
         task = dict(row)
-    for key in ("output", "output_path", "output_dir", "download_name"):
+    for key in ("output", "output_path", "output_dir", "download_name", "error_message"):
         task.pop(key, None)
     status = task.get("status", "")
     if status == "queued":
@@ -1100,6 +1104,31 @@ def _task_process_body(task_id: str, input_path: str, orig_name: str, ip: str, u
                 output_path,
                 numbered_bold_enabled=features["numbered_bold_enabled"],
             )
+        try:
+            validate_docx_integrity(output_path)
+        except DocxIntegrityError as exc:
+            logger.error(
+                f"[Task] {task_id[:8]} generated DOCX integrity check failed "
+                f"code={exc.code} detail={exc.message}"
+            )
+            duration = round(time.time() - t0, 2)
+            return {
+                "status": "error",
+                "log_filename": log_filename,
+                "log_path": log_path,
+                "output_dir": output_dir,
+                "output_filename": "",
+                "output_path": "",
+                "duration_s": duration,
+                "duration_ms": int(duration * 1000),
+                "doc_mode": doc_data.doc_mode or "UNKNOWN",
+                "paragraphs": len(doc_data.paragraphs),
+                "headings": sum(1 for pd in doc_data.paragraphs if pd.type_id.startswith("heading")),
+                "body": sum(1 for pd in doc_data.paragraphs if pd.type_id == "body"),
+                "error": "生成的 DOCX 未通过完整性检查",
+                "error_code": "OUTPUT_DOCX_INVALID",
+                "error_message": f"{exc.code}: {exc.message}"[:500],
+            }
         duration = round(time.time() - t0, 2)
         hc = sum(1 for pd in doc_data.paragraphs if pd.type_id.startswith("heading"))
         bc = sum(1 for pd in doc_data.paragraphs if pd.type_id == "body")
@@ -1117,6 +1146,8 @@ def _task_process_body(task_id: str, input_path: str, orig_name: str, ip: str, u
             "headings": hc,
             "body": bc,
             "error": "",
+            "error_code": "",
+            "error_message": "",
         }
     except Exception as exc:
         logger.exception(f"[Task] {task_id[:8]} error: {exc}")
@@ -1134,6 +1165,8 @@ def _task_process_body(task_id: str, input_path: str, orig_name: str, ip: str, u
             "headings": 0,
             "body": 0,
             "error": str(exc)[:200],
+            "error_code": "TASK_PROCESSING_ERROR",
+            "error_message": str(exc)[:500],
         }
     finally:
         reset_context_log_path(token)
@@ -1157,6 +1190,8 @@ def _task_process_entry(result_queue, task_id: str, input_path: str, orig_name: 
             "headings": 0,
             "body": 0,
             "error": f"{type(exc).__name__}: {exc}"[:200],
+            "error_code": "TASK_PROCESSING_ERROR",
+            "error_message": f"{type(exc).__name__}: {exc}"[:500],
         }
     try:
         result_queue.put(result)
@@ -1202,6 +1237,8 @@ def _task_process_subprocess(task_id: str, input_path: str, orig_name: str, ip: 
             "headings": 0,
             "body": 0,
             "error": f"排版超时：超过 {PROCESS_TIMEOUT} 秒",
+            "error_code": "TASK_TIMEOUT",
+            "error_message": f"排版超时：超过 {PROCESS_TIMEOUT} 秒",
         }
     try:
         result = result_queue.get(timeout=2)
@@ -1220,6 +1257,8 @@ def _task_process_subprocess(task_id: str, input_path: str, orig_name: str, ip: 
             "headings": 0,
             "body": 0,
             "error": f"子进程未返回结果，退出码={process.exitcode}",
+            "error_code": "TASK_PROCESSING_ERROR",
+            "error_message": f"子进程未返回结果，退出码={process.exitcode}",
         }
     if result.get("status") != "done":
         _cleanup_output_path(_task_output_dir(task_id))
@@ -1235,6 +1274,8 @@ def _record_task_result(task_id: str, input_path: str, orig_name: str, ip: str, 
     file_size = os.path.getsize(input_path) if input_path and os.path.exists(input_path) else 0
     duration_ms = int(result.get("duration_ms", 0) or 0)
     error = result.get("error", "") if status != "done" else ""
+    error_code = result.get("error_code", "") if status != "done" else ""
+    error_message = result.get("error_message", error) if status != "done" else ""
     sql_status = "done" if status == "done" else ("timeout" if status == "timeout" else "error")
     task_payload = {}
     with TASKS_LOCK:
@@ -1259,6 +1300,8 @@ def _record_task_result(task_id: str, input_path: str, orig_name: str, ip: str, 
             output_path=output_path,
             processing_options=processing_options,
             preset_id=preset_id,
+            error_code=error_code,
+            error_message=error_message,
         )
     except Exception:
         logger.exception(f"[Stats] failed to record task={task_id[:8]} ip={ip} file={orig_name}")
@@ -1283,8 +1326,13 @@ def _record_task_result(task_id: str, input_path: str, orig_name: str, ip: str, 
         task["client_ip"] = ip
         if status == "done":
             task["output"] = output_path
+            task["error"] = ""
+            task["error_code"] = ""
+            task["error_message"] = ""
         else:
             task["error"] = error
+            task["error_code"] = error_code
+            task["error_message"] = error_message
         task["time"] = time.time()
         TASKS[task_id] = task
     _prune_task_cache()
