@@ -25,8 +25,7 @@ import logging
 import html
 import ipaddress
 import shutil
-import traceback
-from io import BytesIO
+import re as _re
 from queue import Empty
 from datetime import timezone, timedelta
 from email.utils import parsedate_to_datetime
@@ -517,7 +516,6 @@ def get_sql_stats(query: dict = None):
         err = conn.execute("SELECT COUNT(*) as c FROM tasks WHERE status IN ('error','timeout','failed','interrupted','expired')").fetchone()["c"]
         ips = conn.execute("SELECT COUNT(DISTINCT ip) as c FROM tasks").fetchone()["c"]
         tbytes = conn.execute("SELECT COALESCE(SUM(file_size),0) as c FROM tasks").fetchone()["c"]
-        tms = conn.execute("SELECT COALESCE(SUM(duration_ms),0) as c FROM tasks").fetchone()["c"]
         avg_p = conn.execute("SELECT AVG(paragraphs) as c FROM tasks WHERE status='done'").fetchone()["c"] or 0
         avg_ms = conn.execute("SELECT AVG(duration_ms) as c FROM tasks WHERE status='done'").fetchone()["c"] or 0
         recent_pages = _page_count(total, recent_size)
@@ -532,7 +530,7 @@ def get_sql_stats(query: dict = None):
             "SELECT * FROM tasks ORDER BY rowid DESC LIMIT ? OFFSET ?",
             [recent_size, recent_offset],
         ).fetchall()
-        days = conn.execute(f"""
+        days = conn.execute("""
             SELECT date(created_at) as date,
                    COUNT(*) as total,
                    SUM(CASE WHEN status='done' THEN 1 ELSE 0 END) as done,
@@ -541,7 +539,7 @@ def get_sql_stats(query: dict = None):
             GROUP BY date(created_at)
             ORDER BY date(created_at)
         """).fetchall()
-        top_rows = conn.execute(f"""
+        top_rows = conn.execute("""
             SELECT t.ip, COUNT(*) as c,
                    SUM(CASE WHEN t.status='done' THEN 1 ELSE 0 END) as done,
                    SUM(CASE WHEN t.status IN ('error','timeout','failed','interrupted','expired') THEN 1 ELSE 0 END) as error,
@@ -740,15 +738,19 @@ for h in logging.getLogger("docx_tool").handlers:
     if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler):
         h.setLevel(logging.WARNING)
 
-_startup_cleanup()
-
 def _read_exact(rfile, length: int, timeout: int = 10) -> bytes:
-    data = b""; remaining = length; t0 = time.time()
+    data = b""
+    remaining = length
+    t0 = time.time()
     while remaining > 0:
-        if time.time() - t0 > timeout: raise TimeoutError(f"read timeout")
+        if time.time() - t0 > timeout:
+            raise TimeoutError("read timeout")
         chunk = rfile.read(remaining)
-        if not chunk: time.sleep(0.01); continue
-        data += chunk; remaining -= len(chunk)
+        if not chunk:
+            time.sleep(0.01)
+            continue
+        data += chunk
+        remaining -= len(chunk)
     return data
 
 def _read_exact_to_file(rfile, path: str, length: int, timeout: int = 10, chunk_size: int = UPLOAD_READ_CHUNK_SIZE) -> int:
@@ -783,7 +785,8 @@ def _allow(ip: str) -> bool:
     now = time.time()
     with RATE_LOCK:
         last = RATE_LIMIT.get(ip, 0)
-        if now - last < RATE_WINDOW: return False
+        if now - last < RATE_WINDOW:
+            return False
         RATE_LIMIT[ip] = now
     return True
 
@@ -2074,7 +2077,6 @@ table{{width:100%;border-collapse:collapse;background:#fff;border:1px solid #e0d
 
 
 # ── 安全工具 ──
-import re as _re
 
 def _is_safe_uuid(s: str) -> bool:
     return bool(_re.match(r'^[0-9a-fA-F-]{32,36}$', s or ""))
@@ -2206,10 +2208,12 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/version":
             self._json(_version_payload())
         elif path == "/stats":
-            if not self._require_admin(parsed): return
+            if not self._require_admin(parsed):
+                return
             self._json(get_sql_stats(_monitor_query_from(parsed)))
         elif path == "/monitor":
-            if not self._require_admin(parsed): return
+            if not self._require_admin(parsed):
+                return
             ctx = self._admin_context_or_default()
             if ctx.get("legacy_token") and not ctx.get("session"):
                 session = _create_admin_session(self.headers.get("User-Agent", ""), self.client_address[0] if self.client_address else "")
@@ -2218,7 +2222,8 @@ class Handler(BaseHTTPRequestHandler):
             query = _monitor_query_from(parsed)
             self._text(_monitor_html(get_sql_stats(query), self._admin_csrf_token(parsed)), "text/html")
         elif path == "/ip":
-            if not self._require_admin(parsed): return
+            if not self._require_admin(parsed):
+                return
             self._handle_ip_detail(parsed)
         elif path == "/ban":
             self.send_error(405)
@@ -2233,13 +2238,16 @@ class Handler(BaseHTTPRequestHandler):
         elif path.startswith("/presets/"):
             self._handle_preset_detail(path.split("/", 2)[-1])
         elif path.startswith("/status/") or path.startswith("/api/status/"):
-            if not self._require_file_api(): return
+            if not self._require_file_api():
+                return
             self._handle_status(path.split("/")[-1])
         elif path.startswith("/download/") or path.startswith("/api/download/"):
-            if not self._require_file_api(): return
+            if not self._require_file_api():
+                return
             self._handle_download(path.split("/")[-1])
         elif path.startswith("/log/"):
-            if not self._require_admin(parsed): return
+            if not self._require_admin(parsed):
+                return
             self._handle_log(path.split("/")[-1])
         else:
             self.send_error(404)
@@ -2248,29 +2256,36 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = _route_path(parsed.path)
         if path == "/upload":
-            if not self._require_file_api(): return
+            if not self._require_file_api():
+                return
             self._handle_upload_raw()
         elif path == "/admin/login":
             self._handle_admin_login()
         elif path == "/admin/logout":
             self._handle_admin_logout()
         elif path == "/ban":
-            if not self._require_admin_post(parsed): return
+            if not self._require_admin_post(parsed):
+                return
             self._handle_ban(parsed)
         elif path == "/unban":
-            if not self._require_admin_post(parsed): return
+            if not self._require_admin_post(parsed):
+                return
             self._handle_unban(parsed)
         elif path == "/limit":
-            if not self._require_admin_post(parsed): return
+            if not self._require_admin_post(parsed):
+                return
             self._handle_limit(parsed)
         elif path == "/cleanup":
-            if not self._require_admin_post(parsed): return
+            if not self._require_admin_post(parsed):
+                return
             self._handle_cleanup(parsed)
         elif path == "/presets":
-            if not self._require_admin_post(parsed): return
+            if not self._require_admin_post(parsed):
+                return
             self._handle_preset_create()
         elif path.startswith("/presets/"):
-            if not self._require_admin_post(parsed): return
+            if not self._require_admin_post(parsed):
+                return
             self._handle_preset_update(path.split("/", 2)[-1])
         else:
             self.send_error(404)
@@ -2278,10 +2293,12 @@ class Handler(BaseHTTPRequestHandler):
     def do_PUT(self):
         path = _route_path(urlparse(self.path).path)
         if path == "/upload":
-            if not self._require_file_api(): return
+            if not self._require_file_api():
+                return
             self._handle_upload_raw()
         elif path.startswith("/presets/"):
-            if not self._require_admin_post(urlparse(self.path)): return
+            if not self._require_admin_post(urlparse(self.path)):
+                return
             self._handle_preset_update(path.split("/", 2)[-1])
         else:
             self.send_error(404)
@@ -2290,7 +2307,8 @@ class Handler(BaseHTTPRequestHandler):
         path = _route_path(urlparse(self.path).path)
         if path.startswith("/presets/"):
             parsed = urlparse(self.path)
-            if not self._require_admin_post(parsed): return
+            if not self._require_admin_post(parsed):
+                return
             self._handle_preset_delete(path.split("/", 2)[-1])
         else:
             self.send_error(404)
@@ -2418,12 +2436,15 @@ button{margin-top:16px;height:42px;border:0;border-radius:10px;background:#b71c1
         ip = _client_ip(self.headers, self.client_address)
         if _is_ip_banned(ip):
             logger.warning(f"[Security] banned ip blocked: {ip}")
-            self._json_error("IP_BANNED", "该 IP 已被禁止访问", 403); return
+            self._json_error("IP_BANNED", "该 IP 已被禁止访问", 403)
+            return
         if _upload_limit_exceeded(ip):
             logger.warning(f"[Security] upload limit exceeded: {ip}")
-            self._json_error("UPLOAD_LIMIT_EXCEEDED", "当前 IP 在该时间段内排版次数已达上限，请稍后再试", 429); return
+            self._json_error("UPLOAD_LIMIT_EXCEEDED", "当前 IP 在该时间段内排版次数已达上限，请稍后再试", 429)
+            return
         if not _allow(ip):
-            self._json_error("RATE_LIMITED", "请求过于频繁，请稍后再试", 429); return
+            self._json_error("RATE_LIMITED", "请求过于频繁，请稍后再试", 429)
+            return
         try:
             try:
                 format_config = _decode_format_config(self.headers)
@@ -2432,14 +2453,16 @@ button{margin-top:16px;height:42px;border:0;border-radius:10px;background:#b71c1
                 code = message.split(":", 1)[0]
                 text = message.split(":", 1)[1].strip() if ":" in message else "格式配置无效"
                 status = 413 if code == "FORMAT_CONFIG_TOO_LARGE" else 400
-                self._json_error(code, text, status); return
+                self._json_error(code, text, status)
+                return
             request_meta = _upload_request_meta(self.headers)
             try:
                 length = int(self.headers.get("Content-Length", 0))
             except ValueError:
                 length = 0
             if length <= 0 or length > MAX_SIZE:
-                self._json_error("FILE_TOO_LARGE", "文件过大或无内容", 413); return
+                self._json_error("FILE_TOO_LARGE", "文件过大或无内容", 413)
+                return
             task_id = str(uuid.uuid4())
             raw_name = unquote(self.headers.get("X-Filename", "upload.docx"))
             task_tmp_dir = _task_tmp_dir(task_id)
@@ -2524,15 +2547,20 @@ button{margin-top:16px;height:42px;border:0;border-radius:10px;background:#b71c1
 
     def _handle_status(self, task_id: str):
         if not _is_safe_uuid(task_id):
-            self._json_error("INVALID_TASK_ID", "无效的任务 ID", 400); return
+            self._json_error("INVALID_TASK_ID", "无效的任务 ID", 400)
+            return
         task = _public_task_state(task_id)
-        if not task: self._json_error("TASK_NOT_FOUND", "任务不存在或已过期", 404)
-        else: self._json(task)
+        if not task:
+            self._json_error("TASK_NOT_FOUND", "任务不存在或已过期", 404)
+        else:
+            self._json(task)
 
     def _handle_download(self, task_id: str):
         if not _is_safe_uuid(task_id):
-            self._json_error("INVALID_TASK_ID", "无效的任务 ID", 400); return
-        with TASKS_LOCK: task = TASKS.get(task_id)
+            self._json_error("INVALID_TASK_ID", "无效的任务 ID", 400)
+            return
+        with TASKS_LOCK:
+            task = TASKS.get(task_id)
         if not task or task.get("status") != "done":
             with _SQL_LOCK:
                 conn = _sql()
@@ -2542,14 +2570,16 @@ button{margin-top:16px;height:42px;border:0;border-radius:10px;background:#b71c1
                 ).fetchone()
                 conn.close()
             if not row or row["status"] != "done":
-                self._json_error("FILE_NOT_READY", "文件未就绪", 400); return
+                self._json_error("FILE_NOT_READY", "文件未就绪", 400)
+                return
             path = row["output_path"] or ""
             download_name = row["output_filename"] or _safe_download_filename(row["filename"] or "download.docx")
         else:
             path = task.get("output_path") or task.get("output") or ""
             download_name = task.get("download_name") or _safe_download_filename(task.get("filename", "download.docx"))
         if not path or not os.path.exists(path):
-            self._json_error("FILE_EXPIRED", "文件已过期", 410); return
+            self._json_error("FILE_EXPIRED", "文件已过期", 410)
+            return
         try:
             file_size = os.path.getsize(path)
         except OSError:
@@ -2614,14 +2644,16 @@ button{margin-top:16px;height:42px;border:0;border-radius:10px;background:#b71c1
     def _handle_ip_detail(self, parsed):
         ip = self._query_ip(parsed)
         if not _is_ip(ip):
-            self._json_error("INVALID_IP", "无效的 IP", 400); return
+            self._json_error("INVALID_IP", "无效的 IP", 400)
+            return
         self._text(_ip_detail_html(ip, self._admin_csrf_token(parsed)), "text/html")
 
     def _handle_ban(self, parsed):
         params = self._request_params(parsed)
         ip = (params.get("ip") or params.get("addr") or "").strip()
         if not _is_ip(ip):
-            self._json_error("INVALID_IP", "无效的 IP", 400); return
+            self._json_error("INVALID_IP", "无效的 IP", 400)
+            return
         reason = str(params.get("reason") or "monitor")[:120]
         _ban_ip(ip, reason)
         logger.warning(f"[Security] ip banned: {ip} reason={reason}")
@@ -2631,7 +2663,8 @@ button{margin-top:16px;height:42px;border:0;border-radius:10px;background:#b71c1
         params = self._request_params(parsed)
         ip = (params.get("ip") or params.get("addr") or "").strip()
         if not _is_ip(ip):
-            self._json_error("INVALID_IP", "无效的 IP", 400); return
+            self._json_error("INVALID_IP", "无效的 IP", 400)
+            return
         _unban_ip(ip)
         logger.warning(f"[Security] ip unbanned: {ip}")
         self._redirect("/monitor")
@@ -2720,7 +2753,8 @@ button{margin-top:16px;height:42px;border:0;border-radius:10px;background:#b71c1
 
     def _handle_log(self, task_id: str):
         if not _is_safe_uuid(task_id):
-            self._json_error("INVALID_TASK_ID", "无效的任务 ID", 400); return
+            self._json_error("INVALID_TASK_ID", "无效的任务 ID", 400)
+            return
         path = ""
         with TASKS_LOCK:
             task = TASKS.get(task_id)
@@ -2735,11 +2769,13 @@ button{margin-top:16px;height:42px;border:0;border-radius:10px;background:#b71c1
                 conn.close()
             path = row["log_path"] if row else ""
         if not path:
-            self._json_error("LOG_NOT_FOUND", "日志不存在", 404); return
+            self._json_error("LOG_NOT_FOUND", "日志不存在", 404)
+            return
         root = os.path.abspath(LOG_DIR)
         path = os.path.abspath(path)
         if not path.startswith(root + os.sep) or not os.path.exists(path):
-            self._json_error("LOG_NOT_FOUND", "日志不存在或已过期", 404); return
+            self._json_error("LOG_NOT_FOUND", "日志不存在或已过期", 404)
+            return
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             self._text(f.read(), "text/plain")
 
@@ -2757,7 +2793,8 @@ button{margin-top:16px;height:42px;border:0;border-radius:10px;background:#b71c1
                 self.send_header(key, value)
         self._set_cors_headers()
         self._set_security_headers()
-        self.end_headers(); self.wfile.write(data)
+        self.end_headers()
+        self.wfile.write(data)
 
     def _json(self, obj: dict, status: int = 200, extra_headers=None):
         data = json.dumps(obj, ensure_ascii=False, default=str).encode("utf-8")
@@ -2773,12 +2810,14 @@ button{margin-top:16px;height:42px;border:0;border-radius:10px;background:#b71c1
                 self.send_header(key, value)
         self._set_cors_headers()
         self._set_security_headers()
-        self.end_headers(); self.wfile.write(data)
+        self.end_headers()
+        self.wfile.write(data)
 
     def _json_error(self, code: str, message: str, status: int):
         self._json(_error_payload(code, message), status)
 
-    def log_message(self, fmt, *args): pass
+    def log_message(self, fmt, *args):
+        pass
 
 
 def main():
@@ -2788,6 +2827,7 @@ def main():
         print("Configure ADMIN_TOKEN and PROXY_SECRET before starting the service.")
         return
     _validate_secrets_or_exit()
+    _startup_cleanup()
     _sql_init()
     _recover_inflight_tasks_on_startup()
     _ensure_workers_started()
@@ -2803,9 +2843,11 @@ def main():
         print(line)
     print("外网访问:   Cloudflare Pages /api/* -> Nginx 80 -> 127.0.0.1:9527")
     print("Ctrl+C 停止")
-    try: server.serve_forever()
+    try:
+        server.serve_forever()
     except KeyboardInterrupt:
-        print("\n已停止"); server.server_close()
+        print("\n已停止")
+        server.server_close()
 
 if __name__ == "__main__":
     main()

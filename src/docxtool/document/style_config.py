@@ -9,14 +9,15 @@
 
 import logging
 import math
+import os as _os
 import re
 
 from docxtool.paths import default_format_config_path
 import contextvars
 from datetime import datetime
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from logging.handlers import RotatingFileHandler
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple
 
 try:
     from PyQt5.QtWidgets import QTableWidget, QWidget, QTextEdit
@@ -234,8 +235,6 @@ class ExportError(FormatterError):
 # ═══════════════════════════════════════════════════════════════
 # 统一日志接口
 # ═══════════════════════════════════════════════════════════════
-
-import os as _os
 
 LOGGER_NAME = "docx_tool"
 LOG_FORMAT = "%(asctime)s [%(levelname)-5s] %(name)s | %(message)s"
