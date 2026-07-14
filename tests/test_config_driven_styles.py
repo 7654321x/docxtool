@@ -201,6 +201,31 @@ class ConfigDrivenStylesTest(unittest.TestCase):
             with self.subTest(style=style), self.assertRaises(ConfigValidationError):
                 StyleRule.from_config_dict({"styles": [style], "page": {}})
 
+    def test_frontend_style_config_rejects_explicit_empty_size(self):
+        with self.assertRaises(ConfigValidationError) as ctx:
+            StyleRule.from_config_dict({"styles": [{"name": "数字", "size": ""}], "page": {}})
+
+        self.assertEqual(ctx.exception.field, "styles[0].size")
+        self.assertEqual(ctx.exception.reason, "不能为空")
+
+    def test_frontend_style_config_uses_default_when_size_missing(self):
+        rules = StyleRule.from_config_dict({"styles": [{"name": "数字", "font": "Times New Roman"}], "page": {}})
+
+        self.assertEqual(rules[0].font_size_label, StyleRule.default_for_row(0).font_size_label)
+        self.assertEqual(rules[0].font_size_pt, StyleRule.default_for_row(0).font_size_pt)
+
+    def test_frontend_style_config_accepts_named_and_point_sizes(self):
+        rules = StyleRule.from_config_dict({
+            "styles": [
+                {"name": "正文", "size": "三号"},
+                {"name": "正文上标", "size": "16pt"},
+            ],
+            "page": {},
+        })
+
+        self.assertEqual(rules[0].font_size_pt, 16.0)
+        self.assertEqual(rules[1].font_size_label, "16pt")
+
     def test_frontend_style_config_keeps_legacy_valid_config(self):
         rules = StyleRule.from_config_dict({
             "styles": [{

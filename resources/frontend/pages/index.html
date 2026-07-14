@@ -590,6 +590,23 @@ function boolValue(value,fallback=false){
   if(['0','false','no','off','禁用','否'].includes(raw))return false;
   return fallback;
 }
+function optionalSizeStyle(style,size){
+  const next={...style};
+  const value=String(size??'').trim();
+  if(value)next.size=value;
+  return next;
+}
+function migrateOptionalEmptySizeStyle(style,index){
+  if(!style||typeof style!=='object'||Array.isArray(style))return style;
+  const name=String(style.name||'').trim();
+  const legacySlot=(index===6&&(!name||name==='数字'))||(index===7&&(!name||name==='字母'));
+  if((name==='数字'||name==='字母'||legacySlot)&&style.size===''){
+    const next={...style};
+    delete next.size;
+    return next;
+  }
+  return style;
+}
 function normalizeCoreFeatureOptions(value,defaults){
   const base=clonePlain(defaults);
   if(value&&typeof value==='object'&&!Array.isArray(value)){
@@ -607,6 +624,7 @@ function normalizeCoreFeatureOptions(value,defaults){
 }
 function normalizeTransportConfig(config){
   const out={...(asObject(config)||{})};
+  if(Array.isArray(out.styles))out.styles=out.styles.map(migrateOptionalEmptySizeStyle);
   Object.keys(CORE_FEATURE_DEFAULTS).forEach(key=>{
     out[key]=normalizeCoreFeatureOptions(out[key],CORE_FEATURE_DEFAULTS[key]);
   });
@@ -677,8 +695,8 @@ function collectConfig(){
     styleByName['三级标题']||{name:'三级标题',font:'仿宋_GB2312',size:'三号',bold:true,pattern:'{c}.',lang:'阿拉伯数字',indent:2,align:'左对齐'},
     styleByName['四级标题']||{name:'四级标题',font:'仿宋_GB2312',size:'三号',bold:false,pattern:'（{d}）',lang:'阿拉伯数字',indent:2,align:'左对齐'},
     styleByName['正文']||{name:'正文',font:'仿宋_GB2312',size:'三号',bold:false,pattern:'',lang:'',indent:2,align:'两端对齐'},
-    {name:'数字',font:get('numberFont')||'Times New Roman',size:get('numberSize')||'',bold:false,pattern:'',lang:'',indent:0,align:'左对齐'},
-    {name:'字母',font:get('letterFont')||'Times New Roman',size:get('letterSize')||'',bold:false,pattern:'',lang:'',indent:0,align:'左对齐'},
+    optionalSizeStyle({name:'数字',font:get('numberFont')||'Times New Roman',bold:false,pattern:'',lang:'',indent:0,align:'左对齐'},get('numberSize')),
+    optionalSizeStyle({name:'字母',font:get('letterFont')||'Times New Roman',bold:false,pattern:'',lang:'',indent:0,align:'左对齐'},get('letterSize')),
     {name:'页码设置',font:get('pageFont')||'宋体',size:get('pageSize')||'四号',bold:false,pattern:get('pageStyle')||'— 1 —',lang:get('pageLanguage')||'阿拉伯数字',indent:0,align:get('pagePosition')||'奇右|偶左'}
   ];
   return normalizeTransportConfig({
@@ -981,9 +999,36 @@ zone.addEventListener('dragover',e=>{e.preventDefault();zone.classList.add('drag
 function status(text,cls){msg.textContent=text;msg.className='status-msg';if(cls)msg.classList.add(cls)}
 function sizeLabel(bytes){const kb=bytes/1024;return kb>=1024?(kb/1024).toFixed(1)+' MB':kb.toFixed(1)+' KB'}
 function setStep(n){document.querySelectorAll('.mini-step').forEach(el=>{const s=Number(el.dataset.step);el.classList.toggle('done',s<n);el.classList.toggle('active',s===n)})}
-function friendlyError(text,code){if(code==='PROXY_REQUIRED')return'当前请求缺少前端代理校验，请通过 Cloudflare Pages 前端页面或同源 /api 代理访问。';if(code==='UNAUTHORIZED'||code==='CSRF_INVALID')return'管理员会话已失效，请重新登录后再试。';if(code==='FORMAT_CONFIG_INVALID')return'排版设置格式无效，请重新保存设置后再上传。';if(code==='FORMAT_CONFIG_TOO_LARGE')return'排版设置内容过大，请减少自定义规则后再上传。';if(!text)return'处理失败，请检查文档是否损坏或包含特殊对象。';if(text.includes('too large')||text.includes('过大'))return'文件过大，请压缩到 10MB 以内后重试。';if(text.includes('format')||text.includes('docx'))return'文件格式不支持，请上传 .docx 文件。';if(text.includes('network')||text.includes('网络'))return'网络异常，请检查网络后重新上传。';return text}
+function fieldLabel(field){
+  const raw=String(field||'').trim();
+  const m=raw.match(/^styles\[(\d+)\]\.size$/);
+  if(m){
+    if(m[1]==='6')return'数字字号';
+    if(m[1]==='7')return'字母字号';
+  }
+  return raw;
+}
+function sentence(text){
+  const raw=String(text||'配置不完整').trim();
+  return /[。！？.!?]$/.test(raw)?raw:raw+'。';
+}
+function configErrorMessage(text,detail={}){
+  let field=detail.field||'';
+  let reason=detail.reason||text||'配置不完整';
+  if(!field&&typeof reason==='string'){
+    const m=reason.match(/^([^:：]+):\s*(.+)$/);
+    if(m){field=m[1];reason=m[2]}
+  }
+  if(field){
+    const label=fieldLabel(field);
+    const separator=/^[A-Za-z0-9_[\].]+$/.test(label)?' ':'';
+    return '排版设置无效：'+label+separator+sentence(reason);
+  }
+  return '排版设置无效：'+sentence(reason);
+}
+function friendlyError(text,code,detail={}){if(code==='PROXY_REQUIRED')return'当前请求缺少前端代理校验，请通过 Cloudflare Pages 前端页面或同源 /api 代理访问。';if(code==='UNAUTHORIZED'||code==='CSRF_INVALID')return'管理员会话已失效，请重新登录后再试。';if(code==='FORMAT_CONFIG_INVALID')return configErrorMessage(text,detail);if(code==='FORMAT_CONFIG_TOO_LARGE')return'排版设置内容过大，请减少自定义规则后再上传。';if(!text)return'处理失败，请检查文档是否损坏或包含特殊对象。';if(text.includes('too large')||text.includes('过大'))return'文件过大，请压缩到 10MB 以内后重试。';if(text.includes('format')||text.includes('docx'))return'文件格式不支持，请上传 .docx 文件。';if(text.includes('network')||text.includes('网络'))return'网络异常，请检查网络后重新上传。';return text}
 function warnSuffix(task){const list=Array.isArray(task?.compatibility_warnings)?task.compatibility_warnings.filter(Boolean):[];return list.length?'；'+list.join('；'):''}
-function safeCollectConfig(){try{return collectConfig()}catch(_){resetDefaults();try{return collectConfig()}catch(__){return defaultTransportConfig()}}}
+function safeCollectConfig(){try{return collectConfig()}catch(e){const err=new Error(e?.message||'配置生成失败');err.code='FORMAT_CONFIG_INVALID';err.reason=err.message;throw err}}
 async function upload(f){
   if(!f)return;
   resultCard.style.display='none';
@@ -993,8 +1038,10 @@ async function upload(f){
   progressArea.style.display='block';bar.style.width='16%';setStep(1);status('文件上传中','');
   let resp,config;
   try{
-    const buf=await f.arrayBuffer();
     config=safeCollectConfig();
+  }catch(e){status(friendlyError(e.message,e.code,e),'error');return}
+  try{
+    const buf=await f.arrayBuffer();
     const tpl=templateStore.find(t=>t.id===currentPresetId)||templateStore[0];
     const presetName=document.getElementById('settingPresetName')?.value||tpl?.name||'党政机关公文格式';
     const processingMode=document.getElementById('settingMode')?.value||'smart';
@@ -1013,7 +1060,7 @@ async function upload(f){
       body:buf
     });
   }catch(e){status('网络异常，请检查网络后重试','error');return}
-  if(!resp.ok){let e={};try{e=await resp.json()}catch(_){}status(friendlyError(e.error||'服务器异常',e.code),'error');return}
+  if(!resp.ok){let e={};try{e=await resp.json()}catch(_){}status(friendlyError(e.error||'服务器异常',e.code,e),'error');return}
   const task=await resp.json();
   const task_id=task.task_id;
   bar.style.width='36%';setStep(2);status((task.status==='queued'?(task.message||`排队中，前方还有 ${task.queue_ahead||0} 个任务`):'正在读取文档结构')+warnSuffix(task),'');
@@ -1024,7 +1071,7 @@ async function upload(f){
       if(t.status==='queued'){bar.style.width='36%';setStep(2);status((t.message||`排队中，前方还有 ${t.queue_ahead||0} 个任务`)+warnSuffix(t),'');continue}
       if(t.status==='processing'){const pct=48+Math.min(i*2,36);bar.style.width=pct+'%';setStep(pct<72?3:4);status((t.message||'正在应用公文格式')+warnSuffix(t),'');continue}
       if(t.status==='done'){bar.style.width='100%';setStep(4);status('排版完成，正在下载'+warnSuffix(t),'done');const dl=await fetch(api('/download/'+task_id));const blob=await dl.blob();if(lastDownloadUrl)URL.revokeObjectURL(lastDownloadUrl);lastDownloadUrl=URL.createObjectURL(blob);lastDownloadName=f.name.replace(/\.docx$/i,(config?.output_suffix||'_排版')+'.docx');triggerDownload(lastDownloadUrl,lastDownloadName);status('下载完成','done');resultCard.style.display='block';return}
-      if(t.status==='error'){status(friendlyError(t.error||'排版失败',t.code),'error');return}
+      if(t.status==='error'){status(friendlyError(t.error||'排版失败',t.code,t),'error');return}
       bar.style.width=(50+Math.min(i*2,42))+'%';
     }catch(_){}
   }

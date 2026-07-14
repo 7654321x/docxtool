@@ -27,6 +27,8 @@ def test_default_format_config_is_packaged_resource() -> None:
     data = json.loads(config.read_text(encoding="utf-8"))
     assert len(data["styles"]) == 24
     assert data["page"]["lines_per_page"] == 22
+    assert "size" not in data["styles"][6]
+    assert "size" not in data["styles"][7]
 
 
 def test_default_format_config_loads_without_current_working_directory(monkeypatch, tmp_path) -> None:
@@ -50,6 +52,8 @@ def test_default_format_config_is_valid_x_format_config() -> None:
 
     assert len(data["styles"]) == 24
     assert len(rules) == 24
+    assert rules[6].font_size_label == StyleRule.default_for_row(6).font_size_label
+    assert rules[7].font_size_label == StyleRule.default_for_row(7).font_size_label
     assert settings.lines_per_page == 22
     assert features["numbered_bold_enabled"] is True
     assert decoded == data

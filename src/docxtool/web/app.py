@@ -41,7 +41,7 @@ from docxtool.security.docx_validator import DocxValidationError, detect_docx_co
 from docxtool.document.style_config import (
     StyleRule, PageSettings, load_rules_and_settings, configure_logging, get_logger,
     make_document_log_path, set_context_log_path, reset_context_log_path,
-    validate_format_config,
+    ConfigValidationError, validate_format_config,
 )
 from docxtool.paths import project_path, resource_path, runtime_dir
 from docxtool.storage.database import connect as _db_connect, default_database_path
@@ -1498,8 +1498,13 @@ def _cleaner_loop():
 
 threading.Thread(target=_cleaner_loop, daemon=True).start()
 
-def _error_payload(code: str, message: str) -> dict:
-    return {"error": message, "code": code}
+def _error_payload(code: str, message: str, field: str = "", reason: str = "") -> dict:
+    payload = {"error": message, "code": code}
+    if field:
+        payload["field"] = field
+    if reason:
+        payload["reason"] = reason
+    return payload
 
 def _cookie_value(cookie_header: str, name: str) -> str:
     for part in str(cookie_header or "").split(";"):
@@ -1621,34 +1626,66 @@ def _file_api_authorized(headers, client_address=None) -> bool:
         return True
     return bool(client_address and client_address[0] in {"127.0.0.1", "::1"})
 
+class FormatConfigRequestError(ValueError):
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        field: str = "",
+        reason: str = "",
+        status: int = 400,
+    ):
+        self.code = code
+        self.message = message
+        self.field = field
+        self.reason = reason
+        self.status = status
+        super().__init__(f"{code}: {message}")
+
+
+def _format_config_error(code: str, message: str, *, field: str = "", reason: str = "") -> FormatConfigRequestError:
+    return FormatConfigRequestError(
+        code,
+        message,
+        field=field,
+        reason=reason,
+        status=413 if code == "FORMAT_CONFIG_TOO_LARGE" else 400,
+    )
+
 def _decode_format_config(headers) -> dict:
     raw = headers.get("X-Format-Config", "") if headers else ""
     if not raw:
         return None
     encoding = (headers.get("X-Format-Config-Encoding", "") if headers else "").strip().lower()
     if len(raw.encode("ascii", "ignore")) > MAX_FORMAT_CONFIG_HEADER_BYTES:
-        raise ValueError("FORMAT_CONFIG_TOO_LARGE: 配置请求头过大")
+        raise _format_config_error("FORMAT_CONFIG_TOO_LARGE", "配置请求头过大", reason="配置请求头过大")
     if encoding != "base64url-json":
-        raise ValueError("FORMAT_CONFIG_INVALID: 不支持的配置编码")
+        raise _format_config_error("FORMAT_CONFIG_INVALID", "不支持的配置编码", reason="不支持的配置编码")
     try:
         padding = "=" * (-len(raw) % 4)
         decoded = base64.urlsafe_b64decode((raw + padding).encode("ascii"))
     except (binascii.Error, UnicodeEncodeError, ValueError) as exc:
-        raise ValueError("FORMAT_CONFIG_INVALID: 配置解码失败") from exc
+        raise _format_config_error("FORMAT_CONFIG_INVALID", "配置解码失败", reason="配置解码失败") from exc
     if len(decoded) > MAX_FORMAT_CONFIG_JSON_BYTES:
-        raise ValueError("FORMAT_CONFIG_TOO_LARGE: 配置内容过大")
+        raise _format_config_error("FORMAT_CONFIG_TOO_LARGE", "配置内容过大", reason="配置内容过大")
     try:
         config = json.loads(decoded.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ValueError("FORMAT_CONFIG_INVALID: 配置 JSON 无效") from exc
+        raise _format_config_error("FORMAT_CONFIG_INVALID", "配置 JSON 无效", reason="配置 JSON 无效") from exc
     if not isinstance(config, dict):
-        raise ValueError("FORMAT_CONFIG_INVALID: 配置必须是 JSON 对象")
+        raise _format_config_error("FORMAT_CONFIG_INVALID", "配置必须是 JSON 对象", reason="配置必须是 JSON 对象")
     if "styles" not in config or "page" not in config:
-        raise ValueError("FORMAT_CONFIG_INVALID: 配置缺少 styles 或 page")
+        raise _format_config_error("FORMAT_CONFIG_INVALID", "配置缺少 styles 或 page", reason="配置缺少 styles 或 page")
     try:
         return validate_format_config(config)
+    except ConfigValidationError as exc:
+        field = getattr(exc, "field", "")
+        reason = getattr(exc, "reason", "") or "配置无效"
+        message = f"{field}: {reason}" if field else reason
+        raise _format_config_error(exc.code, message, field=field, reason=reason) from exc
     except ValueError as exc:
-        raise ValueError(str(exc)) from exc
+        raise _format_config_error("FORMAT_CONFIG_INVALID", "配置无效", reason="配置无效") from exc
 
 def _upload_request_meta(headers) -> dict:
     return {
@@ -2539,12 +2576,14 @@ button{margin-top:16px;height:42px;border:0;border-radius:10px;background:#b71c1
         try:
             try:
                 format_config = _decode_format_config(self.headers)
-            except ValueError as cfg_error:
-                message = str(cfg_error)
-                code = message.split(":", 1)[0]
-                text = message.split(":", 1)[1].strip() if ":" in message else "格式配置无效"
-                status = 413 if code == "FORMAT_CONFIG_TOO_LARGE" else 400
-                self._json_error(code, text, status)
+            except FormatConfigRequestError as cfg_error:
+                self._json_error(
+                    cfg_error.code,
+                    cfg_error.message,
+                    cfg_error.status,
+                    field=cfg_error.field,
+                    reason=cfg_error.reason,
+                )
                 return
             request_meta = _upload_request_meta(self.headers)
             try:
@@ -2904,8 +2943,8 @@ button{margin-top:16px;height:42px;border:0;border-radius:10px;background:#b71c1
         self.end_headers()
         self.wfile.write(data)
 
-    def _json_error(self, code: str, message: str, status: int):
-        self._json(_error_payload(code, message), status)
+    def _json_error(self, code: str, message: str, status: int, *, field: str = "", reason: str = ""):
+        self._json(_error_payload(code, message, field=field, reason=reason), status)
 
     def log_message(self, fmt, *args):
         pass

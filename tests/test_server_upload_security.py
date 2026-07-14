@@ -219,6 +219,74 @@ class UploadSecurityTest(unittest.TestCase):
                 with server.RATE_LOCK:
                     server.RATE_LIMIT.clear()
 
+    def test_upload_invalid_format_config_returns_field_and_reason(self):
+        old_db = server._DB_PATH
+        old_runtime_tmp = server.RUNTIME_TMP_DIR
+        old_log_dir = server.LOG_DIR
+        old_output_dir = server.OUTPUT_DIR
+        old_proxy_secret = server.PROXY_SECRET
+        old_admin_token = server.ADMIN_TOKEN
+        httpd = None
+        thread = None
+        conn = None
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runtime_tmp = root / "runtime" / "tmp"
+            runtime_tmp.mkdir(parents=True)
+            server._DB_PATH = str(root / "stats.db")
+            server.RUNTIME_TMP_DIR = str(runtime_tmp)
+            server.LOG_DIR = str(root / "logs")
+            server.OUTPUT_DIR = str(root / "outputs")
+            server.PROXY_SECRET = ""
+            server.ADMIN_TOKEN = ""
+            os.makedirs(server.LOG_DIR, exist_ok=True)
+            os.makedirs(server.OUTPUT_DIR, exist_ok=True)
+            server._sql_init()
+            with server.RATE_LOCK:
+                server.RATE_LIMIT.clear()
+            try:
+                httpd = server.ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+                thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+                thread.start()
+                port = httpd.server_address[1]
+                body = _valid_docx_bytes()
+                config = {"styles": [{} for _ in range(6)] + [{"name": "数字", "size": ""}], "page": {}}
+                headers = {
+                    "Content-Length": str(len(body)),
+                    "Content-Type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    "Host": f"127.0.0.1:{port}",
+                    "X-Filename": "format-config.docx",
+                    **_format_config_headers(config),
+                }
+                conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+                conn.request("PUT", "/upload", body=body, headers=headers)
+                response = conn.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+
+                self.assertEqual(response.status, 400)
+                self.assertEqual(payload["code"], "FORMAT_CONFIG_INVALID")
+                self.assertEqual(payload["field"], "styles[6].size")
+                self.assertEqual(payload["reason"], "不能为空")
+                self.assertEqual(payload["error"], "styles[6].size: 不能为空")
+                self.assertNotIn("Traceback", json.dumps(payload, ensure_ascii=False))
+                self.assertNotIn(str(root), json.dumps(payload, ensure_ascii=False))
+            finally:
+                if conn is not None:
+                    conn.close()
+                if httpd is not None:
+                    httpd.shutdown()
+                    httpd.server_close()
+                if thread is not None:
+                    thread.join(timeout=5)
+                server._DB_PATH = old_db
+                server.RUNTIME_TMP_DIR = old_runtime_tmp
+                server.LOG_DIR = old_log_dir
+                server.OUTPUT_DIR = old_output_dir
+                server.PROXY_SECRET = old_proxy_secret
+                server.ADMIN_TOKEN = old_admin_token
+                with server.RATE_LOCK:
+                    server.RATE_LIMIT.clear()
+
     def test_decode_format_config_rejects_invalid_numeric_fields(self):
         headers = _format_config_headers({
             "styles": [],
