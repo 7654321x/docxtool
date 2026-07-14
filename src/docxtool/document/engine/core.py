@@ -1476,7 +1476,8 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
     stats = {
         "total": len(doc_data.paragraphs),
         "heading1": 0, "heading1_report": 0, "heading2": 0, "heading3": 0, "heading4": 0,
-        "body": 0, "fallback_count": 0, "numpr_removed": 0, "output_path": output_path,
+        "body": 0, "fallback_count": 0, "style_fallback_count": 0, "numpr_removed": 0,
+        "output_path": output_path,
     }
 
     # 查找页码规则（row 7）
@@ -1872,6 +1873,7 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
 
     invariant_stats = _enforce_body_paragraph_invariants(doc)
     stats.update(invariant_stats)
+    stats["style_fallback_count"] = stats["fallback_count"]
     if invariant_stats["fallback_count"] or invariant_stats["numpr_removed"]:
         logger.info(
             "[结构样式] fallback_count=%s numpr_removed=%s",

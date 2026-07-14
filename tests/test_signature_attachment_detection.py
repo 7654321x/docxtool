@@ -64,6 +64,25 @@ class SignatureAttachmentDetectionTest(unittest.TestCase):
         )
         self.assertEqual(data.paragraphs[-4].text, "2025年10月15日")
 
+    def test_tail_date_after_responsibility_line_before_attachment_page(self):
+        data = self._load_lines([
+            "总题目",
+            "一、一级标题",
+            "这里是正文内容这里是正文内容这里是正文内容。",
+            "责任单位：区政府",
+            "2025年十月15日",
+            "附件1",
+            "基本情况",
+            "测试正文测试正文。",
+        ])
+
+        self.assertEqual(data.paragraphs[-4].type_id, "sign_date")
+        self.assertEqual(data.paragraphs[-4].text, "2025年10月15日")
+        self.assertEqual(
+            [p.type_id for p in data.paragraphs[-3:]],
+            ["attachment_page_mark", "attachment_title", "attachment_body"],
+        )
+
     def test_attachment_note_can_start_attachment_page_without_date(self):
         data = self._load_lines([
             "总题目",

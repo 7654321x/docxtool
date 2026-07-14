@@ -451,6 +451,8 @@ def _blocks_independent_sign_date(ctx) -> bool:
     prev = (ctx.last_structural_text or "").strip()
     if not prev:
         return False
+    if prev.replace(" ", "").replace("\u3000", "").startswith("责任单位："):
+        return False
     if prev.startswith(_SIGN_ORG_NEGATIVE_STARTS):
         return True
     return _contains_colon(prev)
