@@ -8,14 +8,12 @@
 
 import copy
 import io
-import logging
 import re
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional
 
 from docxtool.document.style_config import (
-    StyleRule, PageSettings, cn_size_to_pt, chinese_number,
-    arabic_number, parse_indent, parse_alignment,
-    logger, ExportError, StyleError,
+    StyleRule, PageSettings, chinese_number,
+    arabic_number, logger, ExportError,
 )
 import math
 
@@ -29,11 +27,11 @@ from docxtool.document.engine.table import format_tables
 
 # ── python-docx 模块级导入 ──
 from docx import Document
-from docx.shared import Pt, Cm, Emu
-from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK, WD_LINE_SPACING
-from docx.enum.section import WD_ORIENT
+from docx.shared import Pt, Cm
+from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
+from docx.text.paragraph import Paragraph
 from docx.opc.constants import CONTENT_TYPE as CT, RELATIONSHIP_TYPE as RT
 from docx.opc.packuri import PackURI
 from docx.opc.part import Part
@@ -297,7 +295,9 @@ def _line_spacing_twips(settings: PageSettings) -> int:
 def _apply_right_indent(para, n=2):
     pPr = para._element.get_or_add_pPr()
     ind = pPr.find(qn('w:ind'))
-    if ind is None: ind = OxmlElement('w:ind'); pPr.append(ind)
+    if ind is None:
+        ind = OxmlElement('w:ind')
+        pPr.append(ind)
     ind.set(qn('w:right'), str(int(n * 560)))
     ind.set(qn('w:rightChars'), str(n * 100))
 
@@ -454,35 +454,128 @@ def _apply_colon_bold(para, text: str) -> None:
     for colon in ('：', ':'):
         pos = text.find(colon)
         if pos > 0 and pos <= 10:
-            para.runs[0].text = ""
-            br = para.add_run(text[:pos + 1])
-            br.font.bold = True
-            if text[pos + 1:]:
-                nr = para.add_run(text[pos + 1:])
-                nr.font.bold = False
+            write = _segment_writer(para)
+            write(text[:pos + 1], bold=True)
+            write(text[pos + 1:], bold=False)
             return
 
 
-def _apply_heading1_report_split(para, text: str, rule) -> None:
+_RESPONSIBILITY_LABEL_RE = re.compile(r"责\s*任\s*单\s*位\s*[:：]")
+
+
+def _normalize_responsibility_lines(text: str) -> list[str]:
+    """Normalize responsibility labels and split repeated labels into separate lines."""
+    normalized = _RESPONSIBILITY_LABEL_RE.sub("责任单位：", text or "")
+    normalized = normalized.replace("\r\n", "\n").replace("\r", "\n")
+    lines: list[str] = []
+    for raw_line in normalized.split("\n"):
+        line = raw_line.strip().strip("“”\"'")
+        if not line:
+            continue
+        parts = [part.strip() for part in re.split(r"(?=责任单位：)", line) if part.strip()]
+        lines.extend(parts or [line])
+    return lines
+
+
+def _set_zero_first_line_indent(para) -> None:
+    pPr = para._element.get_or_add_pPr()
+    ind = pPr.find(qn("w:ind"))
+    if ind is None:
+        ind = OxmlElement("w:ind")
+        pPr.append(ind)
+    ind.set(qn("w:firstLineChars"), "0")
+    ind.set(qn("w:firstLine"), "0")
+    for attr in ("w:hangingChars", "w:hanging"):
+        q_attr = qn(attr)
+        if q_attr in ind.attrib:
+            del ind.attrib[q_attr]
+
+
+def _force_responsibility_paragraph_format(para) -> None:
+    para.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    _set_zero_first_line_indent(para)
+
+
+def _apply_responsibility_line(para, text: str) -> None:
+    """Render responsibility lines with one bold label per physical line."""
+    if not para.runs:
+        para.add_run("")
+
+    lines = _normalize_responsibility_lines(text)
+    if not lines:
+        return
+
+    base_run = para.runs[0]
+    for run in para.runs:
+        run.text = ""
+    used_base = False
+
+    def write(text_part: str, *, bold: bool | None = None):
+        nonlocal used_base
+        if not text_part:
+            return None
+        run = base_run if not used_base else para.add_run("")
+        if used_base:
+            _copy_run_style(base_run, run)
+        used_base = True
+        run.text = text_part
+        if bold is not None:
+            run.font.bold = bold
+        return run
+
+    def add_break() -> None:
+        nonlocal used_base
+        run = base_run if not used_base else para.add_run("")
+        if used_base:
+            _copy_run_style(base_run, run)
+        used_base = True
+        run.add_break()
+
+    for index, line in enumerate(lines):
+        if index:
+            add_break()
+        if line.startswith("责任单位："):
+            write("责任单位：", bold=True)
+            write(line[len("责任单位："):], bold=False)
+        else:
+            write(line, bold=False)
+
+    _force_responsibility_paragraph_format(para)
+
+
+def _insert_paragraph_after(para) -> Paragraph:
+    new_p = OxmlElement("w:p")
+    para._p.addnext(new_p)
+    return Paragraph(new_p, para._parent)
+
+
+def _apply_heading1_report_split(para, text: str, rule, body_rule, line_twips: int):
     """heading1_report 句号后内容换行：标题部分黑体，句号后另起一段 body。"""
     period = text.find('。')
     if period <= 0 or period >= len(text) - 1:
-        return
+        return None
     heading_text = text[:period + 1]  # 含句号
     body_text = text[period + 1:].lstrip()
     # 截断当前段落为标题部分
-    for run in para.runs:
-        run.text = ""
-    para.runs[0].text = heading_text
+    write = _segment_writer(para)
+    write(heading_text)
     # 在当前段落后插入 body 段落
-    body_para = OxmlElement('w:p')
-    body_run = OxmlElement('w:r')
-    body_t = OxmlElement('w:t')
-    body_t.set(qn('xml:space'), 'preserve')
-    body_t.text = body_text
-    body_run.append(body_t)
-    body_para.append(body_run)
-    para._element.addnext(body_para)
+    body_para = _insert_paragraph_after(para)
+    body_para.add_run(body_text)
+    _set_paragraph_style_id(body_para, "DCT-Body")
+    apply_style_safe(body_para, body_rule)
+    _apply_rule_paragraph_format(body_para, body_rule, line_twips)
+    bpPr = body_para._element.get_or_add_pPr()
+    wc = OxmlElement('w:widowControl')
+    wc.set(qn('w:val'), '0')
+    _set_unique(bpPr, qn('w:widowControl'), wc)
+    ctxSpc = OxmlElement('w:contextualSpacing')
+    ctxSpc.set(qn('w:val'), '0')
+    _set_unique(bpPr, qn('w:contextualSpacing'), ctxSpc)
+    snap = OxmlElement('w:snapToGrid')
+    snap.set(qn('w:val'), '1')
+    _set_unique(bpPr, qn('w:snapToGrid'), snap)
+    return body_para
 
 
 def _apply_glossary_item(para, text: str, rule) -> None:
@@ -609,10 +702,13 @@ class NumberingCounter:
     def advance(self, type_id: str) -> None:
         if type_id == "heading1":
             self.a += 1
-            self.b = 0; self.c = 0; self.d = 0
+            self.b = 0
+            self.c = 0
+            self.d = 0
         elif type_id == "heading2":
             self.b += 1
-            self.c = 0; self.d = 0
+            self.c = 0
+            self.d = 0
         elif type_id == "heading3":
             self.c += 1
             self.d = 0
@@ -1297,6 +1393,42 @@ def _set_keep_with_next(paragraph) -> None:
     _set_unique(pPr, qn("w:keepLines"), OxmlElement("w:keepLines"))
 
 
+def _paragraph_style_id(paragraph) -> str:
+    pPr = paragraph._element.pPr
+    if pPr is None:
+        return ""
+    p_style = pPr.find(qn("w:pStyle"))
+    return p_style.get(qn("w:val")) if p_style is not None else ""
+
+
+def _remove_paragraph_numbering(paragraph) -> bool:
+    pPr = paragraph._element.pPr
+    if pPr is None:
+        return False
+    num_pr = pPr.find(qn("w:numPr"))
+    if num_pr is None:
+        return False
+    pPr.remove(num_pr)
+    return True
+
+
+def _enforce_body_paragraph_invariants(doc) -> dict[str, int]:
+    """Ensure non-empty main-document paragraphs have DCT styles and no numPr."""
+    fallback_count = 0
+    numpr_removed = 0
+    for paragraph in doc.paragraphs:
+        if _remove_paragraph_numbering(paragraph):
+            numpr_removed += 1
+        if not paragraph.text.strip():
+            continue
+        style_id = _paragraph_style_id(paragraph)
+        if style_id.startswith("DCT-"):
+            continue
+        _set_paragraph_style_id(paragraph, "DCT-Body")
+        fallback_count += 1
+    return {"fallback_count": fallback_count, "numpr_removed": numpr_removed}
+
+
 def _is_standalone_keep_heading(pd: ParagraphData, rendered_text: str) -> bool:
     if pd.type_id in {"attachment_page_mark", "attachment_title"}:
         return True
@@ -1344,7 +1476,7 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
     stats = {
         "total": len(doc_data.paragraphs),
         "heading1": 0, "heading1_report": 0, "heading2": 0, "heading3": 0, "heading4": 0,
-        "body": 0, "output_path": output_path,
+        "body": 0, "fallback_count": 0, "numpr_removed": 0, "output_path": output_path,
     }
 
     # 查找页码规则（row 7）
@@ -1364,13 +1496,17 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
     for i, pd in enumerate(render_items):
         # 表格占位符 → 原位复制
         if pd.type_id == "__table__":
-            try: _copy_table(doc, pd.meta.get("table"))
-            except Exception as e: logger.warning(f"[引擎] 表格复制失败: {e}")
+            try:
+                _copy_table(doc, pd.meta.get("table"))
+            except Exception as e:
+                logger.warning(f"[引擎] 表格复制失败: {e}")
             continue
         # 图片占位符 → 原位复制
         if pd.type_id == "__image__":
-            try: _copy_image(doc, pd.meta.get("image_xml"))
-            except Exception as e: logger.warning(f"[引擎] 图片段落复制失败: {e}")
+            try:
+                _copy_image(doc, pd.meta.get("image_xml"))
+            except Exception as e:
+                logger.warning(f"[引擎] 图片段落复制失败: {e}")
             continue
 
         para_no = paragraph_i
@@ -1382,14 +1518,15 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
             rule_index = TYPE_TO_RULE_INDEX.get(pd.type_id, 5)  # fallback → 正文
             raw_rule = rules[rule_index] if rule_index < len(rules) else StyleRule.default_for_row(rule_index)
 
-            # meta → 重写规则（不脏 apply_style）
-            meta = pd.meta or {}
             # glossary_title 特殊处理（内联段落）
             if pd.type_id == "glossary_title":
                 resolved = copy.copy(raw_rule)
-                resolved.row_index = 0; resolved.font = "方正小标宋简体"
-                resolved.font_size_pt = 22; resolved.bold = False
-                resolved.alignment = "居中"; resolved.first_line_indent = 0.0
+                resolved.row_index = 0
+                resolved.font = "方正小标宋简体"
+                resolved.font_size_pt = 22
+                resolved.bold = False
+                resolved.alignment = "居中"
+                resolved.first_line_indent = 0.0
                 para = doc.add_paragraph(pd.text)
                 run = para.runs[0] if para.runs else para.add_run(pd.text)
                 apply_style(para, resolved)
@@ -1516,7 +1653,6 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
                     # 正文另起一段
                     body_para = doc.add_paragraph(body_text)
                     _set_paragraph_style_id(body_para, "DCT-Body")
-                    body_font = rules[5].font if len(rules) > 5 else "仿宋_GB2312"
                     # 预写入 spacing
                     bpPr = body_para._element.get_or_add_pPr()
                     spacing = OxmlElement('w:spacing')
@@ -1563,13 +1699,19 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
             if pd.meta.get("numbered_bold") and para.runs:
                 _apply_special_bold(para, pd.text)
 
+            if pd.type_id == "responsibility_line" and para.runs:
+                _apply_responsibility_line(para, pd.text)
+
             # 冒号关键词加粗（如"责任单位：区政府" → "责任单位："加粗）
-            if pd.meta.get("colon_bold") and para.runs:
+            if pd.type_id != "responsibility_line" and pd.meta.get("colon_bold") and para.runs:
                 _apply_colon_bold(para, pd.text)
 
             # heading1_report 句号后换行
             if pd.meta.get("heading1_report_split") and para.runs:
-                _apply_heading1_report_split(para, pd.text, resolved)
+                body_rule = rules[5] if len(rules) > 5 else StyleRule.default_for_row(5)
+                body_para = _apply_heading1_report_split(para, pd.text, resolved, body_rule, line_twips)
+                if body_para is not None:
+                    stats["body"] += 1
 
             # 报告首句加粗（首句楷体_GB2312 加粗，剩余仿宋正文）
             if pd.meta.get("report_first_sentence_bold") and para.runs:
@@ -1728,6 +1870,15 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
     max_lines = page_h_cm / (settings.line_spacing_value * 0.0353)  # pt→cm
     logger.info(f"[页面] 版心高度={page_h_cm:.1f}cm 行距={settings.line_spacing_value}pt → 理论最大={max_lines:.1f}行 设定={settings.lines_per_page}行")
 
+    invariant_stats = _enforce_body_paragraph_invariants(doc)
+    stats.update(invariant_stats)
+    if invariant_stats["fallback_count"] or invariant_stats["numpr_removed"]:
+        logger.info(
+            "[结构样式] fallback_count=%s numpr_removed=%s",
+            invariant_stats["fallback_count"],
+            invariant_stats["numpr_removed"],
+        )
+
     # 保存
     try:
         doc.save(output_path)
@@ -1760,11 +1911,14 @@ if __name__ == "__main__":
 
     # render 验证
     nc2 = NumberingCounter()
-    nc2.a = 1; nc2.b = 2; nc2.c = 3; nc2.d = 4
+    nc2.a = 1
+    nc2.b = 2
+    nc2.c = 3
+    nc2.d = 4
     assert nc2.render("{a}、", "heading1") == "一、", f"render 中文失败: {nc2.render('{a}、', 'heading1')}"
-    assert nc2.render("（{b}）", "heading2") == "（二）", f"render 括号中文失败"
-    assert nc2.render("{c}.", "heading3") == "3.", f"render 阿拉伯失败"
-    assert nc2.render("({d})", "heading4") == "(4)", f"render 括号阿拉伯失败"
+    assert nc2.render("（{b}）", "heading2") == "（二）", "render 括号中文失败"
+    assert nc2.render("{c}.", "heading3") == "3.", "render 阿拉伯失败"
+    assert nc2.render("({d})", "heading4") == "(4)", "render 括号阿拉伯失败"
     assert nc2.render("- 1 -", "page_number") == "- 1 -", "render 固定值不应变动"
 
     # TYPE_TO_RULE_INDEX
