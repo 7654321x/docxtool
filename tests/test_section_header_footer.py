@@ -139,6 +139,14 @@ def _texts_from_part(zf: zipfile.ZipFile, part_name: str) -> str:
     return "".join(text.text or "" for text in root.findall(".//" + qn("w:t")))
 
 
+def _field_instructions_from_part(zf: zipfile.ZipFile, part_name: str) -> list[str]:
+    root = ET.fromstring(zf.read(part_name))
+    return [
+        "".join(element.itertext()).strip()
+        for element in root.findall(".//" + qn("w:instrText"))
+    ]
+
+
 class SectionHeaderFooterTest(unittest.TestCase):
     def test_preserves_explicit_section_headers_footers_and_media(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -218,6 +226,9 @@ class SectionHeaderFooterTest(unittest.TestCase):
                         part_name = _part_name(rel["target"])
                         self.assertIn(part_name, names)
                         self.assertTrue(part_name.startswith(f"word/{ref['kind']}"))
+                        if ref["kind"] == "footer":
+                            footer_text = _texts_from_part(zf, part_name)
+                            self.assertIn(f"{label} {ref['type']} footer", footer_text)
 
                 footer_xml = "\n".join(
                     zf.read(name).decode("utf-8")
@@ -225,10 +236,16 @@ class SectionHeaderFooterTest(unittest.TestCase):
                     if name.startswith("word/footer") and name.endswith(".xml")
                 )
                 self.assertIn("PAGE", footer_xml)
-                self.assertIn("NUMPAGES", footer_xml)
+                self.assertNotIn("NUMPAGES", footer_xml)
                 self.assertIn("<w:instrText", footer_xml)
                 self.assertNotIn("<w:t>PAGE</w:t>", footer_xml)
                 self.assertNotIn("<w:t>NUMPAGES</w:t>", footer_xml)
+                for name in names:
+                    if not name.startswith("word/footer") or not name.endswith(".xml"):
+                        continue
+                    instructions = _field_instructions_from_part(zf, name)
+                    self.assertLessEqual(instructions.count("PAGE"), 1)
+                    self.assertNotIn("NUMPAGES", instructions)
 
                 image_header = next(
                     name

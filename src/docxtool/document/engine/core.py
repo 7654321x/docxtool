@@ -23,7 +23,8 @@ from docxtool.document.importer import DocumentData, ParagraphData
 from docxtool.document.engine.normal import resolve as _resolve_rule
 from docxtool.document.engine.cleanup import cleanup_styles
 from docxtool.document.engine.numbering import normalize_numbering_text
-from docxtool.document.engine.page_number import apply_page_numbers
+from docxtool.document.engine.page_number import apply_page_number
+from docxtool.document.engine.style_catalog import ensure_document_styles
 from docxtool.document.engine.table import format_tables
 
 # ── python-docx 模块级导入 ──
@@ -182,38 +183,87 @@ def _sectPr_with_preserved_header_footer_refs(sectPr, doc_part, source_parts, pa
     return copied_sectPr
 
 
-def _copy_paragraph_sectPr(para, sectPr, source_parts=None, part_copier=None) -> None:
+def _set_sectPr_page_layout(sectPr, settings: PageSettings, doc_mode: str = "") -> None:
+    if sectPr is None:
+        return
+
+    pg_sz = sectPr.find(qn("w:pgSz"))
+    is_landscape = pg_sz is not None and pg_sz.get(qn("w:orient")) == "landscape"
+    if not is_landscape:
+        if pg_sz is None:
+            pg_sz = OxmlElement("w:pgSz")
+            sectPr.insert(0, pg_sz)
+        pg_sz.set(qn("w:w"), str(int(round(settings.page_width_cm * 567))))
+        pg_sz.set(qn("w:h"), str(int(round(settings.page_height_cm * 567))))
+        pg_sz.attrib.pop(qn("w:orient"), None)
+
+    pg_mar = sectPr.find(qn("w:pgMar"))
+    if pg_mar is None:
+        pg_mar = OxmlElement("w:pgMar")
+        sectPr.append(pg_mar)
+    pg_mar.set(qn("w:top"), str(int(round(settings.margin_top_cm * 567))))
+    pg_mar.set(qn("w:bottom"), str(int(round(settings.margin_bottom_cm * 567))))
+    pg_mar.set(qn("w:left"), str(int(round(settings.margin_left_cm * 567))))
+    pg_mar.set(qn("w:right"), str(int(round(settings.margin_right_cm * 567))))
+    pg_mar.set(qn("w:header"), "0")
+    pg_mar.set(qn("w:footer"), str(int(round(max(settings.margin_bottom_cm - 0.7, 0.3) * 567))))
+
+    for old in sectPr.findall(qn("w:docGrid")):
+        sectPr.remove(old)
+    if settings.chars_per_line > 0 and settings.lines_per_page > 0 and doc_mode != "SCHEME":
+        page_w = (29.7 if is_landscape else settings.page_width_cm) * 567
+        if is_landscape and pg_sz is not None:
+            try:
+                page_w = int(pg_sz.get(qn("w:w"))) or page_w
+            except (TypeError, ValueError):
+                pass
+        content_width = page_w - settings.margin_left_cm * 567 - settings.margin_right_cm * 567
+        char_space = math.floor((content_width / settings.chars_per_line) - 320)
+        doc_grid = OxmlElement("w:docGrid")
+        doc_grid.set(qn("w:type"), "linesAndChars")
+        doc_grid.set(qn("w:charsPerLine"), str(settings.chars_per_line))
+        doc_grid.set(qn("w:linesPerPage"), str(settings.lines_per_page))
+        doc_grid.set(qn("w:charSpace"), str(char_space))
+        doc_grid.set(qn("w:linePitch"), str(_line_spacing_twips(settings)))
+        sectPr.append(doc_grid)
+
+
+def _copy_paragraph_sectPr(para, sectPr, source_parts=None, part_copier=None,
+                           settings: PageSettings | None = None, doc_mode: str = "") -> None:
     if sectPr is None:
         return
     pPr = para._element.get_or_add_pPr()
     old = pPr.find(qn("w:sectPr"))
     if old is not None:
         pPr.remove(old)
-    pPr.append(
-        _sectPr_with_preserved_header_footer_refs(
-            sectPr,
-            para.part,
-            source_parts or {},
-            part_copier,
-        )
+    copied = _sectPr_with_preserved_header_footer_refs(
+        sectPr,
+        para.part,
+        source_parts or {},
+        part_copier,
     )
+    if settings is not None:
+        _set_sectPr_page_layout(copied, settings, doc_mode)
+    pPr.append(copied)
 
 
-def _replace_body_sectPr(doc, sectPr, source_parts=None, part_copier=None) -> None:
+def _replace_body_sectPr(doc, sectPr, source_parts=None, part_copier=None,
+                         settings: PageSettings | None = None, doc_mode: str = "") -> None:
     if sectPr is None:
         return
     body = doc._body._element
     old = body.find(qn("w:sectPr"))
     if old is not None:
         body.remove(old)
-    body.append(
-        _sectPr_with_preserved_header_footer_refs(
-            sectPr,
-            doc.part,
-            source_parts or {},
-            part_copier,
-        )
+    copied = _sectPr_with_preserved_header_footer_refs(
+        sectPr,
+        doc.part,
+        source_parts or {},
+        part_copier,
     )
+    if settings is not None:
+        _set_sectPr_page_layout(copied, settings, doc_mode)
+    body.append(copied)
 
 
 def _has_imported_header_footer_refs(doc_data: DocumentData) -> bool:
@@ -1173,7 +1223,7 @@ TYPE_TO_RULE_INDEX: Dict[str, int] = {
     "title": 0, "title_cont": 0,     # 主标题 + 续行 → row 0
     "heading1": 1, "heading1_report": 1,  # 报告 heading1 同 row 1，但无编号
     "heading2": 2, "heading3": 3, "heading4": 4,
-    "body": 5, "attachment": 5,
+    "body": 5, "attachment": 5, "responsibility_line": 5,
     "addressing": 10, "date_line": 11, "author_line": 12, "role_name": 13,
     "title2": 14, "sign_off": 15,
     "glossary_title": 0, "glossary_item": 16,
@@ -1182,6 +1232,30 @@ TYPE_TO_RULE_INDEX: Dict[str, int] = {
     "sign_org": 22, "sign_date": 23,
     "number": 6, "letter": 7,
     "page_number": 8, "superscript": 9,
+}
+
+TYPE_TO_STYLE_ID: Dict[str, str] = {
+    "title": "DCT-Title",
+    "title_cont": "DCT-Title",
+    "date_line": "DCT-Date",
+    "author_line": "DCT-Signature",
+    "role_name": "DCT-Signature",
+    "heading1": "DCT-Heading1",
+    "heading1_report": "DCT-Heading1",
+    "heading2": "DCT-Heading2",
+    "heading3": "DCT-Heading3",
+    "heading4": "DCT-Heading4",
+    "body": "DCT-Body",
+    "addressing": "DCT-Recipient",
+    "responsibility_line": "DCT-Responsibility",
+    "title2": "DCT-Heading2",
+    "sign_org": "DCT-Signature",
+    "sign_date": "DCT-Date",
+    "attachment_note": "DCT-AttachmentNote",
+    "attachment_note_item": "DCT-AttachmentNote",
+    "attachment_page_mark": "DCT-AttachmentMark",
+    "attachment_title": "DCT-AttachmentTitle",
+    "attachment_body": "DCT-AttachmentBody",
 }
 
 HEAD_TYPES_REQUIRING_GAP = ("title", "title_cont", "date_line", "author_line", "role_name", "attachment_title")
@@ -1201,6 +1275,40 @@ def _feature_enabled(options: dict | None, default: bool = False) -> bool:
     if raw in {"0", "false", "no", "off", "禁用", "否"}:
         return False
     return bool(default)
+
+
+def _style_id_for_type(type_id: str) -> str:
+    return TYPE_TO_STYLE_ID.get(type_id, "DCT-Body")
+
+
+def _set_paragraph_style_id(paragraph, style_id: str) -> None:
+    pPr = paragraph._element.get_or_add_pPr()
+    old = pPr.find(qn("w:pStyle"))
+    if old is not None:
+        pPr.remove(old)
+    p_style = OxmlElement("w:pStyle")
+    p_style.set(qn("w:val"), style_id)
+    pPr.insert(0, p_style)
+
+
+def _set_keep_with_next(paragraph) -> None:
+    pPr = paragraph._element.get_or_add_pPr()
+    _set_unique(pPr, qn("w:keepNext"), OxmlElement("w:keepNext"))
+    _set_unique(pPr, qn("w:keepLines"), OxmlElement("w:keepLines"))
+
+
+def _is_standalone_keep_heading(pd: ParagraphData, rendered_text: str) -> bool:
+    if pd.type_id in {"attachment_page_mark", "attachment_title"}:
+        return True
+    if pd.type_id not in {"heading1", "heading1_report", "heading2", "heading3", "heading4"}:
+        return False
+    if (pd.meta or {}).get("heading_inline_body"):
+        return False
+    if pd.type_id in {"heading1", "heading2"}:
+        period_pos = rendered_text.find("。")
+        if period_pos >= 0 and len(rendered_text[period_pos + 1:].strip()) >= 5:
+            return False
+    return True
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1225,6 +1333,7 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
     logger.info(f"[引擎] 共 {len(doc_data.paragraphs)} 段, {len(doc_data.tables)} 表格")
 
     doc = Document()
+    ensure_document_styles(doc, rules, settings)
     section_relationship_parts = getattr(doc_data, "section_relationship_parts", {}) or {}
     section_part_copier = (
         _SectionRelationshipCopier(doc.part.package)
@@ -1329,6 +1438,9 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
                 _write_inline_tokens(para, inline_tokens)
             else:
                 para = doc.add_paragraph(text)
+            _set_paragraph_style_id(para, _style_id_for_type(pd.type_id))
+            if _is_standalone_keep_heading(pd, para.text):
+                _set_keep_with_next(para)
 
             # 逐段写入 XML 属性
             pPr = para._element.get_or_add_pPr()
@@ -1403,6 +1515,7 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
                     para.runs[-1].text = heading_text.rstrip("。")
                     # 正文另起一段
                     body_para = doc.add_paragraph(body_text)
+                    _set_paragraph_style_id(body_para, "DCT-Body")
                     body_font = rules[5].font if len(rules) > 5 else "仿宋_GB2312"
                     # 预写入 spacing
                     bpPr = body_para._element.get_or_add_pPr()
@@ -1506,6 +1619,8 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
                     pd.meta.get("sectPr"),
                     section_relationship_parts,
                     section_part_copier,
+                    settings,
+                    doc_data.doc_mode,
                 )
             # 段落排版日志（每段汇总格式信息）
             text_preview = pd.text[:28].replace('\n', ' ')
@@ -1562,28 +1677,14 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
     apply_page_settings(doc, settings, doc_data.doc_mode)
     _preserve_even_and_odd_headers_setting(doc, doc_data)
 
-    has_imported_header_footer_refs = _has_imported_header_footer_refs(doc_data)
-    if _feature_enabled(page_number_options, False) and not has_imported_header_footer_refs:
-        page_options = dict(_feature_options(page_number_options))
-        page_options.setdefault("font_name", page_rule.font)
-        page_options.setdefault("font_size_pt", page_rule.font_size_pt)
-        page_options.setdefault("bold", page_rule.bold)
-        if isinstance(page_options.get("first_page"), bool):
-            page_options["first_page"] = "show" if page_options["first_page"] else "hide"
-        apply_page_numbers(doc, page_options)
-    elif _feature_enabled(page_number_options, False):
-        logger.info("[引擎] 检测到导入节页眉/页脚，跳过新版自动页码以保留原始关系")
-    elif page_number_enabled and not has_imported_header_footer_refs:
-        apply_header_footer(doc, page_rule)
-    elif page_number_enabled:
-        logger.info("[引擎] 检测到导入节页眉/页脚，跳过自动页码页脚以保留原始关系")
-
     for para, sectPr in section_paragraphs:
         _copy_paragraph_sectPr(
             para,
             sectPr,
             section_relationship_parts,
             section_part_copier,
+            settings,
+            doc_data.doc_mode,
         )
 
     _replace_body_sectPr(
@@ -1591,7 +1692,31 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
         getattr(doc_data, "body_sectPr", None),
         section_relationship_parts,
         section_part_copier,
+        settings,
+        doc_data.doc_mode,
     )
+
+    if _feature_enabled(page_number_options, False):
+        page_options = dict(_feature_options(page_number_options))
+        page_options.setdefault("font_name", page_rule.font)
+        page_options.setdefault("font_size_pt", page_rule.font_size_pt)
+        page_options.setdefault("bold", page_rule.bold)
+        if isinstance(page_options.get("first_page"), bool):
+            page_options["first_page"] = "show" if page_options["first_page"] else "hide"
+        apply_page_number(doc, page_options)
+    elif page_number_enabled:
+        apply_page_number(
+            doc,
+            {
+                "style": "dash",
+                "position": "outside",
+                "first_page": True,
+                "font_name": page_rule.font,
+                "font_size_pt": page_rule.font_size_pt,
+                "bold": page_rule.bold,
+                "offset_from_text_mm": 7,
+            },
+        )
 
     if _feature_enabled(table_format_options, False):
         format_tables(doc, _feature_options(table_format_options))

@@ -31,6 +31,11 @@ def resolve(pd, raw_rule, rules, meta=None):
         return _copy(r)
     if pd.type_id == "attachment_title":
         return _copy(r)
+    if pd.type_id == "responsibility_line":
+        r = _copy(r)
+        r.alignment = "左对齐"
+        r.first_line_indent = 0.0
+        return r
     if pd.type_id in ("sign_org", "sign_date"):
         return _copy(r)
     if pd.type_id == "title2":

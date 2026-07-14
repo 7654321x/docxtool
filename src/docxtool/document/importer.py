@@ -465,6 +465,14 @@ def _is_auto_numbered_item(feats: Optional[ParagraphFeatures]) -> bool:
         return False
     return feats.numbering_prefix.startswith("@lvl_") or feats.numbering_prefix.startswith("@style_")
 
+
+_RESPONSIBILITY_LINE_RE = re.compile(r"^\s*责\s*任\s*单\s*位\s*[:：]")
+
+
+def _normalize_responsibility_line(text: str) -> str:
+    return _RESPONSIBILITY_LINE_RE.sub("责任单位：", text or "", count=1)
+
+
 def detect_structural_type(line: str, next_line: str, ctx,
                            feats: Optional[ParagraphFeatures] = None,
                            next_feats: Optional[ParagraphFeatures] = None):
@@ -476,6 +484,9 @@ def detect_structural_type(line: str, next_line: str, ctx,
     """
     text = line.strip()
     next_text = next_line.strip() if next_line else ""
+
+    if _RESPONSIBILITY_LINE_RE.match(text):
+        return "responsibility_line", {"colon_bold": True}, "", _normalize_responsibility_line(text)
 
     # 1. 附件说明：上一段必须是正文
     m = _ATT_NOTE_RE.match(text)
@@ -1192,7 +1203,7 @@ def detect_paragraph_type(text: str, feats: ParagraphFeatures,
     ctx.prev_type_id = type_id
 
     # 附件/落款 结构状态跟踪
-    if type_id in ("body", "addressing"):
+    if type_id in ("body", "addressing", "responsibility_line"):
         ctx.has_seen_real_body = True
         ctx.last_structural_type = "body"
     elif type_id in ("attachment_note", "attachment_note_item",
@@ -1228,7 +1239,7 @@ def detect_paragraph_type(text: str, feats: ParagraphFeatures,
         ctx.has_seen_body = True
     elif type_id in ("title", "title_cont", "date_line", "author_line", "role_name"):
         pass  # 头部区域，不设 has_seen_body
-    elif type_id == "body" or type_id == "addressing":
+    elif type_id in ("body", "addressing", "responsibility_line"):
         if not ctx.has_seen_body:
             ctx.has_seen_body = True
             ctx.doc_mode = _detect_doc_type(ctx)  # 锁定文种
@@ -1534,7 +1545,7 @@ class DocxImporter:
             ctx.prev_type_id = type_id
 
             # 结构状态跟踪
-            if type_id in ("body", "addressing"):
+            if type_id in ("body", "addressing", "responsibility_line"):
                 ctx.has_seen_real_body = True; ctx.last_structural_type = "body"
             elif type_id.startswith("heading") or type_id in ("title", "title2"):
                 if meta_patch.get("heading_inline_body"):
