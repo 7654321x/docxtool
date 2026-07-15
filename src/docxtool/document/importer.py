@@ -81,6 +81,7 @@ class DocumentData:
     body_sectPr: object = None
     section_relationship_parts: Dict[str, object] = field(default_factory=dict)
     even_and_odd_headers: object = None
+    letterhead_detection: object = None
 
 
 _OBJECT_CAPTION_RE = re.compile(
@@ -1484,6 +1485,10 @@ class DocxImporter:
             raise ImportError(f"无法打开文件 {filepath}: {e}")
 
         data = DocumentData(filepath=filepath)
+        from docxtool.document.engine.letterhead import detect_letterhead
+
+        data.letterhead_detection = detect_letterhead(doc)
+        protected_letterhead_indexes = set(data.letterhead_detection.protected_body_indexes)
 
         # 第一步：按 Word body XML 顺序提取段落、表格、图片段落。
         from docx.text.paragraph import Paragraph as DocxParagraph
@@ -1496,6 +1501,7 @@ class DocxImporter:
 
         raw_blocks = []
         para_index = 0
+        body_index = 0
         for child in doc._body._element.iterchildren():
             if child.tag == _qn_body('w:p'):
                 para = DocxParagraph(child, doc._body)
@@ -1504,7 +1510,9 @@ class DocxImporter:
                 sectPr = extract_paragraph_sectPr(para)
                 collect_section_header_footer_parts(doc, sectPr, data)
                 para_index += 1
-                if pf.contains_image:
+                if body_index in protected_letterhead_indexes:
+                    raw_blocks.append(("letterhead_paragraph_xml", para))
+                elif pf.contains_image:
                     raw_blocks.append(("paragraph_xml", para))
                 elif para.text.strip() or sectPr is not None or any(token.kind == "page_break" for token in inline_tokens):
                     raw_blocks.append(("paragraph", para, pf, inline_tokens, sectPr))
@@ -1515,6 +1523,8 @@ class DocxImporter:
             elif child.tag == _qn_body('w:sectPr'):
                 data.body_sectPr = copy.deepcopy(child)
                 collect_section_header_footer_parts(doc, child, data)
+                continue
+            body_index += 1
 
         # Captions immediately below a table/image belong to that object block.
         # Preserve their complete paragraph XML instead of classifying/reformatting them.
@@ -1651,6 +1661,16 @@ class DocxImporter:
                                    meta={"paragraph_xml": item[1]})
                 data.paragraphs.append(pd)
                 continue
+            if item[0] == "letterhead_paragraph_xml":
+                pd = ParagraphData(
+                    text="",
+                    type_id="__letterhead__",
+                    original_text="",
+                    features=None,
+                    meta={"paragraph_xml": item[1]},
+                )
+                data.paragraphs.append(pd)
+                continue
 
             _, line, sub_pf, inline_tokens, sectPr = item
             next_line = ""
@@ -1661,18 +1681,30 @@ class DocxImporter:
                     next_pf = next_item[2]
                     break
 
-            # 结构检测优先
-            st, sm, sp, ft = detect_structural_type(line, next_line, ctx, sub_pf, next_pf)
-            if st:
-                sm.pop("numbering", None)
-                type_id = st
-                meta_patch = sm
-                prefix = sp
-                clean_text = ft
-                ctx.prev_type_id = st
+            # 受管版头输出重新处理时，固定主标题样式优先于普通物理特征打分。
+            managed_title = (
+                data.letterhead_detection.status == "managed"
+                and sub_pf.style_name == "Docxtool Title"
+                and not ctx.has_seen_real_body
+            )
+            if managed_title:
+                type_id = "title" if not ctx.title_texts else "title_cont"
+                meta_patch = {"is_title": True} if type_id == "title" else {}
+                prefix = ""
+                clean_text = line
             else:
-                type_id, meta_patch, prefix = detect_paragraph_type(line, sub_pf, ctx, rules)
-                clean_text = strip_numbering(line, prefix)
+                # 结构检测优先
+                st, sm, sp, ft = detect_structural_type(line, next_line, ctx, sub_pf, next_pf)
+                if st:
+                    sm.pop("numbering", None)
+                    type_id = st
+                    meta_patch = sm
+                    prefix = sp
+                    clean_text = ft
+                    ctx.prev_type_id = st
+                else:
+                    type_id, meta_patch, prefix = detect_paragraph_type(line, sub_pf, ctx, rules)
+                    clean_text = strip_numbering(line, prefix)
 
             if ctx.attachment_page_mode and type_id == "body":
                 type_id = "attachment_body"

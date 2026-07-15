@@ -170,6 +170,8 @@ PUT /api/upload
 
 `X-Format-Config` 用于把前端“排版设置”随本次上传传入后端，不新增接口、不改变请求体格式。后端只把它作为当前任务的临时配置使用，不会覆盖随包安装的 `src/docxtool/resources/config/default-format.json`。
 
+可选顶层 `letterhead` 使用 `schema_version: 1`。`enabled` 默认为 `false`；启用时通过 `issuance_mode`、`document_direction`、`agencies`、`document_number` 和 `signers` 描述版头。机关及签发人使用稳定 ID 和正整数 `order`，联合发文必须且只能有一个 `role: sponsor`。已有外部或未知版头不会被强制替换，任务状态中的 `compatibility_warnings` 可能包含 `LETTERHEAD_SKIPPED_EXISTING_EXTERNAL` 或 `LETTERHEAD_SKIPPED_EXISTING_UNKNOWN`。
+
 配置 JSON 结构示例：
 
 ```json

@@ -282,6 +282,17 @@ h1{font-size:clamp(38px,5.4vw,64px);letter-spacing:0;line-height:1.08;margin-bot
   padding-right:7px;
 }
 
+.letterhead-toggle{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:12px 0;border-bottom:1px solid rgba(255,255,255,.1)}
+.letterhead-toggle strong{display:block;font-size:14px}.letterhead-toggle small,.letterhead-note{display:block;color:var(--muted2);font-size:11.5px;line-height:1.6}
+.letterhead-fields[hidden]{display:none}.letterhead-subsection{padding:14px 0;border-bottom:1px solid rgba(255,255,255,.09)}.letterhead-subsection:last-child{border-bottom:0;padding-bottom:0}
+.letterhead-subsection h4{font-size:13px;margin-bottom:10px}.letterhead-basic{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.agency-list,.signer-list{display:grid;gap:8px}.agency-row{display:grid;grid-template-columns:minmax(180px,1.4fr) minmax(140px,1fr) 110px auto;gap:8px;align-items:end}
+.row-actions{display:flex;gap:5px}.icon-btn{width:34px;height:34px;border-radius:8px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.07);color:#fff;font-size:15px;display:grid;place-items:center}.icon-btn:hover{border-color:rgba(246,200,95,.45);color:#ffe7a4}
+.letterhead-add{margin-top:9px}.signer-group{padding:10px 0;border-bottom:1px solid rgba(255,255,255,.07)}.signer-group:last-child{border-bottom:0}.signer-group-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}.signer-group-head strong{font-size:12px}.signer-row{display:grid;grid-template-columns:minmax(180px,1fr) 100px 34px;gap:8px;margin-bottom:7px}
+.letterhead-preview-wrap{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:16px;align-items:start}.letterhead-preview{aspect-ratio:210/297;background:#fff;color:#111;padding:28px 24px 22px;box-shadow:0 10px 30px rgba(0,0,0,.25);overflow:hidden}.preview-mark{text-align:center;color:#e60012;font-family:"方正小标宋简体","SimSun",serif;font-size:22px;line-height:1.35;white-space:pre-line}.preview-number{text-align:center;font-family:"FangSong","仿宋",serif;font-size:11px;margin-top:14px}.preview-number.upward{text-align:left}.preview-signers{font-family:"FangSong","仿宋",serif;font-size:10px;line-height:1.7;margin-top:7px}.preview-separator{border-bottom:2px solid #f00;margin-top:8px}.preview-title{text-align:center;font-family:"SimSun",serif;font-size:15px;margin-top:28px;font-weight:700}
+@media(max-width:900px){.letterhead-basic,.agency-row{grid-template-columns:1fr 1fr}.row-actions{grid-column:1/-1}.letterhead-preview-wrap{grid-template-columns:1fr}.letterhead-preview{max-width:300px}}
+@media(max-width:620px){.letterhead-basic,.agency-row,.signer-row{grid-template-columns:1fr}.row-actions{grid-column:auto}}
+
 </style>
 </head>
 <body>
@@ -321,14 +332,58 @@ h1{font-size:clamp(38px,5.4vw,64px);letter-spacing:0;line-height:1.08;margin-bot
       <aside class="settings-sidebar">
         <div class="side-box compact-only"><strong>快速导航</strong></div>
         <nav class="settings-toc">
-          <a href="#settingStyles"><span>01</span>段落样式</a>
-          <a href="#settingGlobal"><span>02</span>全局设置</a>
-          <a href="#settingFeatures"><span>03</span>功能开关</a>
+          <a href="#settingLetterhead"><span>01</span>版头（红头）设置</a>
+          <a href="#settingStyles"><span>02</span>段落样式</a>
+          <a href="#settingGlobal"><span>03</span>全局设置</a>
+          <a href="#settingFeatures"><span>04</span>功能开关</a>
         </nav>
 
       </aside>
 
       <div class="settings-main">
+        <section class="settings-block" id="settingLetterhead">
+          <div class="block-head"><div><h3>版头（红头）设置</h3><p>生成正文流中的机关标志、发文字号、签发人和红色分隔线。</p></div></div>
+          <div class="letterhead-toggle"><span><strong>生成版头</strong><small id="letterheadDisabledNote">不会生成新版头；检测到已有版头时原样保留。</small></span><label class="switch"><input type="checkbox" id="letterheadEnabled" onchange="renderLetterhead()"><span></span></label></div>
+          <div class="letterhead-fields" id="letterheadFields" hidden>
+            <div class="letterhead-subsection">
+              <h4>基本信息</h4>
+              <div class="letterhead-basic">
+                <div class="field"><label>发文方式</label><select id="letterheadIssuanceMode" onchange="setIssuanceMode(this.value)"><option value="single">单一机关</option><option value="joint">联合发文</option></select></div>
+                <div class="field"><label>行文方向</label><select id="letterheadDirection" onchange="renderLetterhead()"><option value="downward">下行文</option><option value="parallel">平行文</option><option value="upward">上行文</option></select></div>
+                <div class="field"><label>标志形式</label><select id="letterheadMarkDisplayMode" onchange="renderLetterheadPreview()"><option value="agency_with_document">机关名称＋“文件”</option><option value="agency_only">仅机关名称</option></select></div>
+                <div class="field" id="letterheadJointScopeWrap" hidden><label>联合展示范围</label><select id="letterheadJointScope" onchange="renderLetterheadPreview()"><option value="all_agencies">全部机关</option><option value="sponsor_only">仅主办机关</option></select></div>
+              </div>
+            </div>
+            <div class="letterhead-subsection">
+              <h4>机关列表</h4>
+              <div class="agency-list" id="letterheadAgencies"></div>
+              <button type="button" class="btn btn-secondary btn-small letterhead-add" id="addAgencyBtn" onclick="addLetterheadAgency()">＋ 添加机关</button>
+            </div>
+            <div class="letterhead-subsection">
+              <h4>发文字号</h4>
+              <div class="letterhead-basic">
+                <div class="field"><label>机关代字</label><input id="letterheadAgencyCode" maxlength="40" oninput="renderLetterheadPreview()"></div>
+                <div class="field"><label>四位年份</label><input id="letterheadYear" type="number" min="1900" max="2100" oninput="renderLetterheadPreview()"></div>
+                <div class="field"><label>顺序号</label><input id="letterheadSequence" type="number" min="1" oninput="renderLetterheadPreview()"></div>
+                <div class="field"><label>实时预览</label><input id="letterheadNumberPreview" class="readonly-control" readonly></div>
+              </div>
+            </div>
+            <div class="letterhead-subsection" id="letterheadSignerSection" hidden>
+              <h4>签发人</h4>
+              <div class="signer-list" id="letterheadSigners"></div>
+            </div>
+            <div class="letterhead-subsection">
+              <h4>已有版头</h4>
+              <p class="letterhead-note">已有外部版头默认保留；由 docxtool 生成的受管版头可选择替换。</p>
+              <label class="letterhead-toggle"><span><strong>替换由 docxtool 生成的版头</strong></span><span class="switch"><input type="checkbox" id="letterheadReplaceManaged"><span></span></span></label>
+            </div>
+            <div class="letterhead-subsection letterhead-preview-wrap">
+              <div><h4>A4 首页预览</h4><p class="letterhead-note">预览仅使用当前配置，不读取上传文件正文。</p></div>
+              <div class="letterhead-preview" id="letterheadPreview"><div class="preview-mark" id="previewLetterheadMark"></div><div class="preview-number" id="previewDocumentNumber"></div><div class="preview-signers" id="previewSigners"></div><div class="preview-separator"></div><div class="preview-title">公文标题</div></div>
+            </div>
+          </div>
+        </section>
+
         <section class="settings-block" id="settingStyles">
           <div class="block-head"><div><h3>段落样式</h3></div></div>
           <div class="style-matrix-wrap"><div class="style-card-list" id="styleMatrixBody"></div></div>
@@ -568,6 +623,17 @@ const CORE_FEATURE_DEFAULTS={
   table_format:{enabled:false,smart_alignment:false},
   cleanup:{enabled:false,mode:'safe'}
 };
+const LETTERHEAD_DEFAULT={
+  schema_version:1,enabled:false,document_direction:'downward',issuance_mode:'single',
+  mark_display_mode:'agency_with_document',joint_mark_scope:'all_agencies',
+  agencies:[{id:'agency-1',name:'',short_name:'',role:'sponsor',order:1}],
+  document_number:{agency_code:'',year:null,sequence:null},signers:[],
+  existing_policy:'preserve_external',replace_managed:false,layout_version:1
+};
+let letterheadAgencies=clonePlain(LETTERHEAD_DEFAULT.agencies);
+let letterheadSigners=[];
+let letterheadAgencySerial=1;
+let letterheadSignerSerial=0;
 function clonePlain(value){return JSON.parse(JSON.stringify(value))}
 function boolValue(value,fallback=false){
   if(value===undefined||value===null)return fallback;
@@ -620,6 +686,7 @@ function normalizeTransportConfig(config){
   out.features.numbered_bold_enabled=boolValue(out.features.numbered_bold_enabled,true);
   out.features.punctuation_enabled=boolValue(out.features.punctuation_enabled,true);
   out.features.page_number_enabled=boolValue(out.features.page_number_enabled,true);
+  out.letterhead=normalizeLetterheadClient(out.letterhead);
   return out;
 }
 function defaultTransportConfig(){
@@ -628,6 +695,143 @@ function defaultTransportConfig(){
     page:{width_cm:21.0,height_cm:29.7,margin_top_cm:3.7,margin_bottom_cm:3.5,margin_left_cm:2.8,margin_right_cm:2.6,lines_per_page:22,chars_per_line:28,line_spacing_pt:28,space_before_line:0,space_after_line:0,grid_alignment:'文字对齐字符网络'},
     features:{numbered_bold_enabled:true,punctuation_enabled:true,page_number_enabled:true}
   });
+}
+function normalizeLetterheadClient(value){
+  const raw=value&&typeof value==='object'&&!Array.isArray(value)?value:{};
+  const out={...clonePlain(LETTERHEAD_DEFAULT),...clonePlain(raw)};
+  out.enabled=boolValue(raw.enabled,false);
+  out.replace_managed=boolValue(raw.replace_managed,false);
+  out.document_number={...LETTERHEAD_DEFAULT.document_number,...(raw.document_number||{})};
+  const incoming=Array.isArray(raw.agencies)&&raw.agencies.length?raw.agencies:LETTERHEAD_DEFAULT.agencies;
+  out.agencies=incoming.map((agency,index)=>({
+    id:String(agency?.id||`agency-${index+1}`),name:String(agency?.name||''),short_name:String(agency?.short_name||''),
+    role:agency?.role==='sponsor'?'sponsor':'joint',order:index+1
+  }));
+  let sponsor=out.agencies.findIndex(agency=>agency.role==='sponsor');
+  if(sponsor<0)sponsor=0;
+  out.agencies.forEach((agency,index)=>agency.role=index===sponsor?'sponsor':'joint');
+  out.agencies.sort((a,b)=>(a.role==='sponsor'?-1:b.role==='sponsor'?1:a.order-b.order));
+  out.agencies.forEach((agency,index)=>agency.order=index+1);
+  out.signers=(Array.isArray(raw.signers)?raw.signers:[]).map((signer,index)=>({
+    id:String(signer?.id||`signer-${index+1}`),agency_id:String(signer?.agency_id||out.agencies[0]?.id||''),
+    name:String(signer?.name||''),label:String(signer?.label||'签发人'),order:Number(signer?.order)||index+1
+  }));
+  return out;
+}
+function letterheadElement(id){return document.getElementById(id)}
+function nextAgencyId(){letterheadAgencySerial+=1;return `agency-${letterheadAgencySerial}`}
+function nextSignerId(){letterheadSignerSerial+=1;return `signer-${letterheadSignerSerial}`}
+function setIssuanceMode(mode){
+  const select=letterheadElement('letterheadIssuanceMode');if(select)select.value=mode;
+  if(mode==='single'){
+    const sponsor=letterheadAgencies.find(agency=>agency.role==='sponsor')||letterheadAgencies[0]||{id:nextAgencyId(),name:'',short_name:''};
+    letterheadAgencies=[{...sponsor,role:'sponsor',order:1}];
+    letterheadSigners=letterheadSigners.filter(signer=>signer.agency_id===sponsor.id);
+  }
+  renderLetterhead();
+}
+function updateLetterheadAgency(id,field,value){
+  const agency=letterheadAgencies.find(item=>item.id===id);if(!agency)return;
+  agency[field]=value;renderLetterheadPreview();
+  if(field==='name'&&letterheadElement('letterheadDirection')?.value==='upward')renderLetterheadSigners();
+}
+function setLetterheadSponsor(id){
+  letterheadAgencies.forEach(agency=>agency.role=agency.id===id?'sponsor':'joint');
+  letterheadAgencies.sort((a,b)=>(a.role==='sponsor'?-1:b.role==='sponsor'?1:a.order-b.order));
+  letterheadAgencies.forEach((agency,index)=>agency.order=index+1);renderLetterhead();
+}
+function addLetterheadAgency(){
+  if(letterheadAgencies.length>=10)return;
+  letterheadAgencies.push({id:nextAgencyId(),name:'',short_name:'',role:'joint',order:letterheadAgencies.length+1});renderLetterhead();
+}
+function removeLetterheadAgency(id){
+  if(letterheadAgencies.length<=2)return;
+  const removed=letterheadAgencies.find(item=>item.id===id);letterheadAgencies=letterheadAgencies.filter(item=>item.id!==id);
+  letterheadSigners=letterheadSigners.filter(signer=>signer.agency_id!==id);
+  if(removed?.role==='sponsor'&&letterheadAgencies[0])letterheadAgencies[0].role='sponsor';
+  letterheadAgencies.forEach((agency,index)=>agency.order=index+1);renderLetterhead();
+}
+function moveLetterheadAgency(id,delta){
+  const index=letterheadAgencies.findIndex(item=>item.id===id);const target=index+delta;
+  if(index<=0||target<=0||target>=letterheadAgencies.length)return;
+  [letterheadAgencies[index],letterheadAgencies[target]]=[letterheadAgencies[target],letterheadAgencies[index]];
+  letterheadAgencies.forEach((agency,order)=>agency.order=order+1);renderLetterhead();
+}
+function addLetterheadSigner(agencyId){
+  const count=letterheadSigners.filter(item=>item.agency_id===agencyId).length;
+  if(count>=10)return;
+  letterheadSigners.push({id:nextSignerId(),agency_id:agencyId,name:'',label:'签发人',order:count+1});renderLetterheadSigners();renderLetterheadPreview();
+}
+function updateLetterheadSigner(id,field,value){const signer=letterheadSigners.find(item=>item.id===id);if(signer){signer[field]=value;renderLetterheadPreview()}}
+function removeLetterheadSigner(id){
+  const signer=letterheadSigners.find(item=>item.id===id);if(!signer)return;
+  const group=letterheadSigners.filter(item=>item.agency_id===signer.agency_id);if(group.length<=1)return;
+  letterheadSigners=letterheadSigners.filter(item=>item.id!==id);
+  letterheadSigners.filter(item=>item.agency_id===signer.agency_id).forEach((item,index)=>item.order=index+1);
+  renderLetterheadSigners();renderLetterheadPreview();
+}
+function renderLetterheadAgencies(){
+  const body=letterheadElement('letterheadAgencies');if(!body)return;
+  const joint=letterheadElement('letterheadIssuanceMode')?.value==='joint';
+  body.innerHTML=letterheadAgencies.map((agency,index)=>`<div class="agency-row" data-agency-id="${escapeHtml(agency.id)}"><div class="field"><label>机关名称</label><input maxlength="80" value="${escapeHtml(agency.name)}" oninput="updateLetterheadAgency('${escapeHtml(agency.id)}','name',this.value)"></div><div class="field"><label>规范化简称（可选）</label><input maxlength="80" value="${escapeHtml(agency.short_name)}" oninput="updateLetterheadAgency('${escapeHtml(agency.id)}','short_name',this.value)"></div><div class="field"><label>机关角色</label><select onchange="if(this.value==='sponsor')setLetterheadSponsor('${escapeHtml(agency.id)}');else this.value='${agency.role}'"><option value="sponsor" ${agency.role==='sponsor'?'selected':''}>主办机关</option><option value="joint" ${agency.role==='joint'?'selected':''}>联合机关</option></select></div><div class="row-actions"><button type="button" class="icon-btn" title="上移" onclick="moveLetterheadAgency('${escapeHtml(agency.id)}',-1)" ${index<=1?'disabled':''}>↑</button><button type="button" class="icon-btn" title="下移" onclick="moveLetterheadAgency('${escapeHtml(agency.id)}',1)" ${index===0||index===letterheadAgencies.length-1?'disabled':''}>↓</button><button type="button" class="icon-btn" title="删除" onclick="removeLetterheadAgency('${escapeHtml(agency.id)}')" ${!joint||letterheadAgencies.length<=2?'disabled':''}>×</button></div></div>`).join('');
+}
+function renderLetterheadSigners(){
+  const body=letterheadElement('letterheadSigners');if(!body)return;
+  body.innerHTML=letterheadAgencies.map(agency=>{
+    const group=letterheadSigners.filter(item=>item.agency_id===agency.id).sort((a,b)=>a.order-b.order);
+    return `<div class="signer-group"><div class="signer-group-head"><strong>${escapeHtml(agency.name||'未填写机关名称')}</strong><button type="button" class="btn btn-secondary btn-small" onclick="addLetterheadSigner('${escapeHtml(agency.id)}')">＋ 添加签发人</button></div>${group.map(signer=>`<div class="signer-row"><input maxlength="30" value="${escapeHtml(signer.name)}" placeholder="签发人姓名" oninput="updateLetterheadSigner('${escapeHtml(signer.id)}','name',this.value)"><input maxlength="20" value="${escapeHtml(signer.label)}" oninput="updateLetterheadSigner('${escapeHtml(signer.id)}','label',this.value)"><button type="button" class="icon-btn" title="删除" onclick="removeLetterheadSigner('${escapeHtml(signer.id)}')" ${group.length<=1?'disabled':''}>×</button></div>`).join('')}</div>`;
+  }).join('');
+}
+function ensureUpwardSigners(){
+  letterheadAgencies.forEach(agency=>{if(!letterheadSigners.some(item=>item.agency_id===agency.id))addLetterheadSigner(agency.id)});
+}
+function renderLetterhead(){
+  const enabled=!!letterheadElement('letterheadEnabled')?.checked;
+  if(letterheadElement('letterheadFields'))letterheadElement('letterheadFields').hidden=!enabled;
+  if(letterheadElement('letterheadDisabledNote'))letterheadElement('letterheadDisabledNote').hidden=enabled;
+  const joint=letterheadElement('letterheadIssuanceMode')?.value==='joint';
+  if(letterheadElement('letterheadJointScopeWrap'))letterheadElement('letterheadJointScopeWrap').hidden=!joint;
+  if(letterheadElement('addAgencyBtn'))letterheadElement('addAgencyBtn').hidden=!joint;
+  const upward=letterheadElement('letterheadDirection')?.value==='upward';
+  if(letterheadElement('letterheadSignerSection'))letterheadElement('letterheadSignerSection').hidden=!upward;
+  if(enabled&&upward)ensureUpwardSigners();
+  renderLetterheadAgencies();renderLetterheadSigners();renderLetterheadPreview();
+}
+function renderLetterheadPreview(){
+  const mark=letterheadElement('previewLetterheadMark');if(!mark)return;
+  const joint=letterheadElement('letterheadIssuanceMode')?.value==='joint';
+  const sponsorOnly=joint&&letterheadElement('letterheadJointScope')?.value==='sponsor_only';
+  let agencies=sponsorOnly?letterheadAgencies.slice(0,1):letterheadAgencies;
+  const withDocument=letterheadElement('letterheadMarkDisplayMode')?.value!=='agency_only';
+  let lines=agencies.map(item=>item.name||'发文机关名称');
+  if(withDocument){if(lines.length===1&&!lines[0].endsWith('文件'))lines[0]+='文件';else if(lines.length>1)lines[Math.floor((lines.length-1)/2)]+='　文件'}
+  mark.textContent=lines.join('\n');
+  const code=letterheadElement('letterheadAgencyCode')?.value||'机关代字';const year=letterheadElement('letterheadYear')?.value||'年份';const sequence=letterheadElement('letterheadSequence')?.value||'顺序号';
+  const number=`${code}〔${year}〕${sequence}号`;letterheadElement('letterheadNumberPreview').value=number;
+  const numberNode=letterheadElement('previewDocumentNumber');numberNode.textContent=number;numberNode.classList.toggle('upward',letterheadElement('letterheadDirection')?.value==='upward');
+  const signerNode=letterheadElement('previewSigners');const upward=letterheadElement('letterheadDirection')?.value==='upward';
+  signerNode.textContent=upward?letterheadSigners.filter(item=>item.name).map(item=>`${item.label||'签发人'}：${item.name}`).join('　　'):'';
+}
+function collectLetterheadConfig(){
+  const numberValue=id=>{const value=Number(letterheadElement(id)?.value);return Number.isInteger(value)&&value>0?value:null};
+  return {
+    schema_version:1,enabled:!!letterheadElement('letterheadEnabled')?.checked,
+    document_direction:letterheadElement('letterheadDirection')?.value||'downward',issuance_mode:letterheadElement('letterheadIssuanceMode')?.value||'single',
+    mark_display_mode:letterheadElement('letterheadMarkDisplayMode')?.value||'agency_with_document',joint_mark_scope:letterheadElement('letterheadJointScope')?.value||'all_agencies',
+    agencies:letterheadAgencies.map((agency,index)=>({...agency,name:agency.name.trim(),short_name:agency.short_name.trim(),order:index+1})),
+    document_number:{agency_code:(letterheadElement('letterheadAgencyCode')?.value||'').trim(),year:numberValue('letterheadYear'),sequence:numberValue('letterheadSequence')},
+    signers:letterheadSigners.map(signer=>({...signer,name:signer.name.trim(),label:(signer.label||'签发人').trim()})),existing_policy:'preserve_external',
+    replace_managed:!!letterheadElement('letterheadReplaceManaged')?.checked,layout_version:1
+  };
+}
+function applyLetterheadConfig(value){
+  const config=normalizeLetterheadClient(value);letterheadAgencies=clonePlain(config.agencies);letterheadSigners=clonePlain(config.signers);
+  letterheadAgencySerial=Math.max(1,...letterheadAgencies.map(item=>Number(String(item.id).match(/(\d+)$/)?.[1])||0));letterheadSignerSerial=Math.max(0,...letterheadSigners.map(item=>Number(String(item.id).match(/(\d+)$/)?.[1])||0));
+  const set=(id,value)=>{const element=letterheadElement(id);if(element)element.value=value??''};
+  if(letterheadElement('letterheadEnabled'))letterheadElement('letterheadEnabled').checked=config.enabled;
+  if(letterheadElement('letterheadReplaceManaged'))letterheadElement('letterheadReplaceManaged').checked=config.replace_managed;
+  set('letterheadIssuanceMode',config.issuance_mode);set('letterheadDirection',config.document_direction);set('letterheadMarkDisplayMode',config.mark_display_mode);set('letterheadJointScope',config.joint_mark_scope);
+  set('letterheadAgencyCode',config.document_number.agency_code);set('letterheadYear',config.document_number.year);set('letterheadSequence',config.document_number.sequence);renderLetterhead();
 }
 function updateNumberingType(row){
   const pattern=row.querySelector('[data-field="pattern"]')?.value||'';
@@ -647,6 +851,7 @@ function initSettings(){
   ['pageLanguage','supLanguage'].forEach(id=>fillSelect(id,languages,{pageLanguage:'阿拉伯数字',supLanguage:'阿拉伯数字'}[id]||'中文'));
   fillSelect('pagePosition',alignments,'奇右偶左');
   renderStyleMatrix();
+  applyLetterheadConfig(LETTERHEAD_DEFAULT);
 }
 function renderStyleMatrix(){
   const body=document.getElementById('styleMatrixBody');
@@ -715,7 +920,8 @@ function collectConfig(){
     numbering:{enabled:checked('numberingEnabled'),mode:'safe'},
     page_number:{enabled:checked('pageNumberV2Enabled'),style:'dash',position:'center',first_page:false,section_numbering:'continue',offset_from_text_mm:7},
     table_format:{enabled:checked('tableFormatEnabled'),smart_alignment:false},
-    cleanup:{enabled:checked('cleanupEnabled'),mode:'safe'}
+    cleanup:{enabled:checked('cleanupEnabled'),mode:'safe'},
+    letterhead:collectLetterheadConfig()
   });
 }
 function normalizeConfig(config,tpl){
@@ -918,6 +1124,7 @@ function applyConfigToForm(config,keepTemplate=true){
     const val=coreFeatureMap[id];
     if(el&&val!==undefined)el.checked=!!val;
   });
+  applyLetterheadConfig(cfg.letterhead);
 }
 async function createTemplateFromCurrent(){
   const name=prompt('请输入新模板名称','新的排版模板');

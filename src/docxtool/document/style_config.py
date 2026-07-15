@@ -616,7 +616,12 @@ def validate_format_config(config_dict: dict) -> dict:
     StyleRule.from_config_dict(config_dict)
     PageSettings.from_config_dict(config_dict)
     _parse_core_feature_options(config_dict)
-    return config_dict
+    normalized = dict(config_dict)
+    if config_dict.get("letterhead") is not None:
+        from docxtool.document.letterhead_config import normalize_letterhead_config
+
+        normalized["letterhead"] = normalize_letterhead_config(config_dict["letterhead"])
+    return normalized
 
 
 def _safe_mode(field_path: str, value, allowed: set[str], default: str) -> str:
@@ -753,8 +758,14 @@ def load_rules_and_settings(config_dict: dict = None):
     }
     if isinstance(config_dict, dict):
         features.update(_parse_core_feature_options(config_dict))
+        from docxtool.document.letterhead_config import normalize_letterhead_config
+
+        features["letterhead"] = normalize_letterhead_config(config_dict.get("letterhead"))
     else:
         features.update(_parse_core_feature_options({}))
+        from docxtool.document.letterhead_config import default_letterhead_config
+
+        features["letterhead"] = default_letterhead_config()
     return rules, settings, features
 
 

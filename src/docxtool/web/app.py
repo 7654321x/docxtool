@@ -1125,7 +1125,7 @@ def _task_process_body(task_id: str, input_path: str, orig_name: str, ip: str, u
         output_path = _ensure_path_within(output_dir, _task_output_path(task_id))
         download_name = _safe_download_filename(orig_name)
         try:
-            export_doc(
+            export_stats = export_doc(
                 doc_data,
                 rules,
                 settings,
@@ -1136,15 +1136,17 @@ def _task_process_body(task_id: str, input_path: str, orig_name: str, ip: str, u
                 page_number_options=features.get("page_number"),
                 table_format_options=features.get("table_format"),
                 cleanup_options=features.get("cleanup"),
+                letterhead_options=features.get("letterhead"),
             )
         except TypeError:
-            export_doc(
+            export_stats = export_doc(
                 doc_data,
                 rules,
                 settings,
                 output_path,
                 numbered_bold_enabled=features["numbered_bold_enabled"],
             )
+        export_stats = export_stats or {}
         try:
             validate_docx_integrity(output_path)
         except DocxIntegrityError as exc:
@@ -1189,6 +1191,7 @@ def _task_process_body(task_id: str, input_path: str, orig_name: str, ip: str, u
             "error": "",
             "error_code": "",
             "error_message": "",
+            "compatibility_warnings": list(export_stats.get("compatibility_warnings", []) or []),
         }
     except Exception as exc:
         logger.exception(f"[Task] {task_id[:8]} error: {exc}")
@@ -1352,6 +1355,9 @@ def _record_task_result(task_id: str, input_path: str, orig_name: str, ip: str, 
 
     with TASKS_LOCK:
         task = TASKS.get(task_id, {})
+        existing_warnings = list(task.get("compatibility_warnings", []) or [])
+        result_warnings = list(result.get("compatibility_warnings", []) or [])
+        task["compatibility_warnings"] = list(dict.fromkeys(existing_warnings + result_warnings))
         task["status"] = status
         task["finished_at"] = time.time()
         task["duration"] = round((duration_ms or 0) / 1000, 2)

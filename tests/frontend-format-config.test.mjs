@@ -123,10 +123,20 @@ const script = scriptMatch[1].replace(/\nbootstrap\(\);\s*$/, "");
 vm.runInNewContext(
   `${script}
 globalThis.__frontend = {
+  addLetterheadAgency,
+  addLetterheadSigner,
+  applyLetterheadConfig,
+  collectLetterheadConfig,
   collectConfig,
   friendlyError,
+  getLetterheadState: () => ({ agencies: letterheadAgencies, signers: letterheadSigners }),
   initSettings,
   normalizeConfig,
+  moveLetterheadAgency,
+  removeLetterheadAgency,
+  renderLetterhead,
+  setIssuanceMode,
+  setLetterheadSponsor,
   styleRows
 };
 `,
@@ -139,6 +149,9 @@ frontend.initSettings();
 styleDomRows = makeStyleDomRows(frontend.styleRows);
 
 const defaultConfig = frontend.collectConfig();
+assert.equal(defaultConfig.letterhead.enabled, false);
+assert.equal(defaultConfig.letterhead.agencies.length, 1);
+assert.equal(elements.get("letterheadFields").hidden, true);
 assert.equal(defaultConfig.styles[6].name, "数字");
 assert.equal(defaultConfig.styles[7].name, "字母");
 assert.equal(Object.hasOwn(defaultConfig.styles[6], "size"), false);
@@ -167,6 +180,63 @@ const migratedConfig = frontend.normalizeConfig(legacyConfig, { id: "custom", na
 assert.equal(migratedConfig.styles[0].size, "");
 assert.equal(Object.hasOwn(migratedConfig.styles[6], "size"), false);
 assert.equal(Object.hasOwn(migratedConfig.styles[7], "size"), false);
+assert.equal(migratedConfig.letterhead.enabled, false);
+
+assert.match(html, /href="#settingLetterhead"><span>01<\/span>版头（红头）设置/);
+assert.match(html, /href="#settingStyles"><span>02<\/span>段落样式/);
+assert.match(html, /href="#settingGlobal"><span>03<\/span>全局设置/);
+assert.match(html, /href="#settingFeatures"><span>04<\/span>功能开关/);
+assert.match(html, /const API_PREFIX = '\/api'/);
+assert.match(html, /fetch\(api\('\/upload'\)/);
+assert.match(html, /'X-Format-Config':base64UrlJson\(config\)/);
+assert.match(html, /'X-Format-Config-Encoding':'base64url-json'/);
+for (const id of ["styleMatrixBody", "marginTop", "pageNumberEnabled", "specialBold"]) {
+  assert.equal((html.match(new RegExp(`id="${id}"`, "g")) || []).length, 1);
+}
+
+elements.get("letterheadEnabled").checked = true;
+frontend.setIssuanceMode("joint");
+frontend.addLetterheadAgency();
+let letterheadState = frontend.getLetterheadState();
+assert.equal(letterheadState.agencies.length, 2);
+letterheadState.agencies[0].name = "主办机关";
+letterheadState.agencies[1].name = "联合机关";
+frontend.addLetterheadAgency();
+letterheadState = frontend.getLetterheadState();
+const movableAgencyId = letterheadState.agencies[2].id;
+letterheadState.agencies[2].name = "第三机关";
+frontend.moveLetterheadAgency(movableAgencyId, -1);
+letterheadState = frontend.getLetterheadState();
+assert.equal(letterheadState.agencies[1].id, movableAgencyId);
+frontend.removeLetterheadAgency(movableAgencyId);
+letterheadState = frontend.getLetterheadState();
+assert.equal(letterheadState.agencies.length, 2);
+frontend.setLetterheadSponsor(letterheadState.agencies[1].id);
+elements.get("letterheadDirection").value = "upward";
+elements.get("letterheadAgencyCode").value = "测发";
+elements.get("letterheadYear").value = "2026";
+elements.get("letterheadSequence").value = "8";
+frontend.renderLetterhead();
+letterheadState = frontend.getLetterheadState();
+assert.equal(elements.get("letterheadFields").hidden, false);
+assert.equal(letterheadState.agencies[0].role, "sponsor");
+assert.equal(letterheadState.signers.length, 2);
+assert.match(elements.get("previewLetterheadMark").textContent, /联合机关/);
+assert.equal(elements.get("letterheadNumberPreview").value, "测发〔2026〕8号");
+letterheadState.signers[0].name = "张三";
+letterheadState.signers[1].name = "李四";
+frontend.addLetterheadSigner(letterheadState.agencies[0].id);
+const collectedLetterhead = frontend.collectLetterheadConfig();
+assert.equal(collectedLetterhead.issuance_mode, "joint");
+assert.equal(collectedLetterhead.document_direction, "upward");
+assert.deepEqual(
+  collectedLetterhead.agencies.map((agency) => agency.order),
+  [1, 2],
+);
+assert.equal(collectedLetterhead.signers.length, 3);
+assert.equal(collectedLetterhead.document_number.agency_code, "测发");
+assert.equal(collectedLetterhead.document_number.year, 2026);
+assert.equal(collectedLetterhead.document_number.sequence, 8);
 
 assert.equal(
   frontend.friendlyError("styles[6].size: 不能为空", "FORMAT_CONFIG_INVALID", {

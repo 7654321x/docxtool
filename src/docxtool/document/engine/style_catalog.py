@@ -43,6 +43,13 @@ _STYLE_SPECS: tuple[_ParagraphStyleSpec, ...] = (
     _ParagraphStyleSpec("DCT-AttachmentBody", "Docxtool Attachment Body", 21, "两端对齐", 2.0),
 )
 
+_LETTERHEAD_STYLE_SPECS: tuple[_ParagraphStyleSpec, ...] = (
+    _ParagraphStyleSpec("DCT-LetterheadMark", "Docxtool Letterhead Mark", 0, "居中", 0.0),
+    _ParagraphStyleSpec("DCT-DocumentNumber", "Docxtool Document Number", 5, "居中", 0.0),
+    _ParagraphStyleSpec("DCT-SignerLine", "Docxtool Signer Line", 5, "左对齐", 0.0),
+    _ParagraphStyleSpec("DCT-LetterheadSeparator", "Docxtool Letterhead Separator", 5, "左对齐", 0.0),
+)
+
 _ALIGNMENT_TO_JC = {
     "左对齐": "left",
     "居中": "center",
@@ -70,6 +77,22 @@ def ensure_document_styles(
     for spec in _STYLE_SPECS:
         style = _get_or_create_style(styles_element, spec)
         _replace_ppr(style, _build_ppr(spec, _rule_at(resolved_rules, spec.rule_index), resolved_settings))
+
+
+def ensure_letterhead_styles(
+    document,
+    rules: Sequence[StyleRule] | None,
+    settings: PageSettings | None,
+) -> None:
+    """Create the managed letterhead styles only when a letterhead is generated."""
+
+    resolved_rules = list(rules or [])
+    resolved_settings = settings or PageSettings()
+    styles_element = document.styles._element
+    for spec in _LETTERHEAD_STYLE_SPECS:
+        style = _get_or_create_style(styles_element, spec)
+        _replace_ppr(style, _build_ppr(spec, _rule_at(resolved_rules, spec.rule_index), resolved_settings))
+        _replace_rpr(style, _letterhead_rpr(spec.style_id, _rule_at(resolved_rules, spec.rule_index)))
 
 
 def _rule_at(rules: Sequence[StyleRule], index: int) -> StyleRule:
@@ -108,6 +131,33 @@ def _replace_ppr(style, ppr) -> None:
     if old is not None:
         style.remove(old)
     style.append(ppr)
+
+
+def _replace_rpr(style, rpr) -> None:
+    old = style.find(qn("w:rPr"))
+    if old is not None:
+        style.remove(old)
+    style.append(rpr)
+
+
+def _letterhead_rpr(style_id: str, rule: StyleRule):
+    rpr = OxmlElement("w:rPr")
+    fonts = OxmlElement("w:rFonts")
+    font_name = "方正小标宋简体" if style_id == "DCT-LetterheadMark" else "仿宋_GB2312"
+    for attribute in ("ascii", "hAnsi", "eastAsia", "cs"):
+        fonts.set(qn(f"w:{attribute}"), font_name)
+    rpr.append(fonts)
+    size = OxmlElement("w:sz")
+    size_cs = OxmlElement("w:szCs")
+    half_points = 72 if style_id == "DCT-LetterheadMark" else int(round((rule.font_size_pt or 16) * 2))
+    size.set(qn("w:val"), str(half_points))
+    size_cs.set(qn("w:val"), str(half_points))
+    rpr.extend((size, size_cs))
+    if style_id == "DCT-LetterheadMark":
+        color = OxmlElement("w:color")
+        color.set(qn("w:val"), "FF0000")
+        rpr.append(color)
+    return rpr
 
 
 def _build_ppr(spec: _ParagraphStyleSpec, rule: StyleRule, settings: PageSettings):
@@ -178,4 +228,4 @@ def _line_spacing_twips(settings: PageSettings) -> int:
     return int(round(value * 20))
 
 
-__all__ = ["ensure_document_styles"]
+__all__ = ["ensure_document_styles", "ensure_letterhead_styles"]

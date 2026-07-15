@@ -72,5 +72,31 @@
   "cleanup": {
     "enabled": false,
     "mode": "safe"
+  },
+  "letterhead": {
+    "schema_version": 1,
+    "enabled": false,
+    "document_direction": "downward",
+    "issuance_mode": "single",
+    "mark_display_mode": "agency_with_document",
+    "joint_mark_scope": "all_agencies",
+    "agencies": [
+      {
+        "id": "agency-1",
+        "name": "",
+        "short_name": "",
+        "role": "sponsor",
+        "order": 1
+      }
+    ],
+    "document_number": {
+      "agency_code": "",
+      "year": null,
+      "sequence": null
+    },
+    "signers": [],
+    "existing_policy": "preserve_external",
+    "replace_managed": false,
+    "layout_version": 1
   }
 }

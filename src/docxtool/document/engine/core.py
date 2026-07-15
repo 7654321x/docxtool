@@ -22,6 +22,7 @@ from docxtool.document.engine.cleanup import cleanup_styles
 from docxtool.document.engine.numbering import normalize_numbering_text
 from docxtool.document.engine.page_number import apply_page_number
 from docxtool.document.engine.style_catalog import ensure_document_styles
+from docxtool.document.engine.letterhead import apply_letterhead, LetterheadDetection
 
 # ── python-docx 模块级导入 ──
 from docx import Document
@@ -1477,7 +1478,7 @@ def _remap_image_relationships(element, source_part, target_part) -> None:
         imagedata.set(qn('r:id'), new_rid)
 
 
-def _copy_preserved_paragraph(doc, source_para, part_copier):
+def _copy_preserved_paragraph(doc, source_para, part_copier, style_copier=None):
     """Copy a paragraph XML block and all relationships without reformatting it."""
     import copy as pycopy
 
@@ -1485,6 +1486,8 @@ def _copy_preserved_paragraph(doc, source_para, part_copier):
         raise ExportError("缺少源段落对象，无法保证对象完整复制")
     p_element = pycopy.deepcopy(source_para._p)
     _remap_element_relationships(p_element, source_para.part, doc.part, part_copier)
+    if style_copier is not None:
+        style_copier.remap_element_styles(p_element, source_para.part.styles.element)
     _append_body_element(doc, p_element)
     return p_element
 
@@ -1505,9 +1508,9 @@ def _set_object_caption_zero_spacing(paragraph_element) -> None:
         spacing.attrib.pop(qn(attr), None)
 
 
-def _copy_image(doc, source_para, part_copier):
+def _copy_image(doc, source_para, part_copier, style_copier=None):
     """Copy an image paragraph and all package relationships unchanged."""
-    element = _copy_preserved_paragraph(doc, source_para, part_copier)
+    element = _copy_preserved_paragraph(doc, source_para, part_copier, style_copier)
     logger.debug(f"[引擎] 图片段落已原样复制: '{source_para.text[:30]}'")
     return element
 
@@ -1672,7 +1675,8 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
                numbering_options: dict | None = None,
                page_number_options: dict | None = None,
                table_format_options: dict | None = None,
-               cleanup_options: dict | None = None) -> dict:
+               cleanup_options: dict | None = None,
+               letterhead_options: dict | None = None) -> dict:
     """排版引擎主入口。DocumentData → .docx 文件。
 
     Returns:
@@ -1710,6 +1714,12 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
     _deferred_body_log = []  # heading1 拆出的 body 日志
     section_paragraphs = []
     protected_paragraph_elements = set()
+    letterhead_detection = getattr(doc_data, "letterhead_detection", None) or LetterheadDetection()
+    letterhead_enabled = _feature_enabled(letterhead_options, False)
+    replace_managed = bool(_feature_options(letterhead_options).get("replace_managed", False))
+    preserve_input_letterhead = not (
+        letterhead_enabled and letterhead_detection.status == "managed" and replace_managed
+    )
 
     for i, pd in enumerate(render_items):
         # 表格占位符 → 原位复制
@@ -1742,6 +1752,20 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
                 protected_paragraph_elements.add(caption_element)
             except Exception as e:
                 raise ExportError(f"题注完整复制失败，已中止导出: {e}") from e
+            continue
+        if pd.type_id == "__letterhead__":
+            if preserve_input_letterhead:
+                try:
+                    protected_paragraph_elements.add(
+                        _copy_preserved_paragraph(
+                            doc,
+                            pd.meta.get("paragraph_xml"),
+                            relationship_part_copier,
+                            None if letterhead_detection.status == "managed" else referenced_style_copier,
+                        )
+                    )
+                except Exception as e:
+                    raise ExportError(f"已有版头完整复制失败，已中止导出: {e}") from e
             continue
 
         para_no = paragraph_i
@@ -2065,6 +2089,18 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
     # 页面设置（边距 + compat + Normal 样式）
     apply_page_settings(doc, settings, doc_data.doc_mode)
     _preserve_even_and_odd_headers_setting(doc, doc_data)
+
+    letterhead_result = apply_letterhead(
+        doc,
+        letterhead_options,
+        detection=letterhead_detection,
+        rules=rules,
+        settings=settings,
+    )
+    protected_paragraph_elements.update(letterhead_result.protected_elements)
+    stats["letterhead_detection"] = letterhead_result.detection
+    stats["letterhead_action"] = letterhead_result.action
+    stats["compatibility_warnings"] = list(letterhead_result.warnings)
 
     for para, sectPr in section_paragraphs:
         _copy_paragraph_sectPr(

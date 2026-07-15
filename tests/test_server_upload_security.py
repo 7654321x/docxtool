@@ -316,6 +316,35 @@ class UploadSecurityTest(unittest.TestCase):
 
         self.assertEqual(config["page"]["width_cm"], "21")
 
+    def test_decode_format_config_rejects_invalid_letterhead_with_safe_field(self):
+        headers = _format_config_headers({
+            "styles": [],
+            "page": {},
+            "letterhead": {
+                "schema_version": 1,
+                "enabled": True,
+                "document_direction": "downward",
+                "issuance_mode": "single",
+                "mark_display_mode": "agency_with_document",
+                "joint_mark_scope": "all_agencies",
+                "agencies": [
+                    {"id": "agency-1", "name": "测试机关", "short_name": "", "role": "sponsor", "order": 1}
+                ],
+                "document_number": {"agency_code": "测第发", "year": 2026, "sequence": 1},
+                "signers": [],
+                "existing_policy": "preserve_external",
+                "replace_managed": False,
+                "layout_version": 1,
+            },
+        })
+
+        with self.assertRaises(server.FormatConfigRequestError) as exc_info:
+            server._decode_format_config(headers)
+
+        self.assertEqual(exc_info.exception.code, "FORMAT_CONFIG_INVALID")
+        self.assertEqual(exc_info.exception.field, "letterhead.document_number.agency_code")
+        self.assertNotIn("测试机关", exc_info.exception.reason)
+
 
 if __name__ == "__main__":
     unittest.main()
