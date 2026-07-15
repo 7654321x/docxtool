@@ -25,16 +25,19 @@ class _ParagraphStyleSpec:
 _STYLE_SPECS: tuple[_ParagraphStyleSpec, ...] = (
     _ParagraphStyleSpec("DCT-Title", "Docxtool Title", 0, "居中", 0.0, True),
     _ParagraphStyleSpec("DCT-DocumentNumber", "Docxtool Document Number", 5, "居中", 0.0),
+    _ParagraphStyleSpec("DCT-Author", "Docxtool Author", 12, "居中", 0.0),
+    _ParagraphStyleSpec("DCT-RoleName", "Docxtool Role Name", 13, "居中", 0.0),
     _ParagraphStyleSpec("DCT-Recipient", "Docxtool Recipient", 10, "左对齐", 2.0),
-    _ParagraphStyleSpec("DCT-Heading1", "Docxtool Heading 1", 1, "左对齐", 2.0, True, 0),
-    _ParagraphStyleSpec("DCT-Heading2", "Docxtool Heading 2", 2, "左对齐", 2.0, True, 1),
-    _ParagraphStyleSpec("DCT-Heading3", "Docxtool Heading 3", 3, "左对齐", 2.0, True, 2),
-    _ParagraphStyleSpec("DCT-Heading4", "Docxtool Heading 4", 4, "左对齐", 2.0, True, 3),
+    _ParagraphStyleSpec("DCT-Heading1", "Docxtool Heading 1", 1, "左对齐", 2.0, False, 0),
+    _ParagraphStyleSpec("DCT-Heading2", "Docxtool Heading 2", 2, "左对齐", 2.0, False, 1),
+    _ParagraphStyleSpec("DCT-Heading3", "Docxtool Heading 3", 3, "左对齐", 2.0, False, 2),
+    _ParagraphStyleSpec("DCT-Heading4", "Docxtool Heading 4", 4, "左对齐", 2.0, False, 3),
     _ParagraphStyleSpec("DCT-Body", "Docxtool Body", 5, "两端对齐", 2.0),
     _ParagraphStyleSpec("DCT-Responsibility", "Docxtool Responsibility", 5, "左对齐", 0.0),
     _ParagraphStyleSpec("DCT-Signature", "Docxtool Signature", 22, "右对齐", 0.0),
     _ParagraphStyleSpec("DCT-Date", "Docxtool Date", 23, "右对齐", 0.0),
     _ParagraphStyleSpec("DCT-AttachmentNote", "Docxtool Attachment Note", 17, "左对齐", 0.0),
+    _ParagraphStyleSpec("DCT-AttachmentNoteItem", "Docxtool Attachment Note Item", 18, "左对齐", 0.0),
     _ParagraphStyleSpec("DCT-AttachmentMark", "Docxtool Attachment Mark", 19, "左对齐", 0.0, True),
     _ParagraphStyleSpec("DCT-AttachmentTitle", "Docxtool Attachment Title", 20, "居中", 0.0, True),
     _ParagraphStyleSpec("DCT-AttachmentBody", "Docxtool Attachment Body", 21, "两端对齐", 2.0),
@@ -146,8 +149,14 @@ def _indent_element(first_line_indent: float):
 
 def _spacing_element(rule: StyleRule, settings: PageSettings):
     line_twips = _line_spacing_twips(settings)
-    before_lines = float(getattr(rule, "spacing_before", 0.0) or getattr(settings, "space_before_line", 0.0) or 0.0)
-    after_lines = float(getattr(rule, "spacing_after", 0.0) or getattr(settings, "space_after_line", 0.0) or 0.0)
+    before_value = getattr(rule, "spacing_before", None)
+    after_value = getattr(rule, "spacing_after", None)
+    before_lines = float(
+        getattr(settings, "space_before_line", 0.0) if before_value is None else before_value
+    )
+    after_lines = float(
+        getattr(settings, "space_after_line", 0.0) if after_value is None else after_value
+    )
 
     spacing = OxmlElement("w:spacing")
     spacing.set(qn("w:before"), str(int(round(before_lines * line_twips))))

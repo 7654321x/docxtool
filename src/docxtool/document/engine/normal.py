@@ -1,7 +1,6 @@
 """engine_normal — 通用公文排版样式重写。"""
 
 import copy
-from docxtool.document.style_config import StyleRule
 
 
 def _copy(rule):
@@ -41,14 +40,17 @@ def resolve(pd, raw_rule, rules, meta=None):
     if pd.type_id == "title2":
         return _copy(r)
     if meta.get("numbered_bold"):
-        r = _copy(r); r.bold = True
+        r = _copy(r)
+        r.bold = True
         return r
     if meta.get("no_indent"):
-        r = _copy(r); r.first_line_indent = 0.0
+        r = _copy(r)
+        r.first_line_indent = 0.0
         return r
     if pd.type_id == "sign_off":
         return _copy(r)
     if meta.get("align_right"):
-        r = _copy(r); r.alignment = "右对齐"
+        r = _copy(r)
+        r.alignment = "右对齐"
         return r
     return r

@@ -28,6 +28,12 @@ def _paragraph_spacing(paragraph):
     return pPr.find(qn("w:spacing")) if pPr is not None else None
 
 
+def _paragraph_style_id(paragraph):
+    pPr = paragraph._element.pPr
+    p_style = pPr.find(qn("w:pStyle")) if pPr is not None else None
+    return _xml_attr(p_style, "w:val")
+
+
 def _paragraph_alignment(paragraph):
     pPr = paragraph._element.pPr
     jc = pPr.find(qn("w:jc")) if pPr is not None else None
@@ -120,23 +126,35 @@ class ConfigDrivenStylesTest(unittest.TestCase):
         rules[rows["附件说明"]].alignment = "右对齐"
         rules[rows["附件说明"]].spacing_before = 2
         rules[rows["附件说明"]].left_indent = 3
+        rules[rows["附件说明续项"]].spacing_before = 1
+        rules[rows["落款署名"]].right_indent = 2
         rules[rows["落款日期"]].right_indent = 4
 
         doc = self._export([
             ParagraphData("附件：测试", "attachment_note", "附件：测试", ParagraphFeatures()),
+            ParagraphData("2. 续项", "attachment_note_item", "2. 续项", ParagraphFeatures()),
+            ParagraphData("区政协", "sign_org", "区政协", ParagraphFeatures()),
             ParagraphData("2026年6月18日", "sign_date", "2026年6月18日", ParagraphFeatures()),
         ], rules=rules)
 
         note = doc.paragraphs[0]
-        sign_date = doc.paragraphs[1]
+        note_item = doc.paragraphs[1]
+        sign_org = doc.paragraphs[2]
+        sign_date = doc.paragraphs[3]
         note_spacing = _paragraph_spacing(note)
+        note_item_spacing = _paragraph_spacing(note_item)
         note_indent = _paragraph_indent(note)
+        sign_org_indent = _paragraph_indent(sign_org)
         sign_indent = _paragraph_indent(sign_date)
 
         self.assertEqual(_run_east_asia_font(note), "黑体")
         self.assertEqual(_paragraph_alignment(note), "right")
         self.assertEqual(_xml_attr(note_spacing, "w:beforeLines"), "200")
+        self.assertEqual(_xml_attr(note_item_spacing, "w:beforeLines"), "100")
         self.assertEqual(_xml_attr(note_indent, "w:leftChars"), "300")
+        self.assertEqual(_paragraph_style_id(sign_org), "DCT-Signature")
+        self.assertEqual(_paragraph_alignment(sign_org), "right")
+        self.assertEqual(_xml_attr(sign_org_indent, "w:rightChars"), "200")
         self.assertEqual(_xml_attr(sign_indent, "w:rightChars"), "400")
 
     def test_line_spacing_setting_controls_paragraph_and_doc_grid_pitch(self):

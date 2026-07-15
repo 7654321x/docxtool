@@ -9,7 +9,7 @@ from docx.enum.text import WD_COLOR_INDEX
 from docx.oxml.ns import qn
 
 
-def cleanup_styles(document, options: Mapping[str, Any] | None = None):
+def cleanup_styles(document, options: Mapping[str, Any] | None = None, protected_elements=None):
     """Clean only configured safe style anomalies; default mode is off."""
 
     opts = dict(options or {})
@@ -24,7 +24,12 @@ def cleanup_styles(document, options: Mapping[str, Any] | None = None):
     if not any((highlight_colors, shading_fills, font_colors, underline_values, italic_values)):
         return document
 
-    for paragraph in _iter_paragraphs(document):
+    protected_elements = protected_elements or set()
+    # Object paragraphs and table-cell paragraphs are pass-through content.
+    # Cleanup is intentionally limited to ordinary top-level body paragraphs.
+    for paragraph in getattr(document, "paragraphs", []):
+        if paragraph._p in protected_elements:
+            continue
         if _paragraph_is_signature_related(paragraph):
             continue
         for run in paragraph.runs:

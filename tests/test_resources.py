@@ -56,6 +56,8 @@ def test_default_format_config_is_valid_x_format_config() -> None:
     assert rules[7].font_size_label == StyleRule.default_for_row(7).font_size_label
     assert settings.lines_per_page == 22
     assert features["numbered_bold_enabled"] is True
+    assert rules[17].spacing_before == 1.0
+    assert rules[18].spacing_before == 0.0
     assert decoded == data
 
 

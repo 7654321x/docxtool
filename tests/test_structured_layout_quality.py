@@ -57,6 +57,30 @@ def _text(paragraph: ET.Element) -> str:
     return "".join(element.text or "" for element in paragraph.findall(".//w:t", NS))
 
 
+def _run_text_and_bold(paragraph: ET.Element) -> list[tuple[str, bool]]:
+    result = []
+    for run in paragraph.findall("w:r", NS):
+        text = "".join(element.text or "" for element in run.findall("w:t", NS))
+        bold = run.find("w:rPr/w:b", NS)
+        bold_value = bold.get(qn("w:val")) if bold is not None else None
+        result.append((text, bold is not None and bold_value not in {"0", "false", "False"}))
+    return result
+
+
+def _run_east_asia_font(paragraph: ET.Element, text: str) -> str | None:
+    for run in paragraph.findall("w:r", NS):
+        run_text = "".join(element.text or "" for element in run.findall("w:t", NS))
+        if run_text == text:
+            fonts = run.find("w:rPr/w:rFonts", NS)
+            return fonts.get(qn("w:eastAsia")) if fonts is not None else None
+    return None
+
+
+def _spacing_after_lines(paragraph: ET.Element) -> str | None:
+    spacing = paragraph.find("w:pPr/w:spacing", NS)
+    return spacing.get(qn("w:afterLines")) if spacing is not None else None
+
+
 def _style(root: ET.Element, style_id: str) -> ET.Element:
     for style in root.findall("w:style", NS):
         if style.get(qn("w:styleId")) == style_id:
@@ -103,8 +127,8 @@ def test_heading_body_responsibility_and_attachment_styles_are_applied(tmp_path:
     style_root = _styles_xml(output)
 
     heading = next(paragraph for paragraph in _paragraphs(doc_root) if _text(paragraph) == "一级标题")
-    assert heading.find("w:pPr/w:keepNext", NS) is not None
-    assert heading.find("w:pPr/w:keepLines", NS) is not None
+    assert heading.find("w:pPr/w:keepNext", NS) is None
+    assert heading.find("w:pPr/w:keepLines", NS) is None
 
     body_style = _style(style_root, "DCT-Body")
     body_indent = body_style.find("w:pPr/w:ind", NS)
@@ -158,6 +182,16 @@ def test_page_margins_and_clean_footer_page_field(tmp_path: Path) -> None:
         assert "textbox" not in footer_xml
 
 
+def test_document_grid_char_space_uses_ooxml_4096_point_units(tmp_path: Path) -> None:
+    output = tmp_path / "grid.docx"
+    _export_sample(output)
+    grid = _document_xml(output).find(".//w:body/w:sectPr/w:docGrid", NS)
+
+    assert grid is not None
+    assert grid.get(qn("w:charsPerLine")) == "28"
+    assert int(grid.get(qn("w:charSpace"))) == -842
+
+
 def test_import_export_keeps_input_sha256_unchanged(tmp_path: Path) -> None:
     source = tmp_path / "source.docx"
     output = tmp_path / "output.docx"
@@ -173,6 +207,10 @@ def test_import_export_keeps_input_sha256_unchanged(tmp_path: Path) -> None:
 
     assert hashlib.sha256(source.read_bytes()).hexdigest() == before
     assert validate_docx_integrity(output).ok is True
+    grid = _document_xml(output).find(".//w:body/w:sectPr/w:docGrid", NS)
+    assert grid is not None
+    assert grid.get(qn("w:charsPerLine")) == "28"
+    assert int(grid.get(qn("w:charSpace"))) == -842
 
 
 def test_responsibility_line_normalizes_quotes_and_repeated_labels(tmp_path: Path) -> None:
@@ -215,6 +253,133 @@ def test_heading4_does_not_insert_blank_paragraph_after_it(tmp_path: Path) -> No
     assert "（1）四级标题" in texts
     heading_index = texts.index("（1）四级标题")
     assert texts[heading_index + 1] == "正文内容"
+
+
+def test_heading2_title_runs_stay_bold_when_inline_body_is_split(tmp_path: Path) -> None:
+    output = tmp_path / "output.docx"
+    data = DocumentData(
+        paragraphs=[
+            ParagraphData(
+                "强化理论武装，筑牢思想政治根基。坚持学习提升履职能力和服务水平。",
+                "heading2",
+                "（一）强化理论武装，筑牢思想政治根基。坚持学习提升履职能力和服务水平。",
+                ParagraphFeatures(),
+                meta={"numbering": "（一）"},
+            ),
+        ],
+        filepath="generated.docx",
+    )
+
+    export_doc(data, _rules(), PageSettings(), str(output))
+    paragraph = _paragraphs(_document_xml(output))[0]
+
+    assert _pstyle(paragraph) == "DCT-Heading2"
+    assert _run_text_and_bold(paragraph) == [
+        ("（一）", True),
+        ("强化理论武装，筑牢思想政治根基。", True),
+        ("坚持学习提升履职能力和服务水平。", False),
+    ]
+
+
+def test_short_inline_heading2_body_uses_the_body_rule(tmp_path: Path) -> None:
+    output = tmp_path / "output.docx"
+    data = DocumentData(
+        paragraphs=[
+            ParagraphData(
+                "标题。短正文测试",
+                "heading2",
+                "（一）标题。短正文测试",
+                ParagraphFeatures(),
+                meta={"numbering": "（一）"},
+            ),
+        ],
+        filepath="generated.docx",
+    )
+
+    export_doc(data, _rules(), PageSettings(), str(output))
+    paragraph = _paragraphs(_document_xml(output))[0]
+
+    assert _run_text_and_bold(paragraph) == [
+        ("（一）", True),
+        ("标题。", True),
+        ("短正文测试", False),
+    ]
+    assert _run_east_asia_font(paragraph, "短正文测试") == "仿宋_GB2312"
+
+
+def test_heading_rules_respect_configured_boldness(tmp_path: Path) -> None:
+    output = tmp_path / "output.docx"
+    rules = _rules()
+    rules[2].bold = False
+    rules[3].bold = False
+    data = DocumentData(
+        paragraphs=[
+            ParagraphData("二级标题", "heading2", "（一）二级标题", ParagraphFeatures(), meta={"numbering": "（一）"}),
+            ParagraphData("三级标题", "heading3", "1.三级标题", ParagraphFeatures(), meta={"numbering": "1."}),
+        ],
+        filepath="generated.docx",
+    )
+
+    export_doc(data, rules, PageSettings(), str(output))
+    paragraphs = _paragraphs(_document_xml(output))
+
+    assert all(not bold for _text_value, bold in _run_text_and_bold(paragraphs[0]))
+    assert all(not bold for _text_value, bold in _run_text_and_bold(paragraphs[1]))
+
+
+def test_heading3_followed_by_body_has_no_blank_gap_or_spacing(tmp_path: Path) -> None:
+    output = tmp_path / "output.docx"
+    rules = _rules()
+    rules[3].spacing_after = 1.0
+    data = DocumentData(
+        paragraphs=[
+            ParagraphData("测试测试", "heading3", "1.测试测试", ParagraphFeatures(), meta={"numbering": "1."}),
+            ParagraphData("正文内容正文内容正文内容。", "body", "正文内容正文内容正文内容。", ParagraphFeatures()),
+        ],
+        filepath="generated.docx",
+    )
+
+    export_doc(data, rules, PageSettings(), str(output))
+    paragraphs = _paragraphs(_document_xml(output))
+    texts = [_text(paragraph) for paragraph in paragraphs]
+
+    assert texts[:2] == ["1.测试测试", "正文内容正文内容正文内容。"]
+    assert _spacing_after_lines(paragraphs[0]) in {None, "0"}
+
+
+def test_heading1_before_nested_heading_does_not_create_keep_chain(tmp_path: Path) -> None:
+    output = tmp_path / "output.docx"
+    data = DocumentData(
+        paragraphs=[
+            ParagraphData("一级标题", "heading1", "一、一级标题", ParagraphFeatures(), meta={"numbering": "一、"}),
+            ParagraphData("二级标题", "heading2", "（一）二级标题", ParagraphFeatures(), meta={"numbering": "（一）"}),
+            ParagraphData("正文内容", "body", "正文内容", ParagraphFeatures()),
+        ],
+        filepath="generated.docx",
+    )
+
+    export_doc(data, _rules(), PageSettings(), str(output))
+    heading1 = _paragraphs(_document_xml(output))[0]
+
+    assert heading1.find("w:pPr/w:keepNext", NS) is None
+    assert heading1.find("w:pPr/w:keepLines", NS) is None
+
+
+def test_heading1_before_body_does_not_require_same_page(tmp_path: Path) -> None:
+    output = tmp_path / "output.docx"
+    data = DocumentData(
+        paragraphs=[
+            ParagraphData("一级标题", "heading1", "一、一级标题", ParagraphFeatures(), meta={"numbering": "一、"}),
+            ParagraphData("正文内容", "body", "正文内容", ParagraphFeatures()),
+        ],
+        filepath="generated.docx",
+    )
+
+    export_doc(data, _rules(), PageSettings(), str(output))
+    heading1 = _paragraphs(_document_xml(output))[0]
+
+    assert heading1.find("w:pPr/w:keepNext", NS) is None
+    assert heading1.find("w:pPr/w:keepLines", NS) is None
 
 
 def test_imported_heading3_heading4_and_responsibility_are_exported_without_blank_gap(tmp_path: Path) -> None:

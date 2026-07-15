@@ -83,6 +83,18 @@ class DocumentData:
     even_and_odd_headers: object = None
 
 
+_OBJECT_CAPTION_RE = re.compile(
+    r"^(?:表|图)\s*(?:(?:[0-9一二三四五六七八九十百]+(?:[-—._、][0-9一二三四五六七八九十百]+)*).*|[:：].*|)$"
+)
+
+
+def _is_object_caption(paragraph) -> bool:
+    """Return whether a paragraph immediately below an object is a caption."""
+    text = paragraph.text.strip()
+    style_name = (paragraph.style.name or "") if paragraph.style else ""
+    return bool(text and (_OBJECT_CAPTION_RE.match(text) or style_name.lower() == "caption" or "题注" in style_name))
+
+
 # ═══════════════════════════════════════════════════════════════
 # 特征提取
 # ═══════════════════════════════════════════════════════════════
@@ -131,14 +143,7 @@ def extract_features(paragraph, index: int) -> ParagraphFeatures:
     # 编号前缀
     pf.numbering_prefix = _detect_numbering_prefix(text)
 
-    pf.contains_image = (
-        bool(paragraph._element.findall(
-            './/{http://schemas.openxmlformats.org/wordprocessingml/2006/main}drawing'
-        ))
-        or bool(paragraph._element.findall(
-            './/{http://schemas.openxmlformats.org/wordprocessingml/2006/main}pict'
-        ))
-    )
+    pf.contains_image = _contains_visible_image(paragraph._element)
 
     # Word 多级列表：ilvl → 项目里的标题级别（0=heading2, 1=heading3, 2+=heading4）
     try:
@@ -179,6 +184,29 @@ def extract_features(paragraph, index: int) -> ParagraphFeatures:
         pass
 
     return pf
+
+
+def _contains_visible_image(paragraph_element) -> bool:
+    picts = paragraph_element.findall(
+        './/{http://schemas.openxmlformats.org/wordprocessingml/2006/main}pict'
+    )
+    if picts:
+        return True
+
+    drawings = paragraph_element.findall(
+        './/{http://schemas.openxmlformats.org/wordprocessingml/2006/main}drawing'
+    )
+    for drawing in drawings:
+        extents = [element for element in drawing.iter() if element.tag.endswith('}extent')]
+        if not extents:
+            return True
+        for extent in extents:
+            try:
+                if int(extent.get('cx', '0')) > 0 and int(extent.get('cy', '0')) > 0:
+                    return True
+            except ValueError:
+                return True
+    return False
 
 
 def extract_inline_tokens(paragraph) -> List[InlineToken]:
@@ -505,6 +533,32 @@ def _is_auto_numbered_item(feats: Optional[ParagraphFeatures]) -> bool:
 _RESPONSIBILITY_LINE_RE = re.compile(r"^\s*[“”\"'‘’「『]?\s*责\s*任\s*单\s*位\s*[:：]")
 _RESPONSIBILITY_LABEL_RE = re.compile(r"\s*责\s*任\s*单\s*位\s*[:：]\s*")
 _RESPONSIBILITY_WRAPPER_RE = re.compile(r"^\s*[“”\"'‘’「『]\s*(.*?)\s*[”\"'’」』]?\s*$")
+
+
+def _should_split_structural_line_breaks(parts: list[str], next_text: str) -> bool:
+    """Split manual line breaks when they delimit known document structures."""
+    nonempty = [part.strip() for part in parts if part.strip()]
+    if len(nonempty) < 2:
+        return False
+    if any(_detect_numbering_prefix(part) for part in nonempty[1:]):
+        return True
+
+    # A title block often uses soft line breaks and ends in "职务  姓名".
+    role_line = nonempty[-1]
+    if (re.fullmatch(r"[\u4e00-\u9fff、，,·]{2,28}\s{2,}[\u4e00-\u9fff·]{2,6}", role_line)
+            or (re.search(r"主任|书记|主席|部长|局长|处长|科长|市长|县长|区长|镇长|乡长|院长|校长|政委|组长|队长|秘书长|委员|常委|负责人", role_line)
+                and re.search(r"\s{2,}", role_line))):
+        return True
+
+    # A signature organization may be separated from the final body paragraph
+    # by manual blank lines; the following paragraph supplies the date boundary.
+    next_visible_line = next(
+        (part.strip() for part in (next_text or "").splitlines() if part.strip()),
+        "",
+    )
+    return bool(_SIGN_DATE_RE2.match(next_visible_line)
+                and len(role_line) <= 30
+                and not any(mark in role_line for mark in "。；;：:"))
 
 
 def _normalize_responsibility_line(text: str) -> str:
@@ -1462,11 +1516,21 @@ class DocxImporter:
                 data.body_sectPr = copy.deepcopy(child)
                 collect_section_header_footer_parts(doc, child, data)
 
+        # Captions immediately below a table/image belong to that object block.
+        # Preserve their complete paragraph XML instead of classifying/reformatting them.
+        for block_index in range(1, len(raw_blocks)):
+            block = raw_blocks[block_index]
+            previous = raw_blocks[block_index - 1]
+            if (block[0] == "paragraph"
+                    and previous[0] in {"table", "paragraph_xml", "protected_paragraph_xml"}
+                    and _is_object_caption(block[1])):
+                raw_blocks[block_index] = ("protected_paragraph_xml", block[1])
+
         # 第二步：按换行符拆分段落（解决 3/4 级标题合并在同一段的问题）
 
         # ── 扁平化 + 单次分类（单 pass，传真实 next_line）──
-        flat_lines = []  # ("text", line_text, pf, inline_tokens, sectPr) / ("table", table) / ("paragraph_xml", para)
-        for block in raw_blocks:
+        flat_lines = []  # text / table / image paragraph XML / protected caption XML
+        for block_index, block in enumerate(raw_blocks):
             if block[0] != "paragraph":
                 flat_lines.append(block)
                 continue
@@ -1487,12 +1551,24 @@ class DocxImporter:
             has_structural_inline = any(token.kind in {"tab", "line_break", "page_break"} for token in inline_tokens)
             if has_structural_inline:
                 normalized_tokens = normalize_tokens(inline_tokens)
-                line = inline_tokens_text(normalized_tokens).strip()
+                raw_inline_text = inline_tokens_text(normalized_tokens)
+                line = raw_inline_text.strip()
+                boundary_whitespace_trimmed = raw_inline_text != line
                 has_page_break = any(token.kind == "page_break" for token in normalized_tokens)
-                has_tab = any(token.kind == "tab" for token in normalized_tokens)
                 has_line_break = any(token.kind == "line_break" for token in normalized_tokens)
                 split_lines = [part.strip() for part in line.split("\n")]
-                if has_line_break and not has_page_break and not has_tab and any(_detect_numbering_prefix(part) for part in split_lines[1:]):
+                following_text = ""
+                for following in raw_blocks[block_index + 1:]:
+                    if following[0] == "paragraph":
+                        following_text = normalize_text(following[1].text).strip()
+                        if following_text:
+                            break
+                # Manual page breaks are often mixed with blank soft breaks before
+                # a trailing signature organization.  A following date is a
+                # stronger structural boundary, so page-break presence must not
+                # suppress the split.
+                if (has_line_break
+                        and _should_split_structural_line_breaks(split_lines, following_text)):
                     for li, split_line in enumerate(split_lines):
                         if not split_line:
                             continue
@@ -1519,7 +1595,8 @@ class DocxImporter:
                     paragraph_index=len(flat_lines),
                     is_new_line=False,
                 )
-                flat_lines.append(("text", line, sub_pf, normalized_tokens, sectPr))
+                preserved_tokens = [] if boundary_whitespace_trimmed else normalized_tokens
+                flat_lines.append(("text", line, sub_pf, preserved_tokens, sectPr))
                 continue
             for li, line in enumerate(text.split('\n')):
                 line = line.strip()
@@ -1566,6 +1643,12 @@ class DocxImporter:
                 pd = ParagraphData(text="", type_id="__image__",
                                    original_text="", features=None,
                                    meta={"image_xml": item[1]})
+                data.paragraphs.append(pd)
+                continue
+            if item[0] == "protected_paragraph_xml":
+                pd = ParagraphData(text="", type_id="__object_caption__",
+                                   original_text="", features=None,
+                                   meta={"paragraph_xml": item[1]})
                 data.paragraphs.append(pd)
                 continue
 

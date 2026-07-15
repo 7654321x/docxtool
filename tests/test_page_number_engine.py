@@ -179,6 +179,21 @@ def test_page_number_styles_and_section_restart_policy(tmp_path: Path) -> None:
     assert starts == ["1", "1"]
 
 
+def test_outside_page_numbers_reuse_empty_even_footer_paragraph(tmp_path: Path) -> None:
+    document = Document()
+
+    apply_page_numbers(document, {"style": "dash", "position": "outside"})
+    output = tmp_path / "outside-page-number.docx"
+    document.save(output)
+
+    roots = _footer_roots(output)
+    assert len(roots) == 2
+    for root in roots.values():
+        paragraphs = root.findall(f".//{{{W_NS}}}p")
+        assert len(paragraphs) == 1
+        assert _field_instructions(root) == ["PAGE"]
+
+
 def test_page_number_formats_create_standard_fields(tmp_path: Path) -> None:
     cases = [
         ("dash", "— ", " —", ["PAGE"]),

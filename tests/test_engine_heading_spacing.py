@@ -21,9 +21,25 @@ def _body_font(run):
     return rFonts.get(qn("w:eastAsia")) if rFonts is not None else None
 
 
+def _font_size_half_points(run):
+    rPr = run._element.rPr
+    size = rPr.find(qn("w:sz")) if rPr is not None else None
+    return size.get(qn("w:val")) if size is not None else None
+
+
+def _has_bold(run):
+    rPr = run._element.rPr
+    return rPr.find(qn("w:b")) is not None if rPr is not None else False
+
+
 def _spacing_after_lines(paragraph):
     spacing = paragraph._element.get_or_add_pPr().find(qn("w:spacing"))
     return spacing.get(qn("w:afterLines")) if spacing is not None else None
+
+
+def _spacing_before_lines(paragraph):
+    spacing = paragraph._element.get_or_add_pPr().find(qn("w:spacing"))
+    return spacing.get(qn("w:beforeLines")) if spacing is not None else None
 
 
 class EngineHeadingSpacingTest(unittest.TestCase):
@@ -141,6 +157,69 @@ class EngineHeadingSpacingTest(unittest.TestCase):
         )
         self.assertIn(_spacing_after_lines(doc.paragraphs[0]), (None, "0"))
         self.assertEqual(_spacing_after_lines(doc.paragraphs[1]), "100")
+
+    def test_attachment_note_has_one_line_gap_after_body(self):
+        doc = self._export([
+            ParagraphData("正文内容。", "body", "正文内容。", ParagraphFeatures()),
+            ParagraphData("附件：1. 基本情况", "attachment_note", "附件：1. 基本情况", ParagraphFeatures()),
+            ParagraphData("2. 具体情况", "attachment_note_item", "2. 具体情况", ParagraphFeatures()),
+            ParagraphData("区政协办", "sign_org", "区政协办", ParagraphFeatures()),
+            ParagraphData("2025年10月15日", "sign_date", "2025年10月15日", ParagraphFeatures()),
+        ])
+
+        self.assertEqual(_spacing_before_lines(doc.paragraphs[1]), "100")
+        self.assertIn(_spacing_before_lines(doc.paragraphs[2]), (None, "0"))
+        self.assertEqual(doc.paragraphs[1].style.style_id, "DCT-AttachmentNote")
+        self.assertEqual(doc.paragraphs[2].style.style_id, "DCT-AttachmentNoteItem")
+        self.assertEqual(_spacing_before_lines(doc.paragraphs[3]), "100")
+        self.assertIn(_spacing_before_lines(doc.paragraphs[4]), (None, "0"))
+
+    def test_export_normalizes_attachment_note_before_signature_block(self):
+        doc = self._export([
+            ParagraphData("正文内容。", "body", "正文内容。", ParagraphFeatures()),
+            ParagraphData("区政协办", "sign_org", "区政协办", ParagraphFeatures()),
+            ParagraphData("2025年10月15日", "sign_date", "2025年10月15日", ParagraphFeatures()),
+            ParagraphData("附件：1. 基本情况", "attachment_note", "附件：1. 基本情况", ParagraphFeatures()),
+            ParagraphData("2. 具体情况", "attachment_note_item", "2. 具体情况", ParagraphFeatures()),
+            ParagraphData("3. 超级情况", "attachment_note_item", "3. 超级情况", ParagraphFeatures()),
+        ])
+
+        self.assertEqual(
+            [paragraph.text for paragraph in doc.paragraphs],
+            [
+                "正文内容。",
+                "附件：1. 基本情况",
+                "2. 具体情况",
+                "3. 超级情况",
+                "区政协办",
+                "2025年10月15日",
+            ],
+        )
+
+    def test_author_and_role_name_use_kaiti_gb2312_16pt_bold(self):
+        doc = self._export([
+            ParagraphData(
+                text="张三",
+                type_id="author_line",
+                original_text="张三",
+                features=ParagraphFeatures(),
+                meta={},
+            ),
+            ParagraphData(
+                text="区政协办公室主任  李弟弟",
+                type_id="role_name",
+                original_text="区政协办公室主任  李弟弟",
+                features=ParagraphFeatures(),
+                meta={},
+            ),
+        ])
+
+        for paragraph in doc.paragraphs:
+            with self.subTest(text=paragraph.text):
+                run = paragraph.runs[0]
+                self.assertEqual(_body_font(run), "楷体_GB2312")
+                self.assertEqual(_font_size_half_points(run), "32")
+                self.assertTrue(_has_bold(run))
 
     def test_overlapping_numbered_and_report_bold_does_not_duplicate_text(self):
         text = (

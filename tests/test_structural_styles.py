@@ -14,6 +14,8 @@ NS = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
 STYLE_IDS = [
     "DCT-Title",
     "DCT-DocumentNumber",
+    "DCT-Author",
+    "DCT-RoleName",
     "DCT-Recipient",
     "DCT-Heading1",
     "DCT-Heading2",
@@ -24,6 +26,7 @@ STYLE_IDS = [
     "DCT-Signature",
     "DCT-Date",
     "DCT-AttachmentNote",
+    "DCT-AttachmentNoteItem",
     "DCT-AttachmentMark",
     "DCT-AttachmentTitle",
     "DCT-AttachmentBody",
@@ -79,14 +82,14 @@ def test_structural_style_ids_are_stable_and_idempotent(tmp_path: Path) -> None:
         assert style.findall(".//w:numPr", NS) == []
 
 
-def test_heading_styles_have_outline_and_keep_properties(tmp_path: Path) -> None:
+def test_heading_styles_have_outline_without_catalog_keep_chain(tmp_path: Path) -> None:
     output, _document = _save_with_structural_styles(tmp_path)
     root = _styles_xml(output)
 
     for level, style_id in enumerate(["DCT-Heading1", "DCT-Heading2", "DCT-Heading3", "DCT-Heading4"]):
         ppr = _ppr(root, style_id)
-        assert ppr.find("w:keepNext", NS) is not None
-        assert ppr.find("w:keepLines", NS) is not None
+        assert ppr.find("w:keepNext", NS) is None
+        assert ppr.find("w:keepLines", NS) is None
         assert ppr.find("w:outlineLvl", NS).get(qn("w:val")) == str(level)
 
     title_ppr = _ppr(root, "DCT-Title")
@@ -111,6 +114,24 @@ def test_body_style_uses_justified_indent_and_exact_spacing(tmp_path: Path) -> N
     assert spacing.get(qn("w:after")) == "150"
     assert spacing.get(qn("w:beforeLines")) == "50"
     assert spacing.get(qn("w:afterLines")) == "25"
+
+
+def test_explicit_zero_spacing_does_not_fall_back_to_page_defaults(tmp_path: Path) -> None:
+    document = Document()
+    rules = [StyleRule.default_for_row(index) for index in range(24)]
+    ensure_document_styles(
+        document,
+        rules,
+        PageSettings(line_spacing_value=30.0, space_before_line=1.0, space_after_line=1.0),
+    )
+
+    output = tmp_path / "zero-spacing.docx"
+    document.save(output)
+    body_ppr = _ppr(_styles_xml(output), "DCT-Body")
+    spacing = body_ppr.find("w:spacing", NS)
+
+    assert spacing.get(qn("w:beforeLines")) == "0"
+    assert spacing.get(qn("w:afterLines")) == "0"
 
 
 def test_responsibility_style_is_left_aligned_without_distribution_or_indent(tmp_path: Path) -> None:

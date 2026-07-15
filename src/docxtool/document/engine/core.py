@@ -8,6 +8,7 @@
 
 import copy
 import io
+import math
 import re
 from typing import Dict, List, Optional
 
@@ -15,15 +16,12 @@ from docxtool.document.style_config import (
     StyleRule, PageSettings, chinese_number,
     arabic_number, logger, ExportError,
 )
-import math
-
 from docxtool.document.importer import DocumentData, ParagraphData
 from docxtool.document.engine.normal import resolve as _resolve_rule
 from docxtool.document.engine.cleanup import cleanup_styles
 from docxtool.document.engine.numbering import normalize_numbering_text
 from docxtool.document.engine.page_number import apply_page_number
 from docxtool.document.engine.style_catalog import ensure_document_styles
-from docxtool.document.engine.table import format_tables
 
 # ── python-docx 模块级导入 ──
 from docx import Document
@@ -156,6 +154,94 @@ class _SectionRelationshipCopier:
         raise ExportError(f"无法为复制的部件分配唯一名称: {source_name}")
 
 
+class _ReferencedStyleCopier:
+    """Copy only styles referenced by pass-through objects, including dependencies."""
+
+    def __init__(self, target_styles_element):
+        self._target = target_styles_element
+        self._mapped = {}
+        self._counter = 0
+
+    def remap_element_styles(self, element, source_styles_element) -> None:
+        if source_styles_element is None:
+            raise ExportError("源文档缺少样式定义，无法保留表格文字格式")
+        for tag in ("w:tblStyle", "w:pStyle", "w:rStyle"):
+            for reference in element.findall(".//" + qn(tag)):
+                source_id = reference.get(qn("w:val"))
+                if source_id:
+                    reference.set(qn("w:val"), self._copy_style(source_styles_element, source_id))
+
+    def preserve_table_default_paragraph_style(self, table_element, source_styles_element) -> None:
+        """Make the source default paragraph style explicit inside copied table cells."""
+        default_style = None
+        for style in source_styles_element.findall(qn("w:style")):
+            if (style.get(qn("w:type")) == "paragraph"
+                    and style.get(qn("w:default")) in {"1", "true", "on"}):
+                default_style = style
+                break
+        if default_style is None:
+            raise ExportError("源文档缺少默认段落样式，无法保留表格文字格式")
+        source_id = default_style.get(qn("w:styleId"))
+        if not source_id:
+            raise ExportError("源文档默认段落样式缺少 styleId")
+        target_id = self._copy_style(source_styles_element, source_id)
+
+        for paragraph in table_element.findall(".//" + qn("w:p")):
+            p_pr = paragraph.find(qn("w:pPr"))
+            if p_pr is None:
+                p_pr = OxmlElement("w:pPr")
+                paragraph.insert(0, p_pr)
+            if p_pr.find(qn("w:pStyle")) is not None:
+                continue
+            p_style = OxmlElement("w:pStyle")
+            p_style.set(qn("w:val"), target_id)
+            p_pr.insert(0, p_style)
+
+    def _copy_style(self, source_styles_element, source_id: str) -> str:
+        key = (id(source_styles_element), source_id)
+        if key in self._mapped:
+            return self._mapped[key]
+
+        source_style = source_styles_element.find(
+            f".//{qn('w:style')}[@{qn('w:styleId')}='{source_id}']"
+        )
+        if source_style is None:
+            raise ExportError(f"表格引用的源样式不存在: {source_id}")
+
+        target_id = source_id
+        existing = self._find_target(target_id)
+        if existing is not None:
+            target_id = self._next_id(source_id)
+        self._mapped[key] = target_id
+
+        copied = copy.deepcopy(source_style)
+        copied.set(qn("w:styleId"), target_id)
+        copied.attrib.pop(qn("w:default"), None)
+        for dependency_tag in ("w:basedOn", "w:next", "w:link"):
+            dependency = copied.find(qn(dependency_tag))
+            if dependency is not None:
+                dependency_id = dependency.get(qn("w:val"))
+                if dependency_id:
+                    dependency.set(
+                        qn("w:val"), self._copy_style(source_styles_element, dependency_id)
+                    )
+        self._target.append(copied)
+        return target_id
+
+    def _find_target(self, style_id: str):
+        return self._target.find(
+            f".//{qn('w:style')}[@{qn('w:styleId')}='{style_id}']"
+        )
+
+    def _next_id(self, source_id: str) -> str:
+        safe_id = re.sub(r"[^A-Za-z0-9_-]+", "-", source_id).strip("-") or "Style"
+        while True:
+            self._counter += 1
+            candidate = f"DCT-Preserved-{safe_id}-{self._counter}"
+            if self._find_target(candidate) is None:
+                return candidate
+
+
 def _sectPr_with_preserved_header_footer_refs(sectPr, doc_part, source_parts, part_copier):
     if sectPr is None:
         return None
@@ -215,8 +301,12 @@ def _set_sectPr_page_layout(sectPr, settings: PageSettings, doc_mode: str = "") 
                 page_w = int(pg_sz.get(qn("w:w"))) or page_w
             except (TypeError, ValueError):
                 pass
-        content_width = page_w - settings.margin_left_cm * 567 - settings.margin_right_cm * 567
-        char_space = math.floor((content_width / settings.chars_per_line) - 320)
+        content_width = (
+            page_w
+            - int(pg_mar.get(qn("w:left")))
+            - int(pg_mar.get(qn("w:right")))
+        )
+        char_space = _doc_grid_char_space(content_width, settings.chars_per_line)
         doc_grid = OxmlElement("w:docGrid")
         doc_grid.set(qn("w:type"), "linesAndChars")
         doc_grid.set(qn("w:charsPerLine"), str(settings.chars_per_line))
@@ -289,6 +379,14 @@ def _line_spacing_twips(settings: PageSettings) -> int:
     if value <= 0:
         value = 28.0
     return int(round(value * 20))
+
+
+def _doc_grid_char_space(content_width_twips: float, chars_per_line: int,
+                         normal_font_size_pt: float = 16.0) -> int:
+    """Return OOXML docGrid charSpace (point delta multiplied by 4096)."""
+    desired_pitch_pt = content_width_twips / chars_per_line / 20
+    # Round toward a narrower grid so strict WPS layout never exceeds the text area.
+    return math.floor((desired_pitch_pt - normal_font_size_pt) * 4096)
 
 
 # ── 落款排版辅助 ──
@@ -662,6 +760,43 @@ def _apply_rule_paragraph_format(para, rule: StyleRule, line_twips: int) -> None
         _set_unique(pPr, qn('w:pageBreakBefore'), pb)
 
 
+_INLINE_HEADING_BODY_MIN_CHARS = 5
+
+
+def _enforce_inline_heading2_format(para, heading_bold: bool, body_bold: bool) -> None:
+    """Apply configured boldness to an inline heading2 and its body text."""
+    full_text = para.text
+    period_pos = full_text.find("。")
+    if period_pos < 0 or len(full_text[period_pos + 1:].strip()) < _INLINE_HEADING_BODY_MIN_CHARS:
+        return
+    inline_body_start = period_pos + 1
+
+    cursor = 0
+    for run in list(para.runs):
+        text = run.text or ""
+        if not text:
+            continue
+        start = cursor
+        end = cursor + len(text)
+        cursor = end
+
+        if end <= inline_body_start:
+            run.font.bold = heading_bold
+            continue
+        if start >= inline_body_start:
+            run.font.bold = body_bold
+            continue
+
+        heading_text = text[:inline_body_start - start]
+        body_text = text[inline_body_start - start:]
+        run.text = heading_text
+        run.font.bold = heading_bold
+        body_run = para.add_run(body_text)
+        _copy_run_style(run, body_run)
+        body_run.font.bold = body_bold
+        run._element.addnext(body_run._element)
+
+
 def _handle_heading_period(text: str) -> str:
     """处理标题句号（heading2/heading3）。
 
@@ -675,8 +810,8 @@ def _handle_heading_period(text: str) -> str:
         return text  # 无句号，类型 A，直接返回
 
     after_period = text[period_pos + 1:].strip()
-    # 句号后 ≥5 字 → 类型 B（行内标题），保留整段
-    if len(after_period) >= 5:
+    # 句号后达到最小正文长度 → 类型 B（行内标题），保留整段
+    if len(after_period) >= _INLINE_HEADING_BODY_MIN_CHARS:
         return text
     # 句号后无内容或很短 → 类型 A（独立标题），去掉句号
     return text[:period_pos] + text[period_pos + 1:]
@@ -936,7 +1071,7 @@ def apply_superscript_split(paragraph) -> None:
 def _write_doc_grid(section, settings: PageSettings, doc_mode: str = "") -> bool:
     """写入 docGrid：强制每行28字符，每页22行，精确计算字符间距。
 
-    关键：charSpace = 列宽 - 字体固有宽度（16pt=320twip），Word 用"字体宽 + charSpace"算列宽。
+    charSpace 使用 OOXML 规定的单位：目标字距与 Normal 字号之差（磅）乘以 4096。
     返回 True 表示网格已写入，False 表示跳过（chars/lines 为 0）。
     """
     if settings.chars_per_line <= 0 or settings.lines_per_page <= 0:
@@ -948,13 +1083,19 @@ def _write_doc_grid(section, settings: PageSettings, doc_mode: str = "") -> bool
         sectPr.remove(old)
 
     # ═══ 字符网格 ═══
-    TWIP = 567
-    page_w = 21.0 * TWIP
-    left   = settings.margin_left_cm * TWIP
-    right  = settings.margin_right_cm * TWIP
-    cw     = page_w - left - right
-    col    = cw / settings.chars_per_line
-    csp    = math.floor(col - 320)  # floor(315.9-320) = -5
+    pg_sz = sectPr.find(qn('w:pgSz'))
+    pg_mar = sectPr.find(qn('w:pgMar'))
+    try:
+        page_w = int(pg_sz.get(qn('w:w')))
+        left = int(pg_mar.get(qn('w:left')))
+        right = int(pg_mar.get(qn('w:right')))
+    except (AttributeError, TypeError, ValueError):
+        twips_per_cm = 1440 / 2.54
+        page_w = round(settings.page_width_cm * twips_per_cm)
+        left = round(settings.margin_left_cm * twips_per_cm)
+        right = round(settings.margin_right_cm * twips_per_cm)
+    cw = page_w - left - right
+    csp    = _doc_grid_char_space(cw, settings.chars_per_line)
     line_pitch = _line_spacing_twips(settings)
 
     logger.info(f"[网格] charSpace={csp}  版心={cw:.0f}twip  期望{settings.chars_per_line}字/行")
@@ -1029,9 +1170,6 @@ def apply_page_settings(doc, settings: PageSettings, doc_mode: str = "") -> None
     rPr.insert(0, rFonts)
 
     for section in doc.sections:
-        # 写入网格（字体已就绪）
-        _write_doc_grid(section, settings, doc_mode)
-
         # A4 页面尺寸
         section.page_width = Cm(settings.page_width_cm)
         section.page_height = Cm(settings.page_height_cm)
@@ -1045,6 +1183,9 @@ def apply_page_settings(doc, settings: PageSettings, doc_mode: str = "") -> None
         # 页码距版心下边缘 7mm → 页脚距页底 = 下边距 - 0.7cm = 2.8cm（GB/T 9704-2012 7.5）
         section.header_distance = Cm(0)
         section.footer_distance = Cm(settings.margin_bottom_cm - 0.7)
+
+        # 页面尺寸经 python-docx 取整后再计算网格，避免 WPS 临界超宽少显示一字。
+        _write_doc_grid(section, settings, doc_mode)
 
     logger.info(f"[页面] 边距 上{settings.margin_top_cm} 下{settings.margin_bottom_cm} 左{settings.margin_left_cm} 右{settings.margin_right_cm} cm")
 
@@ -1250,13 +1391,52 @@ def _apply_universal_superscript(paragraph) -> None:
 # 表格/图片复制
 # ═══════════════════════════════════════════════════════════════
 
-def _copy_table(doc, table) -> None:
-    """跨文档复制表格（底层 XML 操作）。"""
+def _copy_table(doc, table, part_copier, style_copier) -> None:
+    """Copy a table and every package relationship referenced by its XML."""
     import copy as pycopy
 
+    if table is None:
+        raise ExportError("缺少源表格对象，无法保证表格完整复制")
     tbl_element = pycopy.deepcopy(table._tbl)
-    _remap_image_relationships(tbl_element, table.part, doc.part)
+    style_copier.remap_element_styles(tbl_element, table.part.styles.element)
+    style_copier.preserve_table_default_paragraph_style(
+        tbl_element, table.part.styles.element
+    )
+    _remap_element_relationships(tbl_element, table.part, doc.part, part_copier)
     _append_body_element(doc, tbl_element)
+
+
+def _remap_element_relationships(element, source_part, target_part, part_copier) -> None:
+    """Remap every relationship id used by copied XML, failing on any unresolved id."""
+    remapped = {}
+    source_rels = source_part.rels
+
+    for node in element.iter():
+        for attr_name, old_rid in list(node.attrib.items()):
+            if old_rid not in source_rels:
+                continue
+            if old_rid not in remapped:
+                rel = source_rels[old_rid]
+                if rel.is_external:
+                    new_rid = target_part.relate_to(
+                        rel.target_ref, rel.reltype, is_external=True
+                    )
+                else:
+                    if part_copier is None:
+                        raise ExportError(f"缺少关系部件复制器，无法复制表格关系: {old_rid}")
+                    copied_part = part_copier.copy_part(rel.target_part)
+                    new_rid = target_part.relate_to(copied_part, rel.reltype)
+                remapped[old_rid] = new_rid
+            node.set(attr_name, remapped[old_rid])
+
+    unresolved = {
+        value
+        for node in element.iter()
+        for value in node.attrib.values()
+        if isinstance(value, str) and value.startswith("rId") and value not in target_part.rels
+    }
+    if unresolved:
+        raise ExportError(f"表格包含无法迁移的关系引用: {', '.join(sorted(unresolved))}")
 
 
 def _append_body_element(doc, element) -> None:
@@ -1297,18 +1477,39 @@ def _remap_image_relationships(element, source_part, target_part) -> None:
         imagedata.set(qn('r:id'), new_rid)
 
 
-def _copy_image(doc, source_para) -> None:
-    """跨文档复制图片（二进制 blob 路线）。
-
-    注意：此功能在 V1 为简化实现，仅保留原段落文本，
-    图片部分暂不做完全复制。
-    """
+def _copy_preserved_paragraph(doc, source_para, part_copier):
+    """Copy a paragraph XML block and all relationships without reformatting it."""
     import copy as pycopy
 
+    if source_para is None:
+        raise ExportError("缺少源段落对象，无法保证对象完整复制")
     p_element = pycopy.deepcopy(source_para._p)
-    _remap_image_relationships(p_element, source_para.part, doc.part)
+    _remap_element_relationships(p_element, source_para.part, doc.part, part_copier)
     _append_body_element(doc, p_element)
-    logger.debug(f"[引擎] 图片段落已按原位复制: '{source_para.text[:30]}'")
+    return p_element
+
+
+def _set_object_caption_zero_spacing(paragraph_element) -> None:
+    """Normalize only caption paragraph spacing; preserve all other XML."""
+    p_pr = paragraph_element.find(qn("w:pPr"))
+    if p_pr is None:
+        p_pr = OxmlElement("w:pPr")
+        paragraph_element.insert(0, p_pr)
+    spacing = p_pr.find(qn("w:spacing"))
+    if spacing is None:
+        spacing = OxmlElement("w:spacing")
+        p_pr.append(spacing)
+    for attr in ("w:before", "w:after", "w:beforeLines", "w:afterLines"):
+        spacing.set(qn(attr), "0")
+    for attr in ("w:beforeAutospacing", "w:afterAutospacing"):
+        spacing.attrib.pop(qn(attr), None)
+
+
+def _copy_image(doc, source_para, part_copier):
+    """Copy an image paragraph and all package relationships unchanged."""
+    element = _copy_preserved_paragraph(doc, source_para, part_copier)
+    logger.debug(f"[引擎] 图片段落已原样复制: '{source_para.text[:30]}'")
+    return element
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1334,8 +1535,8 @@ TYPE_TO_STYLE_ID: Dict[str, str] = {
     "title": "DCT-Title",
     "title_cont": "DCT-Title",
     "date_line": "DCT-Date",
-    "author_line": "DCT-Signature",
-    "role_name": "DCT-Signature",
+    "author_line": "DCT-Author",
+    "role_name": "DCT-RoleName",
     "heading1": "DCT-Heading1",
     "heading1_report": "DCT-Heading1",
     "heading2": "DCT-Heading2",
@@ -1348,7 +1549,7 @@ TYPE_TO_STYLE_ID: Dict[str, str] = {
     "sign_org": "DCT-Signature",
     "sign_date": "DCT-Date",
     "attachment_note": "DCT-AttachmentNote",
-    "attachment_note_item": "DCT-AttachmentNote",
+    "attachment_note_item": "DCT-AttachmentNoteItem",
     "attachment_page_mark": "DCT-AttachmentMark",
     "attachment_title": "DCT-AttachmentTitle",
     "attachment_body": "DCT-AttachmentBody",
@@ -1412,11 +1613,14 @@ def _remove_paragraph_numbering(paragraph) -> bool:
     return True
 
 
-def _enforce_body_paragraph_invariants(doc) -> dict[str, int]:
+def _enforce_body_paragraph_invariants(doc, protected_elements=None) -> dict[str, int]:
     """Ensure non-empty main-document paragraphs have DCT styles and no numPr."""
     fallback_count = 0
     numpr_removed = 0
+    protected_elements = protected_elements or set()
     for paragraph in doc.paragraphs:
+        if paragraph._p in protected_elements:
+            continue
         if _remove_paragraph_numbering(paragraph):
             numpr_removed += 1
         if not paragraph.text.strip():
@@ -1429,23 +1633,37 @@ def _enforce_body_paragraph_invariants(doc) -> dict[str, int]:
     return {"fallback_count": fallback_count, "numpr_removed": numpr_removed}
 
 
-def _is_standalone_keep_heading(pd: ParagraphData, rendered_text: str) -> bool:
-    if pd.type_id in {"attachment_page_mark", "attachment_title"}:
-        return True
-    if pd.type_id not in {"heading1", "heading1_report", "heading2", "heading3", "heading4"}:
-        return False
-    if (pd.meta or {}).get("heading_inline_body"):
-        return False
-    if pd.type_id in {"heading1", "heading2"}:
-        period_pos = rendered_text.find("。")
-        if period_pos >= 0 and len(rendered_text[period_pos + 1:].strip()) >= 5:
-            return False
-    return True
+def _is_standalone_keep_heading(
+    pd: ParagraphData,
+    next_pd: ParagraphData | None,
+    rendered_text: str,
+) -> bool:
+    del next_pd, rendered_text
+    return pd.type_id in {"attachment_page_mark", "attachment_title"}
 
 
 # ═══════════════════════════════════════════════════════════════
 # 主入口
 # ═══════════════════════════════════════════════════════════════
+
+def _normalize_signature_attachment_order(paragraphs: list[ParagraphData]) -> list[ParagraphData]:
+    """Enforce body → attachment note block → signature organization → date."""
+    normalized = list(paragraphs)
+    i = 0
+    while i < len(normalized) - 2:
+        if normalized[i].type_id != "sign_org" or normalized[i + 1].type_id != "sign_date":
+            i += 1
+            continue
+        if normalized[i + 2].type_id != "attachment_note":
+            i += 1
+            continue
+
+        note_end = i + 3
+        while note_end < len(normalized) and normalized[note_end].type_id == "attachment_note_item":
+            note_end += 1
+        normalized[i:note_end] = normalized[i + 2:note_end] + normalized[i:i + 2]
+        i = note_end
+    return normalized
 
 def export_doc(doc_data: DocumentData, rules: List[StyleRule],
                settings: PageSettings, output_path: str,
@@ -1467,11 +1685,9 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
     doc = Document()
     ensure_document_styles(doc, rules, settings)
     section_relationship_parts = getattr(doc_data, "section_relationship_parts", {}) or {}
-    section_part_copier = (
-        _SectionRelationshipCopier(doc.part.package)
-        if section_relationship_parts
-        else None
-    )
+    relationship_part_copier = _SectionRelationshipCopier(doc.part.package)
+    referenced_style_copier = _ReferencedStyleCopier(doc.styles.element)
+    section_part_copier = relationship_part_copier if section_relationship_parts else None
 
     stats = {
         "total": len(doc_data.paragraphs),
@@ -1489,25 +1705,43 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
     numbering_enabled = _feature_enabled(numbering_options, False)
     numbering_mode = str(_feature_options(numbering_options).get("mode", "safe") or "safe").lower()
 
-    render_items = doc_data.paragraphs
+    render_items = _normalize_signature_attachment_order(doc_data.paragraphs)
     paragraph_i = 0
     _deferred_body_log = []  # heading1 拆出的 body 日志
     section_paragraphs = []
+    protected_paragraph_elements = set()
 
     for i, pd in enumerate(render_items):
         # 表格占位符 → 原位复制
         if pd.type_id == "__table__":
             try:
-                _copy_table(doc, pd.meta.get("table"))
+                _copy_table(
+                    doc,
+                    pd.meta.get("table"),
+                    relationship_part_copier,
+                    referenced_style_copier,
+                )
             except Exception as e:
-                logger.warning(f"[引擎] 表格复制失败: {e}")
+                raise ExportError(f"表格完整复制失败，已中止导出: {e}") from e
             continue
         # 图片占位符 → 原位复制
         if pd.type_id == "__image__":
             try:
-                _copy_image(doc, pd.meta.get("image_xml"))
+                protected_paragraph_elements.add(
+                    _copy_image(doc, pd.meta.get("image_xml"), relationship_part_copier)
+                )
             except Exception as e:
-                logger.warning(f"[引擎] 图片段落复制失败: {e}")
+                raise ExportError(f"图片完整复制失败，已中止导出: {e}") from e
+            continue
+        if pd.type_id == "__object_caption__":
+            try:
+                caption_element = _copy_preserved_paragraph(
+                    doc, pd.meta.get("paragraph_xml"), relationship_part_copier
+                )
+                _set_object_caption_zero_spacing(caption_element)
+                protected_paragraph_elements.add(caption_element)
+            except Exception as e:
+                raise ExportError(f"题注完整复制失败，已中止导出: {e}") from e
             continue
 
         para_no = paragraph_i
@@ -1577,7 +1811,8 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
             else:
                 para = doc.add_paragraph(text)
             _set_paragraph_style_id(para, _style_id_for_type(pd.type_id))
-            if _is_standalone_keep_heading(pd, para.text):
+            next_pd = render_items[i + 1] if i + 1 < len(render_items) else None
+            if _is_standalone_keep_heading(pd, next_pd, para.text):
                 _set_keep_with_next(para)
 
             # 逐段写入 XML 属性
@@ -1620,6 +1855,8 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
                 _set_para_spacing(para, before_lines=0, after_lines=0, line_twips=line_twips)
             elif pd.type_id == "date_line":
                 _set_para_spacing(para, before_lines=0, after_lines=1, line_twips=line_twips)
+            elif pd.type_id in ("heading2", "heading3", "heading4"):
+                _set_para_spacing(para, before_lines=0, after_lines=0, line_twips=line_twips)
 
             # (colon_inline_body removed — scheme mode deleted)            # date_line 强制适应一行（自动计算压缩量）
             if getattr(resolved, 'date_line_compress', False):
@@ -1688,12 +1925,13 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
                 period_pos = para.text.find("。")
                 full_text = para.text
                 after = full_text[period_pos + 1:].strip()
-                if len(after) >= 15 and para.runs:
+                if len(after) >= _INLINE_HEADING_BODY_MIN_CHARS and para.runs:
                     para.runs[-1].text = full_text[:period_pos + 1]
                     body_run = para.add_run(full_text[period_pos + 1:])
-                    _set_run_fonts(body_run, cn_font=rules[5].font, en_font="Times New Roman")
-                    body_run.font.size = Pt(resolved.font_size_pt)
-                    body_run.font.bold = False
+                    body_rule = rules[5] if len(rules) > 5 else StyleRule.default_for_row(5)
+                    _set_run_fonts(body_run, cn_font=body_rule.font, en_font="Times New Roman")
+                    body_run.font.size = Pt(body_rule.font_size_pt)
+                    body_run.font.bold = body_rule.bold
                     para.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
 
             # X是/固定词组 特殊加粗
@@ -1741,6 +1979,10 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
                     rPr.append(b)
                 new_r.insert(0, rPr)
                 para.runs[0]._element.addprevious(new_r)
+
+            if pd.type_id == "heading2":
+                body_rule = rules[5] if len(rules) > 5 else StyleRule.default_for_row(5)
+                _enforce_inline_heading2_format(para, resolved.bold, body_rule.bold)
 
             # 名词解释条目（编号后执行：关键词黑体，正文仿宋）
             if pd.meta.get("glossary_item") and para.runs:
@@ -1810,10 +2052,14 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
 
     # 后处理：上标统一
     for para in doc.paragraphs:
+        if para._p in protected_paragraph_elements:
+            continue
         _apply_universal_superscript(para)
 
     # 后处理：数字/字母 → Times New Roman
     for para in doc.paragraphs:
+        if para._p in protected_paragraph_elements:
+            continue
         _apply_digit_latin_font(para)
 
     # 页面设置（边距 + compat + Normal 样式）
@@ -1862,16 +2108,16 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
         )
 
     if _feature_enabled(table_format_options, False):
-        format_tables(doc, _feature_options(table_format_options))
+        logger.info("[表格] 当前阶段仅原样复制，已忽略表格格式化配置")
     if _feature_enabled(cleanup_options, False):
-        cleanup_styles(doc, _feature_options(cleanup_options))
+        cleanup_styles(doc, _feature_options(cleanup_options), protected_paragraph_elements)
 
     # 页面行数诊断
     page_h_cm = 29.7 - settings.margin_top_cm - settings.margin_bottom_cm
     max_lines = page_h_cm / (settings.line_spacing_value * 0.0353)  # pt→cm
     logger.info(f"[页面] 版心高度={page_h_cm:.1f}cm 行距={settings.line_spacing_value}pt → 理论最大={max_lines:.1f}行 设定={settings.lines_per_page}行")
 
-    invariant_stats = _enforce_body_paragraph_invariants(doc)
+    invariant_stats = _enforce_body_paragraph_invariants(doc, protected_paragraph_elements)
     stats.update(invariant_stats)
     stats["style_fallback_count"] = stats["fallback_count"]
     if invariant_stats["fallback_count"] or invariant_stats["numpr_removed"]:

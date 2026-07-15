@@ -109,9 +109,31 @@ def _replace_footer_content(footer, snapshot) -> None:
 def _apply_to_footer(footer, alignment, style: str, options: Mapping[str, Any]) -> None:
     footer.is_linked_to_previous = False
     _remove_existing_page_numbers(footer)
-    paragraph = footer.add_paragraph()
+    paragraph = next(
+        (candidate for candidate in footer.paragraphs if _is_reusable_empty_paragraph(candidate)),
+        None,
+    )
+    if paragraph is None:
+        paragraph = footer.add_paragraph()
+    else:
+        paragraph.clear()
     paragraph.alignment = alignment
     _write_page_number(paragraph, style, options)
+
+
+def _is_reusable_empty_paragraph(paragraph) -> bool:
+    element = paragraph._element
+    if paragraph.text.strip():
+        return False
+    protected_content = (
+        "w:fldSimple",
+        "w:instrText",
+        "w:drawing",
+        "w:pict",
+        "w:object",
+        "w:hyperlink",
+    )
+    return not any(element.find(".//" + qn(tag)) is not None for tag in protected_content)
 
 
 def _write_page_number(paragraph, style: str, options: Mapping[str, Any]) -> None:

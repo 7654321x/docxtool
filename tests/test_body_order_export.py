@@ -1,4 +1,5 @@
 import base64
+import copy
 import logging
 import tempfile
 import unittest
@@ -9,7 +10,10 @@ from docx import Document
 from docx.enum.section import WD_ORIENT, WD_SECTION
 from docx.enum.text import WD_BREAK
 from docx.oxml.ns import qn
+from docx.oxml import OxmlElement
+from docx.opc.constants import RELATIONSHIP_TYPE as RT
 from docx.shared import Cm
+from docx.shared import Pt, RGBColor
 
 from docxtool.document.engine import export_doc
 from docxtool.document.importer import DocxImporter
@@ -40,6 +44,38 @@ def _body_order(path):
 def _document_xml_root(path):
     with zipfile.ZipFile(path) as zf:
         return zf.read("word/document.xml")
+
+
+def _paragraph_xml_by_text(path, expected):
+    doc = Document(path)
+    return next(paragraph._p.xml for paragraph in doc.paragraphs if paragraph.text == expected)
+
+
+def _paragraph_xml_without_spacing(path, expected):
+    doc = Document(path)
+    element = copy.deepcopy(next(p._p for p in doc.paragraphs if p.text == expected))
+    p_pr = element.find(qn("w:pPr"))
+    if p_pr is not None:
+        spacing = p_pr.find(qn("w:spacing"))
+        if spacing is not None:
+            p_pr.remove(spacing)
+        if len(p_pr) == 0:
+            element.remove(p_pr)
+    return element.xml
+
+
+def _table_xml_without_added_paragraph_styles(table):
+    element = copy.deepcopy(table._tbl)
+    for paragraph in element.findall(".//" + qn("w:p")):
+        p_pr = paragraph.find(qn("w:pPr"))
+        if p_pr is None:
+            continue
+        p_style = p_pr.find(qn("w:pStyle"))
+        if p_style is not None:
+            p_pr.remove(p_style)
+        if len(p_pr) == 0:
+            paragraph.remove(p_pr)
+    return element.xml
 
 
 def _replace_document_xml(source, target, transform):
@@ -111,6 +147,128 @@ class BodyOrderExportTest(unittest.TestCase):
             self.assertEqual(
                 _body_order(output),
                 [("paragraph", "before"), ("table", "cell"), ("paragraph", "after")],
+            )
+
+    def test_preserves_external_hyperlink_relationship_in_table(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            source = tmp / "source.docx"
+            output = tmp / "output.docx"
+
+            doc = Document()
+            cell_para = doc.add_table(rows=1, cols=1).cell(0, 0).paragraphs[0]
+            rid = cell_para.part.relate_to("https://example.com/table", RT.HYPERLINK, is_external=True)
+            hyperlink = OxmlElement("w:hyperlink")
+            hyperlink.set(qn("r:id"), rid)
+            run = OxmlElement("w:r")
+            text = OxmlElement("w:t")
+            text.text = "link"
+            run.append(text)
+            hyperlink.append(run)
+            cell_para._p.append(hyperlink)
+            doc.save(source)
+
+            data = DocxImporter().load(str(source), _rules())
+            export_doc(data, _rules(), PageSettings(), str(output))
+
+            exported = Document(output)
+            link = exported.tables[0]._tbl.find(".//" + qn("w:hyperlink"))
+            self.assertIsNotNone(link)
+            exported_rel = exported.part.rels[link.get(qn("r:id"))]
+            self.assertTrue(exported_rel.is_external)
+            self.assertEqual(exported_rel.target_ref, "https://example.com/table")
+
+    def test_preserves_table_and_following_caption_xml_unchanged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            source = tmp / "source.docx"
+            output = tmp / "output.docx"
+
+            doc = Document()
+            doc.add_paragraph("before")
+            table = doc.add_table(rows=2, cols=2)
+            table.autofit = False
+            table.cell(0, 0).merge(table.cell(0, 1)).text = "完整表头"
+            table.cell(1, 0).text = "数据A"
+            table.cell(1, 1).text = "123"
+            caption = doc.add_paragraph()
+            caption.alignment = 2
+            caption.paragraph_format.space_before = Pt(7)
+            run = caption.add_run("表一完整数据表")
+            run.bold = True
+            run.font.size = Pt(10.5)
+            run.font.color.rgb = RGBColor(12, 34, 56)
+            doc.add_paragraph("after")
+            doc.save(source)
+
+            source_doc = Document(source)
+            source_table_xml = _table_xml_without_added_paragraph_styles(source_doc.tables[0])
+            source_caption_xml = _paragraph_xml_without_spacing(source, "表一完整数据表")
+
+            data = DocxImporter().load(str(source), _rules())
+            caption_data = next(item for item in data.paragraphs if item.type_id == "__object_caption__")
+            self.assertEqual(caption_data.meta["paragraph_xml"].text, "表一完整数据表")
+            export_doc(data, _rules(), PageSettings(), str(output))
+
+            output_doc = Document(output)
+            self.assertEqual(
+                _table_xml_without_added_paragraph_styles(output_doc.tables[0]),
+                source_table_xml,
+            )
+            source_default = next(style for style in source_doc.styles if style.element.get(qn("w:default")) == "1" and style.type == 1)
+            output_cell_style = output_doc.tables[0].cell(0, 0).paragraphs[0].style
+            self.assertNotEqual(output_cell_style.style_id, "DCT-Body")
+            self.assertEqual(
+                output_cell_style.element.rPr.xml if output_cell_style.element.rPr is not None else None,
+                source_default.element.rPr.xml if source_default.element.rPr is not None else None,
+            )
+            self.assertEqual(
+                output_cell_style.element.pPr.xml if output_cell_style.element.pPr is not None else None,
+                source_default.element.pPr.xml if source_default.element.pPr is not None else None,
+            )
+            self.assertEqual(
+                _paragraph_xml_without_spacing(output, "表一完整数据表"),
+                source_caption_xml,
+            )
+            output_caption = next(p for p in output_doc.paragraphs if p.text == "表一完整数据表")
+            spacing = output_caption._p.pPr.find(qn("w:spacing"))
+            self.assertEqual(spacing.get(qn("w:before")), "0")
+            self.assertEqual(spacing.get(qn("w:after")), "0")
+            self.assertEqual(spacing.get(qn("w:beforeLines")), "0")
+            self.assertEqual(spacing.get(qn("w:afterLines")), "0")
+
+    def test_preserves_image_and_following_caption_xml_unchanged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            source = tmp / "source.docx"
+            output = tmp / "output.docx"
+            image = tmp / "tiny.png"
+            image.write_bytes(base64.b64decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+            ))
+
+            doc = Document()
+            image_paragraph = doc.add_paragraph()
+            image_paragraph.alignment = 1
+            image_paragraph.add_run().add_picture(str(image), width=Cm(3.21))
+            caption = doc.add_paragraph("图2结构示意图")
+            caption.paragraph_format.space_after = Pt(9)
+            caption.runs[0].italic = True
+            doc.save(source)
+
+            source_doc = Document(source)
+            source_extent = source_doc.paragraphs[0]._p.find(".//" + qn("wp:extent"))
+            source_caption_xml = _paragraph_xml_without_spacing(source, "图2结构示意图")
+
+            data = DocxImporter().load(str(source), _rules())
+            export_doc(data, _rules(), PageSettings(), str(output))
+
+            output_doc = Document(output)
+            output_extent = output_doc.paragraphs[0]._p.find(".//" + qn("wp:extent"))
+            self.assertEqual(dict(output_extent.attrib), dict(source_extent.attrib))
+            self.assertEqual(
+                _paragraph_xml_without_spacing(output, "图2结构示意图"),
+                source_caption_xml,
             )
 
     def test_keeps_image_at_original_body_position(self):
