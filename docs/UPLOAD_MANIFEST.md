@@ -5,7 +5,7 @@
 当前项目根目录：
 
 ```text
-D:\PycharmProjects\project8
+D:\PycharmProjects\docxtool
 ```
 
 目标 GitHub 仓库：
@@ -43,18 +43,30 @@ git@github.com:7654321x/docxtool.git
 | `src/docxtool/__init__.py` | Python 包入口 |
 | `src/docxtool/__main__.py` | `python -m docxtool` 入口 |
 | `src/docxtool/paths.py` | 项目路径、运行目录和默认资源定位 |
+| `src/docxtool/env.py` | 环境变量加载和本地启动配置 |
 | `src/docxtool/web/__init__.py` | Web 包入口 |
 | `src/docxtool/web/app.py` | Web 服务入口、上传下载、任务队列、管理后台、健康检查 |
 | `src/docxtool/document/__init__.py` | 文档处理包入口 |
 | `src/docxtool/document/importer.py` | DOCX 结构识别、段落分类、元数据生成 |
+| `src/docxtool/document/classifier.py` | 文档模式和段落结构分类 |
+| `src/docxtool/document/letterhead_config.py` | 版头配置归一化和安全校验 |
 | `src/docxtool/document/style_config.py` | 样式规则、页面设置、日志配置、默认配置读取 |
 | `src/docxtool/resources/__init__.py` | 打包资源包入口 |
 | `src/docxtool/resources/config/default-format.json` | 默认公文格式配置，随 wheel 安装 |
 | `src/docxtool/document/engine/__init__.py` | 排版引擎导出入口 |
 | `src/docxtool/document/engine/core.py` | DOCX 导出和实际排版逻辑 |
 | `src/docxtool/document/engine/normal.py` | 常规文种规则分派 |
+| `src/docxtool/document/engine/letterhead.py` | 版头、发文字号、签发人和红色分隔线 |
+| `src/docxtool/document/engine/style_catalog.py` | 结构化 Word 样式目录 |
+| `src/docxtool/document/engine/page_number.py` | 字段页码和奇偶页外侧位置 |
+| `src/docxtool/document/engine/numbering.py` | 结构序号规范化 |
+| `src/docxtool/document/engine/punctuation.py` | 标点规范化核心 |
+| `src/docxtool/document/engine/punctuation_docx.py` | DOCX 标点安全处理 |
+| `src/docxtool/document/engine/cleanup.py` | 保守样式清理 |
+| `src/docxtool/document/engine/table.py` | 表格处理边界入口 |
 | `src/docxtool/security/__init__.py` | 安全模块入口 |
 | `src/docxtool/security/docx_validator.py` | DOCX 上传安全校验 |
+| `src/docxtool/security/docx_integrity.py` | 生成 DOCX 的 OOXML 完整性校验 |
 | `src/docxtool/storage/__init__.py` | 存储包入口 |
 | `src/docxtool/storage/database.py` | SQLite 路径和连接辅助 |
 | `scripts/generate_secrets.py` | 生成随机密钥辅助脚本 |
@@ -98,7 +110,7 @@ var/runtime/.gitkeep
 
 ```text
 tests/test_*.py
-tests/worker-routing.test.mjs
+tests/*.test.mjs
 ```
 
 `tests/` 下的 `.docx` 样例只在确实需要回归测试样例时保留或上传。当前安全发布脚本默认不复制任何 `.docx`，因此不会把根目录用户文档或测试样例文档推送到 GitHub。若以后确需上传测试 fixture，应先脱敏并显式加入清单。

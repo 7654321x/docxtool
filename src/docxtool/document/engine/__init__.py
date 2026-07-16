@@ -7,4 +7,4 @@
   scheme.py  — 方案模式样式重写
 """
 
-from docxtool.document.engine.core import export_doc
+from docxtool.document.engine.core import export_doc as export_doc

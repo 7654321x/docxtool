@@ -170,6 +170,8 @@ PUT /api/upload
 
 `X-Format-Config` 用于把前端“排版设置”随本次上传传入后端，不新增接口、不改变请求体格式。后端只把它作为当前任务的临时配置使用，不会覆盖随包安装的 `src/docxtool/resources/config/default-format.json`。
 
+可选顶层 `letterhead` 使用 `schema_version: 1`。`enabled` 默认为 `false`；启用时通过 `issuance_mode`、`document_direction`、`agencies`、`document_number` 和 `signers` 描述版头。机关及签发人使用稳定 ID 和正整数 `order`，联合发文必须且只能有一个 `role: sponsor`。已有外部或未知版头不会被强制替换，任务状态中的 `compatibility_warnings` 可能包含 `LETTERHEAD_SKIPPED_EXISTING_EXTERNAL` 或 `LETTERHEAD_SKIPPED_EXISTING_UNKNOWN`。
+
 配置 JSON 结构示例：
 
 ```json
@@ -331,6 +333,7 @@ curl "http://127.0.0.1:9527/status/b3e4d8a8-0f3a-4f1b-b8c3-5f8b35d02c11" \
 {
   "status": "error",
   "error": "错误摘要",
+  "error_code": "OUTPUT_DOCX_INVALID",
   "log_filename": "20260619_224512_测试_b3e4d8a8.log",
   "log_url": "/log/b3e4d8a8-0f3a-4f1b-b8c3-5f8b35d02c11",
   "queue_position": 0,
@@ -338,6 +341,8 @@ curl "http://127.0.0.1:9527/status/b3e4d8a8-0f3a-4f1b-b8c3-5f8b35d02c11" \
   "message": "排版失败"
 }
 ```
+
+当后端已生成输出文件但生成结果未通过 OOXML 完整性检查时，任务状态为 `error`，`error_code` 固定为 `OUTPUT_DOCX_INVALID`，输出文件会被清理，下载接口继续返回 `FILE_NOT_READY`。
 
 常见错误：
 

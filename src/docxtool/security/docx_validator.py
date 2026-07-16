@@ -13,6 +13,7 @@ import re
 import zipfile
 from dataclasses import dataclass
 from io import BytesIO
+
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
 _XML_SUFFIXES = (".xml", ".rels", ".vml")
 _NESTED_ARCHIVE_SUFFIXES = (".zip", ".docx", ".pptx", ".xlsx", ".xlsm", ".jar", ".7z", ".rar")
@@ -43,6 +44,15 @@ class DocxValidationError(Exception):
 
 def _reject(code: str, message: str, status: int = 400) -> None:
     raise DocxValidationError(code=code, message=message, status=status)
+
+
+def _open_docx_archive(source: str | os.PathLike | BytesIO) -> zipfile.ZipFile:
+    try:
+        return zipfile.ZipFile(source)
+    except zipfile.BadZipFile as exc:
+        raise DocxValidationError(code="INVALID_DOCX", message="无效的 ZIP / DOCX 文件") from exc
+    except zipfile.LargeZipFile as exc:
+        raise DocxValidationError(code="INVALID_DOCX", message="DOCX 文件过大，无法打开") from exc
 
 
 def _is_absolute_member(name: str) -> bool:
@@ -104,13 +114,13 @@ def validate_docx_upload(
             _reject("INVALID_DOCX", "文件为空或不是有效的 DOCX")
         if os.path.getsize(path) > max_upload_bytes:
             _reject("FILE_TOO_LARGE", "文件过大", 413)
-        archive = zipfile.ZipFile(path)
+        archive = _open_docx_archive(path)
     else:
         if not data:
             _reject("INVALID_DOCX", "文件为空或不是有效的 DOCX")
         if len(data) > max_upload_bytes:
             _reject("FILE_TOO_LARGE", "文件过大", 413)
-        archive = zipfile.ZipFile(BytesIO(data))
+        archive = _open_docx_archive(BytesIO(data))
     try:
         with archive as zf:
             infos = zf.infolist()
@@ -172,16 +182,22 @@ def detect_docx_complexity(
         path = os.fspath(data)
         if not path or not os.path.exists(path):
             return []
-        archive = zipfile.ZipFile(path)
+        try:
+            archive = zipfile.ZipFile(path)
+        except (zipfile.BadZipFile, zipfile.LargeZipFile):
+            return []
     else:
         if not data:
             return []
-        archive = zipfile.ZipFile(BytesIO(data))
+        try:
+            archive = zipfile.ZipFile(BytesIO(data))
+        except (zipfile.BadZipFile, zipfile.LargeZipFile):
+            return []
 
     warnings: list[str] = []
     try:
         with archive as zf:
-            names = { _normalized_member_name(info.filename).lower() for info in zf.infolist() if not info.is_dir() }
+            names = {_normalized_member_name(info.filename).lower() for info in zf.infolist() if not info.is_dir()}
             if any(name.startswith("word/header") and name.endswith(".xml") for name in names):
                 warnings.append("文档包含页眉，排版结果可能无法完整保留")
             if any(name.startswith("word/footer") and name.endswith(".xml") for name in names):
@@ -213,7 +229,7 @@ def detect_docx_complexity(
                     else:
                         warnings.append(f"文档包含{label}，排版结果可能无法完整保留")
 
-    except zipfile.BadZipFile:
+    except (zipfile.BadZipFile, zipfile.LargeZipFile):
         return []
 
     unique: list[str] = []

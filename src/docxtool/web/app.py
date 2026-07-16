@@ -25,8 +25,7 @@ import logging
 import html
 import ipaddress
 import shutil
-import traceback
-from io import BytesIO
+import re as _re
 from queue import Empty
 from datetime import timezone, timedelta
 from email.utils import parsedate_to_datetime
@@ -37,11 +36,12 @@ from urllib.request import Request, urlopen
 
 from docxtool.document.importer import DocxImporter
 from docxtool.document.engine import export_doc
+from docxtool.security import DocxIntegrityError, validate_docx_integrity
 from docxtool.security.docx_validator import DocxValidationError, detect_docx_complexity, validate_docx_upload
 from docxtool.document.style_config import (
     StyleRule, PageSettings, load_rules_and_settings, configure_logging, get_logger,
     make_document_log_path, set_context_log_path, reset_context_log_path,
-    validate_format_config,
+    ConfigValidationError, validate_format_config,
 )
 from docxtool.paths import project_path, resource_path, runtime_dir
 from docxtool.storage.database import connect as _db_connect, default_database_path
@@ -292,7 +292,7 @@ def _default_preset_config() -> dict:
             "page_break_before": rule.page_break_before,
         })
     settings = PageSettings.from_config()
-    return {
+    config = {
         "schema_version": 1,
         "styles": styles,
         "page": {
@@ -313,6 +313,41 @@ def _default_preset_config() -> dict:
             "numbered_bold_enabled": True,
             "punctuation_enabled": True,
             "page_number_enabled": True,
+        },
+    }
+    config.update(_core_feature_config_defaults())
+    return config
+
+def _core_feature_config_defaults() -> dict:
+    return {
+        "punctuation": {
+            "enabled": False,
+            "mode": "safe",
+            "scope": {"body": True, "tables": False, "headers": False, "footers": False},
+        },
+        "classification": {
+            "enabled": True,
+            "minimum_auto_format_confidence": 0.85,
+        },
+        "numbering": {
+            "enabled": False,
+            "mode": "safe",
+        },
+        "page_number": {
+            "enabled": False,
+            "style": "dash",
+            "position": "outside",
+            "first_page": True,
+            "section_numbering": "continue",
+            "offset_from_text_mm": 7,
+        },
+        "table_format": {
+            "enabled": False,
+            "smart_alignment": False,
+        },
+        "cleanup": {
+            "enabled": False,
+            "mode": "safe",
         },
     }
 
@@ -431,7 +466,7 @@ def _page_count(total: int, size: int) -> int:
 def log_sql(task_id, ip, ua, filename, file_size, doc_type,
             paragraphs, headings, body, duration_ms, status="done", error="",
             log_filename="", log_path="", output_dir="", output_filename="", output_path="",
-            processing_options="", preset_id=""):
+            processing_options="", preset_id="", error_code="", error_message=""):
     now = _now_local()
     today = now[:10]
     with _SQL_LOCK:
@@ -440,9 +475,9 @@ def log_sql(task_id, ip, ua, filename, file_size, doc_type,
                        paragraphs,headings,body,duration_ms,status,error,
                        log_filename,log_path,output_dir,output_filename,output_path,
                        client_ip,original_filename,safe_download_filename,input_size,
-                       processing_options,preset_id,
+                       processing_options,preset_id,error_code,error_message,
                        created_at,done_at)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                        ON CONFLICT(id) DO UPDATE SET
                        ip=excluded.ip, ua=excluded.ua, filename=excluded.filename,
                        file_size=excluded.file_size, doc_type=excluded.doc_type,
@@ -458,11 +493,14 @@ def log_sql(task_id, ip, ua, filename, file_size, doc_type,
                        input_size=excluded.input_size,
                        processing_options=excluded.processing_options,
                        preset_id=excluded.preset_id,
+                       error_code=excluded.error_code,
+                       error_message=excluded.error_message,
                        done_at=excluded.done_at""",
                       (task_id, ip, ua, filename, file_size, doc_type,
                        paragraphs, headings, body, duration_ms, status, error,
                        log_filename, log_path, output_dir, output_filename, output_path,
-                       ip, filename, output_filename, file_size, processing_options, preset_id, now, now))
+                       ip, filename, output_filename, file_size, processing_options, preset_id,
+                       error_code, error_message, now, now))
         conn.execute("""INSERT INTO daily_stats (date,total,done,error,total_bytes,total_ms)
                        VALUES (?,1,?,?,?,?)
                        ON CONFLICT(date) DO UPDATE SET total=total+1,
@@ -517,7 +555,6 @@ def get_sql_stats(query: dict = None):
         err = conn.execute("SELECT COUNT(*) as c FROM tasks WHERE status IN ('error','timeout','failed','interrupted','expired')").fetchone()["c"]
         ips = conn.execute("SELECT COUNT(DISTINCT ip) as c FROM tasks").fetchone()["c"]
         tbytes = conn.execute("SELECT COALESCE(SUM(file_size),0) as c FROM tasks").fetchone()["c"]
-        tms = conn.execute("SELECT COALESCE(SUM(duration_ms),0) as c FROM tasks").fetchone()["c"]
         avg_p = conn.execute("SELECT AVG(paragraphs) as c FROM tasks WHERE status='done'").fetchone()["c"] or 0
         avg_ms = conn.execute("SELECT AVG(duration_ms) as c FROM tasks WHERE status='done'").fetchone()["c"] or 0
         recent_pages = _page_count(total, recent_size)
@@ -532,7 +569,7 @@ def get_sql_stats(query: dict = None):
             "SELECT * FROM tasks ORDER BY rowid DESC LIMIT ? OFFSET ?",
             [recent_size, recent_offset],
         ).fetchall()
-        days = conn.execute(f"""
+        days = conn.execute("""
             SELECT date(created_at) as date,
                    COUNT(*) as total,
                    SUM(CASE WHEN status='done' THEN 1 ELSE 0 END) as done,
@@ -541,7 +578,7 @@ def get_sql_stats(query: dict = None):
             GROUP BY date(created_at)
             ORDER BY date(created_at)
         """).fetchall()
-        top_rows = conn.execute(f"""
+        top_rows = conn.execute("""
             SELECT t.ip, COUNT(*) as c,
                    SUM(CASE WHEN t.status='done' THEN 1 ELSE 0 END) as done,
                    SUM(CASE WHEN t.status IN ('error','timeout','failed','interrupted','expired') THEN 1 ELSE 0 END) as error,
@@ -740,15 +777,19 @@ for h in logging.getLogger("docx_tool").handlers:
     if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler):
         h.setLevel(logging.WARNING)
 
-_startup_cleanup()
-
 def _read_exact(rfile, length: int, timeout: int = 10) -> bytes:
-    data = b""; remaining = length; t0 = time.time()
+    data = b""
+    remaining = length
+    t0 = time.time()
     while remaining > 0:
-        if time.time() - t0 > timeout: raise TimeoutError(f"read timeout")
+        if time.time() - t0 > timeout:
+            raise TimeoutError("read timeout")
         chunk = rfile.read(remaining)
-        if not chunk: time.sleep(0.01); continue
-        data += chunk; remaining -= len(chunk)
+        if not chunk:
+            time.sleep(0.01)
+            continue
+        data += chunk
+        remaining -= len(chunk)
     return data
 
 def _read_exact_to_file(rfile, path: str, length: int, timeout: int = 10, chunk_size: int = UPLOAD_READ_CHUNK_SIZE) -> int:
@@ -783,7 +824,8 @@ def _allow(ip: str) -> bool:
     now = time.time()
     with RATE_LOCK:
         last = RATE_LIMIT.get(ip, 0)
-        if now - last < RATE_WINDOW: return False
+        if now - last < RATE_WINDOW:
+            return False
         RATE_LIMIT[ip] = now
     return True
 
@@ -928,7 +970,7 @@ def _public_task_state(task_id: str) -> dict:
         if not row:
             return {}
         task = dict(row)
-    for key in ("output", "output_path", "output_dir", "download_name"):
+    for key in ("output", "output_path", "output_dir", "download_name", "error_message"):
         task.pop(key, None)
     status = task.get("status", "")
     if status == "queued":
@@ -1062,6 +1104,8 @@ def _task_process_body(task_id: str, input_path: str, orig_name: str, ip: str, u
         features.setdefault("numbered_bold_enabled", True)
         features.setdefault("punctuation_enabled", True)
         features.setdefault("page_number_enabled", True)
+        for key, value in _core_feature_config_defaults().items():
+            features.setdefault(key, value)
         body_rule = rules[5] if len(rules) > 5 else StyleRule.default_for_row(5)
         logger.info(
             f"[Task] {task_id[:8]} start file={orig_name} ip={ip} log={log_filename} "
@@ -1081,22 +1125,53 @@ def _task_process_body(task_id: str, input_path: str, orig_name: str, ip: str, u
         output_path = _ensure_path_within(output_dir, _task_output_path(task_id))
         download_name = _safe_download_filename(orig_name)
         try:
-            export_doc(
+            export_stats = export_doc(
                 doc_data,
                 rules,
                 settings,
                 output_path,
                 numbered_bold_enabled=features["numbered_bold_enabled"],
                 page_number_enabled=features["page_number_enabled"],
+                numbering_options=features.get("numbering"),
+                page_number_options=features.get("page_number"),
+                table_format_options=features.get("table_format"),
+                cleanup_options=features.get("cleanup"),
+                letterhead_options=features.get("letterhead"),
             )
         except TypeError:
-            export_doc(
+            export_stats = export_doc(
                 doc_data,
                 rules,
                 settings,
                 output_path,
                 numbered_bold_enabled=features["numbered_bold_enabled"],
             )
+        export_stats = export_stats or {}
+        try:
+            validate_docx_integrity(output_path)
+        except DocxIntegrityError as exc:
+            logger.error(
+                f"[Task] {task_id[:8]} generated DOCX integrity check failed "
+                f"code={exc.code} detail={exc.message}"
+            )
+            duration = round(time.time() - t0, 2)
+            return {
+                "status": "error",
+                "log_filename": log_filename,
+                "log_path": log_path,
+                "output_dir": output_dir,
+                "output_filename": "",
+                "output_path": "",
+                "duration_s": duration,
+                "duration_ms": int(duration * 1000),
+                "doc_mode": doc_data.doc_mode or "UNKNOWN",
+                "paragraphs": len(doc_data.paragraphs),
+                "headings": sum(1 for pd in doc_data.paragraphs if pd.type_id.startswith("heading")),
+                "body": sum(1 for pd in doc_data.paragraphs if pd.type_id == "body"),
+                "error": "生成的 DOCX 未通过完整性检查",
+                "error_code": "OUTPUT_DOCX_INVALID",
+                "error_message": f"{exc.code}: {exc.message}"[:500],
+            }
         duration = round(time.time() - t0, 2)
         hc = sum(1 for pd in doc_data.paragraphs if pd.type_id.startswith("heading"))
         bc = sum(1 for pd in doc_data.paragraphs if pd.type_id == "body")
@@ -1114,6 +1189,9 @@ def _task_process_body(task_id: str, input_path: str, orig_name: str, ip: str, u
             "headings": hc,
             "body": bc,
             "error": "",
+            "error_code": "",
+            "error_message": "",
+            "compatibility_warnings": list(export_stats.get("compatibility_warnings", []) or []),
         }
     except Exception as exc:
         logger.exception(f"[Task] {task_id[:8]} error: {exc}")
@@ -1131,6 +1209,8 @@ def _task_process_body(task_id: str, input_path: str, orig_name: str, ip: str, u
             "headings": 0,
             "body": 0,
             "error": str(exc)[:200],
+            "error_code": "TASK_PROCESSING_ERROR",
+            "error_message": str(exc)[:500],
         }
     finally:
         reset_context_log_path(token)
@@ -1154,6 +1234,8 @@ def _task_process_entry(result_queue, task_id: str, input_path: str, orig_name: 
             "headings": 0,
             "body": 0,
             "error": f"{type(exc).__name__}: {exc}"[:200],
+            "error_code": "TASK_PROCESSING_ERROR",
+            "error_message": f"{type(exc).__name__}: {exc}"[:500],
         }
     try:
         result_queue.put(result)
@@ -1199,6 +1281,8 @@ def _task_process_subprocess(task_id: str, input_path: str, orig_name: str, ip: 
             "headings": 0,
             "body": 0,
             "error": f"排版超时：超过 {PROCESS_TIMEOUT} 秒",
+            "error_code": "TASK_TIMEOUT",
+            "error_message": f"排版超时：超过 {PROCESS_TIMEOUT} 秒",
         }
     try:
         result = result_queue.get(timeout=2)
@@ -1217,6 +1301,8 @@ def _task_process_subprocess(task_id: str, input_path: str, orig_name: str, ip: 
             "headings": 0,
             "body": 0,
             "error": f"子进程未返回结果，退出码={process.exitcode}",
+            "error_code": "TASK_PROCESSING_ERROR",
+            "error_message": f"子进程未返回结果，退出码={process.exitcode}",
         }
     if result.get("status") != "done":
         _cleanup_output_path(_task_output_dir(task_id))
@@ -1232,6 +1318,8 @@ def _record_task_result(task_id: str, input_path: str, orig_name: str, ip: str, 
     file_size = os.path.getsize(input_path) if input_path and os.path.exists(input_path) else 0
     duration_ms = int(result.get("duration_ms", 0) or 0)
     error = result.get("error", "") if status != "done" else ""
+    error_code = result.get("error_code", "") if status != "done" else ""
+    error_message = result.get("error_message", error) if status != "done" else ""
     sql_status = "done" if status == "done" else ("timeout" if status == "timeout" else "error")
     task_payload = {}
     with TASKS_LOCK:
@@ -1256,6 +1344,8 @@ def _record_task_result(task_id: str, input_path: str, orig_name: str, ip: str, 
             output_path=output_path,
             processing_options=processing_options,
             preset_id=preset_id,
+            error_code=error_code,
+            error_message=error_message,
         )
     except Exception:
         logger.exception(f"[Stats] failed to record task={task_id[:8]} ip={ip} file={orig_name}")
@@ -1265,6 +1355,9 @@ def _record_task_result(task_id: str, input_path: str, orig_name: str, ip: str, 
 
     with TASKS_LOCK:
         task = TASKS.get(task_id, {})
+        existing_warnings = list(task.get("compatibility_warnings", []) or [])
+        result_warnings = list(result.get("compatibility_warnings", []) or [])
+        task["compatibility_warnings"] = list(dict.fromkeys(existing_warnings + result_warnings))
         task["status"] = status
         task["finished_at"] = time.time()
         task["duration"] = round((duration_ms or 0) / 1000, 2)
@@ -1280,8 +1373,13 @@ def _record_task_result(task_id: str, input_path: str, orig_name: str, ip: str, 
         task["client_ip"] = ip
         if status == "done":
             task["output"] = output_path
+            task["error"] = ""
+            task["error_code"] = ""
+            task["error_message"] = ""
         else:
             task["error"] = error
+            task["error_code"] = error_code
+            task["error_message"] = error_message
         task["time"] = time.time()
         TASKS[task_id] = task
     _prune_task_cache()
@@ -1406,8 +1504,13 @@ def _cleaner_loop():
 
 threading.Thread(target=_cleaner_loop, daemon=True).start()
 
-def _error_payload(code: str, message: str) -> dict:
-    return {"error": message, "code": code}
+def _error_payload(code: str, message: str, field: str = "", reason: str = "") -> dict:
+    payload = {"error": message, "code": code}
+    if field:
+        payload["field"] = field
+    if reason:
+        payload["reason"] = reason
+    return payload
 
 def _cookie_value(cookie_header: str, name: str) -> str:
     for part in str(cookie_header or "").split(";"):
@@ -1529,34 +1632,66 @@ def _file_api_authorized(headers, client_address=None) -> bool:
         return True
     return bool(client_address and client_address[0] in {"127.0.0.1", "::1"})
 
+class FormatConfigRequestError(ValueError):
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        field: str = "",
+        reason: str = "",
+        status: int = 400,
+    ):
+        self.code = code
+        self.message = message
+        self.field = field
+        self.reason = reason
+        self.status = status
+        super().__init__(f"{code}: {message}")
+
+
+def _format_config_error(code: str, message: str, *, field: str = "", reason: str = "") -> FormatConfigRequestError:
+    return FormatConfigRequestError(
+        code,
+        message,
+        field=field,
+        reason=reason,
+        status=413 if code == "FORMAT_CONFIG_TOO_LARGE" else 400,
+    )
+
 def _decode_format_config(headers) -> dict:
     raw = headers.get("X-Format-Config", "") if headers else ""
     if not raw:
         return None
     encoding = (headers.get("X-Format-Config-Encoding", "") if headers else "").strip().lower()
     if len(raw.encode("ascii", "ignore")) > MAX_FORMAT_CONFIG_HEADER_BYTES:
-        raise ValueError("FORMAT_CONFIG_TOO_LARGE: 配置请求头过大")
+        raise _format_config_error("FORMAT_CONFIG_TOO_LARGE", "配置请求头过大", reason="配置请求头过大")
     if encoding != "base64url-json":
-        raise ValueError("FORMAT_CONFIG_INVALID: 不支持的配置编码")
+        raise _format_config_error("FORMAT_CONFIG_INVALID", "不支持的配置编码", reason="不支持的配置编码")
     try:
         padding = "=" * (-len(raw) % 4)
         decoded = base64.urlsafe_b64decode((raw + padding).encode("ascii"))
     except (binascii.Error, UnicodeEncodeError, ValueError) as exc:
-        raise ValueError("FORMAT_CONFIG_INVALID: 配置解码失败") from exc
+        raise _format_config_error("FORMAT_CONFIG_INVALID", "配置解码失败", reason="配置解码失败") from exc
     if len(decoded) > MAX_FORMAT_CONFIG_JSON_BYTES:
-        raise ValueError("FORMAT_CONFIG_TOO_LARGE: 配置内容过大")
+        raise _format_config_error("FORMAT_CONFIG_TOO_LARGE", "配置内容过大", reason="配置内容过大")
     try:
         config = json.loads(decoded.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ValueError("FORMAT_CONFIG_INVALID: 配置 JSON 无效") from exc
+        raise _format_config_error("FORMAT_CONFIG_INVALID", "配置 JSON 无效", reason="配置 JSON 无效") from exc
     if not isinstance(config, dict):
-        raise ValueError("FORMAT_CONFIG_INVALID: 配置必须是 JSON 对象")
+        raise _format_config_error("FORMAT_CONFIG_INVALID", "配置必须是 JSON 对象", reason="配置必须是 JSON 对象")
     if "styles" not in config or "page" not in config:
-        raise ValueError("FORMAT_CONFIG_INVALID: 配置缺少 styles 或 page")
+        raise _format_config_error("FORMAT_CONFIG_INVALID", "配置缺少 styles 或 page", reason="配置缺少 styles 或 page")
     try:
         return validate_format_config(config)
+    except ConfigValidationError as exc:
+        field = getattr(exc, "field", "")
+        reason = getattr(exc, "reason", "") or "配置无效"
+        message = f"{field}: {reason}" if field else reason
+        raise _format_config_error(exc.code, message, field=field, reason=reason) from exc
     except ValueError as exc:
-        raise ValueError(str(exc)) from exc
+        raise _format_config_error("FORMAT_CONFIG_INVALID", "配置无效", reason="配置无效") from exc
 
 def _upload_request_meta(headers) -> dict:
     return {
@@ -1675,6 +1810,8 @@ def _validate_template_config(config_obj: dict) -> dict:
             "page_number_enabled": bool(features.get("page_number_enabled", True)),
         },
     }
+    for key in ("punctuation", "classification", "numbering", "page_number", "table_format", "cleanup"):
+        normalized[key] = features.get(key, _core_feature_config_defaults()[key])
     for key in ("mode", "processing_mode", "preset_id", "preset_name", "template_type", "source", "output_suffix", "global"):
         if key in config_obj:
             normalized[key] = config_obj[key]
@@ -2074,7 +2211,6 @@ table{{width:100%;border-collapse:collapse;background:#fff;border:1px solid #e0d
 
 
 # ── 安全工具 ──
-import re as _re
 
 def _is_safe_uuid(s: str) -> bool:
     return bool(_re.match(r'^[0-9a-fA-F-]{32,36}$', s or ""))
@@ -2206,10 +2342,12 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/version":
             self._json(_version_payload())
         elif path == "/stats":
-            if not self._require_admin(parsed): return
+            if not self._require_admin(parsed):
+                return
             self._json(get_sql_stats(_monitor_query_from(parsed)))
         elif path == "/monitor":
-            if not self._require_admin(parsed): return
+            if not self._require_admin(parsed):
+                return
             ctx = self._admin_context_or_default()
             if ctx.get("legacy_token") and not ctx.get("session"):
                 session = _create_admin_session(self.headers.get("User-Agent", ""), self.client_address[0] if self.client_address else "")
@@ -2218,7 +2356,8 @@ class Handler(BaseHTTPRequestHandler):
             query = _monitor_query_from(parsed)
             self._text(_monitor_html(get_sql_stats(query), self._admin_csrf_token(parsed)), "text/html")
         elif path == "/ip":
-            if not self._require_admin(parsed): return
+            if not self._require_admin(parsed):
+                return
             self._handle_ip_detail(parsed)
         elif path == "/ban":
             self.send_error(405)
@@ -2233,13 +2372,16 @@ class Handler(BaseHTTPRequestHandler):
         elif path.startswith("/presets/"):
             self._handle_preset_detail(path.split("/", 2)[-1])
         elif path.startswith("/status/") or path.startswith("/api/status/"):
-            if not self._require_file_api(): return
+            if not self._require_file_api():
+                return
             self._handle_status(path.split("/")[-1])
         elif path.startswith("/download/") or path.startswith("/api/download/"):
-            if not self._require_file_api(): return
+            if not self._require_file_api():
+                return
             self._handle_download(path.split("/")[-1])
         elif path.startswith("/log/"):
-            if not self._require_admin(parsed): return
+            if not self._require_admin(parsed):
+                return
             self._handle_log(path.split("/")[-1])
         else:
             self.send_error(404)
@@ -2248,29 +2390,36 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = _route_path(parsed.path)
         if path == "/upload":
-            if not self._require_file_api(): return
+            if not self._require_file_api():
+                return
             self._handle_upload_raw()
         elif path == "/admin/login":
             self._handle_admin_login()
         elif path == "/admin/logout":
             self._handle_admin_logout()
         elif path == "/ban":
-            if not self._require_admin_post(parsed): return
+            if not self._require_admin_post(parsed):
+                return
             self._handle_ban(parsed)
         elif path == "/unban":
-            if not self._require_admin_post(parsed): return
+            if not self._require_admin_post(parsed):
+                return
             self._handle_unban(parsed)
         elif path == "/limit":
-            if not self._require_admin_post(parsed): return
+            if not self._require_admin_post(parsed):
+                return
             self._handle_limit(parsed)
         elif path == "/cleanup":
-            if not self._require_admin_post(parsed): return
+            if not self._require_admin_post(parsed):
+                return
             self._handle_cleanup(parsed)
         elif path == "/presets":
-            if not self._require_admin_post(parsed): return
+            if not self._require_admin_post(parsed):
+                return
             self._handle_preset_create()
         elif path.startswith("/presets/"):
-            if not self._require_admin_post(parsed): return
+            if not self._require_admin_post(parsed):
+                return
             self._handle_preset_update(path.split("/", 2)[-1])
         else:
             self.send_error(404)
@@ -2278,10 +2427,12 @@ class Handler(BaseHTTPRequestHandler):
     def do_PUT(self):
         path = _route_path(urlparse(self.path).path)
         if path == "/upload":
-            if not self._require_file_api(): return
+            if not self._require_file_api():
+                return
             self._handle_upload_raw()
         elif path.startswith("/presets/"):
-            if not self._require_admin_post(urlparse(self.path)): return
+            if not self._require_admin_post(urlparse(self.path)):
+                return
             self._handle_preset_update(path.split("/", 2)[-1])
         else:
             self.send_error(404)
@@ -2290,7 +2441,8 @@ class Handler(BaseHTTPRequestHandler):
         path = _route_path(urlparse(self.path).path)
         if path.startswith("/presets/"):
             parsed = urlparse(self.path)
-            if not self._require_admin_post(parsed): return
+            if not self._require_admin_post(parsed):
+                return
             self._handle_preset_delete(path.split("/", 2)[-1])
         else:
             self.send_error(404)
@@ -2418,28 +2570,35 @@ button{margin-top:16px;height:42px;border:0;border-radius:10px;background:#b71c1
         ip = _client_ip(self.headers, self.client_address)
         if _is_ip_banned(ip):
             logger.warning(f"[Security] banned ip blocked: {ip}")
-            self._json_error("IP_BANNED", "该 IP 已被禁止访问", 403); return
+            self._json_error("IP_BANNED", "该 IP 已被禁止访问", 403)
+            return
         if _upload_limit_exceeded(ip):
             logger.warning(f"[Security] upload limit exceeded: {ip}")
-            self._json_error("UPLOAD_LIMIT_EXCEEDED", "当前 IP 在该时间段内排版次数已达上限，请稍后再试", 429); return
+            self._json_error("UPLOAD_LIMIT_EXCEEDED", "当前 IP 在该时间段内排版次数已达上限，请稍后再试", 429)
+            return
         if not _allow(ip):
-            self._json_error("RATE_LIMITED", "请求过于频繁，请稍后再试", 429); return
+            self._json_error("RATE_LIMITED", "请求过于频繁，请稍后再试", 429)
+            return
         try:
             try:
                 format_config = _decode_format_config(self.headers)
-            except ValueError as cfg_error:
-                message = str(cfg_error)
-                code = message.split(":", 1)[0]
-                text = message.split(":", 1)[1].strip() if ":" in message else "格式配置无效"
-                status = 413 if code == "FORMAT_CONFIG_TOO_LARGE" else 400
-                self._json_error(code, text, status); return
+            except FormatConfigRequestError as cfg_error:
+                self._json_error(
+                    cfg_error.code,
+                    cfg_error.message,
+                    cfg_error.status,
+                    field=cfg_error.field,
+                    reason=cfg_error.reason,
+                )
+                return
             request_meta = _upload_request_meta(self.headers)
             try:
                 length = int(self.headers.get("Content-Length", 0))
             except ValueError:
                 length = 0
             if length <= 0 or length > MAX_SIZE:
-                self._json_error("FILE_TOO_LARGE", "文件过大或无内容", 413); return
+                self._json_error("FILE_TOO_LARGE", "文件过大或无内容", 413)
+                return
             task_id = str(uuid.uuid4())
             raw_name = unquote(self.headers.get("X-Filename", "upload.docx"))
             task_tmp_dir = _task_tmp_dir(task_id)
@@ -2524,15 +2683,20 @@ button{margin-top:16px;height:42px;border:0;border-radius:10px;background:#b71c1
 
     def _handle_status(self, task_id: str):
         if not _is_safe_uuid(task_id):
-            self._json_error("INVALID_TASK_ID", "无效的任务 ID", 400); return
+            self._json_error("INVALID_TASK_ID", "无效的任务 ID", 400)
+            return
         task = _public_task_state(task_id)
-        if not task: self._json_error("TASK_NOT_FOUND", "任务不存在或已过期", 404)
-        else: self._json(task)
+        if not task:
+            self._json_error("TASK_NOT_FOUND", "任务不存在或已过期", 404)
+        else:
+            self._json(task)
 
     def _handle_download(self, task_id: str):
         if not _is_safe_uuid(task_id):
-            self._json_error("INVALID_TASK_ID", "无效的任务 ID", 400); return
-        with TASKS_LOCK: task = TASKS.get(task_id)
+            self._json_error("INVALID_TASK_ID", "无效的任务 ID", 400)
+            return
+        with TASKS_LOCK:
+            task = TASKS.get(task_id)
         if not task or task.get("status") != "done":
             with _SQL_LOCK:
                 conn = _sql()
@@ -2542,14 +2706,16 @@ button{margin-top:16px;height:42px;border:0;border-radius:10px;background:#b71c1
                 ).fetchone()
                 conn.close()
             if not row or row["status"] != "done":
-                self._json_error("FILE_NOT_READY", "文件未就绪", 400); return
+                self._json_error("FILE_NOT_READY", "文件未就绪", 400)
+                return
             path = row["output_path"] or ""
             download_name = row["output_filename"] or _safe_download_filename(row["filename"] or "download.docx")
         else:
             path = task.get("output_path") or task.get("output") or ""
             download_name = task.get("download_name") or _safe_download_filename(task.get("filename", "download.docx"))
         if not path or not os.path.exists(path):
-            self._json_error("FILE_EXPIRED", "文件已过期", 410); return
+            self._json_error("FILE_EXPIRED", "文件已过期", 410)
+            return
         try:
             file_size = os.path.getsize(path)
         except OSError:
@@ -2614,14 +2780,16 @@ button{margin-top:16px;height:42px;border:0;border-radius:10px;background:#b71c1
     def _handle_ip_detail(self, parsed):
         ip = self._query_ip(parsed)
         if not _is_ip(ip):
-            self._json_error("INVALID_IP", "无效的 IP", 400); return
+            self._json_error("INVALID_IP", "无效的 IP", 400)
+            return
         self._text(_ip_detail_html(ip, self._admin_csrf_token(parsed)), "text/html")
 
     def _handle_ban(self, parsed):
         params = self._request_params(parsed)
         ip = (params.get("ip") or params.get("addr") or "").strip()
         if not _is_ip(ip):
-            self._json_error("INVALID_IP", "无效的 IP", 400); return
+            self._json_error("INVALID_IP", "无效的 IP", 400)
+            return
         reason = str(params.get("reason") or "monitor")[:120]
         _ban_ip(ip, reason)
         logger.warning(f"[Security] ip banned: {ip} reason={reason}")
@@ -2631,7 +2799,8 @@ button{margin-top:16px;height:42px;border:0;border-radius:10px;background:#b71c1
         params = self._request_params(parsed)
         ip = (params.get("ip") or params.get("addr") or "").strip()
         if not _is_ip(ip):
-            self._json_error("INVALID_IP", "无效的 IP", 400); return
+            self._json_error("INVALID_IP", "无效的 IP", 400)
+            return
         _unban_ip(ip)
         logger.warning(f"[Security] ip unbanned: {ip}")
         self._redirect("/monitor")
@@ -2720,7 +2889,8 @@ button{margin-top:16px;height:42px;border:0;border-radius:10px;background:#b71c1
 
     def _handle_log(self, task_id: str):
         if not _is_safe_uuid(task_id):
-            self._json_error("INVALID_TASK_ID", "无效的任务 ID", 400); return
+            self._json_error("INVALID_TASK_ID", "无效的任务 ID", 400)
+            return
         path = ""
         with TASKS_LOCK:
             task = TASKS.get(task_id)
@@ -2735,11 +2905,13 @@ button{margin-top:16px;height:42px;border:0;border-radius:10px;background:#b71c1
                 conn.close()
             path = row["log_path"] if row else ""
         if not path:
-            self._json_error("LOG_NOT_FOUND", "日志不存在", 404); return
+            self._json_error("LOG_NOT_FOUND", "日志不存在", 404)
+            return
         root = os.path.abspath(LOG_DIR)
         path = os.path.abspath(path)
         if not path.startswith(root + os.sep) or not os.path.exists(path):
-            self._json_error("LOG_NOT_FOUND", "日志不存在或已过期", 404); return
+            self._json_error("LOG_NOT_FOUND", "日志不存在或已过期", 404)
+            return
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             self._text(f.read(), "text/plain")
 
@@ -2757,7 +2929,8 @@ button{margin-top:16px;height:42px;border:0;border-radius:10px;background:#b71c1
                 self.send_header(key, value)
         self._set_cors_headers()
         self._set_security_headers()
-        self.end_headers(); self.wfile.write(data)
+        self.end_headers()
+        self.wfile.write(data)
 
     def _json(self, obj: dict, status: int = 200, extra_headers=None):
         data = json.dumps(obj, ensure_ascii=False, default=str).encode("utf-8")
@@ -2773,12 +2946,14 @@ button{margin-top:16px;height:42px;border:0;border-radius:10px;background:#b71c1
                 self.send_header(key, value)
         self._set_cors_headers()
         self._set_security_headers()
-        self.end_headers(); self.wfile.write(data)
+        self.end_headers()
+        self.wfile.write(data)
 
-    def _json_error(self, code: str, message: str, status: int):
-        self._json(_error_payload(code, message), status)
+    def _json_error(self, code: str, message: str, status: int, *, field: str = "", reason: str = ""):
+        self._json(_error_payload(code, message, field=field, reason=reason), status)
 
-    def log_message(self, fmt, *args): pass
+    def log_message(self, fmt, *args):
+        pass
 
 
 def main():
@@ -2788,6 +2963,7 @@ def main():
         print("Configure ADMIN_TOKEN and PROXY_SECRET before starting the service.")
         return
     _validate_secrets_or_exit()
+    _startup_cleanup()
     _sql_init()
     _recover_inflight_tasks_on_startup()
     _ensure_workers_started()
@@ -2803,9 +2979,11 @@ def main():
         print(line)
     print("外网访问:   Cloudflare Pages /api/* -> Nginx 80 -> 127.0.0.1:9527")
     print("Ctrl+C 停止")
-    try: server.serve_forever()
+    try:
+        server.serve_forever()
     except KeyboardInterrupt:
-        print("\n已停止"); server.server_close()
+        print("\n已停止")
+        server.server_close()
 
 if __name__ == "__main__":
     main()

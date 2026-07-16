@@ -17,7 +17,7 @@ main
 本地项目路径：
 
 ```text
-D:\PycharmProjects\project8
+D:\PycharmProjects\docxtool
 ```
 
 ## 2. SSH 验证
@@ -49,11 +49,11 @@ pwsh -NoProfile -Command "git ls-remote git@github.com:7654321x/docxtool.git ref
 - 项目文档：`README.md`、`docs/DEPLOY.md`、`docs/API.md`、`docs/UPLOAD_MANIFEST.md`、`docs/GITHUB_UPLOAD_GUIDE.md`、`AGENTS.md`、`CONVENTIONS.md`
 - 依赖和启动：`requirements.txt`、`run.sh`
 - 配置：`.env.example`、`.gitignore`、`.gitattributes`、`pytest.ini`、`ruff.toml`、`pyproject.toml`、`.github/workflows/ci.yml`
-- 后端和排版核心：`server.py`、`src/docxtool/`、`src/docxtool/resources/config/default-format.json`
+- 后端和排版核心：`server.py`、`src/docxtool/**/*.py`、`src/docxtool/resources/config/default-format.json`
 - 脚本：`scripts/generate_secrets.py`、`scripts/migrate_legacy_database.ps1`、`scripts/publish_to_github.ps1`
 - 前端和 Cloudflare Pages：`resources/frontend/pages/index.html`、`resources/frontend/pages/_worker.js`
 - 运行目录占位：`var/data/.gitkeep`、`var/logs/.gitkeep`、`var/outputs/.gitkeep`、`var/runtime/.gitkeep`
-- 测试：`tests/test_*.py`、`tests/worker-routing.test.mjs`
+- 测试：`tests/test_*.py`、`tests/*.test.mjs`
 
 当前唯一生产前端源入口是 `resources/frontend/pages/index.html`。重构前的旧前端入口和 legacy 页面已移除。
 

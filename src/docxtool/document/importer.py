@@ -10,15 +10,17 @@
   - 不负责排版渲染（由 engine.py 负责）
 """
 
-import logging
 import copy
 import re
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple, Union
+from types import SimpleNamespace
+from typing import Dict, List, Optional, Tuple
 
+from docxtool.document.classifier import ClassificationOptions, classify_paragraphs
 from docxtool.document.style_config import (
-    StyleRule, cn_size_to_pt, chinese_number,
+    NB_FIXED, NB_SUFFIXES,
     logger, ImportError,
+    StyleRule,
 )
 
 # ═══════════════════════════════════════════════════════════════
@@ -77,6 +79,21 @@ class DocumentData:
     has_cover: bool = False
     doc_mode: str = ""  # 文种：REPORT / NORMAL / ""
     body_sectPr: object = None
+    section_relationship_parts: Dict[str, object] = field(default_factory=dict)
+    even_and_odd_headers: object = None
+    letterhead_detection: object = None
+
+
+_OBJECT_CAPTION_RE = re.compile(
+    r"^(?:表|图)\s*(?:(?:[0-9一二三四五六七八九十百]+(?:[-—._、][0-9一二三四五六七八九十百]+)*).*|[:：].*|)$"
+)
+
+
+def _is_object_caption(paragraph) -> bool:
+    """Return whether a paragraph immediately below an object is a caption."""
+    text = paragraph.text.strip()
+    style_name = (paragraph.style.name or "") if paragraph.style else ""
+    return bool(text and (_OBJECT_CAPTION_RE.match(text) or style_name.lower() == "caption" or "题注" in style_name))
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -127,14 +144,7 @@ def extract_features(paragraph, index: int) -> ParagraphFeatures:
     # 编号前缀
     pf.numbering_prefix = _detect_numbering_prefix(text)
 
-    pf.contains_image = (
-        bool(paragraph._element.findall(
-            './/{http://schemas.openxmlformats.org/wordprocessingml/2006/main}drawing'
-        ))
-        or bool(paragraph._element.findall(
-            './/{http://schemas.openxmlformats.org/wordprocessingml/2006/main}pict'
-        ))
-    )
+    pf.contains_image = _contains_visible_image(paragraph._element)
 
     # Word 多级列表：ilvl → 项目里的标题级别（0=heading2, 1=heading3, 2+=heading4）
     try:
@@ -156,7 +166,6 @@ def extract_features(paragraph, index: int) -> ParagraphFeatures:
 
     # Word 自动编号/样式检测
     try:
-        from docx.oxml.ns import qn as _qn
         # 样式名直接映射
         style_name = pf.style_name.lower()
         heading_styles = {
@@ -176,6 +185,29 @@ def extract_features(paragraph, index: int) -> ParagraphFeatures:
         pass
 
     return pf
+
+
+def _contains_visible_image(paragraph_element) -> bool:
+    picts = paragraph_element.findall(
+        './/{http://schemas.openxmlformats.org/wordprocessingml/2006/main}pict'
+    )
+    if picts:
+        return True
+
+    drawings = paragraph_element.findall(
+        './/{http://schemas.openxmlformats.org/wordprocessingml/2006/main}drawing'
+    )
+    for drawing in drawings:
+        extents = [element for element in drawing.iter() if element.tag.endswith('}extent')]
+        if not extents:
+            return True
+        for extent in extents:
+            try:
+                if int(extent.get('cx', '0')) > 0 and int(extent.get('cy', '0')) > 0:
+                    return True
+            except ValueError:
+                return True
+    return False
 
 
 def extract_inline_tokens(paragraph) -> List[InlineToken]:
@@ -231,6 +263,23 @@ def extract_paragraph_sectPr(paragraph):
         return None
     sectPr = pPr.find(_qn("w:sectPr"))
     return copy.deepcopy(sectPr) if sectPr is not None else None
+
+
+def collect_section_header_footer_parts(doc, sectPr, data: DocumentData) -> None:
+    """Record source document relationships used by a section properties element."""
+    if sectPr is None:
+        return
+
+    from docx.oxml.ns import qn as _qn
+
+    for tag in ("w:headerReference", "w:footerReference"):
+        for ref in sectPr.findall(_qn(tag)):
+            rel_id = ref.get(_qn("r:id"))
+            if not rel_id or rel_id in data.section_relationship_parts:
+                continue
+            related = doc.part.related_parts.get(rel_id)
+            if related is not None:
+                data.section_relationship_parts[rel_id] = related
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -347,6 +396,7 @@ class DetectionContext:
     signature_complete: bool = False
     _remaining_has_no_body: bool = False  # 后面没有正文/标题了
     last_structural_type: str = ""
+    last_structural_text: str = ""
     attachment_note_next_no: int = 1
 
 
@@ -375,45 +425,81 @@ def _is_body_context(ctx) -> bool:
         "attachment_note", "attachment_note_item", "attachment_body")
 
 def _cn2int(s: str):
-    if not s: return None
+    if not s:
+        return None
     s = s.strip()
-    if s.isdigit(): return int(s)
-    if s in _CN_NUM2: return _CN_NUM2[s]
+    if s.isdigit():
+        return int(s)
+    if s in _CN_NUM2:
+        return _CN_NUM2[s]
     if "十" in s:
-        l, _, r = s.partition("十")
-        return (_CN_NUM2.get(l, 1) if l else 1) * 10 + (_CN_NUM2.get(r, 0) if r else 0)
+        left, _, right = s.partition("十")
+        return (_CN_NUM2.get(left, 1) if left else 1) * 10 + (
+            _CN_NUM2.get(right, 0) if right else 0
+        )
     return None
 
 def _cn_year2int(s: str):
-    if not s: return None
+    if not s:
+        return None
     s = s.strip()
-    if s.isdigit(): return int(s)
+    if s.isdigit():
+        return int(s)
     digits = "".join(_CN_YEAR_DIGITS.get(ch, "") for ch in s)
     return int(digits) if len(digits) == 4 else None
 
 def _norm_sign_date(text: str) -> str:
     m = _SIGN_DATE_RE2.match(text or "")
-    if not m: return text
+    if not m:
+        return text
     y, mo, d = _cn_year2int(m.group(1)), _cn2int(m.group(2)), _cn2int(m.group(3))
     return f"{y}年{mo}月{d}日" if mo and d else text
 
 def _norm_attach_mark(text: str) -> str:
     m = _ATT_PAGE_RE.match(text or "")
-    if not m: return text
+    if not m:
+        return text
     no = m.group(1)
     return f"附件 {no}" if no else "附件"
+
+def _is_attachment_page_mark(text: str) -> bool:
+    return bool(_ATT_PAGE_RE.match((text or "").strip()))
+
+def _is_attachment_boundary(text: str) -> bool:
+    t = (text or "").strip()
+    return bool(_ATT_NOTE_RE.match(t) or _is_attachment_page_mark(t))
 
 def _norm_sign_org(text: str) -> str:
     return re.sub(r'^\s*[一二三四五六七八九十百]+、\s*', '', text or "", count=1).strip()
 
+def _record_structural(ctx, type_id: str, text: str) -> None:
+    ctx.last_structural_type = type_id
+    ctx.last_structural_text = (text or "").strip()
+
+def _blocks_independent_sign_date(ctx) -> bool:
+    prev = (ctx.last_structural_text or "").strip()
+    if not prev:
+        return False
+    if prev.replace(" ", "").replace("\u3000", "").startswith("责任单位："):
+        return False
+    if prev.startswith(_SIGN_ORG_NEGATIVE_STARTS):
+        return True
+    return _contains_colon(prev)
+
 def _looks_like_sign_org(text: str, next_text: str, ctx) -> bool:
     t = (text or "").strip()
-    if not t or len(t) > 30: return False
-    if t.startswith(_SIGN_ORG_NEGATIVE_STARTS): return False
-    if any(c in t for c in ("。","；",";","：",":")): return False
-    if _ATT_NOTE_RE.match(t) or _SIGN_DATE_RE2.match(t): return False
-    if not _is_body_context(ctx): return False
-    if not _SIGN_DATE_RE2.match(next_text or ""): return False
+    if not t or len(t) > 30:
+        return False
+    if t.startswith(_SIGN_ORG_NEGATIVE_STARTS):
+        return False
+    if any(c in t for c in ("。","；",";","：",":")):
+        return False
+    if _ATT_NOTE_RE.match(t) or _SIGN_DATE_RE2.match(t):
+        return False
+    if not _is_body_context(ctx):
+        return False
+    if not _SIGN_DATE_RE2.match(next_text or ""):
+        return False
     return True
 
 def _heading_has_inline_body(text: str) -> bool:
@@ -444,6 +530,44 @@ def _is_auto_numbered_item(feats: Optional[ParagraphFeatures]) -> bool:
         return False
     return feats.numbering_prefix.startswith("@lvl_") or feats.numbering_prefix.startswith("@style_")
 
+
+_RESPONSIBILITY_LINE_RE = re.compile(r"^\s*[“”\"'‘’「『]?\s*责\s*任\s*单\s*位\s*[:：]")
+_RESPONSIBILITY_LABEL_RE = re.compile(r"\s*责\s*任\s*单\s*位\s*[:：]\s*")
+_RESPONSIBILITY_WRAPPER_RE = re.compile(r"^\s*[“”\"'‘’「『]\s*(.*?)\s*[”\"'’」』]?\s*$")
+
+
+def _should_split_structural_line_breaks(parts: list[str], next_text: str) -> bool:
+    """Split manual line breaks when they delimit known document structures."""
+    nonempty = [part.strip() for part in parts if part.strip()]
+    if len(nonempty) < 2:
+        return False
+    if any(_detect_numbering_prefix(part) for part in nonempty[1:]):
+        return True
+
+    # A title block often uses soft line breaks and ends in "职务  姓名".
+    role_line = nonempty[-1]
+    if (re.fullmatch(r"[\u4e00-\u9fff、，,·]{2,28}\s{2,}[\u4e00-\u9fff·]{2,6}", role_line)
+            or (re.search(r"主任|书记|主席|部长|局长|处长|科长|市长|县长|区长|镇长|乡长|院长|校长|政委|组长|队长|秘书长|委员|常委|负责人", role_line)
+                and re.search(r"\s{2,}", role_line))):
+        return True
+
+    # A signature organization may be separated from the final body paragraph
+    # by manual blank lines; the following paragraph supplies the date boundary.
+    next_visible_line = next(
+        (part.strip() for part in (next_text or "").splitlines() if part.strip()),
+        "",
+    )
+    return bool(_SIGN_DATE_RE2.match(next_visible_line)
+                and len(role_line) <= 30
+                and not any(mark in role_line for mark in "。；;：:"))
+
+
+def _normalize_responsibility_line(text: str) -> str:
+    unwrapped = _RESPONSIBILITY_WRAPPER_RE.sub(r"\1", text or "")
+    normalized = _RESPONSIBILITY_LABEL_RE.sub("责任单位：", unwrapped)
+    return re.sub(r"(?<!^)(责任单位：)", r"\n\1", normalized)
+
+
 def detect_structural_type(line: str, next_line: str, ctx,
                            feats: Optional[ParagraphFeatures] = None,
                            next_feats: Optional[ParagraphFeatures] = None):
@@ -455,6 +579,9 @@ def detect_structural_type(line: str, next_line: str, ctx,
     """
     text = line.strip()
     next_text = next_line.strip() if next_line else ""
+
+    if _RESPONSIBILITY_LINE_RE.match(text):
+        return "responsibility_line", {"colon_bold": True}, "", _normalize_responsibility_line(text)
 
     # 1. 附件说明：上一段必须是正文
     m = _ATT_NOTE_RE.match(text)
@@ -470,30 +597,34 @@ def detect_structural_type(line: str, next_line: str, ctx,
 
         if first_no and next_is_item:
             # A: 多附件，规范空格：附件：1.基本情况 → 附件：1. 基本情况
-            is_multi = True; ctx.attachment_note_next_no = int(first_no.group(1)) + 1
+            is_multi = True
+            ctx.attachment_note_next_no = int(first_no.group(1)) + 1
             fixed_text = re.sub(
                 r"^\s*附件\s*[:：]\s*(\d+)[.．、]\s*",
                 lambda x: f"附件：{x.group(1)}. ",
                 text, count=1)
         elif first_no and not next_is_item:
             # B: 首行有 1. 但下一行不是编号 → 单附件，去掉编号
-            is_multi = False; ctx.attachment_note_next_no = 1
+            is_multi = False
+            ctx.attachment_note_next_no = 1
             body_no = re.sub(r"^\d+[.．、]\s*", "", body, count=1).strip()
             fixed_text = f"附件：{body_no}"
         elif not first_no and next_is_item:
             # C: 首行无编号但下一行有 → 补 1.
-            is_multi = True; ctx.attachment_note_next_no = 2
+            is_multi = True
+            ctx.attachment_note_next_no = 2
             fixed_text = f"附件：1. {body}"
         else:
             # D: 单附件
-            is_multi = False; ctx.attachment_note_next_no = 1
+            is_multi = False
+            ctx.attachment_note_next_no = 1
             fixed_text = text
 
         ctx.attachment_note_seen = True
         ctx.attachment_note_mode = is_multi
         ctx.signature_seen = had_signature_complete
         ctx.signature_complete = had_signature_complete
-        ctx.last_structural_type = "attachment_note"
+        _record_structural(ctx, "attachment_note", fixed_text)
         return "attachment_note", {"attachment_single": not is_multi,
                                     "attachment_multi": is_multi}, "", fixed_text
 
@@ -506,7 +637,7 @@ def detect_structural_type(line: str, next_line: str, ctx,
         else:
             fixed = f"{ctx.attachment_note_next_no}. {text.strip()}"
         ctx.attachment_note_next_no += 1
-        ctx.last_structural_type = "attachment_note_item"
+        _record_structural(ctx, "attachment_note_item", fixed)
         return "attachment_note_item", {}, "", fixed
 
     # 3. 落款单位：上段是 body / attachment_note / item，且下一行是日期
@@ -514,30 +645,45 @@ def detect_structural_type(line: str, next_line: str, ctx,
         if _looks_like_sign_org(text, next_text, ctx):
             ctx.attachment_note_mode = False
             ctx.signature_seen = True
-            ctx.last_structural_type = "sign_org"
-            return "sign_org", {}, "", _norm_sign_org(text)
+            fixed = _norm_sign_org(text)
+            _record_structural(ctx, "sign_org", fixed)
+            return "sign_org", {}, "", fixed
 
     # 4. 成文日期：紧接落款单位之后，自动规范化
     if ctx.last_structural_type == "sign_org" and _SIGN_DATE_RE2.match(text):
         ctx.signature_complete = True
-        ctx.last_structural_type = "sign_date"
-        return "sign_date", {}, "", _norm_sign_date(text)
+        fixed = _norm_sign_date(text)
+        _record_structural(ctx, "sign_date", fixed)
+        return "sign_date", {}, "", fixed
 
-    # 5. 附件正文页标识：必须有附件 + 落款完成，且在 sign_date/attachment_body 之后
-    if (ctx.attachment_note_seen and ctx.signature_complete
-            and ctx.last_structural_type in ("sign_date", "attachment_note", "attachment_note_item", "attachment_body", "attachment_title", "heading1", "heading2", "heading3", "heading4", "body")
-            and _ATT_PAGE_RE.match(text)
-            and "：" not in text and ":" not in text):
+    # 4b. 独立尾部日期：正文后、非附件页内，且后续只接附件边界或已到文末
+    if (ctx.has_seen_real_body and not ctx.attachment_page_mode
+            and _SIGN_DATE_RE2.match(text)
+            and (not next_text or _is_attachment_boundary(next_text))
+            and not _blocks_independent_sign_date(ctx)):
+        ctx.attachment_note_mode = False
+        ctx.signature_seen = True
+        ctx.signature_complete = True
+        fixed = _norm_sign_date(text)
+        _record_structural(ctx, "sign_date", fixed)
+        return "sign_date", {}, "", fixed
+
+    # 5. 附件正文页标识：由附件说明或成文日期形成强边界，不再依赖二者同时存在
+    if ((ctx.attachment_note_seen or ctx.signature_complete or ctx.attachment_page_mode)
+            and ctx.last_structural_type in ("sign_date", "attachment_note", "attachment_note_item",
+                                             "attachment_body", "attachment_title")
+            and _is_attachment_page_mark(text)):
         ctx.attachment_page_mode = True
-        ctx.last_structural_type = "attachment_page_mark"
-        return "attachment_page_mark", {}, "", _norm_attach_mark(text)
+        fixed = _norm_attach_mark(text)
+        _record_structural(ctx, "attachment_page_mark", fixed)
+        return "attachment_page_mark", {}, "", fixed
 
     # 6. 附件标题：附件页标识后 + 短句(<28字) + 无编号无冒号 → 标题
     if (ctx.last_structural_type == "attachment_page_mark" and ctx.attachment_page_mode
             and len(text) <= 28 and not _contains_colon(text)):
         tid, _ = _match_numbering(text)
         if not tid:
-            ctx.last_structural_type = "attachment_title"
+            _record_structural(ctx, "attachment_title", text)
             return "attachment_title", {}, "", text
 
     # 7. 附件正文：附件页内，不满足标题条件 → 走正常分类
@@ -558,8 +704,6 @@ _HEADING_RE = [
 ]
 
 # ── 一是/二要/比如 ──
-
-from docxtool.document.style_config import NB_SUFFIXES, NB_FIXED
 _NB_RE = re.compile(rf'[一二三四五六七八九十]+(?:{"|".join(NB_SUFFIXES)})')
 _NB_FIXED_RE = re.compile(rf'^(?:{"|".join(map(re.escape, NB_FIXED))})') if NB_FIXED else None
 
@@ -573,7 +717,8 @@ def _normalize_text(text: str) -> str:
 
 def _to_chinese_punctuation(text: str) -> str:
     """英文标点 → 中文标点（仅中文语境，避免误伤 URL、时间、金额、缩写）。"""
-    if not text: return text
+    if not text:
+        return text
     text = re.sub(r'(?<=[\u4e00-\u9fff])[:：]\s*', '：', text)
     text = re.sub(r'(?<=[\u4e00-\u9fff]),\s*', '，', text)
     text = re.sub(r'(?<=[\u4e00-\u9fff0-9]);\s*', '；', text)
@@ -585,7 +730,8 @@ def _to_chinese_punctuation(text: str) -> str:
 
 def _normalize_quotes(text: str) -> str:
     """英文引号 → 中文引号。避免误伤英文单词内部的撇号（O'Reilly, don't）。"""
-    if not text: return text
+    if not text:
+        return text
     # 1. 双单引号作双引号：''text'' → "text"
     text = re.sub(r"''(?=\S)", '\u201c', text)
     text = re.sub(r"(?<=\S)''", '\u201d', text)
@@ -601,6 +747,15 @@ def _normalize_quotes(text: str) -> str:
     text = re.sub(r"(?<![A-Za-z])'(?=[\u4e00-\u9fff])", '\u2018', text)
     text = re.sub(r"(?<=[\u4e00-\u9fff])'(?![A-Za-z])", '\u2019', text)
     return text
+
+
+def _feature_bool(value, default: bool = False) -> bool:
+    raw = str(value).strip().lower()
+    if raw in {"1", "true", "yes", "on", "启用", "是"}:
+        return True
+    if raw in {"0", "false", "no", "off", "禁用", "否"}:
+        return False
+    return default
 
 
 def _contains_colon(text: str) -> bool:
@@ -779,12 +934,13 @@ def _score_05_role_name(text: str, feats, ctx) -> Tuple[int, dict, str]:
         return 0, {}, ""
     if ctx.prev_type_id not in ("title", "title_cont", "date_line", "author_line"):
         return 0, {}, ""
-    if len(text) >= 20:
+    role_name_match = re.fullmatch(r"[\u4e00-\u9fff、，,·]{2,28}\s{2,}[\u4e00-\u9fff·]{2,6}", text)
+    if len(text) >= 20 and not role_name_match:
         return 0, {}, ""
     if _contains_colon(text):
         return 0, {}, ""
     # 含连续空格 → 署名（如 "韩 双 林"）
-    if re.search(r'\S\s{2,}\S', text):
+    if role_name_match or re.search(r'\S\s{2,}\S', text):
         return 80, {}, ""
     # 含职务关键词 → 署名/职务行
     _ROLE_KW = ('局长|主任|书记|主席|部长|处长|科长|司长|厅长|市长|县长'
@@ -1162,15 +1318,15 @@ def detect_paragraph_type(text: str, feats: ParagraphFeatures,
     ctx.prev_type_id = type_id
 
     # 附件/落款 结构状态跟踪
-    if type_id in ("body", "addressing"):
+    if type_id in ("body", "addressing", "responsibility_line"):
         ctx.has_seen_real_body = True
-        ctx.last_structural_type = "body"
+        _record_structural(ctx, "body", text)
     elif type_id in ("attachment_note", "attachment_note_item",
                       "attachment_page_mark", "attachment_title",
                       "attachment_body", "sign_org", "sign_date"):
-        ctx.last_structural_type = type_id
+        _record_structural(ctx, type_id, text)
     elif type_id.startswith("heading") or type_id in ("title", "title2"):
-        ctx.last_structural_type = "body" if meta.get("heading_inline_body") else type_id
+        _record_structural(ctx, "body" if meta.get("heading_inline_body") else type_id, text)
 
     # 成文日期后重置附件页内状态，允许多个附件
     if type_id == "sign_date":
@@ -1198,7 +1354,7 @@ def detect_paragraph_type(text: str, feats: ParagraphFeatures,
         ctx.has_seen_body = True
     elif type_id in ("title", "title_cont", "date_line", "author_line", "role_name"):
         pass  # 头部区域，不设 has_seen_body
-    elif type_id == "body" or type_id == "addressing":
+    elif type_id in ("body", "addressing", "responsibility_line"):
         if not ctx.has_seen_body:
             ctx.has_seen_body = True
             ctx.doc_mode = _detect_doc_type(ctx)  # 锁定文种
@@ -1245,7 +1401,6 @@ def _repair_broken_rels(filepath: str) -> str:
     import zipfile as _zipfile
     import re as _re
     import tempfile as _tempfile
-    import shutil as _shutil
 
     # 检查是否需要修复
     need_fix = False
@@ -1261,7 +1416,7 @@ def _repair_broken_rels(filepath: str) -> str:
     if not need_fix:
         return filepath
 
-    logger.info(f"[修复] 检测到损坏引用 Target=\"../NULL\"，自动修复…")
+    logger.info("[修复] 检测到损坏引用 Target=\"../NULL\"，自动修复…")
     tmp = _tempfile.NamedTemporaryFile(delete=False, suffix='.docx')
     tmp.close()
 
@@ -1296,7 +1451,30 @@ class DocxImporter:
             raise ImportError("请安装 python-docx: pip install python-docx")
 
         features = features or {}
-        punctuation_enabled = str(features.get("punctuation_enabled", True)).strip().lower() not in {"0", "false", "no", "off", "禁用", "否"}
+        punctuation_options = features.get("punctuation", {}) if isinstance(features.get("punctuation", {}), dict) else {}
+        new_punctuation_enabled = _feature_bool(punctuation_options.get("enabled", False), False)
+        punctuation_mode = str(punctuation_options.get("mode", "safe") or "safe")
+        punctuation_enabled = _feature_bool(features.get("punctuation_enabled", True), True)
+
+        def normalize_text(text: str) -> str:
+            if not text:
+                return text
+            if new_punctuation_enabled:
+                from docxtool.document.engine.punctuation import normalize_punctuation_text
+
+                return normalize_punctuation_text(text, mode=punctuation_mode)
+            if punctuation_enabled:
+                return _to_chinese_punctuation(_normalize_quotes(text))
+            return text
+
+        def normalize_tokens(tokens: List[InlineToken]) -> List[InlineToken]:
+            normalized = _normalize_inline_tokens(tokens, punctuation_enabled and not new_punctuation_enabled)
+            if not new_punctuation_enabled:
+                return normalized
+            return [
+                InlineToken(token.kind, normalize_text(token.text)) if token.kind == "text" else token
+                for token in normalized
+            ]
 
         # 自动修复损坏的 .rels 引用
         filepath = _repair_broken_rels(filepath)
@@ -1307,22 +1485,34 @@ class DocxImporter:
             raise ImportError(f"无法打开文件 {filepath}: {e}")
 
         data = DocumentData(filepath=filepath)
+        from docxtool.document.engine.letterhead import detect_letterhead
+
+        data.letterhead_detection = detect_letterhead(doc)
+        protected_letterhead_indexes = set(data.letterhead_detection.protected_body_indexes)
 
         # 第一步：按 Word body XML 顺序提取段落、表格、图片段落。
         from docx.text.paragraph import Paragraph as DocxParagraph
         from docx.table import Table as DocxTable
         from docx.oxml.ns import qn as _qn_body
 
+        data.even_and_odd_headers = copy.deepcopy(
+            doc.settings._element.find(_qn_body("w:evenAndOddHeaders"))
+        )
+
         raw_blocks = []
         para_index = 0
+        body_index = 0
         for child in doc._body._element.iterchildren():
             if child.tag == _qn_body('w:p'):
                 para = DocxParagraph(child, doc._body)
                 pf = extract_features(para, para_index)
                 inline_tokens = extract_inline_tokens(para)
                 sectPr = extract_paragraph_sectPr(para)
+                collect_section_header_footer_parts(doc, sectPr, data)
                 para_index += 1
-                if pf.contains_image:
+                if body_index in protected_letterhead_indexes:
+                    raw_blocks.append(("letterhead_paragraph_xml", para))
+                elif pf.contains_image:
                     raw_blocks.append(("paragraph_xml", para))
                 elif para.text.strip() or sectPr is not None or any(token.kind == "page_break" for token in inline_tokens):
                     raw_blocks.append(("paragraph", para, pf, inline_tokens, sectPr))
@@ -1332,19 +1522,31 @@ class DocxImporter:
                 data.tables.append(table)
             elif child.tag == _qn_body('w:sectPr'):
                 data.body_sectPr = copy.deepcopy(child)
+                collect_section_header_footer_parts(doc, child, data)
+                continue
+            body_index += 1
+
+        # Captions immediately below a table/image belong to that object block.
+        # Preserve their complete paragraph XML instead of classifying/reformatting them.
+        for block_index in range(1, len(raw_blocks)):
+            block = raw_blocks[block_index]
+            previous = raw_blocks[block_index - 1]
+            if (block[0] == "paragraph"
+                    and previous[0] in {"table", "paragraph_xml", "protected_paragraph_xml"}
+                    and _is_object_caption(block[1])):
+                raw_blocks[block_index] = ("protected_paragraph_xml", block[1])
 
         # 第二步：按换行符拆分段落（解决 3/4 级标题合并在同一段的问题）
 
         # ── 扁平化 + 单次分类（单 pass，传真实 next_line）──
-        flat_lines = []  # ("text", line_text, pf, inline_tokens, sectPr) / ("table", table) / ("paragraph_xml", para)
-        for block in raw_blocks:
+        flat_lines = []  # text / table / image paragraph XML / protected caption XML
+        for block_index, block in enumerate(raw_blocks):
             if block[0] != "paragraph":
                 flat_lines.append(block)
                 continue
             _, para, pf, inline_tokens, sectPr = block
             text = para.text.strip()
-            if punctuation_enabled:
-                text = _to_chinese_punctuation(_normalize_quotes(text))
+            text = normalize_text(text)
             if not text and sectPr is not None:
                 sub_pf = ParagraphFeatures(
                     font_name=pf.font_name, font_size_pt=pf.font_size_pt,
@@ -1358,13 +1560,25 @@ class DocxImporter:
                 continue
             has_structural_inline = any(token.kind in {"tab", "line_break", "page_break"} for token in inline_tokens)
             if has_structural_inline:
-                normalized_tokens = _normalize_inline_tokens(inline_tokens, punctuation_enabled)
-                line = inline_tokens_text(normalized_tokens).strip()
+                normalized_tokens = normalize_tokens(inline_tokens)
+                raw_inline_text = inline_tokens_text(normalized_tokens)
+                line = raw_inline_text.strip()
+                boundary_whitespace_trimmed = raw_inline_text != line
                 has_page_break = any(token.kind == "page_break" for token in normalized_tokens)
-                has_tab = any(token.kind == "tab" for token in normalized_tokens)
                 has_line_break = any(token.kind == "line_break" for token in normalized_tokens)
                 split_lines = [part.strip() for part in line.split("\n")]
-                if has_line_break and not has_page_break and not has_tab and any(_detect_numbering_prefix(part) for part in split_lines[1:]):
+                following_text = ""
+                for following in raw_blocks[block_index + 1:]:
+                    if following[0] == "paragraph":
+                        following_text = normalize_text(following[1].text).strip()
+                        if following_text:
+                            break
+                # Manual page breaks are often mixed with blank soft breaks before
+                # a trailing signature organization.  A following date is a
+                # stronger structural boundary, so page-break presence must not
+                # suppress the split.
+                if (has_line_break
+                        and _should_split_structural_line_breaks(split_lines, following_text)):
                     for li, split_line in enumerate(split_lines):
                         if not split_line:
                             continue
@@ -1391,13 +1605,14 @@ class DocxImporter:
                     paragraph_index=len(flat_lines),
                     is_new_line=False,
                 )
-                flat_lines.append(("text", line, sub_pf, normalized_tokens, sectPr))
+                preserved_tokens = [] if boundary_whitespace_trimmed else normalized_tokens
+                flat_lines.append(("text", line, sub_pf, preserved_tokens, sectPr))
                 continue
             for li, line in enumerate(text.split('\n')):
                 line = line.strip()
-                if punctuation_enabled:
-                    line = _to_chinese_punctuation(_normalize_quotes(line))
-                if not line: continue
+                line = normalize_text(line)
+                if not line:
+                    continue
                 line_numbering = pf.numbering_prefix if li == 0 else _detect_numbering_prefix(line)
                 sub_pf = ParagraphFeatures(
                     font_name=pf.font_name, font_size_pt=pf.font_size_pt,
@@ -1417,10 +1632,14 @@ class DocxImporter:
             if not line_text:
                 continue
             # 排除附件/落款/日期等非正文内容
-            if re.match(r'^附件', line_text): continue
-            if _SIGN_DATE_RE2.match(line_text): continue
-            if re.match(r'^\d+[.．、]', line_text): continue  # 附件条目
-            if _ATT_PAGE_RE.match(line_text): continue  # 附件页标记
+            if re.match(r'^附件', line_text):
+                continue
+            if _SIGN_DATE_RE2.match(line_text):
+                continue
+            if re.match(r'^\d+[.．、]', line_text):
+                continue  # 附件条目
+            if _ATT_PAGE_RE.match(line_text):
+                continue  # 附件页标记
             last_body_idx = j
         for i, item in enumerate(flat_lines):
             ctx._remaining_has_no_body = (i >= last_body_idx)
@@ -1436,6 +1655,22 @@ class DocxImporter:
                                    meta={"image_xml": item[1]})
                 data.paragraphs.append(pd)
                 continue
+            if item[0] == "protected_paragraph_xml":
+                pd = ParagraphData(text="", type_id="__object_caption__",
+                                   original_text="", features=None,
+                                   meta={"paragraph_xml": item[1]})
+                data.paragraphs.append(pd)
+                continue
+            if item[0] == "letterhead_paragraph_xml":
+                pd = ParagraphData(
+                    text="",
+                    type_id="__letterhead__",
+                    original_text="",
+                    features=None,
+                    meta={"paragraph_xml": item[1]},
+                )
+                data.paragraphs.append(pd)
+                continue
 
             _, line, sub_pf, inline_tokens, sectPr = item
             next_line = ""
@@ -1446,16 +1681,30 @@ class DocxImporter:
                     next_pf = next_item[2]
                     break
 
-            # 结构检测优先
-            st, sm, sp, ft = detect_structural_type(line, next_line, ctx, sub_pf, next_pf)
-            if st:
-                sm.pop("numbering", None)
-                type_id = st; meta_patch = sm; prefix = sp
-                clean_text = ft
-                ctx.prev_type_id = st
+            # 受管版头输出重新处理时，固定主标题样式优先于普通物理特征打分。
+            managed_title = (
+                data.letterhead_detection.status == "managed"
+                and sub_pf.style_name == "Docxtool Title"
+                and not ctx.has_seen_real_body
+            )
+            if managed_title:
+                type_id = "title" if not ctx.title_texts else "title_cont"
+                meta_patch = {"is_title": True} if type_id == "title" else {}
+                prefix = ""
+                clean_text = line
             else:
-                type_id, meta_patch, prefix = detect_paragraph_type(line, sub_pf, ctx, rules)
-                clean_text = strip_numbering(line, prefix)
+                # 结构检测优先
+                st, sm, sp, ft = detect_structural_type(line, next_line, ctx, sub_pf, next_pf)
+                if st:
+                    sm.pop("numbering", None)
+                    type_id = st
+                    meta_patch = sm
+                    prefix = sp
+                    clean_text = ft
+                    ctx.prev_type_id = st
+                else:
+                    type_id, meta_patch, prefix = detect_paragraph_type(line, sub_pf, ctx, rules)
+                    clean_text = strip_numbering(line, prefix)
 
             if ctx.attachment_page_mode and type_id == "body":
                 type_id = "attachment_body"
@@ -1477,18 +1726,20 @@ class DocxImporter:
             ctx.prev_type_id = type_id
 
             # 结构状态跟踪
-            if type_id in ("body", "addressing"):
-                ctx.has_seen_real_body = True; ctx.last_structural_type = "body"
+            if type_id in ("body", "addressing", "responsibility_line"):
+                ctx.has_seen_real_body = True
+                _record_structural(ctx, "body", clean_text)
             elif type_id.startswith("heading") or type_id in ("title", "title2"):
                 if meta_patch.get("heading_inline_body"):
                     ctx.has_seen_real_body = True
-                    ctx.last_structural_type = "body"
+                    _record_structural(ctx, "body", clean_text)
                 else:
-                    ctx.last_structural_type = type_id
+                    _record_structural(ctx, type_id, clean_text)
             else:
-                ctx.last_structural_type = type_id
+                _record_structural(ctx, type_id, clean_text)
             if type_id == "sign_date":
-                ctx.signature_complete = True; ctx.attachment_page_mode = False
+                ctx.signature_complete = True
+                ctx.attachment_page_mode = False
 
             if sectPr is not None:
                 meta_patch = dict(meta_patch or {})
@@ -1508,6 +1759,7 @@ class DocxImporter:
         self._reorder_attachment_note_before_signature(data.paragraphs)
         self._assign_numbering(data.paragraphs, rules)
         self._merge_siblings(data.paragraphs)
+        self._apply_core_classification(data, features)
         # (old classification loop removed — replaced by flat_lines single pass above)
 
         # 第三半：编号连续性检查（需在编号赋值之后）
@@ -1519,6 +1771,43 @@ class DocxImporter:
 
         logger.info(f"[导入] {filepath}: {len(data.paragraphs)} 段, {len(data.tables)} 表格")
         return data
+
+    def _apply_core_classification(self, data: DocumentData, features: dict) -> None:
+        classification_options = features.get("classification", {}) if isinstance(features.get("classification", {}), dict) else {}
+        if not _feature_bool(classification_options.get("enabled", True), True):
+            return
+        threshold = classification_options.get("minimum_auto_format_confidence", 0.85)
+        try:
+            threshold = float(threshold)
+        except (TypeError, ValueError):
+            threshold = 0.85
+        candidates = []
+        indexes = []
+        for index, paragraph in enumerate(data.paragraphs):
+            if paragraph.type_id.startswith("__"):
+                continue
+            pf = paragraph.features or ParagraphFeatures()
+            candidates.append(
+                SimpleNamespace(
+                    text=paragraph.original_text or paragraph.text,
+                    style_name=pf.style_name,
+                    alignment=pf.alignment,
+                    first_line_indent=pf.first_line_indent,
+                    font_size_pt=pf.font_size_pt,
+                    bold=pf.bold,
+                    native_numbering=bool(pf.numbering_prefix),
+                )
+            )
+            indexes.append(index)
+        if not candidates:
+            return
+        results = classify_paragraphs(candidates, ClassificationOptions(auto_format_threshold=threshold))
+        for paragraph_index, result in zip(indexes, results):
+            meta = dict(data.paragraphs[paragraph_index].meta or {})
+            meta["classification_kind"] = result.kind.value
+            meta["classification_confidence"] = round(result.confidence, 3)
+            meta["classification_auto_format"] = bool(result.auto_format)
+            data.paragraphs[paragraph_index].meta = meta
 
     def _reorder_attachment_note_before_signature(self, paragraphs: list) -> None:
         """Normalize sign/date before attachment note into official note→sign→date order."""
@@ -1642,7 +1931,7 @@ class DocxImporter:
                         target = f"heading{min(parent_lvl + 1, 4)}"
                         # 保护：已有编号的段落不合并（防止吃掉并列标题如（一）（二）（三））
                         if any(paragraphs[s].meta.get("numbering") for s in siblings):
-                            logger.debug(f"[同级合并] 跳过：siblings 已有编号")
+                            logger.debug("[同级合并] 跳过：siblings 已有编号")
                             continue
                         if any(paragraphs[s].type_id != target for s in siblings):
                             for s in siblings:
@@ -1680,7 +1969,9 @@ class DocxImporter:
                     actual = expected["a"]  # 用修正后的值
                 if actual:
                     expected["a"] = actual + 1
-                    expected["b"] = {actual: 1}; expected["c"] = {}; expected["d"] = {}
+                    expected["b"] = {actual: 1}
+                    expected["c"] = {}
+                    expected["d"] = {}
             elif key == "2":
                 pa = expected["a"] - 1
                 ch = num[1] if num.startswith("（") else num[0]
@@ -1693,7 +1984,8 @@ class DocxImporter:
                     actual = exp
                 if actual:
                     expected["b"][pa] = actual + 1
-                expected["c"] = {}; expected["d"] = {}
+                expected["c"] = {}
+                expected["d"] = {}
             elif key == "3":
                 pa = expected["a"] - 1
                 pb = expected["b"].get(pa, 1) - 1

@@ -6,11 +6,11 @@
     { "name": "三级标题", "font": "仿宋_GB2312", "size": "三号", "bold": true, "pattern": "{c}.", "lang": "阿拉伯数字", "indent": 2, "align": "左对齐" },
     { "name": "四级标题", "font": "仿宋_GB2312", "size": "三号", "bold": false, "pattern": "（{d}）", "lang": "阿拉伯数字", "indent": 2, "align": "左对齐" },
     { "name": "正文", "font": "仿宋_GB2312", "size": "三号", "bold": false, "pattern": "", "lang": "", "indent": 2, "align": "两端对齐" },
-    { "name": "数字", "font": "Times New Roman", "size": "", "bold": false, "pattern": "", "lang": "", "indent": 0, "align": "左对齐" },
-    { "name": "字母", "font": "Times New Roman", "size": "", "bold": false, "pattern": "", "lang": "", "indent": 0, "align": "左对齐" },
+    { "name": "数字", "font": "Times New Roman", "bold": false, "pattern": "", "lang": "", "indent": 0, "align": "左对齐" },
+    { "name": "字母", "font": "Times New Roman", "bold": false, "pattern": "", "lang": "", "indent": 0, "align": "左对齐" },
     { "name": "页码设置", "font": "宋体", "size": "四号", "bold": false, "pattern": "— 1 —", "lang": "阿拉伯数字", "indent": 0, "align": "奇右|偶左" },
     { "name": "正文上标", "font": "Times New Roman", "size": "三号", "bold": false, "pattern": "[n]", "lang": "阿拉伯数字", "indent": 0, "align": "左对齐" },
-    { "name": "称呼", "font": "仿宋_GB2312", "size": "三号", "bold": false, "pattern": "", "lang": "", "indent": 2, "align": "左对齐", "spacing_before": 1, "spacing_after": 0, "left_indent": 0, "right_indent": 0, "page_break_before": false },
+    { "name": "称呼", "font": "仿宋_GB2312", "size": "三号", "bold": false, "pattern": "", "lang": "", "indent": 0, "align": "左对齐", "spacing_before": 1, "spacing_after": 0, "left_indent": 0, "right_indent": 0, "page_break_before": false },
     { "name": "日期行", "font": "楷体_GB2312", "size": "三号", "bold": false, "pattern": "", "lang": "", "indent": 0, "align": "居中", "spacing_before": 1, "spacing_after": 0, "left_indent": 0, "right_indent": 0, "page_break_before": false },
     { "name": "作者行", "font": "楷体_GB2312", "size": "三号", "bold": true, "pattern": "", "lang": "", "indent": 0, "align": "居中", "spacing_before": 0, "spacing_after": 0, "left_indent": 0, "right_indent": 0, "page_break_before": false },
     { "name": "职务名称", "font": "楷体_GB2312", "size": "三号", "bold": true, "pattern": "", "lang": "", "indent": 0, "align": "居中", "spacing_before": 0, "spacing_after": 0, "left_indent": 0, "right_indent": 0, "page_break_before": false },
@@ -38,5 +38,65 @@
     "space_before_line": 0,
     "space_after_line": 0,
     "grid_alignment": "文字对齐字符网络"
+  },
+  "punctuation": {
+    "enabled": false,
+    "mode": "safe",
+    "scope": {
+      "body": true,
+      "tables": false,
+      "headers": false,
+      "footers": false
+    }
+  },
+  "classification": {
+    "enabled": true,
+    "minimum_auto_format_confidence": 0.85
+  },
+  "numbering": {
+    "enabled": false,
+    "mode": "safe"
+  },
+  "page_number": {
+    "enabled": false,
+    "style": "dash",
+    "position": "outside",
+    "first_page": true,
+    "section_numbering": "continue",
+    "offset_from_text_mm": 7
+  },
+  "table_format": {
+    "enabled": false,
+    "smart_alignment": false
+  },
+  "cleanup": {
+    "enabled": false,
+    "mode": "safe"
+  },
+  "letterhead": {
+    "schema_version": 1,
+    "enabled": false,
+    "document_direction": "downward",
+    "issuance_mode": "single",
+    "mark_display_mode": "agency_with_document",
+    "joint_mark_scope": "all_agencies",
+    "agencies": [
+      {
+        "id": "agency-1",
+        "name": "",
+        "short_name": "",
+        "role": "sponsor",
+        "order": 1
+      }
+    ],
+    "document_number": {
+      "agency_code": "",
+      "year": null,
+      "sequence": null
+    },
+    "signers": [],
+    "existing_policy": "preserve_external",
+    "replace_managed": false,
+    "layout_version": 1
   }
 }

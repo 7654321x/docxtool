@@ -79,6 +79,9 @@ function Assert-NoForbiddenFiles {
             if ($relative -match '^\.git/') {
                 return $false
             }
+            if ($relative -eq '.env.example') {
+                return $false
+            }
             $relative -match '(^|/)\.env(\.|$)' -or
             $relative -match '\.(pem|key|db|sqlite|sqlite3|log|zip)$' -or
             $relative -match '\.docx$' -or
@@ -113,16 +116,28 @@ $requiredFiles = @(
     "server.py",
     "src/docxtool/__init__.py",
     "src/docxtool/__main__.py",
+    "src/docxtool/env.py",
     "src/docxtool/paths.py",
     "src/docxtool/web/__init__.py",
     "src/docxtool/web/app.py",
     "src/docxtool/document/__init__.py",
+    "src/docxtool/document/classifier.py",
     "src/docxtool/document/importer.py",
+    "src/docxtool/document/letterhead_config.py",
     "src/docxtool/document/style_config.py",
     "src/docxtool/document/engine/__init__.py",
+    "src/docxtool/document/engine/cleanup.py",
     "src/docxtool/document/engine/core.py",
+    "src/docxtool/document/engine/letterhead.py",
     "src/docxtool/document/engine/normal.py",
+    "src/docxtool/document/engine/numbering.py",
+    "src/docxtool/document/engine/page_number.py",
+    "src/docxtool/document/engine/punctuation.py",
+    "src/docxtool/document/engine/punctuation_docx.py",
+    "src/docxtool/document/engine/style_catalog.py",
+    "src/docxtool/document/engine/table.py",
     "src/docxtool/security/__init__.py",
+    "src/docxtool/security/docx_integrity.py",
     "src/docxtool/security/docx_validator.py",
     "src/docxtool/storage/__init__.py",
     "src/docxtool/storage/database.py",
@@ -138,8 +153,9 @@ $requiredFiles = @(
 )
 
 $testFiles = Get-ChildItem -LiteralPath (Join-Path $SourceRoot "tests") -File |
-    Where-Object { $_.Name -like "test_*.py" -or $_.Name -eq "worker-routing.test.mjs" } |
+    Where-Object { $_.Name -like "test_*.py" -or $_.Name -like "*.test.mjs" } |
     ForEach-Object { "tests/$($_.Name)" }
+$nodeTestFiles = $testFiles | Where-Object { $_ -like "*.test.mjs" }
 
 $publishFiles = @($requiredFiles + $testFiles | Sort-Object -Unique)
 $tempRoot = Join-Path $env:TEMP ("docxtool-publish-" + [guid]::NewGuid().ToString("N"))
@@ -164,7 +180,9 @@ try {
 
         Invoke-Checked python @("-m", "pytest")
         Invoke-Checked python @("-m", "ruff", "check", "src", "tests", "scripts")
-        Invoke-Checked node @("--test", "tests/worker-routing.test.mjs")
+        if ($nodeTestFiles) {
+            Invoke-Checked node (@("--test") + $nodeTestFiles)
+        }
 
         Invoke-Checked git @("add", "-A")
         Invoke-Checked git @("diff", "--cached", "--check")

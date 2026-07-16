@@ -64,26 +64,24 @@ button{cursor:pointer}
 .blob.two{width:360px;height:360px;background:rgba(96,165,250,.18);right:-130px;top:95px;animation-delay:-4s}
 .blob.three{width:260px;height:260px;background:rgba(246,200,95,.14);left:54%;bottom:80px;animation-delay:-8s}
 @keyframes float{0%,100%{transform:translate3d(0,0,0) scale(1)}50%{transform:translate3d(28px,-24px,0) scale(1.06)}}
-.topline{height:34px;color:var(--muted);font-size:12px;border-bottom:1px solid rgba(255,255,255,.08);background:rgba(6,9,18,.48);backdrop-filter:blur(16px)}
-.topline .shell{height:34px;display:flex;align-items:center;justify-content:space-between;gap:14px}
-.signal{display:inline-flex;align-items:center;gap:8px}.signal i{width:8px;height:8px;border-radius:99px;background:var(--green);box-shadow:0 0 0 6px rgba(52,211,153,.13),0 0 18px rgba(52,211,153,.72)}
 .navbar{position:sticky;top:0;z-index:40;background:rgba(7,10,19,.70);border-bottom:1px solid rgba(255,255,255,.08);backdrop-filter:blur(18px)}
 .navbar .shell{min-height:70px;display:flex;align-items:center;justify-content:space-between;gap:22px}
 .brand{display:flex;align-items:center;gap:12px;white-space:nowrap}.mark{width:42px;height:42px;border-radius:15px;display:grid;place-items:center;background:linear-gradient(135deg,var(--red),var(--gold));box-shadow:0 14px 34px rgba(239,68,68,.25),inset 0 1px 0 rgba(255,255,255,.3);font-weight:900}.brand strong{display:block;font-size:17px}.brand small{display:block;color:var(--muted2);font-size:11px;margin-top:-2px}.navlinks{display:flex;gap:4px}.navlinks a{font-size:14px;color:var(--muted);padding:9px 12px;border-radius:99px;transition:.2s}.navlinks a:hover,.navlinks a.active{color:#fff;background:rgba(255,255,255,.09)}
 .nav-cta{display:inline-flex;align-items:center;gap:8px;border-radius:99px;padding:9px 14px;background:rgba(246,200,95,.11);border:1px solid rgba(246,200,95,.32);color:#ffe7a4;font-size:13px;font-weight:700}
 .btn{position:relative;overflow:hidden;display:inline-flex;align-items:center;justify-content:center;gap:8px;border-radius:99px;border:1px solid transparent;min-height:44px;padding:0 18px;font-weight:800;color:#fff;transition:transform .2s ease,box-shadow .2s ease,background .2s ease,border-color .2s ease}.btn:hover{transform:translateY(-2px)}.btn-primary{background:linear-gradient(135deg,var(--red),var(--orange));box-shadow:0 18px 36px rgba(239,68,68,.24),inset 0 1px 0 rgba(255,255,255,.22)}.btn-secondary{background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.16)}.btn-ghost{background:transparent;border-color:rgba(255,255,255,.15);color:var(--muted)}.btn-small{min-height:36px;padding:0 13px;font-size:13px}.btn:disabled{opacity:.65;cursor:not-allowed;transform:none}
-.hero{padding:54px 0 28px}.hero-grid{display:grid;grid-template-columns:1fr 440px;gap:34px;align-items:center}.kicker{display:inline-flex;align-items:center;gap:8px;color:#ffe7a4;background:rgba(246,200,95,.09);border:1px solid rgba(246,200,95,.28);padding:7px 11px;border-radius:99px;font-size:13px;margin-bottom:17px}.kicker i{width:8px;height:8px;border-radius:50%;background:var(--gold);box-shadow:0 0 20px rgba(246,200,95,.85)}
-h1{font-size:clamp(36px,6vw,66px);letter-spacing:-2px;line-height:1.05;margin-bottom:18px}.gradient-text{background:linear-gradient(90deg,#fff,#ffe3a6 34%,#ff9090 65%,#a5f3ff);-webkit-background-clip:text;background-clip:text;color:transparent}.lead{font-size:18px;color:var(--muted);max-width:650px;margin-bottom:24px}.hero-actions{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px}.hero-pills{display:flex;gap:10px;flex-wrap:wrap}.pill{font-size:12px;color:var(--muted);display:inline-flex;gap:6px;align-items:center;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.05);border-radius:99px;padding:7px 10px}
-.promise-card{border-radius:var(--radius);padding:22px;position:relative;overflow:hidden}.promise-card::before{content:"";position:absolute;inset:auto -40px -60px auto;width:180px;height:180px;background:rgba(239,68,68,.18);filter:blur(22px);border-radius:50%}.promise-title{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px}.promise-title h2{font-size:20px}.promise-title span{font-size:12px;color:#a7f3d0;background:rgba(52,211,153,.10);border:1px solid rgba(52,211,153,.25);padding:5px 9px;border-radius:99px}.promise-list{display:grid;gap:12px}.promise-item{display:grid;grid-template-columns:34px 1fr;gap:11px;align-items:start;padding:13px;border-radius:16px;background:rgba(255,255,255,.055);border:1px solid rgba(255,255,255,.08)}.promise-item b{width:34px;height:34px;border-radius:12px;background:rgba(246,200,95,.13);border:1px solid rgba(246,200,95,.22);display:grid;place-items:center}.promise-item strong{display:block;font-size:14px}.promise-item small{display:block;color:var(--muted);font-size:12px;margin-top:1px}.section{padding:34px 0}.section-head{display:flex;align-items:end;justify-content:space-between;gap:20px;margin-bottom:20px}.section-label{font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#ffe7a4;margin-bottom:7px}.section-title h2{font-size:clamp(24px,4vw,40px);line-height:1.16;letter-spacing:-.8px}.section-title p{color:var(--muted);max-width:760px;margin-top:8px}
+.hero{padding:58px 0 32px}.hero-grid{display:block}.hero-main{max-width:900px;margin:0 auto;text-align:center}.kicker{display:inline-flex;align-items:center;gap:8px;color:#ffe7a4;background:rgba(246,200,95,.09);border:1px solid rgba(246,200,95,.28);padding:7px 11px;border-radius:99px;font-size:13px;margin-bottom:18px}.kicker i{width:8px;height:8px;border-radius:50%;background:var(--gold);box-shadow:0 0 20px rgba(246,200,95,.85)}
+h1{font-size:clamp(38px,5.4vw,64px);letter-spacing:0;line-height:1.08;margin-bottom:18px}.gradient-text{background:linear-gradient(90deg,#fff,#ffe3a6 34%,#ff9090 65%,#a5f3ff);-webkit-background-clip:text;background-clip:text;color:transparent}.lead{font-size:18px;color:var(--muted);max-width:720px;margin:0 auto 26px}.hero-main .hero-actions{justify-content:center}.hero-actions{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px}.hero-pills{display:flex;gap:0;flex-wrap:wrap;justify-content:center;border-top:1px solid rgba(255,255,255,.09);padding-top:18px;margin:0 auto;max-width:700px}.hero-pills .pill{border:0;background:transparent;border-radius:0;padding:4px 18px}.hero-pills .pill+.pill{border-left:1px solid rgba(255,255,255,.12)}.pill{font-size:12px;color:var(--muted);display:inline-flex;gap:6px;align-items:center;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.05);border-radius:99px;padding:7px 10px}
+.section{padding:34px 0}.section-head{display:flex;align-items:end;justify-content:space-between;gap:20px;margin-bottom:20px}.section-label{font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#ffe7a4;margin-bottom:7px}.section-title h2{font-size:clamp(24px,4vw,40px);line-height:1.16;letter-spacing:-.8px}.section-title p{color:var(--muted);max-width:760px;margin-top:8px}
 .upload-card{border-radius:30px;padding:22px;position:relative;overflow:hidden}.upload-card::before{content:"";position:absolute;inset:-2px;border-radius:inherit;padding:1px;background:conic-gradient(from 180deg,transparent,rgba(246,200,95,.76),rgba(239,68,68,.95),rgba(96,165,250,.72),transparent 70%);-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;animation:spin 8s linear infinite;opacity:.68;pointer-events:none}@keyframes spin{to{transform:rotate(1turn)}}
 .upload-grid{display:grid;grid-template-columns:1fr 360px;gap:18px;position:relative;z-index:1}.dropzone{min-height:300px;border-radius:26px;border:1.6px dashed rgba(255,255,255,.24);background:radial-gradient(circle at 50% 0%,rgba(246,200,95,.11),transparent 36%),rgba(255,255,255,.055);display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;cursor:pointer;padding:34px 26px;transition:.24s ease;position:relative;overflow:hidden}.dropzone:hover,.dropzone.drag{transform:translateY(-4px);border-color:rgba(246,200,95,.75);background:radial-gradient(circle at 50% 0%,rgba(246,200,95,.17),transparent 38%),rgba(255,255,255,.08);box-shadow:0 26px 70px rgba(0,0,0,.24),0 0 0 6px rgba(246,200,95,.05)}.upload-icon{width:82px;height:82px;border-radius:27px;display:grid;place-items:center;font-size:40px;margin-bottom:18px;background:linear-gradient(135deg,var(--red),var(--gold));box-shadow:0 18px 42px rgba(239,68,68,.25);animation:pulseIcon 3.4s ease-in-out infinite}@keyframes pulseIcon{50%{transform:translateY(-6px);box-shadow:0 24px 54px rgba(246,200,95,.22)}}.dropzone h3{font-size:25px;line-height:1.25;margin-bottom:9px}.dropzone p{color:var(--muted);max-width:470px}.upload-hint{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:16px}.side-panel{border-radius:24px;padding:18px;background:rgba(5,8,16,.36);border:1px solid rgba(255,255,255,.1)}.current-rule{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px;border-radius:16px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.09);margin-bottom:14px}.current-rule strong{display:block;font-size:14px}.current-rule small{display:block;color:var(--muted2);font-size:12px}.meta-info{color:var(--muted);font-size:13px;min-height:22px;margin-top:12px;word-break:break-all}.progress-area{display:none;margin-top:14px}.progress-track{height:10px;border-radius:99px;background:rgba(255,255,255,.1);overflow:hidden;border:1px solid rgba(255,255,255,.08)}.progress-fill{width:0;height:100%;border-radius:99px;background:linear-gradient(90deg,var(--red),var(--gold),var(--blue),var(--red));background-size:220% 100%;transition:width .35s ease;animation:flow 1.2s linear infinite}@keyframes flow{to{background-position:220% 0}}.status-msg{min-height:24px;margin-top:10px;color:var(--muted);font-size:14px}.status-msg.done{color:var(--green);font-weight:800}.status-msg.error{color:var(--danger);font-weight:800}.stepper{display:grid;gap:8px;margin-top:14px}.mini-step{display:flex;align-items:center;gap:9px;color:var(--muted2);font-size:12px}.mini-step i{width:20px;height:20px;border-radius:50%;display:grid;place-items:center;border:1px solid rgba(255,255,255,.16);font-style:normal;font-size:11px;background:rgba(255,255,255,.06)}.mini-step.active{color:#ffe7a4}.mini-step.active i{background:rgba(246,200,95,.16);border-color:rgba(246,200,95,.35)}.mini-step.done{color:#a7f3d0}.mini-step.done i{background:rgba(52,211,153,.15);border-color:rgba(52,211,153,.35)}.result-card{display:none;margin-top:14px;padding:14px;border-radius:18px;background:rgba(52,211,153,.09);border:1px solid rgba(52,211,153,.22)}.result-card h3{font-size:15px;color:#a7f3d0;margin-bottom:4px}.result-card p{font-size:12px;color:var(--muted);margin-bottom:10px}
 .compare-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.compare{border-radius:24px;padding:22px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.10)}.compare.bad{background:rgba(251,113,133,.055)}.compare.good{background:rgba(52,211,153,.055)}.compare h3{display:flex;align-items:center;gap:9px;font-size:19px;margin-bottom:14px}.check-list{display:grid;gap:10px}.check-list li{list-style:none;display:flex;gap:9px;color:var(--muted);font-size:14px}.check-list li::before{content:"";width:7px;height:7px;border-radius:50%;margin-top:9px;background:var(--muted2);flex:0 0 auto}.good .check-list li::before{background:var(--green)}.bad .check-list li::before{background:var(--danger)}
-.fix-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:15px}.fix-card{border-radius:22px;padding:20px;min-height:160px;background:linear-gradient(180deg,rgba(255,255,255,.09),rgba(255,255,255,.045));border:1px solid rgba(255,255,255,.1);transition:.22s}.fix-card:hover{transform:translateY(-5px);border-color:rgba(246,200,95,.28)}.fix-card b{width:44px;height:44px;border-radius:15px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.1);display:grid;place-items:center;font-size:22px;margin-bottom:13px}.fix-card h3{font-size:17px;margin-bottom:7px}.fix-card p{color:var(--muted);font-size:14px}.tips{display:grid;grid-template-columns:1fr 1fr 1fr;gap:15px}.tip{border-radius:22px;padding:19px;background:rgba(246,200,95,.06);border:1px solid rgba(246,200,95,.16)}.tip h3{font-size:16px;margin-bottom:7px;color:#ffe7a4}.tip p{color:var(--muted);font-size:14px}.faq-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}details{border-radius:20px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);overflow:hidden}summary{cursor:pointer;padding:17px 19px;font-weight:800;outline:none;list-style:none;display:flex;align-items:center;justify-content:space-between;gap:14px}summary::-webkit-details-marker{display:none}summary::after{content:"+";width:27px;height:27px;border-radius:50%;display:grid;place-items:center;background:rgba(255,255,255,.08);transition:.2s;flex:0 0 auto}details[open] summary::after{content:"−";background:rgba(246,200,95,.16);color:#ffe7a4}details p{padding:0 19px 17px;border-top:1px solid rgba(255,255,255,.08);padding-top:13px;color:var(--muted);font-size:14px}.footer{margin-top:36px;padding:30px 0;border-top:1px solid rgba(255,255,255,.09);color:var(--muted2);font-size:13px}.footer .shell{display:flex;align-items:center;justify-content:space-between;gap:18px;flex-wrap:wrap}
+.fix-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:15px}.fix-card{border-radius:8px;padding:20px;min-height:160px;background:linear-gradient(180deg,rgba(255,255,255,.09),rgba(255,255,255,.045));border:1px solid rgba(255,255,255,.1);transition:.22s}.fix-card:hover{transform:translateY(-3px);border-color:rgba(246,200,95,.28)}.fix-card b{width:44px;height:44px;border-radius:8px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.1);display:grid;place-items:center;font-size:22px;margin-bottom:13px}.fix-card h3{font-size:17px;margin-bottom:7px}.fix-card p{color:var(--muted);font-size:14px}.tips{display:grid;grid-template-columns:1fr 1fr 1fr;gap:15px}.tip{border-radius:8px;padding:19px;background:rgba(246,200,95,.06);border:1px solid rgba(246,200,95,.16)}.tip h3{font-size:16px;margin-bottom:7px;color:#ffe7a4}.tip p{color:var(--muted);font-size:14px}.faq-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.faq-item{min-height:138px;padding:20px;border-radius:8px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1)}.faq-item h3{font-size:17px;margin-bottom:11px}.faq-item p{padding-top:11px;border-top:1px solid rgba(255,255,255,.08);color:var(--muted);font-size:14px}.footer{margin-top:36px;padding:30px 0;border-top:1px solid rgba(255,255,255,.09);color:var(--muted2);font-size:13px}.footer .shell{display:flex;align-items:center;justify-content:space-between;gap:18px;flex-wrap:wrap}
 #file{display:none}
 .modal{position:fixed;inset:0;z-index:80;display:none;align-items:center;justify-content:center;padding:22px;background:rgba(3,6,12,.66);backdrop-filter:blur(14px)}.modal.open{display:flex}.settings{width:min(1120px,100%);max-height:92vh;border-radius:28px;overflow:hidden;background:linear-gradient(180deg,rgba(18,24,40,.96),rgba(12,17,31,.96));border:1px solid rgba(255,255,255,.14);box-shadow:0 30px 90px rgba(0,0,0,.48);display:flex;flex-direction:column}.settings-head{padding:18px 22px;border-bottom:1px solid rgba(255,255,255,.1);display:flex;align-items:flex-start;justify-content:space-between;gap:18px}.settings-head h2{font-size:21px}.settings-head p{color:var(--muted);font-size:13px;margin-top:2px}.close{width:36px;height:36px;border-radius:12px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);color:#fff;font-size:20px}.settings-body{overflow:auto;padding:20px}.settings-section{border-radius:22px;background:rgba(255,255,255,.055);border:1px solid rgba(255,255,255,.1);padding:18px;margin-bottom:16px}.settings-section h3{font-size:17px;margin-bottom:4px}.settings-section>p{color:var(--muted);font-size:13px;margin-bottom:16px}.form-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.field label{display:block;color:#cbd5ef;font-size:12px;font-weight:800;margin-bottom:7px}.field select,.field input{width:100%;height:42px;border-radius:13px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.09);color:#fff;padding:0 12px;outline:none;font-size:13px}.field select:focus,.field input:focus{border-color:rgba(246,200,95,.52);box-shadow:0 0 0 4px rgba(246,200,95,.08)}.field select option{background:#1d2435;color:#fff}.switch-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.switch-card{display:flex;align-items:center;justify-content:space-between;gap:12px;border-radius:16px;border:1px solid rgba(255,255,255,.10);background:rgba(255,255,255,.06);padding:13px}.switch-card strong{font-size:13px}.switch-card small{display:block;color:var(--muted2);font-size:11px}.switch{width:46px;height:26px;border-radius:99px;background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.12);position:relative;flex:0 0 auto}.switch input{display:none}.switch span{position:absolute;width:20px;height:20px;border-radius:50%;left:3px;top:2px;background:#fff;transition:.2s}.switch:has(input:checked){background:linear-gradient(90deg,var(--red),var(--gold));border-color:rgba(246,200,95,.55)}.switch:has(input:checked) span{left:21px}.advanced{border-radius:18px;border:1px solid rgba(255,255,255,.10);background:rgba(255,255,255,.04);overflow:hidden;margin-top:16px}.advanced summary{padding:14px 16px;font-size:14px}.style-list{display:grid;gap:10px;padding:0 16px 16px}.style-row{display:grid;grid-template-columns:92px 1.45fr .8fr .8fr .9fr .9fr;gap:10px;align-items:end;padding:12px;border-radius:16px;background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.08)}.style-name{font-weight:900;color:#fff;font-size:13px;padding-bottom:10px}.style-row .field label{font-size:11px}.settings-foot{padding:15px 22px;border-top:1px solid rgba(255,255,255,.1);display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;background:rgba(5,8,16,.4)}
 .reveal{opacity:0;transform:translateY(18px);animation:reveal .7s ease forwards}.d1{animation-delay:.08s}.d2{animation-delay:.16s}.d3{animation-delay:.24s}@keyframes reveal{to{opacity:1;transform:none}}
+.section-label{display:none}.section-title h2{letter-spacing:0}
 @media(max-width:1020px){.hero-grid,.upload-grid{grid-template-columns:1fr}.fix-grid,.tips{grid-template-columns:1fr 1fr}.form-grid{grid-template-columns:repeat(2,1fr)}.switch-grid{grid-template-columns:repeat(2,1fr)}.style-row{grid-template-columns:1fr 1fr}.style-name{grid-column:1/-1;padding-bottom:0}.navlinks{display:none}}
-@media(max-width:720px){.shell{width:min(100% - 28px,var(--max))}.topline{height:auto}.topline .shell{height:auto;align-items:flex-start;flex-direction:column;padding:8px 0}.navbar .shell{min-height:64px}.nav-cta{display:none}.hero{padding:40px 0 20px}h1{letter-spacing:-1px}.lead{font-size:16px}.compare-grid,.fix-grid,.tips,.faq-grid{grid-template-columns:1fr}.dropzone{min-height:260px;padding:26px 16px}.section{padding:28px 0}.section-head{align-items:flex-start;flex-direction:column}.form-grid,.switch-grid{grid-template-columns:1fr}.settings-body{padding:14px}.settings-head,.settings-foot{padding-left:16px;padding-right:16px}.style-row{grid-template-columns:1fr}.footer .shell{align-items:flex-start;flex-direction:column}}
+@media(max-width:720px){.shell{width:min(100% - 28px,var(--max))}.navbar .shell{min-height:64px}.nav-cta{display:none}.hero{padding:38px 0 18px}.lead{font-size:16px}.hero-main .hero-actions{display:grid;grid-template-columns:1fr}.hero-main .btn{width:100%}.hero-pills{display:grid;grid-template-columns:1fr;padding-top:14px}.hero-pills .pill{justify-content:center;padding:5px}.hero-pills .pill+.pill{border-left:0}.compare-grid,.fix-grid,.tips,.faq-grid{grid-template-columns:1fr}.dropzone{min-height:260px;padding:26px 16px}.section{padding:28px 0}.section-head{align-items:flex-start;flex-direction:column}.form-grid,.switch-grid{grid-template-columns:1fr}.settings-body{padding:14px}.settings-head,.settings-foot{padding-left:16px;padding-right:16px}.style-row{grid-template-columns:1fr}.footer .shell{align-items:flex-start;flex-direction:column}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important;scroll-behavior:auto!important}}
 
 /* Full settings workspace */
@@ -284,26 +282,31 @@ h1{font-size:clamp(36px,6vw,66px);letter-spacing:-2px;line-height:1.05;margin-bo
   padding-right:7px;
 }
 
+.letterhead-toggle{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:12px 0;border-bottom:1px solid rgba(255,255,255,.1)}
+.letterhead-toggle strong{display:block;font-size:14px}.letterhead-toggle small,.letterhead-note{display:block;color:var(--muted2);font-size:11.5px;line-height:1.6}
+.letterhead-fields[hidden]{display:none}.letterhead-subsection{padding:14px 0;border-bottom:1px solid rgba(255,255,255,.09)}.letterhead-subsection:last-child{border-bottom:0;padding-bottom:0}
+.letterhead-subsection h4{font-size:13px;margin-bottom:10px}.letterhead-basic{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.agency-list,.signer-list{display:grid;gap:8px}.agency-row{display:grid;grid-template-columns:minmax(180px,1.4fr) minmax(140px,1fr) 110px auto;gap:8px;align-items:end}
+.row-actions{display:flex;gap:5px}.icon-btn{width:34px;height:34px;border-radius:8px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.07);color:#fff;font-size:15px;display:grid;place-items:center}.icon-btn:hover{border-color:rgba(246,200,95,.45);color:#ffe7a4}
+.letterhead-add{margin-top:9px}.signer-group{padding:10px 0;border-bottom:1px solid rgba(255,255,255,.07)}.signer-group:last-child{border-bottom:0}.signer-group-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}.signer-group-head strong{font-size:12px}.signer-row{display:grid;grid-template-columns:minmax(180px,1fr) 100px 34px;gap:8px;margin-bottom:7px}
+.letterhead-preview-wrap{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:16px;align-items:start}.letterhead-preview{aspect-ratio:210/297;background:#fff;color:#111;padding:28px 24px 22px;box-shadow:0 10px 30px rgba(0,0,0,.25);overflow:hidden}.preview-mark{text-align:center;color:#e60012;font-family:"方正小标宋简体","SimSun",serif;font-size:22px;line-height:1.35;white-space:pre-line}.preview-meta{margin-top:28px}.preview-meta.upward{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:end}.preview-number{text-align:center;font-family:"FangSong","仿宋",serif;font-size:11px}.preview-meta.upward .preview-number{text-align:left}.preview-signers{font-family:"FangSong","仿宋",serif;font-size:10px;line-height:1.7;text-align:right;white-space:pre-line;padding-right:1em}.preview-separator{border-bottom:2px solid #f00;margin-top:8px}.preview-title{text-align:center;font-family:"SimSun",serif;font-size:15px;margin-top:28px;font-weight:700}
+@media(max-width:900px){.letterhead-basic,.agency-row{grid-template-columns:1fr 1fr}.row-actions{grid-column:1/-1}.letterhead-preview-wrap{grid-template-columns:1fr}.letterhead-preview{max-width:300px}}
+@media(max-width:620px){.letterhead-basic,.agency-row,.signer-row{grid-template-columns:1fr}.row-actions{grid-column:auto}}
+
 </style>
 </head>
 <body>
 <div class="blob one"></div><div class="blob two"></div><div class="blob three"></div>
-<div class="topline"><div class="shell"><span>公文智能排版工具</span><span class="signal"><i></i>服务状态 Online · <span id="today"></span></span></div></div>
-<header class="navbar"><div class="shell"><a class="brand" href="#home"><div class="mark">文</div><div><strong>公文智能排版</strong><small>Word 格式规范化工具</small></div></a><nav class="navlinks"><a class="active" href="#home">首页</a><a href="#upload">上传</a><a href="#compare">效果</a><a href="#tips">提示</a><a href="#faq">问题</a></nav><a class="nav-cta" href="#upload">立即上传</a></div></header>
+<header class="navbar"><div class="shell"><a class="brand" href="#home"><div class="mark">文</div><div><strong>公文智能排版</strong><small>Word 格式规范化工具</small></div></a><nav class="navlinks"><a class="active" href="#home">首页</a><a href="#upload">上传</a><a href="#tips">提示</a><a href="#faq">问题</a></nav><a class="nav-cta" href="#upload">立即上传</a></div></header>
 <main id="home">
-  <section class="hero"><div class="shell hero-grid"><div class="reveal"><div class="kicker"><i></i>默认使用党政机关公文格式</div><h1><span class="gradient-text">上传 Word，</span><br>自动排成规范公文格式</h1><p class="lead">不用反复调字体、缩进、行距和页码。把 .docx 文件拖进来，系统会自动处理并下载排版后的 Word。</p><div class="hero-actions"><a class="btn btn-primary" href="#upload">📄 上传文件</a><button class="btn btn-secondary" onclick="openSettings()">调整排版设置</button></div><div class="hero-pills"><span class="pill">支持 .docx</span><span class="pill">单文件 ≤ 10MB</span><span class="pill">处理完成自动下载</span></div></div><aside class="promise-card glass reveal d1"><div class="promise-title"><h2>你会得到什么</h2><span>结果更规范</span></div><div class="promise-list"><div class="promise-item"><b>1</b><div><strong>标题样式统一</strong><small>主标题、一级标题、二级标题自动套用规则</small></div></div><div class="promise-item"><b>2</b><div><strong>正文格式规整</strong><small>正文仿宋、字号、首行缩进、行距统一</small></div></div><div class="promise-item"><b>3</b><div><strong>页面设置规范</strong><small>A4、页边距、每页行数、页码样式统一</small></div></div><div class="promise-item"><b>4</b><div><strong>减少手动调整</strong><small>先自动处理，再人工复核重点内容</small></div></div></div></aside></div></section>
-
   <section class="section" id="upload"><div class="shell"><div class="section-head reveal"><div class="section-title"><div class="section-label">Upload</div><h2>选择文件后自动开始处理</h2><p>默认按党政机关公文格式排版。需要调整字体、字号、页边距时，再打开排版设置。</p></div></div><div class="upload-card glass reveal d1"><div class="upload-grid"><div class="dropzone" id="dropZone" onclick="document.getElementById('file').click()"><div class="upload-icon">📄</div><h3>拖拽 Word 到这里</h3><p>或点击选择本地 .docx 文件。上传后会显示处理步骤，完成后自动下载。</p><div class="upload-hint"><span class="pill">.docx</span><span class="pill">≤ 10MB</span><span class="pill">请勿上传涉密文件</span></div></div><aside class="side-panel"><div class="current-rule current-rule-simple"><div style="width:100%"><strong>当前规则</strong><select class="home-rule-select" id="homeTemplateSelect" onchange="selectTemplate(this.value)"></select></div></div><input type="file" id="file" accept=".docx" onchange="upload(this.files[0])"><div class="hero-actions" style="margin:0 0 8px"><button class="btn btn-primary" onclick="document.getElementById('file').click()">选择文件</button><button class="btn btn-secondary" onclick="openSettings()">排版设置</button></div><div class="meta-info" id="meta">还没有选择文件</div><div class="progress-area" id="progressArea"><div class="progress-track"><div class="progress-fill" id="bar"></div></div><div class="status-msg" id="msg"></div><div class="stepper" id="stepper"><div class="mini-step" data-step="1"><i>1</i>上传文件</div><div class="mini-step" data-step="2"><i>2</i>读取文档结构</div><div class="mini-step" data-step="3"><i>3</i>应用公文格式</div><div class="mini-step" data-step="4"><i>4</i>生成下载文件</div></div></div><div class="result-card" id="resultCard"><h3>排版完成</h3><p>文件已自动下载，也可以重新下载或继续处理下一个文件。</p><div class="hero-actions" style="margin:0"><button class="btn btn-small btn-primary" id="redownloadBtn" onclick="redownload()">重新下载</button><button class="btn btn-small btn-secondary" onclick="resetUpload()">处理下一个</button></div></div></aside></div></div></div></section>
 
-  <section class="section" id="compare"><div class="shell"><div class="section-head reveal"><div class="section-title"><div class="section-label">Before / After</div><h2>处理前后，用户能直接看懂的变化</h2></div></div><div class="compare-grid"><div class="compare bad reveal"><h3>处理前常见问题</h3><ul class="check-list"><li>标题字体、字号不统一</li><li>正文首行缩进和行距混乱</li><li>页边距、每页行数不规范</li><li>页码样式和位置需要手动调整</li></ul></div><div class="compare good reveal d1"><h3>处理后预期效果</h3><ul class="check-list"><li>主标题、各级标题按规则统一</li><li>正文仿宋三号、首行缩进 2 字符</li><li>A4 页面、固定行距、页边距统一</li><li>输出可下载的规范 Word 文件</li></ul></div></div></div></section>
-
-  <section class="section"><div class="shell"><div class="section-head reveal"><div class="section-title"><div class="section-label">What It Fixes</div><h2>系统主要帮你处理这些格式问题</h2></div></div><div class="fix-grid"><div class="fix-card reveal"><b>🔤</b><h3>字体字号</h3><p>统一标题、正文、页码和数字英文的字体字号规则。</p></div><div class="fix-card reveal d1"><b>📐</b><h3>页面版式</h3><p>设置 A4、页边距、行距、每页行数和每行字数。</p></div><div class="fix-card reveal d2"><b>🧩</b><h3>结构识别</h3><p>自动判断主标题、层级标题、正文、落款等段落类型。</p></div><div class="fix-card reveal"><b>#</b><h3>页码样式</h3><p>统一页码字体、字号、样式和奇偶页位置。</p></div><div class="fix-card reveal d1"><b>▦</b><h3>表格优化</h3><p>可作为后端扩展入口，处理表格边框、宽度和对齐。</p></div><div class="fix-card reveal d2"><b>✨</b><h3>标点修复</h3><p>可选开启标点和空格规范化，减少中英文混排问题。</p></div></div></div></section>
+  <section class="section"><div class="shell"><div class="section-head reveal"><div class="section-title"><div class="section-label">What It Fixes</div><h2>系统主要帮你处理这些格式问题</h2></div></div><div class="fix-grid"><div class="fix-card reveal"><b>🔤</b><h3>字体字号</h3><p>统一标题、正文、页码和数字英文的字体字号规则。</p></div><div class="fix-card reveal d1"><b>📐</b><h3>页面版式</h3><p>设置 A4、页边距、行距、每页行数和每行字数。</p></div><div class="fix-card reveal d2"><b>🧩</b><h3>结构识别</h3><p>自动判断主标题、层级标题、正文、落款等段落类型。</p></div><div class="fix-card reveal"><b>#</b><h3>页码样式</h3><p>统一页码字体、字号、样式和奇偶页位置。</p></div><div class="fix-card reveal d1"><b>▦</b><h3>表格与图片</h3><p>完整保留源文件中的表格、图片、题注及关系资源。</p></div><div class="fix-card reveal d2"><b>✨</b><h3>标点修复</h3><p>可选开启标点和空格规范化，减少中英文混排问题。</p></div></div></div></section>
 
   <section class="section" id="tips"><div class="shell"><div class="section-head reveal"><div class="section-title"><div class="section-label">Tips</div><h2>上传前注意这三点</h2></div></div><div class="tips"><div class="tip reveal"><h3>不要上传涉密文件</h3><p>系统适合处理普通办公文档，涉密或敏感材料请在本地安全环境处理。</p></div><div class="tip reveal d1"><h3>优先使用 .docx</h3><p>如果是 .doc 或 WPS 文件，建议先另存为 .docx 后再上传。</p></div><div class="tip reveal d2"><h3>处理后建议复核</h3><p>复杂表格、图片、特殊对象和特殊编号，建议下载后人工检查一次。</p></div></div></div></section>
 
-  <section class="section" id="faq"><div class="shell"><div class="section-head reveal"><div class="section-title"><div class="section-label">FAQ</div><h2>常见问题</h2></div></div><div class="faq-grid"><details open class="reveal"><summary>排版后是否还要人工检查？</summary><p>建议检查。系统能完成大部分格式统一，但复杂表格、图片和特殊格式仍建议人工复核。</p></details><details class="reveal d1"><summary>为什么上传后提示失败？</summary><p>常见原因是文件不是 .docx、文件超过 10MB、文档损坏，或包含无法解析的特殊对象。</p></details><details class="reveal d2"><summary>上传文件会保存多久？</summary><p>上传原文件处理完成后应尽快清理，输出文件建议限时保留，请及时下载。</p></details><details class="reveal d3"><summary>能不能调整默认格式？</summary><p>可以。点击“排版设置”后可调整常用字体、字号、页边距、行距，也可以展开完整设置。</p></details></div></div></section>
+  <section class="section" id="faq"><div class="shell"><div class="section-head reveal"><div class="section-title"><h2>常见问题</h2></div></div><div class="faq-grid"><article class="faq-item reveal"><h3>排版后是否还要人工检查？</h3><p>建议检查。系统能完成大部分格式统一，但复杂表格、图片和特殊格式仍建议人工复核。</p></article><article class="faq-item reveal d1"><h3>为什么上传后提示失败？</h3><p>常见原因是文件不是 .docx、文件超过 10MB、文档损坏，或包含无法解析的特殊对象。</p></article><article class="faq-item reveal d2"><h3>上传文件会保存多久？</h3><p>上传原文件处理完成后应尽快清理，输出文件建议限时保留，请及时下载。</p></article><article class="faq-item reveal d3"><h3>能不能调整默认格式？</h3><p>可以。点击“排版设置”后可调整常用字体、字号、页边距、行距，也可以展开完整设置。</p></article></div></div></section>
 </main>
-<footer class="footer"><div class="shell"><div><strong style="color:#fff">公文智能排版</strong><div>建议使用 Chrome、Edge 等现代浏览器访问</div></div><div>规范 · 高效 · 自动排版</div></div></footer>
 
 <div class="modal" id="settingsModal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
   <div class="settings settings-wide" onclick="event.stopPropagation()">
@@ -329,14 +332,58 @@ h1{font-size:clamp(36px,6vw,66px);letter-spacing:-2px;line-height:1.05;margin-bo
       <aside class="settings-sidebar">
         <div class="side-box compact-only"><strong>快速导航</strong></div>
         <nav class="settings-toc">
-          <a href="#settingStyles"><span>01</span>段落样式</a>
-          <a href="#settingGlobal"><span>02</span>全局设置</a>
-          <a href="#settingFeatures"><span>03</span>功能开关</a>
+          <a href="#settingLetterhead"><span>01</span>版头设置</a>
+          <a href="#settingStyles"><span>02</span>段落样式</a>
+          <a href="#settingGlobal"><span>03</span>全局设置</a>
+          <a href="#settingFeatures"><span>04</span>功能开关</a>
         </nav>
 
       </aside>
 
       <div class="settings-main">
+        <section class="settings-block" id="settingLetterhead">
+          <div class="block-head"><div><h3>版头设置</h3><p>生成正文流中的机关标志、发文字号、签发人和红色分隔线。</p></div></div>
+          <div class="letterhead-toggle"><span><strong>生成版头</strong><small id="letterheadDisabledNote">不会生成新版头；检测到已有版头时原样保留。</small></span><label class="switch"><input type="checkbox" id="letterheadEnabled" onchange="renderLetterhead()"><span></span></label></div>
+          <div class="letterhead-fields" id="letterheadFields" hidden>
+            <div class="letterhead-subsection">
+              <h4>基本信息</h4>
+              <div class="letterhead-basic">
+                <div class="field"><label>发文方式</label><select id="letterheadIssuanceMode" onchange="setIssuanceMode(this.value)"><option value="single">单一机关</option><option value="joint">联合发文</option></select></div>
+                <div class="field"><label>行文方向</label><select id="letterheadDirection" onchange="renderLetterhead()"><option value="downward">下行文</option><option value="parallel">平行文</option><option value="upward">上行文</option></select></div>
+                <div class="field"><label>标志形式</label><select id="letterheadMarkDisplayMode" onchange="renderLetterheadPreview()"><option value="agency_with_document">机关名称＋“文件”</option><option value="agency_only">仅机关名称</option></select></div>
+                <div class="field" id="letterheadJointScopeWrap" hidden><label>联合展示范围</label><select id="letterheadJointScope" onchange="renderLetterheadPreview()"><option value="all_agencies">全部机关</option><option value="sponsor_only">仅主办机关</option></select></div>
+              </div>
+            </div>
+            <div class="letterhead-subsection">
+              <h4>机关列表</h4>
+              <div class="agency-list" id="letterheadAgencies"></div>
+              <button type="button" class="btn btn-secondary btn-small letterhead-add" id="addAgencyBtn" onclick="addLetterheadAgency()">＋ 添加机关</button>
+            </div>
+            <div class="letterhead-subsection">
+              <h4>发文字号</h4>
+              <div class="letterhead-basic">
+                <div class="field"><label>机关代字</label><input id="letterheadAgencyCode" maxlength="40" oninput="renderLetterheadPreview()"></div>
+                <div class="field"><label>四位年份</label><input id="letterheadYear" type="number" min="1900" max="2100" oninput="renderLetterheadPreview()"></div>
+                <div class="field"><label>顺序号</label><input id="letterheadSequence" type="number" min="1" oninput="renderLetterheadPreview()"></div>
+                <div class="field"><label>实时预览</label><input id="letterheadNumberPreview" class="readonly-control" readonly></div>
+              </div>
+            </div>
+            <div class="letterhead-subsection" id="letterheadSignerSection" hidden>
+              <h4>签发人</h4>
+              <div class="signer-list" id="letterheadSigners"></div>
+            </div>
+            <div class="letterhead-subsection">
+              <h4>已有版头</h4>
+              <p class="letterhead-note">已有外部版头默认保留；由 docxtool 生成的受管版头可选择替换。</p>
+              <label class="letterhead-toggle"><span><strong>替换由 docxtool 生成的版头</strong></span><span class="switch"><input type="checkbox" id="letterheadReplaceManaged"><span></span></span></label>
+            </div>
+            <div class="letterhead-subsection letterhead-preview-wrap">
+              <div><h4>A4 首页预览</h4><p class="letterhead-note">预览仅使用当前配置，不读取上传文件正文。</p></div>
+              <div class="letterhead-preview" id="letterheadPreview"><div class="preview-mark" id="previewLetterheadMark"></div><div class="preview-meta" id="previewLetterheadMeta"><div class="preview-number" id="previewDocumentNumber"></div><div class="preview-signers" id="previewSigners"></div></div><div class="preview-separator"></div><div class="preview-title">公文标题</div></div>
+            </div>
+          </div>
+        </section>
+
         <section class="settings-block" id="settingStyles">
           <div class="block-head"><div><h3>段落样式</h3></div></div>
           <div class="style-matrix-wrap"><div class="style-card-list" id="styleMatrixBody"></div></div>
@@ -405,9 +452,11 @@ h1{font-size:clamp(36px,6vw,66px);letter-spacing:-2px;line-height:1.05;margin-bo
           <div class="block-head"><div><h3>功能开关</h3></div></div>
           <div class="switch-grid full">
             <label class="switch-card"><span><strong>标点修复</strong><small>修复中英文标点和空格</small></span><span class="switch"><input type="checkbox" id="punctuationEnabled" checked><span></span></span></label>
-            <label class="switch-card"><span><strong>表格优化</strong><small>暂未实现，保留为后续扩展入口</small></span><span class="switch"><input type="checkbox" id="tableEnabled" checked disabled><span></span></span></label>
             <label class="switch-card"><span><strong>页码处理</strong><small>统一页码样式和位置</small></span><span class="switch"><input type="checkbox" id="pageNumberEnabled" checked><span></span></span></label>
             <label class="switch-card"><span><strong>特殊加粗</strong><small>识别标题和关键段落加粗</small></span><span class="switch"><input type="checkbox" id="specialBold" checked><span></span></span></label>
+            <label class="switch-card"><span><strong>安全标点</strong><small>保护链接、邮箱、版本号等片段</small></span><span class="switch"><input type="checkbox" id="punctuationSafeEnabled" checked><span></span></span></label>
+            <label class="switch-card"><span><strong>序号规范</strong><small>修正常见人工序号格式</small></span><span class="switch"><input type="checkbox" id="numberingEnabled" checked><span></span></span></label>
+            <label class="switch-card"><span><strong>新版页码</strong><small>字段页码并保留页眉页脚关系</small></span><span class="switch"><input type="checkbox" id="pageNumberV2Enabled" checked><span></span></span></label>
           </div>
         </section>
       </div>
@@ -427,7 +476,6 @@ const LOCAL_TEMPLATE_KEY='docxtool_custom_templates_v2';
 const API_PREFIX = '/api';
 let lastDownloadUrl='',lastDownloadName='',templateApiAvailable=false;
 let adminCsrfToken='';
-document.getElementById('today').textContent=new Date().toLocaleDateString('zh-CN',{year:'numeric',month:'long',day:'numeric',weekday:'long'});
 let currentPresetId=DEFAULT_PRESET_ID;
 let templateStore=[
   {id:DEFAULT_PRESET_ID,name:'党政机关公文格式',type:'system',template_type:'system',is_system:true,is_default:true,description:'默认公文格式，适合通知、报告、请示、汇报等正式材料。'},
@@ -567,6 +615,226 @@ function base64UrlJson(value){
   for(let i=0;i<bytes.length;i+=chunk)binary+=String.fromCharCode(...bytes.subarray(i,i+chunk));
   return btoa(binary).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
 }
+const CORE_FEATURE_DEFAULTS={
+  punctuation:{enabled:false,mode:'safe',scope:{body:true,tables:false,headers:false,footers:false}},
+  classification:{enabled:true,minimum_auto_format_confidence:0.85},
+  numbering:{enabled:false,mode:'safe'},
+  page_number:{enabled:false,style:'dash',position:'outside',first_page:true,section_numbering:'continue',offset_from_text_mm:7},
+  table_format:{enabled:false,smart_alignment:false},
+  cleanup:{enabled:false,mode:'safe'}
+};
+const LETTERHEAD_DEFAULT={
+  schema_version:1,enabled:false,document_direction:'downward',issuance_mode:'single',
+  mark_display_mode:'agency_with_document',joint_mark_scope:'all_agencies',
+  agencies:[{id:'agency-1',name:'',short_name:'',role:'sponsor',order:1}],
+  document_number:{agency_code:'',year:null,sequence:null},signers:[],
+  existing_policy:'preserve_external',replace_managed:false,layout_version:1
+};
+let letterheadAgencies=clonePlain(LETTERHEAD_DEFAULT.agencies);
+let letterheadSigners=[];
+let letterheadAgencySerial=1;
+let letterheadSignerSerial=0;
+function clonePlain(value){return JSON.parse(JSON.stringify(value))}
+function boolValue(value,fallback=false){
+  if(value===undefined||value===null)return fallback;
+  if(typeof value==='boolean')return value;
+  if(typeof value==='number')return value!==0;
+  const raw=String(value).trim().toLowerCase();
+  if(['1','true','yes','on','启用','是'].includes(raw))return true;
+  if(['0','false','no','off','禁用','否'].includes(raw))return false;
+  return fallback;
+}
+function optionalSizeStyle(style,size){
+  const next={...style};
+  const value=String(size??'').trim();
+  if(value)next.size=value;
+  return next;
+}
+function migrateOptionalEmptySizeStyle(style,index){
+  if(!style||typeof style!=='object'||Array.isArray(style))return style;
+  const name=String(style.name||'').trim();
+  const legacySlot=(index===6&&(!name||name==='数字'))||(index===7&&(!name||name==='字母'));
+  if((name==='数字'||name==='字母'||legacySlot)&&style.size===''){
+    const next={...style};
+    delete next.size;
+    return next;
+  }
+  return style;
+}
+function normalizeCoreFeatureOptions(value,defaults){
+  const base=clonePlain(defaults);
+  if(value&&typeof value==='object'&&!Array.isArray(value)){
+    const merged={...base,...value};
+    merged.enabled=boolValue(value.enabled,base.enabled);
+    if(base.scope||value.scope)merged.scope={...(base.scope||{}),...(value.scope||{})};
+    if(merged.offset_from_text_mm!==undefined){
+      const n=Number(merged.offset_from_text_mm);
+      merged.offset_from_text_mm=Number.isFinite(n)?n:base.offset_from_text_mm;
+    }
+    return merged;
+  }
+  if(value!==undefined)return {...base,enabled:boolValue(value,base.enabled)};
+  return base;
+}
+function normalizeTransportConfig(config){
+  const out={...(asObject(config)||{})};
+  if(Array.isArray(out.styles))out.styles=out.styles.map(migrateOptionalEmptySizeStyle);
+  Object.keys(CORE_FEATURE_DEFAULTS).forEach(key=>{
+    out[key]=normalizeCoreFeatureOptions(out[key],CORE_FEATURE_DEFAULTS[key]);
+  });
+  out.features={...(out.features||{})};
+  out.features.numbered_bold_enabled=boolValue(out.features.numbered_bold_enabled,true);
+  out.features.punctuation_enabled=boolValue(out.features.punctuation_enabled,true);
+  out.features.page_number_enabled=boolValue(out.features.page_number_enabled,true);
+  out.letterhead=normalizeLetterheadClient(out.letterhead);
+  return out;
+}
+function defaultTransportConfig(){
+  return normalizeTransportConfig({
+    styles:[],
+    page:{width_cm:21.0,height_cm:29.7,margin_top_cm:3.7,margin_bottom_cm:3.5,margin_left_cm:2.8,margin_right_cm:2.6,lines_per_page:22,chars_per_line:28,line_spacing_pt:28,space_before_line:0,space_after_line:0,grid_alignment:'文字对齐字符网络'},
+    features:{numbered_bold_enabled:true,punctuation_enabled:true,page_number_enabled:true}
+  });
+}
+function normalizeLetterheadClient(value){
+  const raw=value&&typeof value==='object'&&!Array.isArray(value)?value:{};
+  const out={...clonePlain(LETTERHEAD_DEFAULT),...clonePlain(raw)};
+  out.enabled=boolValue(raw.enabled,false);
+  out.replace_managed=boolValue(raw.replace_managed,false);
+  out.document_number={...LETTERHEAD_DEFAULT.document_number,...(raw.document_number||{})};
+  const incoming=Array.isArray(raw.agencies)&&raw.agencies.length?raw.agencies:LETTERHEAD_DEFAULT.agencies;
+  out.agencies=incoming.map((agency,index)=>({
+    id:String(agency?.id||`agency-${index+1}`),name:String(agency?.name||''),short_name:String(agency?.short_name||''),
+    role:agency?.role==='sponsor'?'sponsor':'joint',order:index+1
+  }));
+  let sponsor=out.agencies.findIndex(agency=>agency.role==='sponsor');
+  if(sponsor<0)sponsor=0;
+  out.agencies.forEach((agency,index)=>agency.role=index===sponsor?'sponsor':'joint');
+  out.agencies.sort((a,b)=>(a.role==='sponsor'?-1:b.role==='sponsor'?1:a.order-b.order));
+  out.agencies.forEach((agency,index)=>agency.order=index+1);
+  out.signers=(Array.isArray(raw.signers)?raw.signers:[]).map((signer,index)=>({
+    id:String(signer?.id||`signer-${index+1}`),agency_id:String(signer?.agency_id||out.agencies[0]?.id||''),
+    name:String(signer?.name||''),label:String(signer?.label||'签发人'),order:Number(signer?.order)||index+1
+  }));
+  return out;
+}
+function letterheadElement(id){return document.getElementById(id)}
+function nextAgencyId(){letterheadAgencySerial+=1;return `agency-${letterheadAgencySerial}`}
+function nextSignerId(){letterheadSignerSerial+=1;return `signer-${letterheadSignerSerial}`}
+function setIssuanceMode(mode){
+  const select=letterheadElement('letterheadIssuanceMode');if(select)select.value=mode;
+  if(mode==='single'){
+    const sponsor=letterheadAgencies.find(agency=>agency.role==='sponsor')||letterheadAgencies[0]||{id:nextAgencyId(),name:'',short_name:''};
+    letterheadAgencies=[{...sponsor,role:'sponsor',order:1}];
+    letterheadSigners=letterheadSigners.filter(signer=>signer.agency_id===sponsor.id);
+  }
+  renderLetterhead();
+}
+function updateLetterheadAgency(id,field,value){
+  const agency=letterheadAgencies.find(item=>item.id===id);if(!agency)return;
+  agency[field]=value;renderLetterheadPreview();
+  if(field==='name'&&letterheadElement('letterheadDirection')?.value==='upward')renderLetterheadSigners();
+}
+function setLetterheadSponsor(id){
+  letterheadAgencies.forEach(agency=>agency.role=agency.id===id?'sponsor':'joint');
+  letterheadAgencies.sort((a,b)=>(a.role==='sponsor'?-1:b.role==='sponsor'?1:a.order-b.order));
+  letterheadAgencies.forEach((agency,index)=>agency.order=index+1);renderLetterhead();
+}
+function addLetterheadAgency(){
+  if(letterheadAgencies.length>=10)return;
+  letterheadAgencies.push({id:nextAgencyId(),name:'',short_name:'',role:'joint',order:letterheadAgencies.length+1});renderLetterhead();
+}
+function removeLetterheadAgency(id){
+  if(letterheadAgencies.length<=2)return;
+  const removed=letterheadAgencies.find(item=>item.id===id);letterheadAgencies=letterheadAgencies.filter(item=>item.id!==id);
+  letterheadSigners=letterheadSigners.filter(signer=>signer.agency_id!==id);
+  if(removed?.role==='sponsor'&&letterheadAgencies[0])letterheadAgencies[0].role='sponsor';
+  letterheadAgencies.forEach((agency,index)=>agency.order=index+1);renderLetterhead();
+}
+function moveLetterheadAgency(id,delta){
+  const index=letterheadAgencies.findIndex(item=>item.id===id);const target=index+delta;
+  if(index<=0||target<=0||target>=letterheadAgencies.length)return;
+  [letterheadAgencies[index],letterheadAgencies[target]]=[letterheadAgencies[target],letterheadAgencies[index]];
+  letterheadAgencies.forEach((agency,order)=>agency.order=order+1);renderLetterhead();
+}
+function addLetterheadSigner(agencyId){
+  const count=letterheadSigners.filter(item=>item.agency_id===agencyId).length;
+  if(count>=10)return;
+  letterheadSigners.push({id:nextSignerId(),agency_id:agencyId,name:'',label:'签发人',order:count+1});renderLetterheadSigners();renderLetterheadPreview();
+}
+function updateLetterheadSigner(id,field,value){const signer=letterheadSigners.find(item=>item.id===id);if(signer){signer[field]=value;renderLetterheadPreview()}}
+function removeLetterheadSigner(id){
+  const signer=letterheadSigners.find(item=>item.id===id);if(!signer)return;
+  const group=letterheadSigners.filter(item=>item.agency_id===signer.agency_id);if(group.length<=1)return;
+  letterheadSigners=letterheadSigners.filter(item=>item.id!==id);
+  letterheadSigners.filter(item=>item.agency_id===signer.agency_id).forEach((item,index)=>item.order=index+1);
+  renderLetterheadSigners();renderLetterheadPreview();
+}
+function renderLetterheadAgencies(){
+  const body=letterheadElement('letterheadAgencies');if(!body)return;
+  const joint=letterheadElement('letterheadIssuanceMode')?.value==='joint';
+  body.innerHTML=letterheadAgencies.map((agency,index)=>`<div class="agency-row" data-agency-id="${escapeHtml(agency.id)}"><div class="field"><label>机关名称</label><input maxlength="80" value="${escapeHtml(agency.name)}" oninput="updateLetterheadAgency('${escapeHtml(agency.id)}','name',this.value)"></div><div class="field"><label>规范化简称（可选）</label><input maxlength="80" value="${escapeHtml(agency.short_name)}" oninput="updateLetterheadAgency('${escapeHtml(agency.id)}','short_name',this.value)"></div><div class="field"><label>机关角色</label><select onchange="if(this.value==='sponsor')setLetterheadSponsor('${escapeHtml(agency.id)}');else this.value='${agency.role}'"><option value="sponsor" ${agency.role==='sponsor'?'selected':''}>主办机关</option><option value="joint" ${agency.role==='joint'?'selected':''}>联合机关</option></select></div><div class="row-actions"><button type="button" class="icon-btn" title="上移" onclick="moveLetterheadAgency('${escapeHtml(agency.id)}',-1)" ${index<=1?'disabled':''}>↑</button><button type="button" class="icon-btn" title="下移" onclick="moveLetterheadAgency('${escapeHtml(agency.id)}',1)" ${index===0||index===letterheadAgencies.length-1?'disabled':''}>↓</button><button type="button" class="icon-btn" title="删除" onclick="removeLetterheadAgency('${escapeHtml(agency.id)}')" ${!joint||letterheadAgencies.length<=2?'disabled':''}>×</button></div></div>`).join('');
+}
+function renderLetterheadSigners(){
+  const body=letterheadElement('letterheadSigners');if(!body)return;
+  body.innerHTML=letterheadAgencies.map(agency=>{
+    const group=letterheadSigners.filter(item=>item.agency_id===agency.id).sort((a,b)=>a.order-b.order);
+    return `<div class="signer-group"><div class="signer-group-head"><strong>${escapeHtml(agency.name||'未填写机关名称')}</strong><button type="button" class="btn btn-secondary btn-small" onclick="addLetterheadSigner('${escapeHtml(agency.id)}')">＋ 添加签发人</button></div>${group.map(signer=>`<div class="signer-row"><input maxlength="30" value="${escapeHtml(signer.name)}" placeholder="签发人姓名" oninput="updateLetterheadSigner('${escapeHtml(signer.id)}','name',this.value)"><input maxlength="20" value="${escapeHtml(signer.label)}" oninput="updateLetterheadSigner('${escapeHtml(signer.id)}','label',this.value)"><button type="button" class="icon-btn" title="删除" onclick="removeLetterheadSigner('${escapeHtml(signer.id)}')" ${group.length<=1?'disabled':''}>×</button></div>`).join('')}</div>`;
+  }).join('');
+}
+function ensureUpwardSigners(){
+  letterheadAgencies.forEach(agency=>{if(!letterheadSigners.some(item=>item.agency_id===agency.id))addLetterheadSigner(agency.id)});
+}
+function renderLetterhead(){
+  const enabled=!!letterheadElement('letterheadEnabled')?.checked;
+  if(letterheadElement('letterheadFields'))letterheadElement('letterheadFields').hidden=!enabled;
+  if(letterheadElement('letterheadDisabledNote'))letterheadElement('letterheadDisabledNote').hidden=enabled;
+  const joint=letterheadElement('letterheadIssuanceMode')?.value==='joint';
+  if(letterheadElement('letterheadJointScopeWrap'))letterheadElement('letterheadJointScopeWrap').hidden=!joint;
+  if(letterheadElement('addAgencyBtn'))letterheadElement('addAgencyBtn').hidden=!joint;
+  const upward=letterheadElement('letterheadDirection')?.value==='upward';
+  if(letterheadElement('letterheadSignerSection'))letterheadElement('letterheadSignerSection').hidden=!upward;
+  if(enabled&&upward)ensureUpwardSigners();
+  renderLetterheadAgencies();renderLetterheadSigners();renderLetterheadPreview();
+}
+function renderLetterheadPreview(){
+  const mark=letterheadElement('previewLetterheadMark');if(!mark)return;
+  const joint=letterheadElement('letterheadIssuanceMode')?.value==='joint';
+  const sponsorOnly=joint&&letterheadElement('letterheadJointScope')?.value==='sponsor_only';
+  let agencies=sponsorOnly?letterheadAgencies.slice(0,1):letterheadAgencies;
+  const withDocument=letterheadElement('letterheadMarkDisplayMode')?.value!=='agency_only';
+  let lines=agencies.map(item=>item.name||'发文机关名称');
+  if(withDocument){if(lines.length===1&&!lines[0].endsWith('文件'))lines[0]+='文件';else if(lines.length>1)lines[Math.floor((lines.length-1)/2)]+='　文件'}
+  mark.textContent=lines.join('\n');
+  const code=letterheadElement('letterheadAgencyCode')?.value||'机关代字';const year=letterheadElement('letterheadYear')?.value||'年份';const sequence=letterheadElement('letterheadSequence')?.value||'顺序号';
+  const number=`${code}〔${year}〕${sequence}号`;letterheadElement('letterheadNumberPreview').value=number;
+  const numberNode=letterheadElement('previewDocumentNumber');numberNode.textContent=number;
+  const signerNode=letterheadElement('previewSigners');const upward=letterheadElement('letterheadDirection')?.value==='upward';
+  const signerLabels=letterheadSigners.filter(item=>item.name).map(item=>`${item.label||'签发人'}：${item.name}`);const signerRows=[];
+  for(let index=0;index<signerLabels.length;index+=2)signerRows.push(signerLabels.slice(index,index+2).join('　　'));
+  signerNode.textContent=upward?signerRows.join('\n'):'';letterheadElement('previewLetterheadMeta')?.classList.toggle('upward',upward);
+}
+function collectLetterheadConfig(){
+  const numberValue=id=>{const value=Number(letterheadElement(id)?.value);return Number.isInteger(value)&&value>0?value:null};
+  return {
+    schema_version:1,enabled:!!letterheadElement('letterheadEnabled')?.checked,
+    document_direction:letterheadElement('letterheadDirection')?.value||'downward',issuance_mode:letterheadElement('letterheadIssuanceMode')?.value||'single',
+    mark_display_mode:letterheadElement('letterheadMarkDisplayMode')?.value||'agency_with_document',joint_mark_scope:letterheadElement('letterheadJointScope')?.value||'all_agencies',
+    agencies:letterheadAgencies.map((agency,index)=>({...agency,name:agency.name.trim(),short_name:agency.short_name.trim(),order:index+1})),
+    document_number:{agency_code:(letterheadElement('letterheadAgencyCode')?.value||'').trim(),year:numberValue('letterheadYear'),sequence:numberValue('letterheadSequence')},
+    signers:letterheadSigners.map(signer=>({...signer,name:signer.name.trim(),label:(signer.label||'签发人').trim()})),existing_policy:'preserve_external',
+    replace_managed:!!letterheadElement('letterheadReplaceManaged')?.checked,layout_version:1
+  };
+}
+function applyLetterheadConfig(value){
+  const config=normalizeLetterheadClient(value);letterheadAgencies=clonePlain(config.agencies);letterheadSigners=clonePlain(config.signers);
+  letterheadAgencySerial=Math.max(1,...letterheadAgencies.map(item=>Number(String(item.id).match(/(\d+)$/)?.[1])||0));letterheadSignerSerial=Math.max(0,...letterheadSigners.map(item=>Number(String(item.id).match(/(\d+)$/)?.[1])||0));
+  const set=(id,value)=>{const element=letterheadElement(id);if(element)element.value=value??''};
+  if(letterheadElement('letterheadEnabled'))letterheadElement('letterheadEnabled').checked=config.enabled;
+  if(letterheadElement('letterheadReplaceManaged'))letterheadElement('letterheadReplaceManaged').checked=config.replace_managed;
+  set('letterheadIssuanceMode',config.issuance_mode);set('letterheadDirection',config.document_direction);set('letterheadMarkDisplayMode',config.mark_display_mode);set('letterheadJointScope',config.joint_mark_scope);
+  set('letterheadAgencyCode',config.document_number.agency_code);set('letterheadYear',config.document_number.year);set('letterheadSequence',config.document_number.sequence);renderLetterhead();
+}
 function updateNumberingType(row){
   const pattern=row.querySelector('[data-field="pattern"]')?.value||'';
   const info=parseNumberingFormat(pattern);
@@ -585,6 +853,7 @@ function initSettings(){
   ['pageLanguage','supLanguage'].forEach(id=>fillSelect(id,languages,{pageLanguage:'阿拉伯数字',supLanguage:'阿拉伯数字'}[id]||'中文'));
   fillSelect('pagePosition',alignments,'奇右偶左');
   renderStyleMatrix();
+  applyLetterheadConfig(LETTERHEAD_DEFAULT);
 }
 function renderStyleMatrix(){
   const body=document.getElementById('styleMatrixBody');
@@ -621,11 +890,11 @@ function collectConfig(){
     styleByName['三级标题']||{name:'三级标题',font:'仿宋_GB2312',size:'三号',bold:true,pattern:'{c}.',lang:'阿拉伯数字',indent:2,align:'左对齐'},
     styleByName['四级标题']||{name:'四级标题',font:'仿宋_GB2312',size:'三号',bold:false,pattern:'（{d}）',lang:'阿拉伯数字',indent:2,align:'左对齐'},
     styleByName['正文']||{name:'正文',font:'仿宋_GB2312',size:'三号',bold:false,pattern:'',lang:'',indent:2,align:'两端对齐'},
-    {name:'数字',font:get('numberFont')||'Times New Roman',size:get('numberSize')||'',bold:false,pattern:'',lang:'',indent:0,align:'左对齐'},
-    {name:'字母',font:get('letterFont')||'Times New Roman',size:get('letterSize')||'',bold:false,pattern:'',lang:'',indent:0,align:'左对齐'},
+    optionalSizeStyle({name:'数字',font:get('numberFont')||'Times New Roman',bold:false,pattern:'',lang:'',indent:0,align:'左对齐'},get('numberSize')),
+    optionalSizeStyle({name:'字母',font:get('letterFont')||'Times New Roman',bold:false,pattern:'',lang:'',indent:0,align:'左对齐'},get('letterSize')),
     {name:'页码设置',font:get('pageFont')||'宋体',size:get('pageSize')||'四号',bold:false,pattern:get('pageStyle')||'— 1 —',lang:get('pageLanguage')||'阿拉伯数字',indent:0,align:get('pagePosition')||'奇右|偶左'}
   ];
-  return {
+  return normalizeTransportConfig({
     styles,
     page:{
       width_cm:get('paperSize')==='A3'?29.7:21.0,
@@ -647,13 +916,20 @@ function collectConfig(){
       numbered_bold_enabled:checked('specialBold'),
       punctuation_enabled:checked('punctuationEnabled'),
       page_number_enabled:checked('pageNumberEnabled')
-    }
-  };
+    },
+    punctuation:{enabled:checked('punctuationSafeEnabled'),mode:'safe',scope:{body:true,tables:false,headers:false,footers:false}},
+    classification:{enabled:true,minimum_auto_format_confidence:0.85},
+    numbering:{enabled:checked('numberingEnabled'),mode:'safe'},
+    page_number:{enabled:checked('pageNumberV2Enabled'),style:'dash',position:'outside',first_page:true,section_numbering:'continue',offset_from_text_mm:7},
+    table_format:{enabled:checked('tableFormatEnabled'),smart_alignment:false},
+    cleanup:{enabled:checked('cleanupEnabled'),mode:'safe'},
+    letterhead:collectLetterheadConfig()
+  });
 }
 function normalizeConfig(config,tpl){
   const obj=asObject(config);
   if(!obj)return null;
-  const out={...obj};
+  const out=normalizeTransportConfig(obj);
   out.schema_version=Number(out.schema_version)||1;
   out.preset_id=normalizePresetId(out.preset_id||tpl?.id);
   out.preset_name=out.preset_name||tpl?.name||'党政机关公文格式';
@@ -838,6 +1114,19 @@ function applyConfigToForm(config,keepTemplate=true){
     const val=f[key]!==undefined?f[key]:f[fallbackKey];
     if(document.getElementById(id)&&val!==undefined)document.getElementById(id).checked=!!val;
   });
+  const coreFeatureMap={
+    punctuationSafeEnabled:cfg.punctuation?.enabled,
+    numberingEnabled:cfg.numbering?.enabled,
+    pageNumberV2Enabled:cfg.page_number?.enabled,
+    tableFormatEnabled:cfg.table_format?.enabled,
+    cleanupEnabled:cfg.cleanup?.enabled
+  };
+  Object.keys(coreFeatureMap).forEach(id=>{
+    const el=document.getElementById(id);
+    const val=coreFeatureMap[id];
+    if(el&&val!==undefined)el.checked=!!val;
+  });
+  applyLetterheadConfig(cfg.letterhead);
 }
 async function createTemplateFromCurrent(){
   const name=prompt('请输入新模板名称','新的排版模板');
@@ -907,9 +1196,36 @@ zone.addEventListener('dragover',e=>{e.preventDefault();zone.classList.add('drag
 function status(text,cls){msg.textContent=text;msg.className='status-msg';if(cls)msg.classList.add(cls)}
 function sizeLabel(bytes){const kb=bytes/1024;return kb>=1024?(kb/1024).toFixed(1)+' MB':kb.toFixed(1)+' KB'}
 function setStep(n){document.querySelectorAll('.mini-step').forEach(el=>{const s=Number(el.dataset.step);el.classList.toggle('done',s<n);el.classList.toggle('active',s===n)})}
-function friendlyError(text,code){if(code==='PROXY_REQUIRED')return'当前请求缺少前端代理校验，请通过 Cloudflare Pages 前端页面或同源 /api 代理访问。';if(code==='UNAUTHORIZED'||code==='CSRF_INVALID')return'管理员会话已失效，请重新登录后再试。';if(code==='FORMAT_CONFIG_INVALID')return'排版设置格式无效，请重新保存设置后再上传。';if(code==='FORMAT_CONFIG_TOO_LARGE')return'排版设置内容过大，请减少自定义规则后再上传。';if(!text)return'处理失败，请检查文档是否损坏或包含特殊对象。';if(text.includes('too large')||text.includes('过大'))return'文件过大，请压缩到 10MB 以内后重试。';if(text.includes('format')||text.includes('docx'))return'文件格式不支持，请上传 .docx 文件。';if(text.includes('network')||text.includes('网络'))return'网络异常，请检查网络后重新上传。';return text}
+function fieldLabel(field){
+  const raw=String(field||'').trim();
+  const m=raw.match(/^styles\[(\d+)\]\.size$/);
+  if(m){
+    if(m[1]==='6')return'数字字号';
+    if(m[1]==='7')return'字母字号';
+  }
+  return raw;
+}
+function sentence(text){
+  const raw=String(text||'配置不完整').trim();
+  return /[。！？.!?]$/.test(raw)?raw:raw+'。';
+}
+function configErrorMessage(text,detail={}){
+  let field=detail.field||'';
+  let reason=detail.reason||text||'配置不完整';
+  if(!field&&typeof reason==='string'){
+    const m=reason.match(/^([^:：]+):\s*(.+)$/);
+    if(m){field=m[1];reason=m[2]}
+  }
+  if(field){
+    const label=fieldLabel(field);
+    const separator=/^[A-Za-z0-9_[\].]+$/.test(label)?' ':'';
+    return '排版设置无效：'+label+separator+sentence(reason);
+  }
+  return '排版设置无效：'+sentence(reason);
+}
+function friendlyError(text,code,detail={}){if(code==='PROXY_REQUIRED')return'当前请求缺少前端代理校验，请通过 Cloudflare Pages 前端页面或同源 /api 代理访问。';if(code==='UNAUTHORIZED'||code==='CSRF_INVALID')return'管理员会话已失效，请重新登录后再试。';if(code==='FORMAT_CONFIG_INVALID')return configErrorMessage(text,detail);if(code==='FORMAT_CONFIG_TOO_LARGE')return'排版设置内容过大，请减少自定义规则后再上传。';if(!text)return'处理失败，请检查文档是否损坏或包含特殊对象。';if(text.includes('too large')||text.includes('过大'))return'文件过大，请压缩到 10MB 以内后重试。';if(text.includes('format')||text.includes('docx'))return'文件格式不支持，请上传 .docx 文件。';if(text.includes('network')||text.includes('网络'))return'网络异常，请检查网络后重新上传。';return text}
 function warnSuffix(task){const list=Array.isArray(task?.compatibility_warnings)?task.compatibility_warnings.filter(Boolean):[];return list.length?'；'+list.join('；'):''}
-function safeCollectConfig(){try{return collectConfig()}catch(_){resetDefaults();try{return collectConfig()}catch(__){return{styles:[],page:{width_cm:21.0,height_cm:29.7,margin_top_cm:3.7,margin_bottom_cm:3.5,margin_left_cm:2.8,margin_right_cm:2.6,lines_per_page:22,chars_per_line:28,line_spacing_pt:28,space_before_line:0,space_after_line:0,grid_alignment:'文字对齐字符网络'},features:{numbered_bold_enabled:true,punctuation_enabled:true,page_number_enabled:true}}}}}
+function safeCollectConfig(){try{return collectConfig()}catch(e){const err=new Error(e?.message||'配置生成失败');err.code='FORMAT_CONFIG_INVALID';err.reason=err.message;throw err}}
 async function upload(f){
   if(!f)return;
   resultCard.style.display='none';
@@ -919,8 +1235,10 @@ async function upload(f){
   progressArea.style.display='block';bar.style.width='16%';setStep(1);status('文件上传中','');
   let resp,config;
   try{
-    const buf=await f.arrayBuffer();
     config=safeCollectConfig();
+  }catch(e){status(friendlyError(e.message,e.code,e),'error');return}
+  try{
+    const buf=await f.arrayBuffer();
     const tpl=templateStore.find(t=>t.id===currentPresetId)||templateStore[0];
     const presetName=document.getElementById('settingPresetName')?.value||tpl?.name||'党政机关公文格式';
     const processingMode=document.getElementById('settingMode')?.value||'smart';
@@ -939,7 +1257,7 @@ async function upload(f){
       body:buf
     });
   }catch(e){status('网络异常，请检查网络后重试','error');return}
-  if(!resp.ok){let e={};try{e=await resp.json()}catch(_){}status(friendlyError(e.error||'服务器异常',e.code),'error');return}
+  if(!resp.ok){let e={};try{e=await resp.json()}catch(_){}status(friendlyError(e.error||'服务器异常',e.code,e),'error');return}
   const task=await resp.json();
   const task_id=task.task_id;
   bar.style.width='36%';setStep(2);status((task.status==='queued'?(task.message||`排队中，前方还有 ${task.queue_ahead||0} 个任务`):'正在读取文档结构')+warnSuffix(task),'');
@@ -950,7 +1268,7 @@ async function upload(f){
       if(t.status==='queued'){bar.style.width='36%';setStep(2);status((t.message||`排队中，前方还有 ${t.queue_ahead||0} 个任务`)+warnSuffix(t),'');continue}
       if(t.status==='processing'){const pct=48+Math.min(i*2,36);bar.style.width=pct+'%';setStep(pct<72?3:4);status((t.message||'正在应用公文格式')+warnSuffix(t),'');continue}
       if(t.status==='done'){bar.style.width='100%';setStep(4);status('排版完成，正在下载'+warnSuffix(t),'done');const dl=await fetch(api('/download/'+task_id));const blob=await dl.blob();if(lastDownloadUrl)URL.revokeObjectURL(lastDownloadUrl);lastDownloadUrl=URL.createObjectURL(blob);lastDownloadName=f.name.replace(/\.docx$/i,(config?.output_suffix||'_排版')+'.docx');triggerDownload(lastDownloadUrl,lastDownloadName);status('下载完成','done');resultCard.style.display='block';return}
-      if(t.status==='error'){status(friendlyError(t.error||'排版失败',t.code),'error');return}
+      if(t.status==='error'){status(friendlyError(t.error||'排版失败',t.code,t),'error');return}
       bar.style.width=(50+Math.min(i*2,42))+'%';
     }catch(_){}
   }

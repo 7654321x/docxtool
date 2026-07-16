@@ -24,6 +24,7 @@
 - `src/docxtool/security/`：上传 DOCX 安全校验。
 - `src/docxtool/storage/database.py`：SQLite 路径和连接辅助。
 - `src/docxtool/resources/config/default-format.json`：默认公文格式配置，随 Python 包安装。
+- 可选 `letterhead` 配置用于在首页正文流生成机关标志、结构化发文字号、上行文签发人和红色段落边框；默认关闭，外部或无法可靠识别的已有版头保持原样。
 - `requirements.txt`：Python 运行依赖。
 - `run.sh`：Linux 启动脚本。
 - `.env.example`：环境变量示例，不包含真实密钥。
