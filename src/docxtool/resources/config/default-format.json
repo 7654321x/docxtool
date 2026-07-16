@@ -68,6 +68,9 @@
     "section_numbering": "continue",
     "offset_from_text_mm": 7
   },
+  "signature_block": {
+    "mode": "without_seal"
+  },
   "table_format": {
     "enabled": false,
     "smart_alignment": false

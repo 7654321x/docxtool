@@ -343,6 +343,9 @@ def _core_feature_config_defaults() -> dict:
             "section_numbering": "continue",
             "offset_from_text_mm": 7,
         },
+        "signature_block": {
+            "mode": "without_seal",
+        },
         "table_format": {
             "enabled": False,
             "smart_alignment": False,
@@ -1136,6 +1139,7 @@ def _task_process_body(task_id: str, input_path: str, orig_name: str, ip: str, u
                 page_number_enabled=features["page_number_enabled"],
                 numbering_options=features.get("numbering"),
                 page_number_options=features.get("page_number"),
+                signature_block_options=features.get("signature_block"),
                 table_format_options=features.get("table_format"),
                 cleanup_options=features.get("cleanup"),
                 letterhead_options=features.get("letterhead"),
@@ -1811,7 +1815,15 @@ def _validate_template_config(config_obj: dict) -> dict:
             "punctuation_enabled": bool(features.get("punctuation_enabled", True)),
         },
     }
-    for key in ("punctuation", "classification", "numbering", "page_number", "table_format", "cleanup"):
+    for key in (
+        "punctuation",
+        "classification",
+        "numbering",
+        "page_number",
+        "signature_block",
+        "table_format",
+        "cleanup",
+    ):
         normalized[key] = features.get(key, _core_feature_config_defaults()[key])
     for key in ("mode", "processing_mode", "preset_id", "preset_name", "template_type", "source", "output_suffix", "global"):
         if key in config_obj:

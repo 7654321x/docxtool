@@ -436,6 +436,13 @@ h1{font-size:clamp(38px,5.4vw,64px);letter-spacing:0;line-height:1.08;margin-bot
               </div>
             </div>
 
+            <div class="global-card simple-inline-card">
+              <div class="global-card-title"><i>署</i><div><h4>落款版式</h4></div></div>
+              <div class="compact-grid compact-grid-2">
+                <div class="field"><label>版式</label><select id="signatureBlockMode"><option value="preserve">保留原排版</option><option value="without_seal">不加盖印章</option><option value="with_seal">加盖印章</option></select></div>
+              </div>
+            </div>
+
             <div class="global-card">
               <div class="global-card-title"><i>¹</i><div><h4>正文上标</h4></div></div>
               <div class="compact-grid">
@@ -631,6 +638,7 @@ const LETTERHEAD_DEFAULT={
   document_number:{agency_code:'',year:null,sequence:null},signers:[],
   existing_policy:'preserve_external',replace_managed:false,layout_version:1
 };
+const SIGNATURE_BLOCK_DEFAULT={mode:'without_seal'};
 let letterheadAgencies=clonePlain(LETTERHEAD_DEFAULT.agencies);
 let letterheadSigners=[];
 let letterheadAgencySerial=1;
@@ -691,6 +699,9 @@ function normalizeTransportConfig(config){
   out.features={...(out.features||{})};
   out.features.numbered_bold_enabled=boolValue(out.features.numbered_bold_enabled,true);
   out.features.punctuation_enabled=boolValue(out.features.punctuation_enabled,true);
+  const signature=asObject(out.signature_block);
+  const signatureMode=signature&&['preserve','without_seal','with_seal'].includes(signature.mode)?signature.mode:'preserve';
+  out.signature_block={mode:signatureMode};
   out.letterhead=normalizeLetterheadClient(out.letterhead);
   return out;
 }
@@ -698,7 +709,8 @@ function defaultTransportConfig(){
   return normalizeTransportConfig({
     styles:[],
     page:{width_cm:21.0,height_cm:29.7,margin_top_cm:3.7,margin_bottom_cm:3.5,margin_left_cm:2.8,margin_right_cm:2.6,lines_per_page:22,chars_per_line:28,line_spacing_pt:28,space_before_line:0,space_after_line:0,grid_alignment:'文字对齐字符网络'},
-    features:{numbered_bold_enabled:true,punctuation_enabled:true}
+    features:{numbered_bold_enabled:true,punctuation_enabled:true},
+    signature_block:clonePlain(SIGNATURE_BLOCK_DEFAULT)
   });
 }
 function normalizeLetterheadClient(value){
@@ -850,6 +862,7 @@ function updateNumberingType(row){
 function initSettings(){
   document.getElementById('settingMode').value='smart';
   document.getElementById('pageNumberEnabled').checked=true;
+  document.getElementById('signatureBlockMode').value=SIGNATURE_BLOCK_DEFAULT.mode;
   ['marginTop','marginBottom','marginLeft','marginRight'].forEach((id,i)=>fillSelect(id,margins,['3.7cm','3.5cm','2.8cm','2.6cm'][i]));
   fillSelect('lineSpacing',lineSpacings,'28磅');fillSelect('linesPerPage',Array.from({length:13},(_,i)=>String(18+i)),'22');fillSelect('charsPerLine',Array.from({length:12},(_,i)=>String(24+i)),'28');fillSelect('spaceBefore',beforeAfter,'0行');fillSelect('spaceAfter',beforeAfter,'0行');
   ['numberFont','letterFont','pageFont','supFont'].forEach(id=>fillSelect(id,fonts,id==='pageFont'?'宋体':id==='supFont'?'仿宋_GB2312':'Times New Roman'));
@@ -926,6 +939,7 @@ function collectConfig(){
     classification:{enabled:true,minimum_auto_format_confidence:0.85},
     numbering:{enabled:checked('numberingEnabled'),mode:'safe'},
     page_number:{enabled:checked('pageNumberEnabled'),style:'dash',position:'outside',font_name:get('pageFont')||'宋体',font_size_pt:FONT_SIZE_POINTS[get('pageSize')]||14,bold:false,first_page:true,section_numbering:'continue',offset_from_text_mm:7},
+    signature_block:{mode:get('signatureBlockMode')||SIGNATURE_BLOCK_DEFAULT.mode},
     table_format:{enabled:checked('tableFormatEnabled'),smart_alignment:false},
     cleanup:{enabled:checked('cleanupEnabled'),mode:'safe'},
     letterhead:collectLetterheadConfig()
@@ -1107,6 +1121,7 @@ function applyConfigToForm(config,keepTemplate=true){
   set('pagePosition',pn.position);
   const pageEnabled=canonicalPn.enabled!==undefined?canonicalPn.enabled:(cfg.features||{}).page_number_enabled;
   if(document.getElementById('pageNumberEnabled')&&pageEnabled!==undefined)document.getElementById('pageNumberEnabled').checked=!!pageEnabled;
+  set('signatureBlockMode',(cfg.signature_block||SIGNATURE_BLOCK_DEFAULT).mode);
   const sup=g.body_superscript||{};
   set('supFont',sup.font);
   set('supSize',sup.size);

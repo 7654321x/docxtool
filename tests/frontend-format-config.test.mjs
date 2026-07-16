@@ -158,6 +158,7 @@ assert.equal(defaultConfig.page_number.enabled, true);
 assert.equal(defaultConfig.page_number.font_name, "宋体");
 assert.equal(defaultConfig.page_number.font_size_pt, 14);
 assert.equal(defaultConfig.page_number.bold, false);
+assert.equal(defaultConfig.signature_block.mode, "without_seal");
 assert.equal(Object.hasOwn(defaultConfig.features, "page_number_enabled"), false);
 assert.equal(elements.get("letterheadFields").hidden, true);
 assert.equal(defaultConfig.styles[6].name, "数字");
@@ -189,6 +190,7 @@ assert.equal(migratedConfig.styles[0].size, "");
 assert.equal(Object.hasOwn(migratedConfig.styles[6], "size"), false);
 assert.equal(Object.hasOwn(migratedConfig.styles[7], "size"), false);
 assert.equal(migratedConfig.letterhead.enabled, false);
+assert.equal(migratedConfig.signature_block.mode, "preserve");
 
 const legacyPageNumberConfig = frontend.normalizeConfig(
   { features: { page_number_enabled: false } },
@@ -202,6 +204,9 @@ const canonicalPageNumberConfig = frontend.normalizeConfig(
 assert.equal(canonicalPageNumberConfig.page_number.enabled, false);
 frontend.applyConfigToForm(canonicalPageNumberConfig);
 assert.equal(elements.get("pageNumberEnabled").checked, false);
+
+elements.get("signatureBlockMode").value = "with_seal";
+assert.equal(frontend.collectConfig().signature_block.mode, "with_seal");
 
 assert.match(html, /href="#settingLetterhead"><span>01<\/span>版头设置/);
 assert.match(html, /href="#settingStyles"><span>02<\/span>段落样式/);

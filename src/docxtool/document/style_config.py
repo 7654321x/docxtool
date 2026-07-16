@@ -695,6 +695,7 @@ def _parse_core_feature_options(config_dict: dict) -> dict:
     classification = _dict_field(config_dict, "classification")
     numbering = _dict_field(config_dict, "numbering")
     page_number = _dict_field(config_dict, "page_number")
+    signature_block = _dict_field(config_dict, "signature_block")
     table_format = _dict_field(config_dict, "table_format")
     cleanup = _dict_field(config_dict, "cleanup")
     raw_features = config_dict.get("features", {})
@@ -764,6 +765,14 @@ def _parse_core_feature_options(config_dict: dict) -> dict:
                 page_number.get("offset_from_text_mm", 7),
                 0,
                 30,
+            ),
+        },
+        "signature_block": {
+            "mode": _safe_mode(
+                "signature_block.mode",
+                signature_block.get("mode", "preserve"),
+                {"preserve", "without_seal", "with_seal"},
+                "preserve",
             ),
         },
         "table_format": {

@@ -21,6 +21,7 @@ from docxtool.document.engine.normal import resolve as _resolve_rule
 from docxtool.document.engine.cleanup import cleanup_styles
 from docxtool.document.engine.numbering import normalize_numbering_text
 from docxtool.document.engine.page_number import apply_page_number
+from docxtool.document.engine.signature_block import apply_signature_block
 from docxtool.document.engine.style_catalog import ensure_document_styles
 from docxtool.document.engine.letterhead import apply_letterhead, LetterheadDetection
 
@@ -1687,6 +1688,7 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
                page_number_enabled: bool = True,
                numbering_options: dict | None = None,
                page_number_options: dict | None = None,
+               signature_block_options: dict | None = None,
                table_format_options: dict | None = None,
                cleanup_options: dict | None = None,
                letterhead_options: dict | None = None) -> dict:
@@ -2136,6 +2138,10 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
         section_part_copier,
         page_settings,
         doc_data.doc_mode,
+    )
+
+    stats["signature_blocks_adjusted"] = apply_signature_block(
+        doc, signature_block_options
     )
 
     if page_number_options is not None:

@@ -1,5 +1,8 @@
+import json
+
 import pytest
 
+from docxtool.paths import default_format_config_path
 from docxtool.document.style_config import (
     ConfigValidationError,
     load_rules_and_settings,
@@ -63,3 +66,22 @@ def test_page_number_fields_use_existing_config_validation_errors(
         validate_format_config(config)
 
     assert error.value.field == field
+
+
+def test_missing_signature_block_preserves_legacy_layout() -> None:
+    assert load_rules_and_settings({})[2]["signature_block"] == {"mode": "preserve"}
+
+
+def test_default_format_uses_without_seal_signature_layout() -> None:
+    config = json.loads(default_format_config_path().read_text(encoding="utf-8"))
+
+    assert load_rules_and_settings(config)[2]["signature_block"] == {
+        "mode": "without_seal"
+    }
+
+
+def test_signature_block_mode_uses_existing_config_validation_error() -> None:
+    with pytest.raises(ConfigValidationError) as error:
+        validate_format_config({"signature_block": {"mode": "guess"}})
+
+    assert error.value.field == "signature_block.mode"
