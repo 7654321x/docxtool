@@ -54,9 +54,23 @@ def apply_page_numbers(document, options: Mapping[str, Any] | None = None):
             if first_page_owned:
                 first_page_snapshot = copy.deepcopy(first_page_footer._element)
 
-        _apply_to_footer(section.footer, _alignment_for(position, "default"), style, opts)
+        _apply_to_footer(
+            section.footer,
+            _alignment_for(position, "default"),
+            style,
+            opts,
+            position=position,
+            footer_kind="default",
+        )
         if has_even_footer:
-            _apply_to_footer(section.even_page_footer, _alignment_for(position, "even"), style, opts)
+            _apply_to_footer(
+                section.even_page_footer,
+                _alignment_for(position, "even"),
+                style,
+                opts,
+                position=position,
+                footer_kind="even",
+            )
 
         if first_page_policy in {"hide", "hidden", "no", "skip"}:
             if first_page_owned and first_page_snapshot is not None:
@@ -64,7 +78,14 @@ def apply_page_numbers(document, options: Mapping[str, Any] | None = None):
                 _remove_existing_page_numbers(section.first_page_footer)
         elif first_page_policy in {"show", "same", "display"} or section.different_first_page_header_footer:
             section.different_first_page_header_footer = True
-            _apply_to_footer(section.first_page_footer, _alignment_for(position, "first"), style, opts)
+            _apply_to_footer(
+                section.first_page_footer,
+                _alignment_for(position, "first"),
+                style,
+                opts,
+                position=position,
+                footer_kind="first",
+            )
 
     return document
 
@@ -106,7 +127,15 @@ def _replace_footer_content(footer, snapshot) -> None:
         element.append(copy.deepcopy(child))
 
 
-def _apply_to_footer(footer, alignment, style: str, options: Mapping[str, Any]) -> None:
+def _apply_to_footer(
+    footer,
+    alignment,
+    style: str,
+    options: Mapping[str, Any],
+    *,
+    position: str,
+    footer_kind: str,
+) -> None:
     footer.is_linked_to_previous = False
     _remove_existing_page_numbers(footer)
     paragraph = next(
@@ -118,7 +147,34 @@ def _apply_to_footer(footer, alignment, style: str, options: Mapping[str, Any]) 
     else:
         paragraph.clear()
     paragraph.alignment = alignment
+    _set_page_number_indent(paragraph, position, footer_kind, options)
     _write_page_number(paragraph, style, options)
+
+
+def _set_page_number_indent(
+    paragraph, position: str, footer_kind: str, options: Mapping[str, Any]
+) -> None:
+    ppr = paragraph._element.get_or_add_pPr()
+    indent = ppr.find(qn("w:ind"))
+    if indent is None:
+        indent = OxmlElement("w:ind")
+        ppr.append(indent)
+    for name in ("w:left", "w:right", "w:leftChars", "w:rightChars"):
+        indent.attrib.pop(qn(name), None)
+
+    if position != "outside":
+        if not indent.attrib:
+            ppr.remove(indent)
+        return
+
+    font_size_pt = float(options.get("font_size_pt", 14))
+    twips = str(max(1, round(font_size_pt * 20)))
+    if footer_kind == "even":
+        indent.set(qn("w:leftChars"), "100")
+        indent.set(qn("w:left"), twips)
+    else:
+        indent.set(qn("w:rightChars"), "100")
+        indent.set(qn("w:right"), twips)
 
 
 def _is_reusable_empty_paragraph(paragraph) -> bool:
@@ -192,19 +248,26 @@ def _add_field(paragraph, instruction: str, options: Mapping[str, Any]) -> None:
 
 
 def _style_run(run, options: Mapping[str, Any]) -> None:
-    font_name = options.get("font_name") or options.get("font")
-    if font_name:
-        run.font.name = str(font_name)
-        r_fonts = run._element.get_or_add_rPr().find(qn("w:rFonts"))
-        if r_fonts is None:
-            r_fonts = OxmlElement("w:rFonts")
-            run._element.get_or_add_rPr().append(r_fonts)
-        for attr in ("w:eastAsia", "w:ascii", "w:hAnsi"):
-            r_fonts.set(qn(attr), str(font_name))
-    if options.get("font_size_pt") is not None:
-        run.font.size = Pt(float(options["font_size_pt"]))
-    if options.get("bold") is not None:
-        run.font.bold = bool(options["bold"])
+    font_name = str(options.get("font_name") or options.get("font") or "宋体")
+    font_size_pt = float(options.get("font_size_pt", 14))
+    bold = bool(options.get("bold", False))
+    run.font.name = font_name
+    rpr = run._element.get_or_add_rPr()
+    r_fonts = rpr.find(qn("w:rFonts"))
+    if r_fonts is None:
+        r_fonts = OxmlElement("w:rFonts")
+        rpr.insert(0, r_fonts)
+    for attr in ("w:eastAsia", "w:ascii", "w:hAnsi", "w:cs"):
+        r_fonts.set(qn(attr), font_name)
+    run.font.size = Pt(font_size_pt)
+    half_points = str(round(font_size_pt * 2))
+    for tag in ("w:sz", "w:szCs"):
+        element = rpr.find(qn(tag))
+        if element is None:
+            element = OxmlElement(tag)
+            rpr.append(element)
+        element.set(qn("w:val"), half_points)
+    run.font.bold = bold
 
 
 def _alignment_for(position: str, footer_kind: str):

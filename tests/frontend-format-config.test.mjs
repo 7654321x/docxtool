@@ -125,6 +125,7 @@ vm.runInNewContext(
 globalThis.__frontend = {
   addLetterheadAgency,
   addLetterheadSigner,
+  applyConfigToForm,
   applyLetterheadConfig,
   collectLetterheadConfig,
   collectConfig,
@@ -153,6 +154,11 @@ assert.equal(defaultConfig.letterhead.enabled, false);
 assert.equal(defaultConfig.letterhead.agencies.length, 1);
 assert.equal(defaultConfig.page_number.position, "outside");
 assert.equal(defaultConfig.page_number.first_page, true);
+assert.equal(defaultConfig.page_number.enabled, true);
+assert.equal(defaultConfig.page_number.font_name, "宋体");
+assert.equal(defaultConfig.page_number.font_size_pt, 14);
+assert.equal(defaultConfig.page_number.bold, false);
+assert.equal(Object.hasOwn(defaultConfig.features, "page_number_enabled"), false);
 assert.equal(elements.get("letterheadFields").hidden, true);
 assert.equal(defaultConfig.styles[6].name, "数字");
 assert.equal(defaultConfig.styles[7].name, "字母");
@@ -183,6 +189,19 @@ assert.equal(migratedConfig.styles[0].size, "");
 assert.equal(Object.hasOwn(migratedConfig.styles[6], "size"), false);
 assert.equal(Object.hasOwn(migratedConfig.styles[7], "size"), false);
 assert.equal(migratedConfig.letterhead.enabled, false);
+
+const legacyPageNumberConfig = frontend.normalizeConfig(
+  { features: { page_number_enabled: false } },
+  { id: "legacy-page", name: "旧页码模板" },
+);
+assert.equal(legacyPageNumberConfig.page_number.enabled, false);
+const canonicalPageNumberConfig = frontend.normalizeConfig(
+  { features: { page_number_enabled: true }, page_number: { enabled: false } },
+  { id: "canonical-page", name: "新版页码模板" },
+);
+assert.equal(canonicalPageNumberConfig.page_number.enabled, false);
+frontend.applyConfigToForm(canonicalPageNumberConfig);
+assert.equal(elements.get("pageNumberEnabled").checked, false);
 
 assert.match(html, /href="#settingLetterhead"><span>01<\/span>版头设置/);
 assert.match(html, /href="#settingStyles"><span>02<\/span>段落样式/);

@@ -87,6 +87,21 @@ def _visible_text(root: ET.Element) -> str:
     return "".join(element.text or "" for element in root.findall(f".//{{{W_NS}}}t"))
 
 
+def _page_paragraph(root: ET.Element) -> ET.Element:
+    return next(
+        paragraph
+        for paragraph in root.findall(f".//{{{W_NS}}}p")
+        if "PAGE" in " ".join(_field_instructions(paragraph))
+    )
+
+
+def _paragraph_alignment_and_indent(paragraph: ET.Element) -> tuple[str, ET.Element | None]:
+    properties = paragraph.find(qn("w:pPr"))
+    alignment = properties.find(qn("w:jc")) if properties is not None else None
+    indent = properties.find(qn("w:ind")) if properties is not None else None
+    return (alignment.get(qn("w:val"), "") if alignment is not None else "", indent)
+
+
 def test_page_number_fields_outside_position_and_first_page_hidden(tmp_path: Path) -> None:
     document = Document()
     first = document.sections[0]
@@ -275,3 +290,72 @@ def test_page_number_can_apply_first_and_even_centered_footers(tmp_path: Path) -
     assert "First note" in footer_xml
     assert "Even note" in footer_xml
     assert footer_xml.count('w:val="center"') == 3
+
+
+def test_standard_page_number_has_explicit_font_size_and_outside_indents(tmp_path: Path) -> None:
+    document = Document()
+    document.sections[0].bottom_margin = Cm(3.5)
+    document.add_paragraph("body")
+
+    options = {
+        "style": "dash",
+        "position": "outside",
+        "first_page": True,
+        "section_numbering": "continue",
+        "offset_from_text_mm": 7,
+        "font_name": "宋体",
+        "font_size_pt": 14,
+        "bold": False,
+    }
+    apply_page_number(document, options)
+    apply_page_number(document, options)
+    output = tmp_path / "standard-page-number.docx"
+    document.save(output)
+
+    assert validate_docx_integrity(output).ok is True
+    reopened = Document(output)
+    assert abs(reopened.sections[0].footer_distance.cm - 2.8) < 0.02
+    roots = _footer_roots(output)
+    assert len(roots) == 3
+    alignments = []
+    for root in roots.values():
+        assert _field_instructions(root) == ["PAGE"]
+        paragraph = _page_paragraph(root)
+        alignment, indent = _paragraph_alignment_and_indent(paragraph)
+        alignments.append(alignment)
+        assert indent is not None
+        if alignment == "left":
+            assert indent.get(qn("w:leftChars")) == "100"
+            assert indent.get(qn("w:rightChars")) is None
+        else:
+            assert alignment == "right"
+            assert indent.get(qn("w:rightChars")) == "100"
+            assert indent.get(qn("w:leftChars")) is None
+        runs = paragraph.findall(qn("w:r"))
+        assert len(runs) == 6
+        for run in runs:
+            properties = run.find(qn("w:rPr"))
+            fonts = properties.find(qn("w:rFonts"))
+            assert fonts is not None
+            for attribute in ("w:ascii", "w:hAnsi", "w:eastAsia", "w:cs"):
+                assert fonts.get(qn(attribute)) == "宋体"
+            assert properties.find(qn("w:sz")).get(qn("w:val")) == "28"
+            assert properties.find(qn("w:szCs")).get(qn("w:val")) == "28"
+    assert alignments.count("right") == 2
+    assert alignments.count("left") == 1
+
+
+def test_non_outside_page_numbers_clear_character_indents(tmp_path: Path) -> None:
+    document = Document()
+    apply_page_number(document, {"position": "outside", "first_page": True})
+    apply_page_number(document, {"position": "center", "first_page": True})
+    output = tmp_path / "centered-page-number.docx"
+    document.save(output)
+
+    for root in _footer_roots(output).values():
+        paragraph = _page_paragraph(root)
+        alignment, indent = _paragraph_alignment_and_indent(paragraph)
+        assert alignment == "center"
+        if indent is not None:
+            assert indent.get(qn("w:leftChars")) is None
+            assert indent.get(qn("w:rightChars")) is None

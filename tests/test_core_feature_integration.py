@@ -48,7 +48,10 @@ def test_core_feature_options_default_to_safe_off_without_changing_legacy_featur
     }
     assert features["classification"]["enabled"] is True
     assert features["numbering"]["enabled"] is False
-    assert features["page_number"]["enabled"] is False
+    assert features["page_number"]["enabled"] is True
+    assert features["page_number"]["font_name"] == "宋体"
+    assert features["page_number"]["font_size_pt"] == 14
+    assert features["page_number"]["bold"] is False
     assert features["page_number"]["position"] == "outside"
     assert features["page_number"]["first_page"] is True
     assert features["page_number"]["offset_from_text_mm"] == 7
@@ -131,3 +134,23 @@ def test_export_doc_applies_explicit_numbering_and_field_page_number_options(tmp
     assert "NUMPAGES" in footer_xml
     assert 'w:val="center"' in footer_xml
     assert abs(Document(output).sections[0].footer_distance.cm - 2.8) < 0.02
+
+
+def test_explicit_page_number_disable_does_not_fall_back_to_legacy_flag(tmp_path: Path) -> None:
+    output = tmp_path / "without-page-number.docx"
+    data = DocumentData(
+        paragraphs=[ParagraphData("正文内容", "body", "正文内容", ParagraphFeatures())],
+        filepath=str(tmp_path / "input.docx"),
+    )
+
+    export_doc(
+        data,
+        _rules(),
+        PageSettings(),
+        str(output),
+        page_number_enabled=True,
+        page_number_options={"enabled": False},
+    )
+
+    assert validate_docx_integrity(output).ok is True
+    assert "PAGE" not in _footer_xml(output)

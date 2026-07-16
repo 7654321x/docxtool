@@ -180,6 +180,24 @@ def _safe_bool(value, default: bool = False) -> bool:
     return bool(value)
 
 
+def _bool_field(data: dict, key: str, field_path: str, default: bool) -> bool:
+    if key not in data:
+        return default
+    value = data.get(key)
+    if not isinstance(value, bool):
+        raise ConfigValidationError(field_path, "必须是布尔值")
+    return value
+
+
+def _nonempty_string_field(data: dict, key: str, field_path: str, default: str) -> str:
+    if key not in data:
+        return default
+    value = data.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigValidationError(field_path, "必须是非空字符串")
+    return value.strip()
+
+
 def _grid_alignment(value, default: str = "文字对齐字符网络") -> str:
     """兼容旧字符串配置和新前端布尔开关。"""
     if isinstance(value, str):
@@ -679,6 +697,16 @@ def _parse_core_feature_options(config_dict: dict) -> dict:
     page_number = _dict_field(config_dict, "page_number")
     table_format = _dict_field(config_dict, "table_format")
     cleanup = _dict_field(config_dict, "cleanup")
+    raw_features = config_dict.get("features", {})
+    legacy_page_number_enabled = None
+    if isinstance(raw_features, dict) and "page_number_enabled" in raw_features:
+        legacy_page_number_enabled = _safe_bool(raw_features.get("page_number_enabled"), True)
+    if "enabled" in page_number:
+        page_number_enabled = _bool_field(page_number, "enabled", "page_number.enabled", True)
+    elif legacy_page_number_enabled is not None:
+        page_number_enabled = legacy_page_number_enabled
+    else:
+        page_number_enabled = True
     return {
         "punctuation": {
             "enabled": _safe_bool(punctuation.get("enabled", False), False),
@@ -699,7 +727,17 @@ def _parse_core_feature_options(config_dict: dict) -> dict:
             "mode": _safe_mode("numbering.mode", numbering.get("mode", "safe"), {"off", "safe"}, "safe"),
         },
         "page_number": {
-            "enabled": _safe_bool(page_number.get("enabled", False), False),
+            "enabled": page_number_enabled,
+            "font_name": _nonempty_string_field(
+                page_number, "font_name", "page_number.font_name", "宋体"
+            ),
+            "font_size_pt": finite_float(
+                "page_number.font_size_pt",
+                page_number.get("font_size_pt", 14),
+                1,
+                72,
+            ),
+            "bold": _bool_field(page_number, "bold", "page_number.bold", False),
             "style": _safe_mode(
                 "page_number.style",
                 page_number.get("style", "dash"),
@@ -712,7 +750,9 @@ def _parse_core_feature_options(config_dict: dict) -> dict:
                 {"left", "center", "centre", "right", "outside"},
                 "outside",
             ),
-            "first_page": _safe_bool(page_number.get("first_page", True), True),
+            "first_page": _bool_field(
+                page_number, "first_page", "page_number.first_page", True
+            ),
             "section_numbering": _safe_mode(
                 "page_number.section_numbering",
                 page_number.get("section_numbering", "continue"),

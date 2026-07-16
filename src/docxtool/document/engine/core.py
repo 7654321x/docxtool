@@ -2138,14 +2138,15 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
         doc_data.doc_mode,
     )
 
-    if _feature_enabled(page_number_options, False):
-        page_options = dict(_feature_options(page_number_options))
-        page_options.setdefault("font_name", page_rule.font)
-        page_options.setdefault("font_size_pt", page_rule.font_size_pt)
-        page_options.setdefault("bold", page_rule.bold)
-        if isinstance(page_options.get("first_page"), bool):
-            page_options["first_page"] = "show" if page_options["first_page"] else "hide"
-        apply_page_number(doc, page_options)
+    if page_number_options is not None:
+        if _feature_enabled(page_number_options, True):
+            page_options = dict(_feature_options(page_number_options))
+            page_options.setdefault("font_name", page_rule.font)
+            page_options.setdefault("font_size_pt", page_rule.font_size_pt)
+            page_options.setdefault("bold", page_rule.bold)
+            if isinstance(page_options.get("first_page"), bool):
+                page_options["first_page"] = "show" if page_options["first_page"] else "hide"
+            apply_page_number(doc, page_options)
     elif page_number_enabled:
         apply_page_number(
             doc,

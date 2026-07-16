@@ -456,7 +456,6 @@ h1{font-size:clamp(38px,5.4vw,64px);letter-spacing:0;line-height:1.08;margin-bot
             <label class="switch-card"><span><strong>特殊加粗</strong><small>识别标题和关键段落加粗</small></span><span class="switch"><input type="checkbox" id="specialBold" checked><span></span></span></label>
             <label class="switch-card"><span><strong>安全标点</strong><small>保护链接、邮箱、版本号等片段</small></span><span class="switch"><input type="checkbox" id="punctuationSafeEnabled" checked><span></span></span></label>
             <label class="switch-card"><span><strong>序号规范</strong><small>修正常见人工序号格式</small></span><span class="switch"><input type="checkbox" id="numberingEnabled" checked><span></span></span></label>
-            <label class="switch-card"><span><strong>新版页码</strong><small>字段页码并保留页眉页脚关系</small></span><span class="switch"><input type="checkbox" id="pageNumberV2Enabled" checked><span></span></span></label>
           </div>
         </section>
       </div>
@@ -483,6 +482,8 @@ let templateStore=[
 ];
 const fonts=['方正小标宋简体','方正大标宋简体','方正小标宋_GBK','方正仿宋_GBK','方正黑体_GBK','方正楷体_GBK','方正书宋_GBK','方正宋黑简体','黑体','楷体_GB2312','仿宋_GB2312','仿宋','宋体','新宋体','华文中宋','华文宋体','华文仿宋','华文楷体','华文细黑','微软雅黑','微软雅黑 Light','等线','等线 Light','思源宋体','思源黑体','Noto Serif CJK SC','Noto Sans CJK SC','Times New Roman','Arial','Calibri','Cambria','Georgia'];
 const sizes=['初号','小初','一号','小一','二号','小二','三号','小三','四号','小四','五号','小五','六号','小六','七号','八号'];
+const FONT_SIZE_POINTS={初号:42,小初:36,一号:26,小一:24,二号:22,小二:18,三号:16,小三:15,四号:14,小四:12,五号:10.5,小五:9,六号:7.5,小六:6.5,七号:5.5,八号:5};
+function pointSizeLabel(value,fallback='四号'){const entry=Object.entries(FONT_SIZE_POINTS).find(([,points])=>Number(points)===Number(value));return entry?entry[0]:fallback}
 const languages=['中文','阿拉伯数字','英文字母','中英文混排'];
 const alignments=['居中','左对齐','右对齐','两端对齐','奇右偶左'];
 const indents=['0','1字符','1.5字符','2字符','2.5字符','3字符'];
@@ -619,7 +620,7 @@ const CORE_FEATURE_DEFAULTS={
   punctuation:{enabled:false,mode:'safe',scope:{body:true,tables:false,headers:false,footers:false}},
   classification:{enabled:true,minimum_auto_format_confidence:0.85},
   numbering:{enabled:false,mode:'safe'},
-  page_number:{enabled:false,style:'dash',position:'outside',first_page:true,section_numbering:'continue',offset_from_text_mm:7},
+  page_number:{enabled:true,style:'dash',position:'outside',font_name:'宋体',font_size_pt:14,bold:false,first_page:true,section_numbering:'continue',offset_from_text_mm:7},
   table_format:{enabled:false,smart_alignment:false},
   cleanup:{enabled:false,mode:'safe'}
 };
@@ -678,14 +679,18 @@ function normalizeCoreFeatureOptions(value,defaults){
 }
 function normalizeTransportConfig(config){
   const out={...(asObject(config)||{})};
+  const rawPageNumber=asObject(out.page_number);
+  const canonicalPageEnabled=!!rawPageNumber&&Object.hasOwn(rawPageNumber,'enabled');
+  const rawFeatures=asObject(out.features)||{};
+  const legacyPageEnabled=Object.hasOwn(rawFeatures,'page_number_enabled');
   if(Array.isArray(out.styles))out.styles=out.styles.map(migrateOptionalEmptySizeStyle);
   Object.keys(CORE_FEATURE_DEFAULTS).forEach(key=>{
     out[key]=normalizeCoreFeatureOptions(out[key],CORE_FEATURE_DEFAULTS[key]);
   });
+  if(!canonicalPageEnabled&&legacyPageEnabled)out.page_number.enabled=boolValue(rawFeatures.page_number_enabled,true);
   out.features={...(out.features||{})};
   out.features.numbered_bold_enabled=boolValue(out.features.numbered_bold_enabled,true);
   out.features.punctuation_enabled=boolValue(out.features.punctuation_enabled,true);
-  out.features.page_number_enabled=boolValue(out.features.page_number_enabled,true);
   out.letterhead=normalizeLetterheadClient(out.letterhead);
   return out;
 }
@@ -693,7 +698,7 @@ function defaultTransportConfig(){
   return normalizeTransportConfig({
     styles:[],
     page:{width_cm:21.0,height_cm:29.7,margin_top_cm:3.7,margin_bottom_cm:3.5,margin_left_cm:2.8,margin_right_cm:2.6,lines_per_page:22,chars_per_line:28,line_spacing_pt:28,space_before_line:0,space_after_line:0,grid_alignment:'文字对齐字符网络'},
-    features:{numbered_bold_enabled:true,punctuation_enabled:true,page_number_enabled:true}
+    features:{numbered_bold_enabled:true,punctuation_enabled:true}
   });
 }
 function normalizeLetterheadClient(value){
@@ -844,6 +849,7 @@ function updateNumberingType(row){
 
 function initSettings(){
   document.getElementById('settingMode').value='smart';
+  document.getElementById('pageNumberEnabled').checked=true;
   ['marginTop','marginBottom','marginLeft','marginRight'].forEach((id,i)=>fillSelect(id,margins,['3.7cm','3.5cm','2.8cm','2.6cm'][i]));
   fillSelect('lineSpacing',lineSpacings,'28磅');fillSelect('linesPerPage',Array.from({length:13},(_,i)=>String(18+i)),'22');fillSelect('charsPerLine',Array.from({length:12},(_,i)=>String(24+i)),'28');fillSelect('spaceBefore',beforeAfter,'0行');fillSelect('spaceAfter',beforeAfter,'0行');
   ['numberFont','letterFont','pageFont','supFont'].forEach(id=>fillSelect(id,fonts,id==='pageFont'?'宋体':id==='supFont'?'仿宋_GB2312':'Times New Roman'));
@@ -914,13 +920,12 @@ function collectConfig(){
     processing_mode:'smart',
     features:{
       numbered_bold_enabled:checked('specialBold'),
-      punctuation_enabled:checked('punctuationEnabled'),
-      page_number_enabled:checked('pageNumberEnabled')
+      punctuation_enabled:checked('punctuationEnabled')
     },
     punctuation:{enabled:checked('punctuationSafeEnabled'),mode:'safe',scope:{body:true,tables:false,headers:false,footers:false}},
     classification:{enabled:true,minimum_auto_format_confidence:0.85},
     numbering:{enabled:checked('numberingEnabled'),mode:'safe'},
-    page_number:{enabled:checked('pageNumberV2Enabled'),style:'dash',position:'outside',first_page:true,section_numbering:'continue',offset_from_text_mm:7},
+    page_number:{enabled:checked('pageNumberEnabled'),style:'dash',position:'outside',font_name:get('pageFont')||'宋体',font_size_pt:FONT_SIZE_POINTS[get('pageSize')]||14,bold:false,first_page:true,section_numbering:'continue',offset_from_text_mm:7},
     table_format:{enabled:checked('tableFormatEnabled'),smart_alignment:false},
     cleanup:{enabled:checked('cleanupEnabled'),mode:'safe'},
     letterhead:collectLetterheadConfig()
@@ -1094,19 +1099,21 @@ function applyConfigToForm(config,keepTemplate=true){
     set(prefix+'Font',obj.font);
     set(prefix+'Size',obj.size);
   });
+  const canonicalPn=cfg.page_number||{};
   const pn=g.page_number||{};
-  set('pageFont',pn.font);
-  set('pageSize',pn.size);
+  set('pageFont',canonicalPn.font_name||pn.font);
+  set('pageSize',canonicalPn.font_size_pt===undefined?pn.size:pointSizeLabel(canonicalPn.font_size_pt));
   set('pageStyle',pn.style);
   set('pagePosition',pn.position);
-  if(document.getElementById('pageNumberEnabled')&&pn.enabled!==undefined)document.getElementById('pageNumberEnabled').checked=!!pn.enabled;
+  const pageEnabled=canonicalPn.enabled!==undefined?canonicalPn.enabled:(cfg.features||{}).page_number_enabled;
+  if(document.getElementById('pageNumberEnabled')&&pageEnabled!==undefined)document.getElementById('pageNumberEnabled').checked=!!pageEnabled;
   const sup=g.body_superscript||{};
   set('supFont',sup.font);
   set('supSize',sup.size);
   set('supPattern',sup.style||sup.pattern);
   set('supLanguage',sup.language);
   const f=cfg.features||{};
-  const featureMap={punctuationEnabled:'punctuation',tableEnabled:'table_optimize',specialBold:'special_bold',pageNumberEnabled:'page_number'};
+  const featureMap={punctuationEnabled:'punctuation',tableEnabled:'table_optimize',specialBold:'special_bold'};
   Object.keys(featureMap).forEach(id=>{
     const key=featureMap[id];
     const fallbackMap={table_optimize:'table',special_bold:'numbered_bold_enabled',punctuation:'punctuation_enabled',page_number:'page_number_enabled'};
@@ -1117,7 +1124,6 @@ function applyConfigToForm(config,keepTemplate=true){
   const coreFeatureMap={
     punctuationSafeEnabled:cfg.punctuation?.enabled,
     numberingEnabled:cfg.numbering?.enabled,
-    pageNumberV2Enabled:cfg.page_number?.enabled,
     tableFormatEnabled:cfg.table_format?.enabled,
     cleanupEnabled:cfg.cleanup?.enabled
   };

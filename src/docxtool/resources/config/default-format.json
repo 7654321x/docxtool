@@ -58,9 +58,12 @@
     "mode": "safe"
   },
   "page_number": {
-    "enabled": false,
+    "enabled": true,
     "style": "dash",
     "position": "outside",
+    "font_name": "宋体",
+    "font_size_pt": 14,
+    "bold": false,
     "first_page": true,
     "section_numbering": "continue",
     "offset_from_text_mm": 7

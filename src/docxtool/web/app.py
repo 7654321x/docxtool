@@ -312,7 +312,6 @@ def _default_preset_config() -> dict:
         "features": {
             "numbered_bold_enabled": True,
             "punctuation_enabled": True,
-            "page_number_enabled": True,
         },
     }
     config.update(_core_feature_config_defaults())
@@ -334,9 +333,12 @@ def _core_feature_config_defaults() -> dict:
             "mode": "safe",
         },
         "page_number": {
-            "enabled": False,
+            "enabled": True,
             "style": "dash",
             "position": "outside",
+            "font_name": "宋体",
+            "font_size_pt": 14,
+            "bold": False,
             "first_page": True,
             "section_numbering": "continue",
             "offset_from_text_mm": 7,
@@ -1807,7 +1809,6 @@ def _validate_template_config(config_obj: dict) -> dict:
         "features": {
             "numbered_bold_enabled": bool(features.get("numbered_bold_enabled", True)),
             "punctuation_enabled": bool(features.get("punctuation_enabled", True)),
-            "page_number_enabled": bool(features.get("page_number_enabled", True)),
         },
     }
     for key in ("punctuation", "classification", "numbering", "page_number", "table_format", "cleanup"):
