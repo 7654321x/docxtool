@@ -55,6 +55,7 @@ git@github.com:7654321x/docxtool.git
 | `src/docxtool/resources/config/default-format.json` | 默认公文格式配置，随 wheel 安装 |
 | `src/docxtool/document/engine/__init__.py` | 排版引擎导出入口 |
 | `src/docxtool/document/engine/core.py` | DOCX 导出和实际排版逻辑 |
+| `src/docxtool/document/engine/document_structure.py` | 只读结构化公文板块模型与边界识别 |
 | `src/docxtool/document/engine/normal.py` | 常规文种规则分派 |
 | `src/docxtool/document/engine/letterhead.py` | 版头、发文字号、签发人和红色分隔线 |
 | `src/docxtool/document/engine/style_catalog.py` | 结构化 Word 样式目录 |
