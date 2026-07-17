@@ -136,6 +136,7 @@ $requiredFiles = @(
     "src/docxtool/document/engine/punctuation.py",
     "src/docxtool/document/engine/punctuation_docx.py",
     "src/docxtool/document/engine/signature_block.py",
+    "src/docxtool/document/engine/structure_context.py",
     "src/docxtool/document/engine/style_catalog.py",
     "src/docxtool/document/engine/table.py",
     "src/docxtool/security/__init__.py",
