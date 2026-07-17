@@ -32,7 +32,7 @@ def result_for(validation, *, type_id=None, kind=None):
     for item in validation.elements:
         if type_id is not None and item.original_type_id == type_id:
             return item
-        if kind is not None and item.proposed_kind == kind:
+        if kind is not None and item.context_kind == kind:
             return item
     raise AssertionError("validated element not found")
 
@@ -51,7 +51,7 @@ def test_title_date_and_title_signature_are_confirmed_metadata():
     assert author.final_kind == ElementKind.TITLE_METADATA
     assert date.final_kind == ElementKind.TITLE_METADATA
     assert author.status == date.status == ValidationStatus.CONFIRMED
-    assert any(item.detail == "after:document_title" for item in date.evidence)
+    assert any(item.detail == "title_like_before" for item in date.evidence)
 
 
 def test_signature_pair_is_confirmed_at_document_tail():
@@ -66,7 +66,7 @@ def test_signature_pair_is_confirmed_at_document_tail():
     assert agency.final_kind == ElementKind.SIGNATURE_AGENCY
     assert date.final_kind == ElementKind.SIGNATURE_DATE
     assert agency.status == date.status == ValidationStatus.CONFIRMED
-    assert any(item.detail == "paired:signature_agency" for item in date.evidence)
+    assert any(item.detail == "previous:signature_candidate" for item in date.evidence)
 
 
 def test_body_date_and_agency_sentence_remain_body():
@@ -116,7 +116,7 @@ def test_attachment_note_and_paged_attachment_title_are_distinguished():
     assert title.final_kind == ElementKind.ATTACHMENT_TITLE
     assert title.block_kind == BlockKind.ATTACHMENT_CONTENT
     assert title.status == ValidationStatus.CONFIRMED
-    assert any(item.detail == "after:real_page_boundary" for item in title.evidence)
+    assert any(item.detail == "preceded_by:real_page_boundary" for item in title.evidence)
 
 
 def test_unpaged_attachment_candidate_is_not_confirmed():

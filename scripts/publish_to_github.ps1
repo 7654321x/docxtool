@@ -127,6 +127,7 @@ $requiredFiles = @(
     "src/docxtool/document/style_config.py",
     "src/docxtool/document/engine/__init__.py",
     "src/docxtool/document/engine/cleanup.py",
+    "src/docxtool/document/engine/context_candidate.py",
     "src/docxtool/document/engine/core.py",
     "src/docxtool/document/engine/document_structure.py",
     "src/docxtool/document/engine/letterhead.py",

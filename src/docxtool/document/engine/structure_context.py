@@ -1,17 +1,19 @@
-"""Read-only reconciliation of document blocks and importer context results."""
+"""Reconcile independent local-context candidates with document blocks."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from hashlib import sha256
 from typing import Iterable
 
-from docxtool.document.engine.document_structure import (
-    BlockKind,
-    DocumentStructure,
-    ElementKind,
+from docxtool.document.engine.context_candidate import (
+    ContextCandidate,
+    ContextEvidence,
+    build_raw_element_facts,
+    classify_context_candidate,
 )
+from docxtool.document.engine.document_structure import BlockKind, DocumentStructure, ElementKind
 
 
 CONFIRMED_THRESHOLD = 0.85
@@ -26,17 +28,11 @@ class ValidationStatus(str, Enum):
 
 
 @dataclass(frozen=True)
-class ContextEvidence:
-    source: str
-    detail: str
-    weight: float
-
-
-@dataclass(frozen=True)
 class ValidatedElement:
     index: int
     block_kind: BlockKind
-    proposed_kind: ElementKind
+    structure_kind: ElementKind
+    context_kind: ElementKind
     final_kind: ElementKind
     status: ValidationStatus
     confidence: float
@@ -55,139 +51,103 @@ class ContextValidation:
 
 
 _BODY_KINDS = {
-    ElementKind.HEADING_1,
-    ElementKind.HEADING_2,
-    ElementKind.HEADING_3,
-    ElementKind.HEADING_4,
-    ElementKind.BODY_PARAGRAPH,
-    ElementKind.LIST,
-    ElementKind.QUOTE,
-    ElementKind.TABLE,
-    ElementKind.FIGURE,
-    ElementKind.CAPTION,
-    ElementKind.UNKNOWN,
-    ElementKind.PAGE_BREAK,
+    ElementKind.HEADING_1, ElementKind.HEADING_2, ElementKind.HEADING_3, ElementKind.HEADING_4,
+    ElementKind.BODY_PARAGRAPH, ElementKind.LIST, ElementKind.QUOTE, ElementKind.TABLE,
+    ElementKind.FIGURE, ElementKind.CAPTION, ElementKind.UNKNOWN, ElementKind.PAGE_BREAK,
 }
 _ALLOWED_KINDS = {
     BlockKind.FRONT_MATTER: {
-        ElementKind.LETTERHEAD_MARK,
-        ElementKind.DOCUMENT_NUMBER,
-        ElementKind.SIGNER,
-        ElementKind.LETTERHEAD_SEPARATOR,
-        ElementKind.PAGE_BREAK,
+        ElementKind.LETTERHEAD_MARK, ElementKind.DOCUMENT_NUMBER, ElementKind.SIGNER,
+        ElementKind.LETTERHEAD_SEPARATOR, ElementKind.PAGE_BREAK,
     },
     BlockKind.TITLE: {ElementKind.DOCUMENT_TITLE, ElementKind.TITLE_METADATA},
     BlockKind.BODY: _BODY_KINDS,
     BlockKind.ATTACHMENT_NOTE: {ElementKind.ATTACHMENT_NOTE_ITEM},
-    BlockKind.SIGNATURE: {
-        ElementKind.SIGNATURE_AGENCY,
-        ElementKind.SIGNATURE_DATE,
-        ElementKind.NOTE,
-    },
+    BlockKind.SIGNATURE: {ElementKind.SIGNATURE_AGENCY, ElementKind.SIGNATURE_DATE, ElementKind.NOTE},
     BlockKind.ATTACHMENT_CONTENT: _BODY_KINDS | {ElementKind.ATTACHMENT_TITLE},
     BlockKind.UNKNOWN: {ElementKind.UNKNOWN, ElementKind.PAGE_BREAK},
 }
 _HEADING_LEVELS = {
-    ElementKind.HEADING_1: 1,
-    ElementKind.HEADING_2: 2,
-    ElementKind.HEADING_3: 3,
-    ElementKind.HEADING_4: 4,
+    ElementKind.HEADING_1: 1, ElementKind.HEADING_2: 2,
+    ElementKind.HEADING_3: 3, ElementKind.HEADING_4: 4,
 }
 
 
-def validate_structure_context(
-    structure: DocumentStructure,
-    paragraphs: Iterable,
-) -> ContextValidation:
-    """Reconcile block candidates with existing importer classifications."""
+def allowed_kinds_for_block(block_kind: BlockKind) -> frozenset[ElementKind]:
+    return frozenset(_ALLOWED_KINDS[block_kind])
+
+
+def validate_structure_context(structure: DocumentStructure, paragraphs: Iterable) -> ContextValidation:
+    """Validate every structure element using independently rebuilt raw facts."""
 
     source = tuple(paragraphs)
-    block_map, block_confidence = _block_maps(structure)
-    results: list[ValidatedElement] = []
-    previous_heading: int | None = None
+    facts = build_raw_element_facts(source)
+    if len(facts) != len(structure.elements):
+        raise ValueError("raw fact stream does not align with document structure")
+    block_map, confidence_map = _block_maps(structure)
+    candidates = tuple(classify_context_candidate(facts, index) for index in range(len(facts)))
+    results = []
+    previous_heading = None
 
-    for element in structure.elements:
-        block_kind = block_map[element.index]
-        paragraph = _source_paragraph(source, element.source_index)
-        context_confidence = _context_confidence(element.confidence, paragraph)
-        current_block_confidence = block_confidence[element.index]
-        allowed = element.kind in _ALLOWED_KINDS[block_kind]
-        evidence = [
-            ContextEvidence("block", f"inside:{block_kind.value}", current_block_confidence),
-            ContextEvidence("context", f"type:{_type_id(paragraph) or 'virtual'}", context_confidence),
-        ]
-        evidence.extend(_role_evidence(element.kind, block_kind, structure, element.index))
-        evidence.append(ContextEvidence("style", f"fingerprint:{_style_fingerprint(paragraph)[:12]}", 0.05))
-        evidence.append(ContextEvidence("text", f"fingerprint:{_text_fingerprint(element.text)[:12]}", 0.05))
+    for element, candidate in zip(structure.elements, candidates):
+        block = block_map[element.index]
+        block_confidence = confidence_map[element.index]
+        evidence = [ContextEvidence("block", f"inside:{block.value}", block_confidence)]
+        evidence.extend(candidate.evidence)
+        status, final_kind, confidence = _reconcile(
+            element.kind, candidate, block, block_confidence
+        )
+        if element.kind != candidate.kind and candidate.kind in _ALLOWED_KINDS[block]:
+            evidence.append(ContextEvidence(
+                "structural", "structure_context_kind_disagreement", -0.05
+            ))
+            if status == ValidationStatus.CONFIRMED:
+                status = ValidationStatus.PROVISIONAL
+                confidence = min(confidence, 0.84)
 
-        level = _HEADING_LEVELS.get(element.kind)
+        level = _HEADING_LEVELS.get(candidate.kind)
         if level is not None:
             if previous_heading is not None and level > previous_heading + 1:
-                evidence.append(
-                    ContextEvidence(
-                        "structural",
-                        f"heading_level_jump_{previous_heading}_to_{level}",
-                        -0.05,
-                    )
-                )
+                evidence.append(ContextEvidence(
+                    "structural", f"heading_level_jump_{previous_heading}_to_{level}", -0.05
+                ))
             previous_heading = level
 
-        status, final_kind, confidence = _reconcile(
-            element.kind,
-            allowed,
-            current_block_confidence,
-            context_confidence,
-        )
-        results.append(
-            ValidatedElement(
-                index=element.index,
-                block_kind=block_kind,
-                proposed_kind=element.kind,
-                final_kind=final_kind,
-                status=status,
-                confidence=confidence,
-                evidence=tuple(evidence),
-                original_type_id=_type_id(paragraph),
-                text_fingerprint=_text_fingerprint(element.text),
-                style_fingerprint=_style_fingerprint(paragraph),
-                neighbor_fingerprint=_neighbor_fingerprint(structure, element.index, source),
-                source_index=element.source_index,
-                node_identity=_node_identity(paragraph),
-            )
-        )
+        fact = facts[element.index]
+        results.append(ValidatedElement(
+            element.index, block, element.kind, candidate.kind, final_kind, status,
+            round(confidence, 3), tuple(evidence), candidate.original_type_id,
+            candidate.text_fingerprint, candidate.style_fingerprint,
+            _neighbor_fingerprint(facts, element.index), element.source_index, fact.node_identity,
+        ))
 
-    validation = ContextValidation(tuple(results))
+    validation = ContextValidation(tuple(_structural_review(results)))
     validate_contextual_structure(structure, validation)
     return validation
 
 
-def validate_contextual_structure(
-    structure: DocumentStructure,
-    validation: ContextValidation,
-) -> None:
-    """Check contextual results without changing the imported document."""
+def validate_contextual_structure(structure: DocumentStructure, validation: ContextValidation) -> None:
+    """Assert ordering and semantic invariants after conservative review."""
 
     if len(validation.elements) != len(structure.elements):
         raise ValueError("not all structure elements have contextual results")
     if tuple(item.index for item in validation.elements) != tuple(range(len(structure.elements))):
         raise ValueError("contextual results changed original element order")
-    seen: set[int] = set()
     for item in validation.elements:
-        if item.index in seen:
-            raise ValueError("an element has more than one contextual result")
-        seen.add(item.index)
-        if item.status == ValidationStatus.CONFIRMED and item.final_kind not in _ALLOWED_KINDS[item.block_kind]:
-            raise ValueError("confirmed element is outside its allowed block")
+        allowed = _ALLOWED_KINDS[item.block_kind]
+        if item.status == ValidationStatus.CONFIRMED and item.context_kind not in allowed:
+            raise ValueError("confirmed context kind is outside its block")
         if item.status == ValidationStatus.CONFLICT and item.final_kind != ElementKind.UNKNOWN:
             raise ValueError("conflicting element must remain unknown")
-        if item.final_kind == ElementKind.SIGNATURE_DATE and item.block_kind != BlockKind.SIGNATURE:
-            raise ValueError("signature date is outside signature block")
-        if item.final_kind == ElementKind.TITLE_METADATA and item.block_kind != BlockKind.TITLE:
-            raise ValueError("title metadata is outside title block")
-        if item.final_kind == ElementKind.ATTACHMENT_TITLE and item.block_kind != BlockKind.ATTACHMENT_CONTENT:
-            raise ValueError("attachment title is outside attachment content")
-        if item.final_kind == ElementKind.ATTACHMENT_NOTE_ITEM and item.block_kind == BlockKind.ATTACHMENT_CONTENT:
-            raise ValueError("attachment note item is inside attachment content")
+        required_block = {
+            ElementKind.SIGNATURE_DATE: BlockKind.SIGNATURE,
+            ElementKind.SIGNATURE_AGENCY: BlockKind.SIGNATURE,
+            ElementKind.TITLE_METADATA: BlockKind.TITLE,
+            ElementKind.ATTACHMENT_NOTE_ITEM: BlockKind.ATTACHMENT_NOTE,
+            ElementKind.ATTACHMENT_TITLE: BlockKind.ATTACHMENT_CONTENT,
+        }.get(item.final_kind)
+        if required_block is not None and item.block_kind != required_block:
+            raise ValueError(f"{item.final_kind.value} is outside {required_block.value}")
 
 
 def revalidate_element(
@@ -195,82 +155,90 @@ def revalidate_element(
     structure: DocumentStructure,
     paragraphs: Iterable,
 ) -> bool:
-    """Return whether a previously validated element still matches current state."""
+    """Rebuild local facts and require the same still-safe context candidate."""
 
     source = tuple(paragraphs)
-    if not 0 <= validated.index < len(structure.elements):
+    facts = build_raw_element_facts(source)
+    if not 0 <= validated.index < len(structure.elements) or len(facts) != len(structure.elements):
         return False
-    element = structure.elements[validated.index]
     block_map, _ = _block_maps(structure)
     if block_map.get(validated.index) != validated.block_kind:
         return False
+    element = structure.elements[validated.index]
+    fact = facts[validated.index]
     if element.source_index != validated.source_index:
         return False
-    paragraph = _source_paragraph(source, validated.source_index)
-    current_text = _current_text(element, paragraph)
-    if _text_fingerprint(current_text) != validated.text_fingerprint:
+    if fact.text_fingerprint != validated.text_fingerprint:
         return False
-    if _style_fingerprint(paragraph) != validated.style_fingerprint:
+    if fact.style_fingerprint != validated.style_fingerprint:
         return False
-    if _neighbor_fingerprint(structure, validated.index, source) != validated.neighbor_fingerprint:
+    if fact.node_identity != validated.node_identity:
         return False
-    current_identity = _node_identity(paragraph)
-    return validated.node_identity is None or current_identity == validated.node_identity
+    if _neighbor_fingerprint(facts, validated.index) != validated.neighbor_fingerprint:
+        return False
+    candidate = classify_context_candidate(facts, validated.index)
+    if candidate.kind != validated.context_kind:
+        return False
+    minimum = CONFIRMED_THRESHOLD if validated.status == ValidationStatus.CONFIRMED else PROVISIONAL_THRESHOLD
+    return candidate.confidence >= minimum
 
 
-def _reconcile(proposed, allowed, block_confidence, context_confidence):
+def _reconcile(structure_kind, candidate: ContextCandidate, block, block_confidence):
+    del structure_kind
+    context_kind = candidate.kind
+    context_confidence = candidate.confidence
+    allowed = context_kind in _ALLOWED_KINDS[block]
     block_high = block_confidence >= CONFIRMED_THRESHOLD
     context_high = context_confidence >= CONFIRMED_THRESHOLD
     block_low = block_confidence < PROVISIONAL_THRESHOLD
     context_low = context_confidence < PROVISIONAL_THRESHOLD
 
-    if allowed and block_high and context_high and proposed != ElementKind.UNKNOWN:
-        return ValidationStatus.CONFIRMED, proposed, round(min(0.99, max(block_confidence, context_confidence) + 0.04), 3)
+    if allowed and block_high and context_high and context_kind != ElementKind.UNKNOWN:
+        return ValidationStatus.CONFIRMED, context_kind, min(0.99, max(block_confidence, context_confidence) + 0.04)
     if not allowed and block_high and context_high:
-        return ValidationStatus.CONFLICT, ElementKind.UNKNOWN, round(min(block_confidence, context_confidence), 3)
+        return ValidationStatus.CONFLICT, ElementKind.UNKNOWN, min(block_confidence, context_confidence)
     if block_low and context_low:
-        return ValidationStatus.UNKNOWN, ElementKind.UNKNOWN, round(max(block_confidence, context_confidence), 3)
+        return ValidationStatus.UNKNOWN, ElementKind.UNKNOWN, max(block_confidence, context_confidence)
+    if allowed and context_confidence >= PROVISIONAL_THRESHOLD:
+        return ValidationStatus.PROVISIONAL, context_kind, min(context_confidence, 0.84)
     if allowed and context_high:
-        return ValidationStatus.PROVISIONAL, proposed, round(min(context_confidence, 0.84), 3)
-    if allowed and not context_low:
-        return ValidationStatus.PROVISIONAL, proposed, round(min(max(block_confidence, context_confidence), 0.84), 3)
-    return ValidationStatus.PROVISIONAL, ElementKind.UNKNOWN, round(min(max(block_confidence, context_confidence), 0.84), 3)
+        return ValidationStatus.PROVISIONAL, context_kind, min(context_confidence, 0.84)
+    return ValidationStatus.PROVISIONAL, ElementKind.UNKNOWN, min(max(block_confidence, context_confidence), 0.84)
 
 
-def _role_evidence(kind, block, structure, index):
-    result = []
-    if kind == ElementKind.TITLE_METADATA and block == BlockKind.TITLE:
-        result.append(ContextEvidence("context", "after:document_title", 0.20))
-        result.append(ContextEvidence("context", "before:first_body_element", 0.15))
-    elif kind == ElementKind.SIGNATURE_DATE and block == BlockKind.SIGNATURE:
-        result.append(ContextEvidence("context", "paired:signature_agency", 0.25))
-        result.append(ContextEvidence("structural", "position:main_document_tail", 0.15))
-    elif kind == ElementKind.SIGNATURE_AGENCY and block == BlockKind.SIGNATURE:
-        result.append(ContextEvidence("context", "before:signature_date", 0.25))
-    elif kind == ElementKind.ATTACHMENT_NOTE_ITEM and block == BlockKind.ATTACHMENT_NOTE:
-        result.append(ContextEvidence("structural", "before:signature_or_attachment_content", 0.20))
-    elif kind == ElementKind.ATTACHMENT_TITLE and block == BlockKind.ATTACHMENT_CONTENT:
-        previous = structure.elements[index - 1].kind if index else None
-        if previous == ElementKind.PAGE_BREAK:
-            result.append(ContextEvidence("structural", "after:real_page_boundary", 0.25))
-    elif kind == ElementKind.BODY_PARAGRAPH and block == BlockKind.BODY:
-        result.append(ContextEvidence("context", "inside:main_body_bounds", 0.15))
-    return result
+def _structural_review(results):
+    reviewed = []
+    for item in results:
+        details = {evidence.detail for evidence in item.evidence}
+        if item.status == ValidationStatus.CONFIRMED:
+            required = None
+            if item.final_kind == ElementKind.SIGNATURE_DATE:
+                required = "previous:signature_candidate"
+            elif item.final_kind == ElementKind.ATTACHMENT_TITLE:
+                required = "preceded_by:real_page_boundary"
+            elif item.final_kind == ElementKind.TITLE_METADATA:
+                required = "title_like_before"
+            if required and required not in details:
+                item = replace(
+                    item,
+                    final_kind=ElementKind.UNKNOWN,
+                    status=ValidationStatus.PROVISIONAL,
+                    confidence=min(item.confidence, 0.59),
+                    evidence=item.evidence + (
+                        ContextEvidence("structural", f"missing_required:{required}", -0.25),
+                    ),
+                )
+        reviewed.append(item)
+    return reviewed
 
 
 def _block_maps(structure):
-    blocks = {}
-    confidence = {}
-    spans = []
-    for span in (
-        structure.front_matter,
-        structure.title.span if structure.title else None,
-        structure.body.span if structure.body else None,
-        structure.attachment_note,
+    blocks, confidence = {}, {}
+    spans = [span for span in (
+        structure.front_matter, structure.title.span if structure.title else None,
+        structure.body.span if structure.body else None, structure.attachment_note,
         structure.signature,
-    ):
-        if span:
-            spans.append(span)
+    ) if span]
     spans.extend(item.span for item in structure.attachments)
     spans.extend(structure.unknown)
     for span in spans:
@@ -280,73 +248,15 @@ def _block_maps(structure):
     return blocks, confidence
 
 
-def _context_confidence(default, paragraph):
-    if paragraph is None:
-        return default
-    value = (getattr(paragraph, "meta", {}) or {}).get("classification_confidence", default)
-    try:
-        return max(0.0, min(float(value), 1.0))
-    except (TypeError, ValueError):
-        return default
-
-
-def _source_paragraph(paragraphs, source_index):
-    if source_index is None or not 0 <= source_index < len(paragraphs):
-        return None
-    return paragraphs[source_index]
-
-
-def _type_id(paragraph):
-    return str(getattr(paragraph, "type_id", "") or "") or None
-
-
-def _current_text(element, paragraph):
-    if paragraph is None:
-        return element.text
-    return str(getattr(paragraph, "original_text", "") or getattr(paragraph, "text", "") or "").strip()
-
-
-def _text_fingerprint(text):
-    return sha256(str(text or "").strip().encode("utf-8")).hexdigest()
-
-
-def _style_fingerprint(paragraph):
-    if paragraph is None:
-        value = "virtual"
-    else:
-        features = getattr(paragraph, "features", None)
-        meta = getattr(paragraph, "meta", {}) or {}
-        value = "|".join((
-            str(getattr(features, "style_name", "") or ""),
-            str(getattr(features, "alignment", "") or ""),
-            str(getattr(paragraph, "type_id", "") or ""),
-            "page" if any(getattr(token, "kind", "") == "page_break" for token in getattr(paragraph, "inline_tokens", ())) else "",
-            "section" if meta.get("sectPr") is not None else "",
-        ))
-    return sha256(value.encode("utf-8")).hexdigest()
-
-
-def _neighbor_fingerprint(structure, index, paragraphs):
+def _neighbor_fingerprint(facts, index):
     values = []
     for neighbor in (index - 1, index + 1):
-        if 0 <= neighbor < len(structure.elements):
-            item = structure.elements[neighbor]
-            paragraph = _source_paragraph(paragraphs, item.source_index)
+        if 0 <= neighbor < len(facts):
+            fact = facts[neighbor]
             values.append(
-                f"{item.index}:{item.kind.value}:{item.source_index}:"
-                f"{_text_fingerprint(_current_text(item, paragraph))}:"
-                f"{_style_fingerprint(paragraph)}"
+                f"{fact.index}:{fact.source_index}:{fact.type_id}:"
+                f"{fact.text_fingerprint}:{fact.style_fingerprint}:{fact.physical_kind}"
             )
         else:
             values.append("boundary")
     return sha256("|".join(values).encode("utf-8")).hexdigest()
-
-
-def _node_identity(paragraph):
-    if paragraph is None:
-        return None
-    holder = (getattr(paragraph, "meta", {}) or {}).get("paragraph_xml")
-    node = getattr(holder, "_p", None)
-    if node is None:
-        node = getattr(holder, "_element", None)
-    return id(node) if node is not None else None
