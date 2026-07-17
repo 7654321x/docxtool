@@ -62,6 +62,7 @@ class ElementRef:
     confidence: float
     evidence: tuple[str, ...]
     source_index: int | None = None
+    text: str = ""
 
 
 @dataclass(frozen=True)
@@ -249,34 +250,35 @@ def validate_document_structure(structure: DocumentStructure, element_count: int
 
 
 def _collect_elements(paragraphs: Iterable) -> tuple[ElementRef, ...]:
-    pending: list[tuple[ElementKind, float, tuple[str, ...], int | None]] = []
+    pending: list[tuple[ElementKind, float, tuple[str, ...], int | None, str]] = []
     for source_index, paragraph in enumerate(paragraphs):
         if _has_page_break_before(paragraph):
-            pending.append((ElementKind.PAGE_BREAK, 0.98, ("ooxml:pageBreakBefore",), source_index))
+            pending.append((ElementKind.PAGE_BREAK, 0.98, ("ooxml:pageBreakBefore",), source_index, ""))
         elif _has_inline_page_break(paragraph):
-            pending.append((ElementKind.PAGE_BREAK, 0.98, ("inline:w:br-page",), source_index))
+            pending.append((ElementKind.PAGE_BREAK, 0.98, ("inline:w:br-page",), source_index, ""))
         pending.append(_classify_element(paragraph, source_index))
         if _has_section_break(paragraph):
-            pending.append((ElementKind.PAGE_BREAK, 0.95, ("ooxml:sectPr",), source_index))
+            pending.append((ElementKind.PAGE_BREAK, 0.95, ("ooxml:sectPr",), source_index, ""))
     return tuple(
-        ElementRef(index, kind, confidence, evidence, source_index)
-        for index, (kind, confidence, evidence, source_index) in enumerate(pending)
+        ElementRef(index, kind, confidence, evidence, source_index, text)
+        for index, (kind, confidence, evidence, source_index, text) in enumerate(pending)
     )
 
 
 def _classify_element(paragraph, source_index: int):
     type_id = str(getattr(paragraph, "type_id", "") or "")
+    text = str(getattr(paragraph, "original_text", "") or getattr(paragraph, "text", "") or "").strip()
     style_id = _paragraph_style_id(paragraph)
     if type_id == "__letterhead__":
         kind = _STYLE_KINDS.get(style_id, ElementKind.UNKNOWN)
         confidence = 0.99 if kind != ElementKind.UNKNOWN else 0.45
-        return kind, confidence, ("type:__letterhead__", f"style:{style_id or 'unknown'}"), source_index
+        return kind, confidence, ("type:__letterhead__", f"style:{style_id or 'unknown'}"), source_index, text
     if type_id in _TITLE_METADATA_TYPES:
-        return ElementKind.TITLE_METADATA, 0.9, (f"type:{type_id}", "position:title-area"), source_index
+        return ElementKind.TITLE_METADATA, 0.9, (f"type:{type_id}", "position:title-area"), source_index, text
     kind = _TYPE_KINDS.get(type_id, ElementKind.UNKNOWN)
     confidence = 0.95 if kind != ElementKind.UNKNOWN else 0.4
     evidence = (f"type:{type_id or 'unknown'}",)
-    return kind, confidence, evidence, source_index
+    return kind, confidence, evidence, source_index, text
 
 
 def _paragraph_style_id(paragraph) -> str:
@@ -409,8 +411,19 @@ def _label_attachments(elements, labels, starts):
 
 
 def _attachment_ordinal(element, fallback):
-    del element
-    return fallback
+    match = _ATTACHMENT_TITLE_RE.fullmatch(element.text.strip())
+    if not match or not match.group(1):
+        return fallback
+    value = match.group(1)
+    if value.isdigit():
+        return int(value)
+    digits = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+    if value == "十":
+        return 10
+    if "十" in value:
+        left, right = value.split("十", 1)
+        return digits.get(left, 1) * 10 + digits.get(right, 0)
+    return digits.get(value, fallback)
 
 
 def _label(labels, start, end, kind, *, only_unknown=False):

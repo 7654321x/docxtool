@@ -166,6 +166,19 @@ def test_attachment_without_real_page_break_is_not_attachment_block():
     )
 
 
+def test_attachment_ordinal_preserves_arabic_and_chinese_numbering():
+    page = [InlineToken("page_break")]
+    data = DocumentData(paragraphs=[
+        paragraph("标题", "title"), paragraph("正文", "body"),
+        paragraph("附件2", "attachment_page_mark", tokens=page),
+        paragraph("第二份附件", "attachment_body"),
+        paragraph("附件十一", "attachment_page_mark", tokens=page),
+        paragraph("第十一份附件", "attachment_body"),
+    ])
+    structure = analyze_document_structure(data)
+    assert [item.ordinal for item in structure.attachments] == [2, 11]
+
+
 def test_page_break_before_and_section_break_are_detected():
     data = DocumentData(paragraphs=[
         paragraph("标题", "title"),
