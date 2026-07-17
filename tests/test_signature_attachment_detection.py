@@ -98,7 +98,21 @@ class SignatureAttachmentDetectionTest(unittest.TestCase):
             [p.type_id for p in data.paragraphs[-4:]],
             ["attachment_note", "attachment_page_mark", "attachment_title", "attachment_body"],
         )
-        self.assertEqual(data.paragraphs[-3].text, "附件 一")
+        self.assertEqual(data.paragraphs[-3].text, "附件 1")
+
+    def test_chinese_attachment_page_number_is_normalized_to_arabic(self):
+        data = self._load_lines([
+            "总题目",
+            "一、一级标题",
+            "这里是正文内容这里是正文内容这里是正文内容。",
+            "2025年10月15日",
+            "附件十一",
+            "基本情况",
+            "测试正文测试正文。",
+        ])
+
+        mark = next(item for item in data.paragraphs if item.type_id == "attachment_page_mark")
+        self.assertEqual(mark.text, "附件 11")
 
     def test_multiple_attachment_pages_continue_after_attachment_body(self):
         data = self._load_lines([

@@ -460,7 +460,8 @@ def _norm_attach_mark(text: str) -> str:
     if not m:
         return text
     no = m.group(1)
-    return f"附件 {no}" if no else "附件"
+    normalized_no = _cn2int(no)
+    return f"附件 {normalized_no}" if normalized_no is not None else "附件"
 
 def _is_attachment_page_mark(text: str) -> bool:
     return bool(_ATT_PAGE_RE.match((text or "").strip()))
