@@ -35,12 +35,14 @@ _LETTERHEAD_STYLE_NAMES = {
 }
 WARNING_EXTERNAL = "LETTERHEAD_SKIPPED_EXISTING_EXTERNAL"
 WARNING_UNKNOWN = "LETTERHEAD_SKIPPED_EXISTING_UNKNOWN"
-_DOCUMENT_NUMBER_RE = re.compile(r"[^\s〔〕]{1,40}〔\d{4}〕\d+号")
+_DOCUMENT_NUMBER_LINE_RE = re.compile(
+    r"^[^\s，。；：:（）()《》“”]{1,24}〔\d{4}〕\d+号(?:签发人[：:].{1,80})?$"
+)
 _OBJECT_CAPTION_RE = re.compile(r"^(?:表|图)\s*[0-9一二三四五六七八九十百]+")
 _CUSTOM_NS = "http://schemas.openxmlformats.org/officeDocument/2006/custom-properties"
 _VT_NS = "http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"
 _CUSTOM_FMTID = "{D5CDD505-2E9C-101B-9397-08002B2CF9AE}"
-_MARK_TOP_OFFSET_CM = 3.5
+_MARK_FONT_SIZE_PT = 32
 
 
 @dataclass(frozen=True)
@@ -98,6 +100,11 @@ def _has_red_bottom_border(element) -> bool:
     return (bottom.get(qn("w:color"), "") or "").upper() in {"FF0000", "C00000", "ED1C24"}
 
 
+def _is_document_number_line(text: str) -> bool:
+    compact = re.sub(r"\s+", "", text or "")
+    return bool(_DOCUMENT_NUMBER_LINE_RE.fullmatch(compact))
+
+
 def _custom_property_value(document, name: str) -> str | None:
     for part in document.part.package.parts:
         if str(part.partname) != "/docProps/custom.xml":
@@ -141,7 +148,7 @@ def detect_letterhead(document) -> LetterheadDetection:
         for index, child in enumerate(top)
         if child.tag == qn("w:p") and _has_red_text(child) and ("文件" in texts[index] or len(texts[index]) >= 4)
     ]
-    number_indexes = [index for index, text in enumerate(texts) if _DOCUMENT_NUMBER_RE.search(text)]
+    number_indexes = [index for index, text in enumerate(texts) if _is_document_number_line(text)]
     signer_indexes = [index for index, text in enumerate(texts) if "签发人" in text]
     separator_indexes = [
         index for index, child in enumerate(top) if child.tag == qn("w:p") and _has_red_bottom_border(child)
@@ -175,6 +182,9 @@ def _set_run_font(
     run.font.size = Pt(size_pt)
     rpr = run._element.get_or_add_rPr()
     rpr.rFonts.set(qn("w:eastAsia"), font_name)
+    rpr.rFonts.set(qn("w:ascii"), "Times New Roman")
+    rpr.rFonts.set(qn("w:hAnsi"), "Times New Roman")
+    rpr.rFonts.set(qn("w:cs"), "Times New Roman")
     if color:
         run.font.color.rgb = RGBColor.from_string(color)
 
@@ -184,6 +194,21 @@ def _set_paragraph_style(paragraph, style_id: str) -> None:
     paragraph.paragraph_format.first_line_indent = Pt(0)
     paragraph.paragraph_format.left_indent = Pt(0)
     paragraph.paragraph_format.right_indent = Pt(0)
+
+
+def _set_paragraph_line_spacing(
+    paragraph,
+    *,
+    before_lines: int = 0,
+    after_lines: int = 0,
+) -> None:
+    """Write paragraph spacing in OOXML line units (hundredths of a line)."""
+
+    spacing = paragraph._p.get_or_add_pPr().get_or_add_spacing()
+    for attribute in ("before", "after"):
+        spacing.attrib.pop(qn(f"w:{attribute}"), None)
+    spacing.set(qn("w:beforeLines"), str(before_lines * 100))
+    spacing.set(qn("w:afterLines"), str(after_lines * 100))
 
 
 def _document_number(config: dict) -> str:
@@ -213,13 +238,16 @@ def _add_mark_paragraphs(document, config: dict) -> list:
         _set_paragraph_style(paragraph, "DCT-LetterheadMark")
         paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
         run = paragraph.add_run(text)
-        _set_run_font(run, "方正小标宋简体", 36, color="FF0000")
+        _set_run_font(run, "方正小标宋简体", _MARK_FONT_SIZE_PT, color="FF0000")
         if add_document:
             paragraph.paragraph_format.tab_stops.add_tab_stop(Cm(13.5), WD_TAB_ALIGNMENT.RIGHT)
             label = paragraph.add_run("\t文件")
-            _set_run_font(label, "方正小标宋简体", 36, color="FF0000")
-        paragraph.paragraph_format.space_before = Cm(_MARK_TOP_OFFSET_CM) if index == 0 else Pt(0)
-        paragraph.paragraph_format.space_after = Pt(0)
+            _set_run_font(label, "方正小标宋简体", _MARK_FONT_SIZE_PT, color="FF0000")
+        _set_paragraph_line_spacing(
+            paragraph,
+            before_lines=3 if index == 0 else 0,
+            after_lines=2 if index == len(_mark_lines(config)) - 1 else 0,
+        )
         paragraphs.append(paragraph)
     return paragraphs
 
@@ -230,8 +258,7 @@ def _add_number_paragraph(document, config: dict, settings: PageSettings):
     paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run = paragraph.add_run(_document_number(config))
     _set_run_font(run, "仿宋_GB2312", 16)
-    paragraph.paragraph_format.space_before = Pt(2 * _effective_line_pitch(settings))
-    paragraph.paragraph_format.space_after = Pt(0)
+    _set_paragraph_line_spacing(paragraph)
     return paragraph
 
 
@@ -294,10 +321,7 @@ def _add_number_and_signer_paragraphs(
             settings,
             single_at_first_slot=len(signers) > 1 and len(row_signers) == 1,
         )
-        paragraph.paragraph_format.space_before = Pt(
-            2 * _effective_line_pitch(settings) if index == 0 else 0
-        )
-        paragraph.paragraph_format.space_after = Pt(0)
+        _set_paragraph_line_spacing(paragraph)
         paragraphs.append(paragraph)
     return paragraphs
 
@@ -327,7 +351,11 @@ def _add_separator(document, settings: PageSettings):
     bottom.set(qn("w:space"), "0")
     bottom.set(qn("w:color"), "FF0000")
     paragraph.paragraph_format.space_before = Cm(0.4)
-    paragraph.paragraph_format.space_after = Pt(2 * _effective_line_pitch(settings))
+    _set_paragraph_line_spacing(paragraph, after_lines=2)
+    # The 4 mm distance is a physical standard, not a whole-line gap.
+    spacing = paragraph._p.get_or_add_pPr().get_or_add_spacing()
+    spacing.set(qn("w:before"), str(round(Cm(0.4).twips)))
+    spacing.attrib.pop(qn("w:beforeLines"), None)
     paragraph.paragraph_format.line_spacing = Pt(1)
     return paragraph
 
@@ -400,6 +428,25 @@ def remove_managed_letterhead(document) -> int:
     return removed
 
 
+def remove_detected_letterhead(document, detection: LetterheadDetection) -> int:
+    """Remove the body-flow block identified by *detection* from this document."""
+
+    body_children = [
+        child
+        for child in document._body._element.iterchildren()
+        if child.tag != qn("w:sectPr")
+    ]
+    removed = 0
+    for index in sorted(set(detection.protected_body_indexes), reverse=True):
+        if 0 <= index < len(body_children):
+            element = body_children[index]
+            parent = element.getparent()
+            if parent is not None:
+                parent.remove(element)
+                removed += 1
+    return removed
+
+
 def apply_letterhead(
     document,
     config,
@@ -415,16 +462,8 @@ def apply_letterhead(
             ensure_letterhead_styles(document, rules, settings or PageSettings())
             _set_managed_property(document)
         return LetterheadResult("preserved-disabled", detection.status)
-    if detection.status == "recognized_external":
-        return LetterheadResult("skipped-external", detection.status, [WARNING_EXTERNAL])
-    if detection.status == "unknown":
-        return LetterheadResult("skipped-unknown", detection.status, [WARNING_UNKNOWN])
-    if detection.status == "managed" and not normalized["replace_managed"]:
-        ensure_letterhead_styles(document, rules, settings or PageSettings())
-        _set_managed_property(document)
-        return LetterheadResult("preserved-managed", detection.status)
-    if detection.status == "managed":
-        remove_managed_letterhead(document)
+    if detection.status != "none":
+        remove_detected_letterhead(document, detection)
     resolved_settings = settings or PageSettings()
     ensure_letterhead_styles(document, rules, resolved_settings)
     paragraphs = _add_mark_paragraphs(document, normalized)
@@ -436,7 +475,7 @@ def apply_letterhead(
     _move_before(elements, _first_title_element(document))
     _set_managed_property(document)
     return LetterheadResult(
-        "replaced" if detection.status == "managed" else "generated",
+        "replaced" if detection.status != "none" else "generated",
         detection.status,
         managed_paragraphs=len(paragraphs),
         protected_elements=elements,
@@ -451,5 +490,6 @@ __all__ = [
     "WARNING_UNKNOWN",
     "apply_letterhead",
     "detect_letterhead",
+    "remove_detected_letterhead",
     "remove_managed_letterhead",
 ]

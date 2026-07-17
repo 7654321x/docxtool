@@ -62,6 +62,7 @@ git@github.com:7654321x/docxtool.git
 | `src/docxtool/document/engine/numbering.py` | 结构序号规范化 |
 | `src/docxtool/document/engine/punctuation.py` | 标点规范化核心 |
 | `src/docxtool/document/engine/punctuation_docx.py` | DOCX 标点安全处理 |
+| `src/docxtool/document/engine/signature_block.py` | 落款单位、成文日期和附件结构排版 |
 | `src/docxtool/document/engine/cleanup.py` | 保守样式清理 |
 | `src/docxtool/document/engine/table.py` | 表格处理边界入口 |
 | `src/docxtool/security/__init__.py` | 安全模块入口 |

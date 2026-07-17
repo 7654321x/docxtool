@@ -343,7 +343,7 @@ h1{font-size:clamp(38px,5.4vw,64px);letter-spacing:0;line-height:1.08;margin-bot
       <div class="settings-main">
         <section class="settings-block" id="settingLetterhead">
           <div class="block-head"><div><h3>版头设置</h3><p>生成正文流中的机关标志、发文字号、签发人和红色分隔线。</p></div></div>
-          <div class="letterhead-toggle"><span><strong>生成版头</strong><small id="letterheadDisabledNote">不会生成新版头；检测到已有版头时原样保留。</small></span><label class="switch"><input type="checkbox" id="letterheadEnabled" onchange="renderLetterhead()"><span></span></label></div>
+          <div class="letterhead-toggle"><span><strong>生成版头</strong><small id="letterheadDisabledNote">关闭时不新增、不替换，已有版头原样保留。</small></span><label class="switch"><input type="checkbox" id="letterheadEnabled" onchange="renderLetterhead()"><span></span></label></div>
           <div class="letterhead-fields" id="letterheadFields" hidden>
             <div class="letterhead-subsection">
               <h4>基本信息</h4>
@@ -374,8 +374,7 @@ h1{font-size:clamp(38px,5.4vw,64px);letter-spacing:0;line-height:1.08;margin-bot
             </div>
             <div class="letterhead-subsection">
               <h4>已有版头</h4>
-              <p class="letterhead-note">已有外部版头默认保留；由 docxtool 生成的受管版头可选择替换。</p>
-              <label class="letterhead-toggle"><span><strong>替换由 docxtool 生成的版头</strong></span><span class="switch"><input type="checkbox" id="letterheadReplaceManaged"><span></span></span></label>
+              <p class="letterhead-note">开启后统一替换检测到的原版头；关闭时保持原版头不变。</p>
             </div>
             <div class="letterhead-subsection letterhead-preview-wrap">
               <div><h4>A4 首页预览</h4><p class="letterhead-note">预览仅使用当前配置，不读取上传文件正文。</p></div>
@@ -634,9 +633,9 @@ const CORE_FEATURE_DEFAULTS={
 const LETTERHEAD_DEFAULT={
   schema_version:1,enabled:false,document_direction:'downward',issuance_mode:'single',
   mark_display_mode:'agency_with_document',joint_mark_scope:'all_agencies',
-  agencies:[{id:'agency-1',name:'',short_name:'',role:'sponsor',order:1}],
-  document_number:{agency_code:'',year:null,sequence:null},signers:[],
-  existing_policy:'preserve_external',replace_managed:false,layout_version:1
+  agencies:[{id:'agency-1',name:'xxx市政府',short_name:'',role:'sponsor',order:1}],
+  document_number:{agency_code:'市委办',year:new Date().getFullYear(),sequence:1},signers:[],
+  existing_policy:'preserve_external',replace_managed:true,layout_version:1
 };
 const SIGNATURE_BLOCK_DEFAULT={mode:'without_seal'};
 let letterheadAgencies=clonePlain(LETTERHEAD_DEFAULT.agencies);
@@ -717,11 +716,16 @@ function normalizeLetterheadClient(value){
   const raw=value&&typeof value==='object'&&!Array.isArray(value)?value:{};
   const out={...clonePlain(LETTERHEAD_DEFAULT),...clonePlain(raw)};
   out.enabled=boolValue(raw.enabled,false);
-  out.replace_managed=boolValue(raw.replace_managed,false);
-  out.document_number={...LETTERHEAD_DEFAULT.document_number,...(raw.document_number||{})};
+  out.replace_managed=true;
+  const rawNumber=raw.document_number||{};
+  out.document_number={
+    agency_code:String(rawNumber.agency_code||LETTERHEAD_DEFAULT.document_number.agency_code),
+    year:Number(rawNumber.year)||LETTERHEAD_DEFAULT.document_number.year,
+    sequence:Number(rawNumber.sequence)||LETTERHEAD_DEFAULT.document_number.sequence
+  };
   const incoming=Array.isArray(raw.agencies)&&raw.agencies.length?raw.agencies:LETTERHEAD_DEFAULT.agencies;
   out.agencies=incoming.map((agency,index)=>({
-    id:String(agency?.id||`agency-${index+1}`),name:String(agency?.name||''),short_name:String(agency?.short_name||''),
+    id:String(agency?.id||`agency-${index+1}`),name:String(agency?.name||(index===0?LETTERHEAD_DEFAULT.agencies[0].name:'')),short_name:String(agency?.short_name||''),
     role:agency?.role==='sponsor'?'sponsor':'joint',order:index+1
   }));
   let sponsor=out.agencies.findIndex(agency=>agency.role==='sponsor');
@@ -840,7 +844,7 @@ function collectLetterheadConfig(){
     agencies:letterheadAgencies.map((agency,index)=>({...agency,name:agency.name.trim(),short_name:agency.short_name.trim(),order:index+1})),
     document_number:{agency_code:(letterheadElement('letterheadAgencyCode')?.value||'').trim(),year:numberValue('letterheadYear'),sequence:numberValue('letterheadSequence')},
     signers:letterheadSigners.map(signer=>({...signer,name:signer.name.trim(),label:(signer.label||'签发人').trim()})),existing_policy:'preserve_external',
-    replace_managed:!!letterheadElement('letterheadReplaceManaged')?.checked,layout_version:1
+    replace_managed:true,layout_version:1
   };
 }
 function applyLetterheadConfig(value){
@@ -848,7 +852,6 @@ function applyLetterheadConfig(value){
   letterheadAgencySerial=Math.max(1,...letterheadAgencies.map(item=>Number(String(item.id).match(/(\d+)$/)?.[1])||0));letterheadSignerSerial=Math.max(0,...letterheadSigners.map(item=>Number(String(item.id).match(/(\d+)$/)?.[1])||0));
   const set=(id,value)=>{const element=letterheadElement(id);if(element)element.value=value??''};
   if(letterheadElement('letterheadEnabled'))letterheadElement('letterheadEnabled').checked=config.enabled;
-  if(letterheadElement('letterheadReplaceManaged'))letterheadElement('letterheadReplaceManaged').checked=config.replace_managed;
   set('letterheadIssuanceMode',config.issuance_mode);set('letterheadDirection',config.document_direction);set('letterheadMarkDisplayMode',config.mark_display_mode);set('letterheadJointScope',config.joint_mark_scope);
   set('letterheadAgencyCode',config.document_number.agency_code);set('letterheadYear',config.document_number.year);set('letterheadSequence',config.document_number.sequence);renderLetterhead();
 }

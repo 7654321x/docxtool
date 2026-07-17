@@ -103,7 +103,12 @@ class EngineHeadingSpacingTest(unittest.TestCase):
                     ),
                 ])
 
-                self.assertEqual(doc.paragraphs[1].text, "")
+                if head_type == "role_name":
+                    self.assertEqual(doc.paragraphs[1].text, next_text)
+                    self.assertEqual(_spacing_after_lines(doc.paragraphs[0]), "100")
+                    self.assertIn(_spacing_before_lines(doc.paragraphs[1]), (None, "0"))
+                else:
+                    self.assertEqual(doc.paragraphs[1].text, "")
 
     def test_date_line_uses_spacing_after_without_blank_paragraph(self):
         doc = self._export([
@@ -157,6 +162,46 @@ class EngineHeadingSpacingTest(unittest.TestCase):
         )
         self.assertIn(_spacing_after_lines(doc.paragraphs[0]), (None, "0"))
         self.assertEqual(_spacing_after_lines(doc.paragraphs[1]), "100")
+
+    def test_role_name_after_multiline_title_has_one_line_before_spacing(self):
+        doc = self._export([
+            ParagraphData(
+                text="中共内江市东兴区政协党组班子",
+                type_id="title",
+                original_text="中共内江市东兴区政协党组班子",
+                features=ParagraphFeatures(),
+                meta={"is_title": True},
+            ),
+            ParagraphData(
+                text="2025年度民主生活会对照检查材料",
+                type_id="title_cont",
+                original_text="2025年度民主生活会对照检查材料",
+                features=ParagraphFeatures(),
+                meta={},
+            ),
+            ParagraphData(
+                text="区政协办公室主任  李弟弟",
+                type_id="role_name",
+                original_text="区政协办公室主任  李弟弟",
+                features=ParagraphFeatures(),
+                meta={},
+            ),
+            ParagraphData(
+                text="一级标题",
+                type_id="heading1",
+                original_text="一、一级标题",
+                features=ParagraphFeatures(),
+                meta={"numbering": "一、"},
+            ),
+        ])
+
+        role = next(p for p in doc.paragraphs if p.style.style_id == "DCT-RoleName")
+        self.assertEqual(_spacing_before_lines(role), "100")
+        self.assertEqual(_spacing_after_lines(role), "100")
+        self.assertEqual(doc.paragraphs[1].text, "2025年度民主生活会对照检查材料")
+        self.assertEqual(doc.paragraphs[2].text, "区政协办公室主任  李弟弟")
+        self.assertEqual(doc.paragraphs[3].text, "一、一级标题")
+        self.assertIn(_spacing_before_lines(doc.paragraphs[3]), (None, "0"))
 
     def test_attachment_note_has_one_line_gap_after_body(self):
         doc = self._export([

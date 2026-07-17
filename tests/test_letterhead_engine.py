@@ -12,8 +12,6 @@ from lxml import etree
 
 from docxtool.document.engine.core import export_doc
 from docxtool.document.engine.letterhead import (
-    WARNING_EXTERNAL,
-    WARNING_UNKNOWN,
     apply_letterhead,
     detect_letterhead,
 )
@@ -66,6 +64,16 @@ def style_ids(document):
     return [paragraph.style.style_id for paragraph in document.paragraphs]
 
 
+def spacing_value(paragraph, name):
+    spacing = paragraph._p.get_or_add_pPr().find(qn("w:spacing"))
+    return spacing.get(qn(f"w:{name}")) if spacing is not None else None
+
+
+def run_font_value(run, name):
+    fonts = run._r.get_or_add_rPr().find(qn("w:rFonts"))
+    return fonts.get(qn(f"w:{name}")) if fonts is not None else None
+
+
 def test_missing_null_and_disabled_do_not_generate(tmp_path):
     for index, value in enumerate((None, {**default_letterhead_config(), "enabled": False})):
         output, stats = export(tmp_path, value, f"disabled-{index}.docx")
@@ -85,15 +93,16 @@ def test_single_mark_document_number_separator_and_title_spacing(tmp_path):
         "DCT-LetterheadMark", "DCT-DocumentNumber", "DCT-LetterheadSeparator", "DCT-Title"
     ]
     assert stats["letterhead_action"] == "generated"
-    assert document.paragraphs[0].runs[0].font.size.pt == 36
+    assert document.paragraphs[0].runs[0].font.size.pt == 32
     assert document.paragraphs[0].runs[0]._r.rPr.find(qn("w:w")) is None
-    assert round(document.paragraphs[0].paragraph_format.space_before.cm, 1) == 3.5
-    assert round(
-        document.sections[0].top_margin.mm
-        + document.paragraphs[0].paragraph_format.space_before.mm
-    ) == 72
-    assert document.paragraphs[1].paragraph_format.space_before.pt == 56
-    assert document.paragraphs[2].paragraph_format.space_after.pt == 56
+    assert spacing_value(document.paragraphs[0], "beforeLines") == "300"
+    assert spacing_value(document.paragraphs[0], "afterLines") == "200"
+    assert spacing_value(document.paragraphs[0], "before") is None
+    assert spacing_value(document.paragraphs[0], "after") is None
+    assert spacing_value(document.paragraphs[1], "beforeLines") == "0"
+    assert spacing_value(document.paragraphs[1], "afterLines") == "0"
+    assert spacing_value(document.paragraphs[2], "afterLines") == "200"
+    assert spacing_value(document.paragraphs[2], "after") is None
     assert document.paragraphs[2].paragraph_format.left_indent.pt == 0
     assert document.paragraphs[2].paragraph_format.right_indent.pt == 0
     empty_styles = [p.style.style_id for p in document.paragraphs if not p.text]
@@ -121,9 +130,10 @@ def test_single_mark_document_number_separator_and_title_spacing(tmp_path):
             assert styles_xml.find(f".//{qn('w:style')}[@{qn('w:styleId')}='{style_id}']") is not None
         assert b"------" not in archive.read("word/document.xml")
     assert round(document.paragraphs[2].paragraph_format.space_before.cm, 1) == 0.4
+    assert spacing_value(document.paragraphs[2], "beforeLines") is None
 
 
-def test_enabled_letterhead_forces_official_a4_layout_only_when_enabled(tmp_path):
+def test_enabled_letterhead_does_not_override_document_page_layout(tmp_path):
     custom = PageSettings(
         page_width_cm=20,
         page_height_cm=28,
@@ -132,18 +142,14 @@ def test_enabled_letterhead_forces_official_a4_layout_only_when_enabled(tmp_path
         margin_left_cm=1.4,
         margin_right_cm=1.6,
     )
-    enabled, _ = export(tmp_path, config(), "official-page.docx", page_settings=custom)
+    enabled, _ = export(tmp_path, config(), "custom-enabled-page.docx", page_settings=custom)
     section = Document(enabled).sections[0]
-    assert round(section.page_width.mm) == 210
-    assert round(section.page_height.mm) == 297
-    assert round(section.top_margin.mm) == 37
-    assert round(section.bottom_margin.mm) == 35
-    assert round(section.left_margin.mm) == 28
-    assert round(section.right_margin.mm) == 26
-    content_width = section.page_width - section.left_margin - section.right_margin
-    content_height = section.page_height - section.top_margin - section.bottom_margin
-    assert round(content_width / 36000) == 156
-    assert round(content_height / 36000) == 225
+    assert round(section.page_width.mm) == 200
+    assert round(section.page_height.mm) == 280
+    assert round(section.top_margin.mm) == 10
+    assert round(section.bottom_margin.mm) == 12
+    assert round(section.left_margin.mm) == 14
+    assert round(section.right_margin.mm) == 16
 
     disabled_config = {**default_letterhead_config(), "enabled": False}
     disabled, _ = export(
@@ -179,7 +185,7 @@ def test_upward_multiple_signers_use_separate_runs_and_tabs(tmp_path):
     assert [p.text for p in signer_paragraphs] == ["\t签发人：张三\t签发人：李四"]
     assert signer_paragraphs[0].runs[1].text == "签发人："
     assert signer_paragraphs[0].runs[2].text == "张三"
-    assert signer_paragraphs[0].runs[2].font.name == "楷体_GB2312"
+    assert run_font_value(signer_paragraphs[0].runs[2], "eastAsia") == "楷体_GB2312"
     expected_right = Cm(15.6) - Pt(16)
     expected_positions = [
         expected_right - Cm(4.6),
@@ -202,8 +208,10 @@ def test_upward_multiple_signers_use_separate_runs_and_tabs(tmp_path):
     final_tab_stop = list(number_paragraph.paragraph_format.tab_stops)[0]
     assert abs(final_tab_stop.position - expected_positions[0]) <= 635
     assert final_tab_stop.alignment == WD_TAB_ALIGNMENT.RIGHT
-    assert signer_paragraphs[0].paragraph_format.space_before.pt == 56
-    assert number_paragraph.paragraph_format.space_before.pt == 0
+    assert spacing_value(signer_paragraphs[0], "beforeLines") == "0"
+    assert spacing_value(signer_paragraphs[0], "afterLines") == "0"
+    assert spacing_value(number_paragraph, "beforeLines") == "0"
+    assert spacing_value(number_paragraph, "afterLines") == "0"
 
 
 def test_upward_single_signer_shares_document_number_line(tmp_path):
@@ -221,11 +229,16 @@ def test_upward_single_signer_shares_document_number_line(tmp_path):
     )
     assert number_paragraph.text == "测发〔2026〕12号\t签发人：张三"
     assert number_paragraph.paragraph_format.left_indent.pt == 16
-    assert number_paragraph.paragraph_format.space_before.pt == 56
-    assert number_paragraph.runs[2].text == "签发人："
-    assert number_paragraph.runs[2].font.name == "仿宋_GB2312"
-    assert number_paragraph.runs[3].text == "张三"
-    assert number_paragraph.runs[3].font.name == "楷体_GB2312"
+    assert spacing_value(number_paragraph, "beforeLines") == "0"
+    assert spacing_value(number_paragraph, "afterLines") == "0"
+    signer_label = next(run for run in number_paragraph.runs if run.text == "签发人：")
+    signer_name = next(run for run in number_paragraph.runs if run.text == "张三")
+    assert run_font_value(signer_label, "eastAsia") == "仿宋_GB2312"
+    assert run_font_value(signer_name, "eastAsia") == "楷体_GB2312"
+    number_runs = [run for run in number_paragraph.runs if run.text in {"2026", "12"}]
+    assert len(number_runs) == 2
+    assert all(run_font_value(run, "ascii") == "Times New Roman" for run in number_runs)
+    assert all(run_font_value(run, "hAnsi") == "Times New Roman" for run in number_runs)
     assert "  " not in number_paragraph.text
     tab_stop = list(number_paragraph.paragraph_format.tab_stops)[0]
     assert abs(tab_stop.position - (Cm(15.6) - Pt(16))) <= 635
@@ -316,7 +329,7 @@ def test_managed_output_is_detected_and_reprocessing_is_idempotent(tmp_path):
         first_data, rules(), PageSettings(), str(second),
         page_number_enabled=False, letterhead_options=config(),
     )
-    assert second_stats["letterhead_action"] == "preserved-managed"
+    assert second_stats["letterhead_action"] == "replaced"
     assert style_ids(Document(second)).count("DCT-LetterheadMark") == 1
     assert detect_letterhead(Document(second)).status == "managed"
 
@@ -352,7 +365,7 @@ def _external_document(path: Path):
     document.save(path)
 
 
-def test_external_letterhead_is_preserved_and_warned(tmp_path):
+def test_enabled_letterhead_replaces_external_letterhead(tmp_path):
     source = tmp_path / "external.docx"
     _external_document(source)
     before_hash = hashlib.sha256(source.read_bytes()).hexdigest()
@@ -363,12 +376,13 @@ def test_external_letterhead_is_preserved_and_warned(tmp_path):
         imported, rules(), PageSettings(), str(output),
         page_number_enabled=False, letterhead_options=config(),
     )
-    assert stats["compatibility_warnings"] == [WARNING_EXTERNAL]
-    assert [p.text for p in Document(output).paragraphs[:3]] == ["测试机关文件", "测发〔2026〕3号", ""]
+    assert stats["letterhead_action"] == "replaced"
+    assert stats["compatibility_warnings"] == []
+    assert [p.text for p in Document(output).paragraphs[:3]] == ["测试机关文件", "测发〔2026〕12号", ""]
     assert hashlib.sha256(source.read_bytes()).hexdigest() == before_hash
 
 
-def test_unknown_complex_letterhead_is_preserved_and_warned():
+def test_enabled_letterhead_replaces_unknown_complex_letterhead():
     document = Document()
     paragraph = document.add_paragraph()
     paragraph._p.append(OxmlElement("w:drawing"))
@@ -376,8 +390,10 @@ def test_unknown_complex_letterhead_is_preserved_and_warned():
     detection = detect_letterhead(document)
     assert detection.status == "unknown"
     result = apply_letterhead(document, config(), detection=detection, rules=rules(), settings=PageSettings())
-    assert result.warnings == [WARNING_UNKNOWN]
-    assert "DCT-LetterheadMark" not in style_ids(document)
+    assert result.action == "replaced"
+    assert result.warnings == []
+    assert "DCT-LetterheadMark" in style_ids(document)
+    assert document.paragraphs[0]._p.find(".//" + qn("w:drawing")) is None
 
 
 def test_zero_size_drawing_and_captioned_image_are_not_letterhead_signals():
@@ -403,7 +419,38 @@ def test_zero_size_drawing_and_captioned_image_are_not_letterhead_signals():
     assert detect_letterhead(captioned).status == "none"
 
 
-def test_unknown_complex_letterhead_file_is_preserved_and_input_is_unchanged(tmp_path):
+def test_document_number_reference_in_body_does_not_block_letterhead_generation():
+    document = Document()
+    document.add_paragraph("公文标题")
+    reference = (
+        "按照《中共四川省纪委机关、中共四川省委组织部关于开好2025年度县以上党和国家机关"
+        "党员领导干部民主生活会的通知》（川组通〔2025〕51号）要求，形成如下材料。"
+    )
+    document.add_paragraph(reference)
+    original_text = [paragraph.text for paragraph in document.paragraphs]
+
+    detection = detect_letterhead(document)
+    assert detection.status == "none"
+
+    result = apply_letterhead(
+        document,
+        config(),
+        detection=detection,
+        rules=rules(),
+        settings=PageSettings(),
+    )
+
+    assert result.action == "generated"
+    assert result.warnings == []
+    assert [paragraph.text for paragraph in document.paragraphs[-2:]] == original_text
+    assert style_ids(document)[:3] == [
+        "DCT-LetterheadMark",
+        "DCT-DocumentNumber",
+        "DCT-LetterheadSeparator",
+    ]
+
+
+def test_enabled_letterhead_replaces_unknown_file_and_keeps_input_unchanged(tmp_path):
     source = tmp_path / "unknown.docx"
     document = Document()
     paragraph = document.add_paragraph()
@@ -425,6 +472,53 @@ def test_unknown_complex_letterhead_file_is_preserved_and_input_is_unchanged(tmp
         letterhead_options=config(),
     )
 
-    assert stats["compatibility_warnings"] == [WARNING_UNKNOWN]
-    assert Document(output).paragraphs[0]._p.find(".//" + qn("w:drawing")) is not None
+    assert stats["letterhead_action"] == "replaced"
+    assert stats["compatibility_warnings"] == []
+    assert Document(output).paragraphs[0].style.style_id == "DCT-LetterheadMark"
+    assert not any(
+        paragraph._p.find(".//" + qn("w:drawing")) is not None
+        for paragraph in Document(output).paragraphs
+    )
     assert hashlib.sha256(source.read_bytes()).hexdigest() == before_hash
+
+
+def test_disabled_letterhead_preserves_external_and_unknown_blocks(tmp_path):
+    disabled = {**default_letterhead_config(), "enabled": False}
+
+    external = tmp_path / "external-disabled.docx"
+    _external_document(external)
+    external_data = DocxImporter().load(str(external), rules(), features={})
+    external_output = tmp_path / "external-disabled-output.docx"
+    external_stats = export_doc(
+        external_data,
+        rules(),
+        PageSettings(),
+        str(external_output),
+        page_number_enabled=False,
+        letterhead_options=disabled,
+    )
+    assert external_stats["letterhead_action"] == "preserved-disabled"
+    assert [p.text for p in Document(external_output).paragraphs[:3]] == [
+        "测试机关文件",
+        "测发〔2026〕3号",
+        "",
+    ]
+
+    unknown = tmp_path / "unknown-disabled.docx"
+    unknown_document = Document()
+    drawing_paragraph = unknown_document.add_paragraph()
+    drawing_paragraph._p.append(OxmlElement("w:drawing"))
+    unknown_document.add_paragraph("公文标题")
+    unknown_document.save(unknown)
+    unknown_data = DocxImporter().load(str(unknown), rules(), features={})
+    unknown_output = tmp_path / "unknown-disabled-output.docx"
+    unknown_stats = export_doc(
+        unknown_data,
+        rules(),
+        PageSettings(),
+        str(unknown_output),
+        page_number_enabled=False,
+        letterhead_options=disabled,
+    )
+    assert unknown_stats["letterhead_action"] == "preserved-disabled"
+    assert Document(unknown_output).paragraphs[0]._p.find(".//" + qn("w:drawing")) is not None

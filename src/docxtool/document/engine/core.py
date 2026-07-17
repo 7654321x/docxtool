@@ -1578,19 +1578,6 @@ def _feature_enabled(options: dict | None, default: bool = False) -> bool:
     return bool(default)
 
 
-def _page_settings_for_letterhead(settings: PageSettings, enabled: bool) -> PageSettings:
-    if not enabled:
-        return settings
-    resolved = copy.copy(settings)
-    resolved.page_width_cm = 21.0
-    resolved.page_height_cm = 29.7
-    resolved.margin_top_cm = 3.7
-    resolved.margin_bottom_cm = 3.5
-    resolved.margin_left_cm = 2.8
-    resolved.margin_right_cm = 2.6
-    return resolved
-
-
 def _style_id_for_type(type_id: str) -> str:
     return TYPE_TO_STYLE_ID.get(type_id, "DCT-Body")
 
@@ -1731,10 +1718,7 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
     protected_paragraph_elements = set()
     letterhead_detection = getattr(doc_data, "letterhead_detection", None) or LetterheadDetection()
     letterhead_enabled = _feature_enabled(letterhead_options, False)
-    replace_managed = bool(_feature_options(letterhead_options).get("replace_managed", False))
-    preserve_input_letterhead = not (
-        letterhead_enabled and letterhead_detection.status == "managed" and replace_managed
-    )
+    preserve_input_letterhead = not letterhead_enabled
 
     for i, pd in enumerate(render_items):
         # 表格占位符 → 原位复制
@@ -1776,7 +1760,7 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
                             doc,
                             pd.meta.get("paragraph_xml"),
                             relationship_part_copier,
-                            None if letterhead_detection.status == "managed" else referenced_style_copier,
+                            referenced_style_copier,
                         )
                     )
                 except Exception as e:
@@ -1820,7 +1804,8 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
             # 空行插入（三号 16pt 行距 28 磅）
             # date_line 后的留白由段后间距控制，避免生成真实空段落。
             need_gap = (prev_was_title and pd.type_id in HEAD_GAP_FOLLOW_TYPES
-                        and prev_type_id != "date_line" and pd.text.strip())
+                        and prev_type_id not in ("date_line", "role_name")
+                        and pd.text.strip())
 
             if need_gap and not letterhead_enabled:
                 spacer = doc.add_paragraph("")
@@ -1892,9 +1877,25 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
             _apply_rule_paragraph_format(para, resolved, line_twips)
 
             # 头部署名/日期的相邻间距：
-            # “职务姓名 + 日期”连续出现时，中间段后为 0；日期之后用段后 1 行。
+            # 主标题与职务姓名之间空 1 行，职务姓名与后续标题/正文也空 1 行。
             if pd.type_id in ("role_name", "author_line"):
-                _set_para_spacing(para, before_lines=0, after_lines=0, line_twips=line_twips)
+                head_gap = (
+                    1
+                    if pd.type_id == "role_name"
+                    and prev_type_id in ("title", "title_cont")
+                    else 0
+                )
+                _set_para_spacing(
+                    para,
+                    before_lines=head_gap,
+                    after_lines=(
+                        1
+                        if pd.type_id == "role_name"
+                        and (next_pd is None or next_pd.type_id != "date_line")
+                        else 0
+                    ),
+                    line_twips=line_twips,
+                )
             elif pd.type_id == "date_line":
                 _set_para_spacing(para, before_lines=0, after_lines=1, line_twips=line_twips)
             elif pd.type_id in ("heading2", "heading3", "heading4"):
@@ -2104,18 +2105,32 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
             continue
         _apply_digit_latin_font(para)
 
-    # 启用版头时统一正式公文版式；其余行距和网格设置仍沿用用户配置。
-    page_settings = _page_settings_for_letterhead(settings, letterhead_enabled)
+    # 版头只负责首页正文流，不得覆盖整篇文档的页面设置。
+    page_settings = settings
     apply_page_settings(doc, page_settings, doc_data.doc_mode)
     _preserve_even_and_odd_headers_setting(doc, doc_data)
 
+    apply_detection = letterhead_detection
+    if letterhead_enabled and letterhead_detection.status != "none":
+        # Existing source blocks were intentionally omitted above. Keep the
+        # original status for reporting without applying source indexes to the
+        # rebuilt output body.
+        apply_detection = LetterheadDetection(
+            letterhead_detection.status,
+            (),
+            letterhead_detection.details,
+        )
     letterhead_result = apply_letterhead(
         doc,
         letterhead_options,
-        detection=letterhead_detection,
+        detection=apply_detection,
         rules=rules,
         settings=page_settings,
     )
+    # 版头在全局西文字体后处理之后生成，因此需要补做同一轮扫描。
+    for element in letterhead_result.protected_elements:
+        if element.tag == qn("w:p"):
+            _apply_digit_latin_font(Paragraph(element, doc._body))
     protected_paragraph_elements.update(letterhead_result.protected_elements)
     stats["letterhead_detection"] = letterhead_result.detection
     stats["letterhead_action"] = letterhead_result.action

@@ -144,12 +144,14 @@ def _letterhead_rpr(style_id: str, rule: StyleRule):
     rpr = OxmlElement("w:rPr")
     fonts = OxmlElement("w:rFonts")
     font_name = "方正小标宋简体" if style_id == "DCT-LetterheadMark" else "仿宋_GB2312"
-    for attribute in ("ascii", "hAnsi", "eastAsia", "cs"):
-        fonts.set(qn(f"w:{attribute}"), font_name)
+    fonts.set(qn("w:eastAsia"), font_name)
+    fonts.set(qn("w:ascii"), "Times New Roman")
+    fonts.set(qn("w:hAnsi"), "Times New Roman")
+    fonts.set(qn("w:cs"), "Times New Roman")
     rpr.append(fonts)
     size = OxmlElement("w:sz")
     size_cs = OxmlElement("w:szCs")
-    half_points = 72 if style_id == "DCT-LetterheadMark" else int(round((rule.font_size_pt or 16) * 2))
+    half_points = 64 if style_id == "DCT-LetterheadMark" else int(round((rule.font_size_pt or 16) * 2))
     size.set(qn("w:val"), str(half_points))
     size_cs.set(qn("w:val"), str(half_points))
     rpr.extend((size, size_cs))

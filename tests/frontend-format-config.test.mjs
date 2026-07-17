@@ -152,6 +152,11 @@ styleDomRows = makeStyleDomRows(frontend.styleRows);
 const defaultConfig = frontend.collectConfig();
 assert.equal(defaultConfig.letterhead.enabled, false);
 assert.equal(defaultConfig.letterhead.agencies.length, 1);
+assert.equal(defaultConfig.letterhead.agencies[0].name, "xxx市政府");
+assert.equal(defaultConfig.letterhead.document_number.agency_code, "市委办");
+assert.equal(defaultConfig.letterhead.document_number.year, new Date().getFullYear());
+assert.equal(defaultConfig.letterhead.document_number.sequence, 1);
+assert.equal(defaultConfig.letterhead.replace_managed, true);
 assert.equal(defaultConfig.page_number.position, "outside");
 assert.equal(defaultConfig.page_number.first_page, true);
 assert.equal(defaultConfig.page_number.enabled, true);
@@ -263,6 +268,7 @@ assert.equal(collectedLetterhead.signers.length, 3);
 assert.equal(collectedLetterhead.document_number.agency_code, "测发");
 assert.equal(collectedLetterhead.document_number.year, 2026);
 assert.equal(collectedLetterhead.document_number.sequence, 8);
+assert.equal(collectedLetterhead.replace_managed, true);
 
 assert.equal(
   frontend.friendlyError("styles[6].size: 不能为空", "FORMAT_CONFIG_INVALID", {
