@@ -68,6 +68,12 @@ _ABBR_RE = re.compile(
 )
 _DOT_RUN_RE = re.compile(r"\.{3,}")
 _DASH_RUN_RE = re.compile(r"-{2,}")
+_NUMBERING_MARKER_RE = re.compile(
+    r"(?m)^\s*(?:附件\s*[:：]\s*)?\d{1,3}(?P<marker>[.．])(?=\s*\S)"
+)
+_DUPLICATE_NUMBERING_PUNCT_RE = re.compile(
+    r"(?m)^\s*(?:附件\s*[:：]\s*)?\d{1,3}[.．](?P<extra>[.．。]+)(?=\s*\S)"
+)
 
 
 def _normalize_mode(mode: str) -> str:
@@ -137,6 +143,14 @@ def find_protected_spans(text: str) -> tuple[ProtectedSpan, ...]:
     for kind, pattern in patterns:
         for match in pattern.finditer(text):
             _add_span(spans, match.start(), match.end(), kind, text)
+    for match in _NUMBERING_MARKER_RE.finditer(text):
+        _add_span(
+            spans,
+            match.start("marker"),
+            match.end("marker"),
+            "numbering_marker",
+            text,
+        )
     return tuple(sorted(spans, key=lambda span: (span.start, -(span.end - span.start), span.kind)))
 
 
@@ -174,6 +188,9 @@ def plan_punctuation_replacements(text: str, mode: str = "safe") -> tuple[Punctu
         replacements.append(PunctuationReplacement(start, end, replacement, rule, text[start:end]))
         for index in range(start, end):
             occupied[index] = True
+
+    for match in _DUPLICATE_NUMBERING_PUNCT_RE.finditer(text):
+        add(match.start("extra"), match.end("extra"), "", "duplicate_numbering_punctuation")
 
     for match in _DOT_RUN_RE.finditer(text):
         if _has_cjk_context(text, match.start(), match.end()):

@@ -186,8 +186,16 @@ class SignatureAttachmentDetectionTest(unittest.TestCase):
             "测试正文测试正文。",
         ])
 
-        self.assertEqual(data.paragraphs[-4].type_id, "attachment_note")
-        self.assertEqual(data.paragraphs[-3].type_id, "attachment_page_mark")
+        self.assertEqual(
+            [paragraph.type_id for paragraph in data.paragraphs[-5:]],
+            [
+                "attachment_note",
+                "sign_date",
+                "attachment_page_mark",
+                "attachment_title",
+                "attachment_body",
+            ],
+        )
 
     def test_chinese_month_day_tail_date_is_normalized(self):
         data = self._load_lines([

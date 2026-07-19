@@ -60,7 +60,7 @@ def test_preserve_mode_does_not_change_existing_signature_indents() -> None:
     assert _right_chars(date) == "300"
 
 
-def test_without_seal_places_date_two_characters_right_of_long_signature() -> None:
+def test_without_seal_uses_standard_signature_and_date_right_indents() -> None:
     document = _document_with_styles()
     signature_text = "内江市东兴区人民政府"
     date_text = "2026年7月16日"
@@ -70,12 +70,12 @@ def test_without_seal_places_date_two_characters_right_of_long_signature() -> No
     assert apply_signature_block(document, {"mode": "without_seal"}) == 1
 
     assert _right_chars(signature) == "200"
-    assert _right_chars(date) == "350"
+    assert _right_chars(date) == "400"
     assert signature.text == signature_text
     assert date.text == date_text
 
 
-def test_without_seal_keeps_two_character_minimum_for_long_date() -> None:
+def test_without_seal_keeps_standard_date_indent_for_long_date() -> None:
     document = _document_with_styles()
     signature = _paragraph(document, "区政府", "DCT-Signature")
     date = _paragraph(document, "二〇二六年七月十六日", "DCT-Date")
@@ -83,7 +83,7 @@ def test_without_seal_keeps_two_character_minimum_for_long_date() -> None:
     apply_signature_block(document, {"mode": "without_seal"})
 
     assert _right_chars(signature) == "200"
-    assert _right_chars(date) == "200"
+    assert _right_chars(date) == "400"
 
 
 def test_with_seal_centers_signature_on_date_text_area() -> None:
@@ -182,5 +182,5 @@ def test_export_doc_invokes_signature_block_engine(tmp_path: Path) -> None:
     reopened = Document(output)
     assert stats["signature_blocks_adjusted"] == 1
     assert _right_chars(reopened.paragraphs[-2]) == "200"
-    assert _right_chars(reopened.paragraphs[-1]) == "350"
+    assert _right_chars(reopened.paragraphs[-1]) == "400"
     assert validate_docx_integrity(output).ok is True

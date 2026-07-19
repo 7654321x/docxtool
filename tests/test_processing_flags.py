@@ -26,6 +26,17 @@ class ProcessingFlagsTest(unittest.TestCase):
 
             self.assertEqual(data.paragraphs[0].text, "甲:乙,丙.丁")
 
+    def test_punctuation_enabled_removes_fullwidth_space(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "source.docx"
+            doc = Document()
+            doc.add_paragraph("甲　乙,丙")
+            doc.save(src)
+
+            data = DocxImporter().load(str(src), _rules(), features={"punctuation_enabled": True})
+
+            self.assertEqual(data.paragraphs[0].text, "甲乙，丙")
+
     def test_page_number_disabled_skips_footer_fields(self):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "out.docx"

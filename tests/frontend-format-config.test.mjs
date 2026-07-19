@@ -164,6 +164,9 @@ assert.equal(defaultConfig.page_number.font_name, "宋体");
 assert.equal(defaultConfig.page_number.font_size_pt, 14);
 assert.equal(defaultConfig.page_number.bold, false);
 assert.equal(defaultConfig.signature_block.mode, "without_seal");
+assert.equal(defaultConfig.output_suffix, "_排版");
+assert.equal(defaultConfig.styles.length, 10);
+assert.equal(defaultConfig.styles[9].name, "正文上标");
 assert.equal(Object.hasOwn(defaultConfig.features, "page_number_enabled"), false);
 assert.equal(elements.get("letterheadFields").hidden, true);
 assert.equal(defaultConfig.styles[6].name, "数字");
@@ -203,21 +206,49 @@ const legacyPageNumberConfig = frontend.normalizeConfig(
 );
 assert.equal(legacyPageNumberConfig.page_number.enabled, false);
 const canonicalPageNumberConfig = frontend.normalizeConfig(
-  { features: { page_number_enabled: true }, page_number: { enabled: false } },
+  { features: { page_number_enabled: true }, page_number: { enabled: false, style: "cn_total", position: "center" } },
   { id: "canonical-page", name: "新版页码模板" },
 );
 assert.equal(canonicalPageNumberConfig.page_number.enabled, false);
 frontend.applyConfigToForm(canonicalPageNumberConfig);
 assert.equal(elements.get("pageNumberEnabled").checked, false);
+assert.equal(elements.get("pageStyle").value, "cn_total");
+assert.equal(elements.get("pagePosition").value, "center");
+frontend.applyConfigToForm(frontend.normalizeConfig(
+  { page_number: { style: "chinese_total", position: "centre" } },
+  { id: "legacy-page-aliases", name: "旧页码别名" },
+));
+assert.equal(elements.get("pageStyle").value, "cn_total");
+assert.equal(elements.get("pagePosition").value, "center");
+
+elements.get("paperSize").value = "Letter";
+elements.get("pageStyle").value = "cn";
+elements.get("pagePosition").value = "right";
+elements.get("outputSuffix").value = "_测试";
+const effectiveGlobalConfig = frontend.collectConfig();
+assert.equal(effectiveGlobalConfig.page.paper_size, "Letter");
+assert.equal(effectiveGlobalConfig.page.width_cm, 21.59);
+assert.equal(effectiveGlobalConfig.page.height_cm, 27.94);
+assert.equal(effectiveGlobalConfig.page_number.style, "cn");
+assert.equal(effectiveGlobalConfig.page_number.position, "right");
+assert.equal(effectiveGlobalConfig.output_suffix, "_测试");
 
 elements.get("signatureBlockMode").value = "with_seal";
 assert.equal(frontend.collectConfig().signature_block.mode, "with_seal");
 
 assert.match(html, /href="#settingLetterhead"><span>01<\/span>版头设置/);
+assert.match(html, /letterhead-block-head[^>]*><h3>版头设置<\/h3><label class="switch" title="启用版头设置">/);
+assert.doesNotMatch(html, />生成版头</);
+assert.doesNotMatch(html, /生成正文流中的机关标志/);
+assert.doesNotMatch(html, /letterheadDisabledNote/);
 assert.match(html, /href="#settingStyles"><span>02<\/span>段落样式/);
 assert.match(html, /href="#settingGlobal"><span>03<\/span>全局设置/);
 assert.match(html, /href="#settingFeatures"><span>04<\/span>功能开关/);
 assert.match(html, /const API_PREFIX = '\/api'/);
+assert.match(html, /加盖印章版式（不生成印章）/);
+assert.doesNotMatch(html, /<h4>正文上标<\/h4>/);
+assert.doesNotMatch(html, /id="pageLanguage"/);
+assert.doesNotMatch(html, /<option>- 1 -<\/option>|<option>1 \/ n<\/option>/);
 assert.match(html, /fetch\(api\('\/upload'\)/);
 assert.match(html, /'X-Format-Config':base64UrlJson\(config\)/);
 assert.match(html, /'X-Format-Config-Encoding':'base64url-json'/);
@@ -230,10 +261,24 @@ frontend.setIssuanceMode("joint");
 frontend.addLetterheadAgency();
 let letterheadState = frontend.getLetterheadState();
 assert.equal(letterheadState.agencies.length, 2);
+assert.match(elements.get("letterheadAgencies").innerHTML, /title="上移"/);
+assert.match(elements.get("letterheadAgencies").innerHTML, /title="下移"/);
+const originalSponsorId = letterheadState.agencies[0].id;
+const originalJointId = letterheadState.agencies[1].id;
+frontend.moveLetterheadAgency(originalJointId, -1);
+letterheadState = frontend.getLetterheadState();
+assert.deepEqual(letterheadState.agencies.map(agency => agency.id), [originalJointId, originalSponsorId]);
+assert.deepEqual(letterheadState.agencies.map(agency => agency.role), ["sponsor", "joint"]);
+frontend.moveLetterheadAgency(originalJointId, 1);
+letterheadState = frontend.getLetterheadState();
+assert.deepEqual(letterheadState.agencies.map(agency => agency.id), [originalSponsorId, originalJointId]);
+assert.deepEqual(letterheadState.agencies.map(agency => agency.role), ["sponsor", "joint"]);
 letterheadState.agencies[0].name = "主办机关";
 letterheadState.agencies[1].name = "联合机关";
 frontend.addLetterheadAgency();
 letterheadState = frontend.getLetterheadState();
+assert.match(elements.get("letterheadAgencies").innerHTML, /title="上移"/);
+assert.match(elements.get("letterheadAgencies").innerHTML, /title="下移"/);
 const movableAgencyId = letterheadState.agencies[2].id;
 letterheadState.agencies[2].name = "第三机关";
 frontend.moveLetterheadAgency(movableAgencyId, -1);
@@ -242,6 +287,18 @@ assert.equal(letterheadState.agencies[1].id, movableAgencyId);
 frontend.removeLetterheadAgency(movableAgencyId);
 letterheadState = frontend.getLetterheadState();
 assert.equal(letterheadState.agencies.length, 2);
+frontend.removeLetterheadAgency(letterheadState.agencies[1].id);
+letterheadState = frontend.getLetterheadState();
+assert.equal(letterheadState.agencies.length, 1);
+assert.equal(letterheadState.agencies[0].role, "sponsor");
+assert.equal(elements.get("letterheadIssuanceMode").value, "single");
+frontend.removeLetterheadAgency(letterheadState.agencies[0].id);
+assert.equal(frontend.getLetterheadState().agencies.length, 1);
+frontend.addLetterheadAgency();
+letterheadState = frontend.getLetterheadState();
+assert.equal(letterheadState.agencies.length, 2);
+assert.equal(elements.get("letterheadIssuanceMode").value, "joint");
+letterheadState.agencies[1].name = "联合机关";
 frontend.setLetterheadSponsor(letterheadState.agencies[1].id);
 elements.get("letterheadDirection").value = "upward";
 elements.get("letterheadAgencyCode").value = "测发";

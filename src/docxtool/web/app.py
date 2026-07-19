@@ -57,6 +57,8 @@ os.makedirs(RUNTIME_TMP_DIR, exist_ok=True)
 DEFAULT_ADMIN_TOKEN = "7654321xxx"
 DEFAULT_PROXY_SECRET = "docxtool-proxy-20260601-9ec0d6e2443a4f5f9784f0f04bb62917"
 ADMIN_SESSION_COOKIE = "docxtool_admin_session"
+ANONYMOUS_USER_COOKIE = "docxtool_anon_user"
+ANONYMOUS_USER_COOKIE_MAX_AGE = 2 * 365 * 24 * 60 * 60
 ADMIN_CSRF_HEADER = "X-CSRF-Token"
 DEFAULT_ADMIN_SESSION_TTL_SECONDS = 12 * 60 * 60
 
@@ -203,6 +205,8 @@ def _sql_init():
                 config_json TEXT NOT NULL,
                 is_system INTEGER DEFAULT 0,
                 is_default INTEGER DEFAULT 0,
+                owner_id TEXT DEFAULT '',
+                visibility TEXT DEFAULT 'public',
                 version INTEGER DEFAULT 1,
                 created_at TEXT DEFAULT (datetime('now','localtime')),
                 updated_at TEXT DEFAULT (datetime('now','localtime'))
@@ -267,6 +271,13 @@ def _sql_init():
             conn.execute("ALTER TABLE presets ADD COLUMN created_at TEXT DEFAULT (datetime('now','localtime'))")
         if "updated_at" not in preset_cols:
             conn.execute("ALTER TABLE presets ADD COLUMN updated_at TEXT DEFAULT (datetime('now','localtime'))")
+        if "owner_id" not in preset_cols:
+            conn.execute("ALTER TABLE presets ADD COLUMN owner_id TEXT DEFAULT ''")
+        if "visibility" not in preset_cols:
+            conn.execute("ALTER TABLE presets ADD COLUMN visibility TEXT DEFAULT 'public'")
+        conn.execute("UPDATE presets SET owner_id='' WHERE owner_id IS NULL")
+        conn.execute("UPDATE presets SET visibility='public' WHERE visibility IS NULL OR visibility=''")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_presets_owner_visibility ON presets(owner_id, visibility)")
         conn.commit()
         _seed_default_presets(conn)
         conn.close()
@@ -1112,13 +1123,19 @@ def _task_process_body(task_id: str, input_path: str, orig_name: str, ip: str, u
         for key, value in _core_feature_config_defaults().items():
             features.setdefault(key, value)
         body_rule = rules[5] if len(rules) > 5 else StyleRule.default_for_row(5)
+        letterhead_summary = features.get("letterhead", {})
+        letterhead_agencies = letterhead_summary.get("agencies", [])
         logger.info(
             f"[Task] {task_id[:8]} start file={orig_name} ip={ip} log={log_filename} "
             f"preset={request_meta.get('preset_name','')} mode={request_meta.get('processing_mode','smart')} "
             f"frontend_config={bool(format_config)} body={body_rule.font}/{body_rule.font_size_label} "
             f"margins=top{settings.margin_top_cm} bottom{settings.margin_bottom_cm} "
             f"left{settings.margin_left_cm} right{settings.margin_right_cm} "
-            f"line_spacing={settings.line_spacing_value} numbered_bold_enabled={features['numbered_bold_enabled']}"
+            f"line_spacing={settings.line_spacing_value} numbered_bold_enabled={features['numbered_bold_enabled']} "
+            f"letterhead_enabled={bool(letterhead_summary.get('enabled', False))} "
+            f"letterhead_mode={letterhead_summary.get('issuance_mode', 'single')} "
+            f"letterhead_agencies={len(letterhead_agencies) if isinstance(letterhead_agencies, list) else 0} "
+            f"letterhead_scope={letterhead_summary.get('joint_mark_scope', 'all_agencies')}"
         )
         importer = DocxImporter()
         try:
@@ -1539,6 +1556,87 @@ def _session_cookie_settings() -> str:
         parts.append("Secure")
     return "; ".join(parts)
 
+def _anonymous_user_signing_key() -> bytes:
+    secret = (PROXY_SECRET or DEFAULT_PROXY_SECRET).encode("utf-8")
+    return hmac.new(secret, b"docxtool-anonymous-user-v1", hashlib.sha256).digest()
+
+def _anonymous_user_signature(payload: str) -> str:
+    digest = hmac.new(_anonymous_user_signing_key(), payload.encode("ascii"), hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+
+def _create_anonymous_user(now: int = None) -> dict:
+    issued_at = _now_unix() if now is None else int(now)
+    owner_id = f"usr_{uuid.uuid4().hex}"
+    payload = f"v1.{issued_at}.{owner_id}"
+    token = f"{payload}.{_anonymous_user_signature(payload)}"
+    return {
+        "owner_id": owner_id,
+        "token": token,
+        "issued_at": issued_at,
+        "expires_at": issued_at + ANONYMOUS_USER_COOKIE_MAX_AGE,
+    }
+
+def _parse_anonymous_user(token: str, now: int = None) -> dict:
+    parts = str(token or "").strip().split(".")
+    if len(parts) != 4 or parts[0] != "v1":
+        return {}
+    version, issued_raw, owner_id, signature = parts
+    if not _re.fullmatch(r"usr_[0-9a-f]{32}", owner_id):
+        return {}
+    try:
+        issued_at = int(issued_raw)
+    except (TypeError, ValueError):
+        return {}
+    current = _now_unix() if now is None else int(now)
+    if issued_at > current + 300 or current - issued_at > ANONYMOUS_USER_COOKIE_MAX_AGE:
+        return {}
+    payload = f"{version}.{issued_at}.{owner_id}"
+    expected = _anonymous_user_signature(payload)
+    if not signature or not hmac.compare_digest(signature, expected):
+        return {}
+    return {
+        "owner_id": owner_id,
+        "token": token,
+        "issued_at": issued_at,
+        "expires_at": issued_at + ANONYMOUS_USER_COOKIE_MAX_AGE,
+    }
+
+def _anonymous_user_cookie_header(token: str) -> str:
+    parts = [
+        f"{ANONYMOUS_USER_COOKIE}={token}",
+        "HttpOnly",
+        "Path=/",
+        "SameSite=Lax",
+        f"Max-Age={ANONYMOUS_USER_COOKIE_MAX_AGE}",
+    ]
+    if COOKIE_SECURE:
+        parts.append("Secure")
+    return "; ".join(parts)
+
+def _anonymous_user_from_headers(headers, cookie_header: str = "") -> tuple[dict, str]:
+    token = _cookie_value(cookie_header, ANONYMOUS_USER_COOKIE)
+    if not token and headers:
+        token = _cookie_value(headers.get("Cookie", ""), ANONYMOUS_USER_COOKIE)
+    identity = _parse_anonymous_user(token)
+    if identity:
+        return identity, ""
+    identity = _create_anonymous_user()
+    return identity, _anonymous_user_cookie_header(identity["token"])
+
+def _anonymous_template_origin_allowed(headers) -> bool:
+    origin = str(headers.get("Origin", "") if headers else "").strip().rstrip("/")
+    if not origin:
+        return False
+    if FRONTEND_ORIGIN:
+        return hmac.compare_digest(origin, FRONTEND_ORIGIN)
+    parsed = urlparse(origin)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return False
+    request_host = str(headers.get("Host", "") if headers else "").strip().lower()
+    if request_host and parsed.netloc.lower() == request_host:
+        return True
+    return _is_local_origin_host(parsed.hostname)
+
 def _now_unix() -> int:
     return int(time.time())
 
@@ -1633,6 +1731,11 @@ def _file_api_authorized(headers, client_address=None) -> bool:
     header_token = headers.get("X-Proxy-Secret", "") if headers else ""
     if _compare_secret(header_token, PROXY_SECRET):
         return True
+    # In production, Nginx also appears as a local peer. Do not let that
+    # trusted-proxy topology turn a direct public request into an authorized
+    # file API call; only the Worker-injected secret is sufficient.
+    if PRODUCTION_MODE:
+        return False
     host = headers.get("Host", "") if headers else ""
     if _is_local_host(host):
         return True
@@ -1834,6 +1937,8 @@ def _preset_row_to_dict(row, include_config: bool = False) -> dict:
     data = dict(row)
     data["is_system"] = bool(data.get("is_system"))
     data["is_default"] = bool(data.get("is_default"))
+    data["visibility"] = data.get("visibility") or "public"
+    data.pop("owner_id", None)
     if include_config:
         try:
             data["config_json"] = json.loads(data.get("config_json") or "{}")
@@ -1843,34 +1948,58 @@ def _preset_row_to_dict(row, include_config: bool = False) -> dict:
         data.pop("config_json", None)
     return data
 
-def _list_presets() -> list:
+def _list_presets(owner_id: str = "") -> list:
     with _SQL_LOCK:
         conn = _sql()
         rows = conn.execute(
-            "SELECT id, name, description, is_system, is_default, version, created_at, updated_at FROM presets ORDER BY is_default DESC, is_system DESC, updated_at DESC, name ASC"
+            """SELECT id, name, description, is_system, is_default, visibility,
+                      version, created_at, updated_at
+               FROM presets
+               WHERE is_system=1 OR visibility='public' OR (visibility='private' AND owner_id=?)
+               ORDER BY is_default DESC, is_system DESC, updated_at DESC, name ASC""",
+            (owner_id or "",),
         ).fetchall()
         conn.close()
     return [_preset_row_to_dict(row, include_config=False) for row in rows]
 
-def _get_preset(preset_id: str) -> dict:
+def _get_preset(preset_id: str, owner_id: str = "", public_only: bool = False) -> dict:
     with _SQL_LOCK:
         conn = _sql()
-        row = conn.execute("SELECT * FROM presets WHERE id=?", (preset_id,)).fetchone()
+        if public_only:
+            row = conn.execute(
+                "SELECT * FROM presets WHERE id=? AND (is_system=1 OR visibility='public')",
+                (preset_id,),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                """SELECT * FROM presets
+                   WHERE id=? AND (is_system=1 OR visibility='public' OR (visibility='private' AND owner_id=?))""",
+                (preset_id, owner_id or ""),
+            ).fetchone()
         conn.close()
     if not row:
         return {}
     return _preset_row_to_dict(row, include_config=True)
 
 def _insert_preset(name: str, description: str, config_json: dict, is_system: bool = False,
-                   is_default: bool = False, preset_id: str = "") -> dict:
+                   is_default: bool = False, preset_id: str = "", owner_id: str = "",
+                   visibility: str = "public") -> dict:
     preset_id = _normalize_template_id(preset_id) if preset_id else f"tpl_{uuid.uuid4().hex[:12]}"
     name = _normalize_template_name(name)
     normalized = _validate_template_config(config_json)
     payload = _json_dumps(normalized)
+    visibility = "private" if visibility == "private" else "public"
+    owner_id = str(owner_id or "").strip() if visibility == "private" else ""
+    if visibility == "private" and not _re.fullmatch(r"usr_[0-9a-f]{32}", owner_id):
+        raise ValueError("TEMPLATE_OWNER_INVALID: 模板所有者无效")
     now = _now_local()
     with _SQL_LOCK:
         conn = _sql()
-        row = conn.execute("SELECT id FROM presets WHERE lower(name)=lower(?) AND id<>?", (name, preset_id)).fetchone()
+        row = conn.execute(
+            """SELECT id FROM presets
+               WHERE lower(name)=lower(?) AND id<>? AND visibility=? AND owner_id=?""",
+            (name, preset_id, visibility, owner_id),
+        ).fetchone()
         if row:
             conn.close()
             raise ValueError("TEMPLATE_NAME_CONFLICT: 已存在同名模板，请先重命名")
@@ -1880,8 +2009,9 @@ def _insert_preset(name: str, description: str, config_json: dict, is_system: bo
             raise ValueError("TEMPLATE_ID_CONFLICT: 模板 ID 已存在")
         conn.execute(
             """INSERT INTO presets
-               (id, name, description, config_json, is_system, is_default, version, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
+               (id, name, description, config_json, is_system, is_default, owner_id, visibility,
+                version, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 preset_id,
                 name,
@@ -1889,6 +2019,8 @@ def _insert_preset(name: str, description: str, config_json: dict, is_system: bo
                 payload,
                 1 if is_system else 0,
                 1 if is_default else 0,
+                owner_id,
+                visibility,
                 1,
                 now,
                 now,
@@ -1896,9 +2028,10 @@ def _insert_preset(name: str, description: str, config_json: dict, is_system: bo
         )
         conn.commit()
         conn.close()
-    return _get_preset(preset_id)
+    return _get_preset(preset_id, owner_id=owner_id, public_only=visibility == "public")
 
-def _update_preset(preset_id: str, name: str, description: str, config_json: dict) -> dict:
+def _update_preset(preset_id: str, name: str, description: str, config_json: dict,
+                   owner_id: str = "", public_only: bool = True) -> dict:
     preset_id = _normalize_template_id(preset_id)
     name = _normalize_template_name(name)
     normalized = _validate_template_config(config_json)
@@ -1906,7 +2039,16 @@ def _update_preset(preset_id: str, name: str, description: str, config_json: dic
     now = _now_local()
     with _SQL_LOCK:
         conn = _sql()
-        row = conn.execute("SELECT * FROM presets WHERE id=?", (preset_id,)).fetchone()
+        if public_only:
+            row = conn.execute(
+                "SELECT * FROM presets WHERE id=? AND (is_system=1 OR visibility='public')",
+                (preset_id,),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT * FROM presets WHERE id=? AND visibility='private' AND owner_id=?",
+                (preset_id, owner_id or ""),
+            ).fetchone()
         if not row:
             conn.close()
             raise ValueError("TEMPLATE_NOT_FOUND: 模板不存在")
@@ -1914,8 +2056,9 @@ def _update_preset(preset_id: str, name: str, description: str, config_json: dic
             # 系统模板仍允许更新内容，但保留标记
             pass
         dup = conn.execute(
-            "SELECT id FROM presets WHERE lower(name)=lower(?) AND id<>?",
-            (name, preset_id),
+            """SELECT id FROM presets
+               WHERE lower(name)=lower(?) AND id<>? AND visibility=? AND owner_id=?""",
+            (name, preset_id, row["visibility"] or "public", row["owner_id"] or ""),
         ).fetchone()
         if dup:
             conn.close()
@@ -1929,13 +2072,22 @@ def _update_preset(preset_id: str, name: str, description: str, config_json: dic
         )
         conn.commit()
         conn.close()
-    return _get_preset(preset_id)
+    return _get_preset(preset_id, owner_id=owner_id, public_only=public_only)
 
-def _delete_preset(preset_id: str) -> dict:
+def _delete_preset(preset_id: str, owner_id: str = "", public_only: bool = True) -> dict:
     preset_id = _normalize_template_id(preset_id)
     with _SQL_LOCK:
         conn = _sql()
-        row = conn.execute("SELECT * FROM presets WHERE id=?", (preset_id,)).fetchone()
+        if public_only:
+            row = conn.execute(
+                "SELECT * FROM presets WHERE id=? AND (is_system=1 OR visibility='public')",
+                (preset_id,),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT * FROM presets WHERE id=? AND visibility='private' AND owner_id=?",
+                (preset_id, owner_id or ""),
+            ).fetchone()
         if not row:
             conn.close()
             raise ValueError("TEMPLATE_NOT_FOUND: 模板不存在")
@@ -2427,11 +2579,11 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._handle_cleanup(parsed)
         elif path == "/presets":
-            if not self._require_admin_post(parsed):
+            if not self._require_preset_mutation(parsed):
                 return
             self._handle_preset_create()
         elif path.startswith("/presets/"):
-            if not self._require_admin_post(parsed):
+            if not self._require_preset_mutation(parsed):
                 return
             self._handle_preset_update(path.split("/", 2)[-1])
         else:
@@ -2444,7 +2596,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._handle_upload_raw()
         elif path.startswith("/presets/"):
-            if not self._require_admin_post(urlparse(self.path)):
+            if not self._require_preset_mutation(urlparse(self.path)):
                 return
             self._handle_preset_update(path.split("/", 2)[-1])
         else:
@@ -2454,7 +2606,7 @@ class Handler(BaseHTTPRequestHandler):
         path = _route_path(urlparse(self.path).path)
         if path.startswith("/presets/"):
             parsed = urlparse(self.path)
-            if not self._require_admin_post(parsed):
+            if not self._require_preset_mutation(parsed):
                 return
             self._handle_preset_delete(path.split("/", 2)[-1])
         else:
@@ -2571,6 +2723,27 @@ button{margin-top:16px;height:42px;border:0;border-radius:10px;background:#b71c1
         if not session or not csrf_value or not hmac.compare_digest(csrf_value, session.get("csrf_token", "")):
             self._json_error("CSRF_INVALID", "CSRF 校验失败", 403)
             return False
+        return True
+
+    def _require_preset_mutation(self, parsed) -> bool:
+        """Authorize either an admin public-template mutation or a private one."""
+        admin_context = _admin_request_context(parsed, self.headers, self.headers.get("Cookie", ""))
+        if admin_context.get("authorized"):
+            if not self._require_admin_post(parsed):
+                return False
+            self._preset_owner_id = ""
+            self._preset_public_only = True
+            self._preset_admin = True
+            return True
+        if not _anonymous_template_origin_allowed(self.headers):
+            self._json_error("CSRF_INVALID", "模板请求来源校验失败", 403)
+            return False
+        self._request_params_cache = self._request_params(parsed)
+        identity, cookie = _anonymous_user_from_headers(self.headers, self.headers.get("Cookie", ""))
+        self._preset_owner_id = identity["owner_id"]
+        self._preset_cookie_header = cookie
+        self._preset_public_only = False
+        self._preset_admin = False
         return True
 
     def _require_file_api(self) -> bool:
@@ -2846,18 +3019,23 @@ button{margin-top:16px;height:42px;border:0;border-radius:10px;background:#b71c1
         self._redirect("/monitor")
 
     def _handle_presets_list(self):
-        self._json({"presets": _list_presets()})
+        identity, cookie = _anonymous_user_from_headers(self.headers, self.headers.get("Cookie", ""))
+        self._json(
+            {"presets": _list_presets(identity["owner_id"])},
+            extra_headers=[("Set-Cookie", cookie)] if cookie else None,
+        )
 
     def _handle_preset_detail(self, preset_id: str):
         preset_id = str(preset_id or "").strip()
         if not preset_id:
             self._json_error("TEMPLATE_ID_INVALID", "无效的模板 ID", 400)
             return
-        preset = _get_preset(preset_id)
+        identity, cookie = _anonymous_user_from_headers(self.headers, self.headers.get("Cookie", ""))
+        preset = _get_preset(preset_id, owner_id=identity["owner_id"])
         if not preset:
             self._json_error("TEMPLATE_NOT_FOUND", "模板不存在", 404)
             return
-        self._json(preset)
+        self._json(preset, extra_headers=[("Set-Cookie", cookie)] if cookie else None)
 
     def _handle_preset_create(self):
         payload = getattr(self, "_request_params_cache", {})
@@ -2867,12 +3045,17 @@ button{margin-top:16px;height:42px;border:0;border-radius:10px;background:#b71c1
                 payload.get("description", ""),
                 payload.get("config_json", {}),
                 preset_id=payload.get("id", ""),
+                owner_id=getattr(self, "_preset_owner_id", ""),
+                visibility="public" if getattr(self, "_preset_admin", False) else "private",
             )
         except ValueError as exc:
             code, message = str(exc).split(":", 1) if ":" in str(exc) else ("TEMPLATE_INVALID", str(exc))
             self._json_error(code, message.strip(), 400)
             return
-        self._json(preset, 201)
+        extra_headers = []
+        if getattr(self, "_preset_cookie_header", ""):
+            extra_headers.append(("Set-Cookie", self._preset_cookie_header))
+        self._json(preset, 201, extra_headers=extra_headers or None)
 
     def _handle_preset_update(self, preset_id: str):
         payload = getattr(self, "_request_params_cache", {})
@@ -2882,23 +3065,35 @@ button{margin-top:16px;height:42px;border:0;border-radius:10px;background:#b71c1
                 payload.get("name", ""),
                 payload.get("description", ""),
                 payload.get("config_json", {}),
+                owner_id=getattr(self, "_preset_owner_id", ""),
+                public_only=getattr(self, "_preset_public_only", True),
             )
         except ValueError as exc:
             code, message = str(exc).split(":", 1) if ":" in str(exc) else ("TEMPLATE_INVALID", str(exc))
             status = 404 if code == "TEMPLATE_NOT_FOUND" else 400
             self._json_error(code, message.strip(), status)
             return
-        self._json(preset)
+        extra_headers = []
+        if getattr(self, "_preset_cookie_header", ""):
+            extra_headers.append(("Set-Cookie", self._preset_cookie_header))
+        self._json(preset, extra_headers=extra_headers or None)
 
     def _handle_preset_delete(self, preset_id: str):
         try:
-            result = _delete_preset(preset_id)
+            result = _delete_preset(
+                preset_id,
+                owner_id=getattr(self, "_preset_owner_id", ""),
+                public_only=getattr(self, "_preset_public_only", True),
+            )
         except ValueError as exc:
             code, message = str(exc).split(":", 1) if ":" in str(exc) else ("TEMPLATE_INVALID", str(exc))
             status = 404 if code == "TEMPLATE_NOT_FOUND" else 400
             self._json_error(code, message.strip(), status)
             return
-        self._json(result, 200)
+        extra_headers = []
+        if getattr(self, "_preset_cookie_header", ""):
+            extra_headers.append(("Set-Cookie", self._preset_cookie_header))
+        self._json(result, 200, extra_headers=extra_headers or None)
 
     def _handle_log(self, task_id: str):
         if not _is_safe_uuid(task_id):

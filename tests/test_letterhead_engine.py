@@ -7,7 +7,7 @@ from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_TAB_ALIGNMENT
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
-from docx.shared import Cm, Pt
+from docx.shared import Cm, Pt, RGBColor
 from lxml import etree
 
 from docxtool.document.engine.core import export_doc
@@ -86,29 +86,40 @@ def test_missing_null_and_disabled_do_not_generate(tmp_path):
 def test_single_mark_document_number_separator_and_title_spacing(tmp_path):
     output, stats = export(tmp_path, config())
     document = Document(output)
-    assert [paragraph.text for paragraph in document.paragraphs[:4]] == [
-        "测试机关文件", "测发〔2026〕12号", "", "公文标题"
+    assert [paragraph.text for paragraph in document.paragraphs[:9]] == [
+        "", "", "", "测试机关文件", "", "", "测发〔2026〕12号", "", "公文标题"
     ]
-    assert style_ids(document)[:4] == [
-        "DCT-LetterheadMark", "DCT-DocumentNumber", "DCT-LetterheadSeparator", "DCT-Title"
+    assert style_ids(document)[:9] == [
+        "DCT-LetterheadSpacer", "DCT-LetterheadSpacer", "DCT-LetterheadSpacer",
+        "DCT-LetterheadMark",
+        "DCT-LetterheadSpacer", "DCT-LetterheadSpacer",
+        "DCT-DocumentNumber", "DCT-LetterheadSeparator", "DCT-Title",
     ]
     assert stats["letterhead_action"] == "generated"
-    assert document.paragraphs[0].runs[0].font.size.pt == 32
-    assert document.paragraphs[0].runs[0]._r.rPr.find(qn("w:w")) is None
-    assert spacing_value(document.paragraphs[0], "beforeLines") == "300"
-    assert spacing_value(document.paragraphs[0], "afterLines") == "200"
-    assert spacing_value(document.paragraphs[0], "before") is None
-    assert spacing_value(document.paragraphs[0], "after") is None
-    assert spacing_value(document.paragraphs[1], "beforeLines") == "0"
-    assert spacing_value(document.paragraphs[1], "afterLines") == "0"
-    assert spacing_value(document.paragraphs[2], "afterLines") == "200"
-    assert spacing_value(document.paragraphs[2], "after") is None
-    assert document.paragraphs[2].paragraph_format.left_indent.pt == 0
-    assert document.paragraphs[2].paragraph_format.right_indent.pt == 0
+    mark = document.paragraphs[3]
+    assert mark.runs[0].font.size.pt == 32
+    assert mark.runs[0]._r.rPr.find(qn("w:w")) is None
+    assert spacing_value(mark, "beforeLines") == "0"
+    assert spacing_value(mark, "afterLines") == "0"
+    assert spacing_value(mark, "before") is None
+    assert spacing_value(mark, "after") is None
+    for spacer in document.paragraphs[:3] + document.paragraphs[4:6]:
+        assert spacer.style.style_id == "DCT-LetterheadSpacer"
+        assert spacing_value(spacer, "beforeLines") == "0"
+        assert spacing_value(spacer, "afterLines") == "0"
+    assert spacing_value(document.paragraphs[6], "beforeLines") == "0"
+    assert spacing_value(document.paragraphs[6], "afterLines") == "0"
+    assert spacing_value(document.paragraphs[7], "afterLines") == "200"
+    assert spacing_value(document.paragraphs[7], "after") is None
+    assert document.paragraphs[7].paragraph_format.left_indent.pt == 0
+    assert document.paragraphs[7].paragraph_format.right_indent.pt == 0
     empty_styles = [p.style.style_id for p in document.paragraphs if not p.text]
-    assert empty_styles == ["DCT-LetterheadSeparator"]
-    assert document.paragraphs[4].text == "正文内容。"
-    assert document.paragraphs[4].paragraph_format.page_break_before is not True
+    assert empty_styles == [
+        "DCT-LetterheadSpacer", "DCT-LetterheadSpacer", "DCT-LetterheadSpacer",
+        "DCT-LetterheadSpacer", "DCT-LetterheadSpacer", "DCT-LetterheadSeparator",
+    ]
+    assert document.paragraphs[9].text == "正文内容。"
+    assert document.paragraphs[9].paragraph_format.page_break_before is not True
     with ZipFile(output) as archive:
         document_xml = etree.fromstring(archive.read("word/document.xml"))
         styles_xml = etree.fromstring(archive.read("word/styles.xml"))
@@ -125,12 +136,13 @@ def test_single_mark_document_number_separator_and_title_spacing(tmp_path):
         assert "DocxtoolLetterheadVersion" in custom_xml
         assert not any("header" in name and name.endswith(".xml") for name in archive.namelist())
         for style_id in (
-            "DCT-LetterheadMark", "DCT-DocumentNumber", "DCT-SignerLine", "DCT-LetterheadSeparator"
+            "DCT-LetterheadSpacer", "DCT-LetterheadMark", "DCT-DocumentNumber",
+            "DCT-SignerLine", "DCT-LetterheadSeparator",
         ):
             assert styles_xml.find(f".//{qn('w:style')}[@{qn('w:styleId')}='{style_id}']") is not None
         assert b"------" not in archive.read("word/document.xml")
-    assert round(document.paragraphs[2].paragraph_format.space_before.cm, 1) == 0.4
-    assert spacing_value(document.paragraphs[2], "beforeLines") is None
+    assert round(document.paragraphs[7].paragraph_format.space_before.cm, 1) == 0.4
+    assert spacing_value(document.paragraphs[7], "beforeLines") is None
 
 
 def test_enabled_letterhead_does_not_override_document_page_layout(tmp_path):
@@ -165,10 +177,14 @@ def test_enabled_letterhead_does_not_override_document_page_layout(tmp_path):
 
 def test_agency_only_and_name_ending_in_document_are_not_duplicated(tmp_path):
     output, _ = export(tmp_path, config(mark_display_mode="agency_only"), "agency-only.docx")
-    assert Document(output).paragraphs[0].text == "测试机关"
+    assert next(
+        p.text for p in Document(output).paragraphs if p.style.style_id == "DCT-LetterheadMark"
+    ) == "测试机关"
     ending = config(agencies=[{"id": "agency-1", "name": "测试机关文件", "short_name": "", "role": "sponsor", "order": 1}])
     output2, _ = export(tmp_path, ending, "ending.docx")
-    assert Document(output2).paragraphs[0].text == "测试机关文件"
+    assert next(
+        p.text for p in Document(output2).paragraphs if p.style.style_id == "DCT-LetterheadMark"
+    ) == "测试机关文件"
 
 
 def test_upward_multiple_signers_use_separate_runs_and_tabs(tmp_path):
@@ -179,7 +195,6 @@ def test_upward_multiple_signers_use_separate_runs_and_tabs(tmp_path):
     ]
     output, _ = export(tmp_path, config(document_direction="upward", signers=signers), "upward.docx")
     document = Document(output)
-    assert document.paragraphs[1].alignment == 0
     signer_paragraphs = [p for p in document.paragraphs if p.style.style_id == "DCT-SignerLine"]
     assert len(signer_paragraphs) == 1
     assert [p.text for p in signer_paragraphs] == ["\t签发人：张三\t签发人：李四"]
@@ -266,20 +281,25 @@ def test_title_recipient_and_body_follow_letterhead_without_page_breaks(tmp_path
     validate_docx_integrity(output)
     document = Document(output)
     assert style_ids(document) == [
+        "DCT-LetterheadSpacer",
+        "DCT-LetterheadSpacer",
+        "DCT-LetterheadSpacer",
         "DCT-LetterheadMark",
+        "DCT-LetterheadSpacer",
+        "DCT-LetterheadSpacer",
         "DCT-DocumentNumber",
         "DCT-LetterheadSeparator",
         "DCT-Title",
         "DCT-Recipient",
         "DCT-Body",
     ]
-    assert [p.text for p in document.paragraphs[3:]] == ["公文标题", "测试机关：", "正文内容。"]
-    recipient = document.paragraphs[4]
+    assert [p.text for p in document.paragraphs[8:]] == ["公文标题", "测试机关：", "正文内容。"]
+    recipient = document.paragraphs[9]
     assert recipient._p.pPr.find(qn("w:ind")) is None
     recipient_style_indent = recipient.style.element.pPr.find(qn("w:ind"))
     assert recipient_style_indent.get(qn("w:firstLineChars")) == "0"
     assert recipient_style_indent.get(qn("w:firstLine")) == "0"
-    assert all(p.paragraph_format.page_break_before is not True for p in document.paragraphs[3:])
+    assert all(p.paragraph_format.page_break_before is not True for p in document.paragraphs[8:])
 
 
 def test_downward_and_parallel_preserve_configured_signers_without_rendering_them(tmp_path):
@@ -309,14 +329,17 @@ def test_joint_all_and_sponsor_only_preserve_sponsor_order_and_number(tmp_path):
     joint = config(issuance_mode="joint", agencies=agencies)
     output, _ = export(tmp_path, joint, "joint.docx")
     document = Document(output)
-    marks = [p.text for p in document.paragraphs if p.style.style_id == "DCT-LetterheadMark"]
+    marks = [p.text for p in document.paragraphs if p.style.style_id == "DCT-LetterheadMark" and p.text]
     assert marks == ["主办机关甲", "联合机关乙\t文件", "联合机关丙"]
     assert "测发〔2026〕12号" in [p.text for p in document.paragraphs]
 
     sponsor_only = copy.deepcopy(joint)
     sponsor_only["joint_mark_scope"] = "sponsor_only"
     output2, _ = export(tmp_path, sponsor_only, "sponsor-only.docx")
-    marks2 = [p.text for p in Document(output2).paragraphs if p.style.style_id == "DCT-LetterheadMark"]
+    marks2 = [
+        p.text for p in Document(output2).paragraphs
+        if p.style.style_id == "DCT-LetterheadMark" and p.text
+    ]
     assert marks2 == ["主办机关甲文件"]
 
 
@@ -360,7 +383,17 @@ def _external_document(path: Path):
     bottom.set(qn("w:color"), "FF0000")
     borders.append(bottom)
     separator._p.get_or_add_pPr().append(borders)
-    document.add_paragraph("外部公文标题")
+    title = document.add_paragraph("外部公文标题")
+    # Random title formatting must not widen the protected letterhead prefix.
+    title.alignment = 1
+    title.runs[0].font.color.rgb = RGBColor(255, 0, 0)
+    title.runs[0].font.size = Pt(32)
+    title_borders = OxmlElement("w:pBdr")
+    title_bottom = OxmlElement("w:bottom")
+    title_bottom.set(qn("w:val"), "single")
+    title_bottom.set(qn("w:color"), "FF0000")
+    title_borders.append(title_bottom)
+    title._p.get_or_add_pPr().append(title_borders)
     document.add_paragraph("正文内容。")
     document.save(path)
 
@@ -371,6 +404,11 @@ def test_enabled_letterhead_replaces_external_letterhead(tmp_path):
     before_hash = hashlib.sha256(source.read_bytes()).hexdigest()
     imported = DocxImporter().load(str(source), rules(), features={})
     assert imported.letterhead_detection.status == "recognized_external"
+    ordinary = [item for item in imported.paragraphs if not item.type_id.startswith("__")]
+    assert [(item.type_id, item.text) for item in ordinary[:2]] == [
+        ("title", "外部公文标题"),
+        ("body", "正文内容。"),
+    ]
     output = tmp_path / "external-output.docx"
     stats = export_doc(
         imported, rules(), PageSettings(), str(output),
@@ -378,22 +416,27 @@ def test_enabled_letterhead_replaces_external_letterhead(tmp_path):
     )
     assert stats["letterhead_action"] == "replaced"
     assert stats["compatibility_warnings"] == []
-    assert [p.text for p in Document(output).paragraphs[:3]] == ["测试机关文件", "测发〔2026〕12号", ""]
+    assert [p.text for p in Document(output).paragraphs[:8]] == [
+        "", "", "", "测试机关文件", "", "", "测发〔2026〕12号", "",
+    ]
     assert hashlib.sha256(source.read_bytes()).hexdigest() == before_hash
 
 
-def test_enabled_letterhead_replaces_unknown_complex_letterhead():
+def test_single_leading_drawing_is_not_enough_to_replace_content():
     document = Document()
     paragraph = document.add_paragraph()
     paragraph._p.append(OxmlElement("w:drawing"))
     document.add_paragraph("公文标题")
     detection = detect_letterhead(document)
-    assert detection.status == "unknown"
+    assert detection.status == "none"
     result = apply_letterhead(document, config(), detection=detection, rules=rules(), settings=PageSettings())
-    assert result.action == "replaced"
+    assert result.action == "generated"
     assert result.warnings == []
     assert "DCT-LetterheadMark" in style_ids(document)
-    assert document.paragraphs[0]._p.find(".//" + qn("w:drawing")) is None
+    assert any(
+        paragraph._p.find(".//" + qn("w:drawing")) is not None
+        for paragraph in document.paragraphs
+    )
 
 
 def test_zero_size_drawing_and_captioned_image_are_not_letterhead_signals():
@@ -443,18 +486,30 @@ def test_document_number_reference_in_body_does_not_block_letterhead_generation(
     assert result.action == "generated"
     assert result.warnings == []
     assert [paragraph.text for paragraph in document.paragraphs[-2:]] == original_text
-    assert style_ids(document)[:3] == [
+    assert style_ids(document)[:8] == [
+        "DCT-LetterheadSpacer",
+        "DCT-LetterheadSpacer",
+        "DCT-LetterheadSpacer",
         "DCT-LetterheadMark",
+        "DCT-LetterheadSpacer",
+        "DCT-LetterheadSpacer",
         "DCT-DocumentNumber",
         "DCT-LetterheadSeparator",
     ]
 
 
-def test_enabled_letterhead_replaces_unknown_file_and_keeps_input_unchanged(tmp_path):
+def test_enabled_letterhead_replaces_unknown_complex_prefix_and_keeps_input_unchanged(tmp_path):
     source = tmp_path / "unknown.docx"
     document = Document()
     paragraph = document.add_paragraph()
     paragraph._p.append(OxmlElement("w:drawing"))
+    separator = document.add_paragraph()
+    borders = OxmlElement("w:pBdr")
+    bottom = OxmlElement("w:bottom")
+    bottom.set(qn("w:val"), "single")
+    bottom.set(qn("w:color"), "FF0000")
+    borders.append(bottom)
+    separator._p.get_or_add_pPr().append(borders)
     document.add_paragraph("公文标题")
     document.add_paragraph("正文内容。")
     document.save(source)
@@ -474,7 +529,12 @@ def test_enabled_letterhead_replaces_unknown_file_and_keeps_input_unchanged(tmp_
 
     assert stats["letterhead_action"] == "replaced"
     assert stats["compatibility_warnings"] == []
-    assert Document(output).paragraphs[0].style.style_id == "DCT-LetterheadMark"
+    assert [p.style.style_id for p in Document(output).paragraphs[:4]] == [
+        "DCT-LetterheadSpacer",
+        "DCT-LetterheadSpacer",
+        "DCT-LetterheadSpacer",
+        "DCT-LetterheadMark",
+    ]
     assert not any(
         paragraph._p.find(".//" + qn("w:drawing")) is not None
         for paragraph in Document(output).paragraphs
@@ -508,6 +568,13 @@ def test_disabled_letterhead_preserves_external_and_unknown_blocks(tmp_path):
     unknown_document = Document()
     drawing_paragraph = unknown_document.add_paragraph()
     drawing_paragraph._p.append(OxmlElement("w:drawing"))
+    unknown_separator = unknown_document.add_paragraph()
+    borders = OxmlElement("w:pBdr")
+    bottom = OxmlElement("w:bottom")
+    bottom.set(qn("w:val"), "single")
+    bottom.set(qn("w:color"), "FF0000")
+    borders.append(bottom)
+    unknown_separator._p.get_or_add_pPr().append(borders)
     unknown_document.add_paragraph("公文标题")
     unknown_document.save(unknown)
     unknown_data = DocxImporter().load(str(unknown), rules(), features={})
@@ -522,3 +589,236 @@ def test_disabled_letterhead_preserves_external_and_unknown_blocks(tmp_path):
     )
     assert unknown_stats["letterhead_action"] == "preserved-disabled"
     assert Document(unknown_output).paragraphs[0]._p.find(".//" + qn("w:drawing")) is not None
+
+
+def test_random_red_text_and_body_drawing_do_not_create_letterhead_block():
+    document = Document()
+    red = document.add_paragraph("测试")
+    red.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    red_run = red.runs[0]
+    color = OxmlElement("w:color")
+    color.set(qn("w:val"), "FF0000")
+    red_run._element.get_or_add_rPr().append(color)
+    document.add_paragraph("一、一级标题")
+    image = document.add_paragraph()
+    drawing = OxmlElement("w:drawing")
+    extent = OxmlElement("wp:extent")
+    extent.set("cx", "100")
+    extent.set("cy", "100")
+    drawing.append(extent)
+    image._p.append(drawing)
+
+    detection = detect_letterhead(document)
+
+    assert detection.status == "none"
+    assert detection.protected_body_indexes == ()
+
+
+def test_external_detection_is_bounded_at_separator_and_trailing_blanks():
+    document = Document()
+    document.add_paragraph()
+    mark = document.add_paragraph()
+    mark.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = mark.add_run("测试机关文件")
+    color = OxmlElement("w:color")
+    color.set(qn("w:val"), "FF0000")
+    run._element.get_or_add_rPr().append(color)
+    document.add_paragraph("测发〔2026〕3号")
+    separator = document.add_paragraph()
+    borders = OxmlElement("w:pBdr")
+    bottom = OxmlElement("w:bottom")
+    bottom.set(qn("w:val"), "single")
+    bottom.set(qn("w:color"), "FF0000")
+    borders.append(bottom)
+    separator._p.get_or_add_pPr().append(borders)
+    document.add_paragraph()
+    document.add_paragraph("公文标题")
+    later_red = document.add_paragraph("正文红字")
+    later_color = OxmlElement("w:color")
+    later_color.set(qn("w:val"), "FF0000")
+    later_red.runs[0]._element.get_or_add_rPr().append(later_color)
+
+    detection = detect_letterhead(document)
+
+    assert detection.status == "recognized_external"
+    assert detection.protected_body_indexes == (0, 1, 2, 3, 4)
+
+
+def test_document_number_and_red_separator_are_sufficient_without_mark():
+    document = Document()
+    document.add_paragraph("市委办〔2026〕1号")
+    separator = document.add_paragraph()
+    borders = OxmlElement("w:pBdr")
+    bottom = OxmlElement("w:bottom")
+    bottom.set(qn("w:val"), "single")
+    bottom.set(qn("w:color"), "FF0000")
+    borders.append(bottom)
+    separator._p.get_or_add_pPr().append(borders)
+    document.add_paragraph("关于推进重点工作的通知")
+
+    detection = detect_letterhead(document)
+
+    assert detection.status == "recognized_external"
+    assert detection.details == ("document-number", "separator", "bounded-prefix")
+    assert detection.protected_body_indexes == (0, 1)
+
+
+def test_document_number_without_red_separator_is_incomplete_letterhead():
+    document = Document()
+    document.add_paragraph("市委办〔2026〕1号")
+    document.add_paragraph("关于推进重点工作的通知")
+
+    detection = detect_letterhead(document)
+
+    assert detection.status == "unknown"
+    assert detection.details == ("incomplete-document-number", "bounded-prefix")
+    assert detection.protected_body_indexes == (0,)
+
+
+def test_leading_metadata_is_kept_with_complete_letterhead():
+    document = Document()
+    document.add_paragraph("000123")
+    document.add_paragraph("机密★5年")
+    document.add_paragraph("加急")
+    document.add_paragraph("测发〔2026〕1号")
+    separator = document.add_paragraph()
+    borders = OxmlElement("w:pBdr")
+    top = OxmlElement("w:top")
+    top.set(qn("w:val"), "single")
+    top.set(qn("w:color"), "E60012")
+    borders.append(top)
+    separator._p.get_or_add_pPr().append(borders)
+
+    detection = detect_letterhead(document)
+
+    assert detection.status == "recognized_external"
+    assert detection.protected_body_indexes == (0, 1, 2, 3, 4)
+
+
+def test_compatible_document_number_is_incomplete_not_standard():
+    document = Document()
+    document.add_paragraph("测发[2026]第1号")
+    separator = document.add_paragraph()
+    borders = OxmlElement("w:pBdr")
+    bottom = OxmlElement("w:bottom")
+    bottom.set(qn("w:val"), "single")
+    bottom.set(qn("w:color"), "E60012")
+    borders.append(bottom)
+    separator._p.get_or_add_pPr().append(borders)
+
+    detection = detect_letterhead(document)
+
+    assert detection.status == "unknown"
+    assert detection.details == ("compatible-document-number", "bounded-prefix")
+
+
+def test_joint_agency_prefix_and_signer_continuation_are_bounded():
+    document = Document()
+    document.add_paragraph("中共测试市委")
+    document.add_paragraph("测试市人民政府文件")
+    document.add_paragraph("测发〔2026〕2号")
+    document.add_paragraph("签发人：张三")
+    document.add_paragraph("李四")
+    separator = document.add_paragraph()
+    borders = OxmlElement("w:pBdr")
+    bottom = OxmlElement("w:bottom")
+    bottom.set(qn("w:val"), "single")
+    bottom.set(qn("w:color"), "FF0000")
+    borders.append(bottom)
+    separator._p.get_or_add_pPr().append(borders)
+    document.add_paragraph("关于推进重点工作的通知")
+
+    detection = detect_letterhead(document)
+
+    assert detection.status == "recognized_external"
+    assert detection.protected_body_indexes == (0, 1, 2, 3, 4, 5)
+
+
+def test_agency_file_mark_without_red_formatting_is_incomplete_letterhead():
+    document = Document()
+    document.add_paragraph("中共测试市委办公室文件")
+    document.add_paragraph("关于推进重点工作的通知")
+
+    detection = detect_letterhead(document)
+
+    assert detection.status == "unknown"
+    assert detection.details == ("incomplete-letterhead-mark", "following-title", "bounded-prefix")
+    assert detection.protected_body_indexes == (0,)
+
+
+def test_agency_file_text_without_following_title_is_not_letterhead():
+    document = Document()
+    document.add_paragraph("中共测试市委办公室文件")
+    document.add_paragraph("各有关单位：")
+    document.add_paragraph("现将有关事项安排如下。")
+
+    detection = detect_letterhead(document)
+
+    assert detection.status == "none"
+    assert detection.protected_body_indexes == ()
+
+
+def test_red_agency_file_text_without_following_title_is_not_letterhead():
+    document = Document()
+    paragraph = document.add_paragraph("中共测试市委办公室文件")
+    paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    paragraph.runs[0].font.color.rgb = RGBColor(255, 0, 0)
+    document.add_paragraph("各有关单位：")
+    document.add_paragraph("现将有关事项安排如下。")
+
+    detection = detect_letterhead(document)
+
+    assert detection.status == "none"
+
+
+def test_agency_file_text_does_not_use_later_separator_past_body():
+    document = Document()
+    document.add_paragraph("中共测试市委办公室文件")
+    body = document.add_paragraph("这是一行尚未添加句号的正文内容")
+    body.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+    separator = document.add_paragraph()
+    borders = OxmlElement("w:pBdr")
+    bottom = OxmlElement("w:bottom")
+    bottom.set(qn("w:val"), "single")
+    bottom.set(qn("w:color"), "FF0000")
+    borders.append(bottom)
+    separator._p.get_or_add_pPr().append(borders)
+
+    detection = detect_letterhead(document)
+
+    assert detection.status == "none"
+
+
+def test_agency_file_mark_accepts_visually_identifiable_material_title():
+    document = Document()
+    document.add_paragraph("中共测试市委办公室文件")
+    title = document.add_paragraph("2026年度重点任务清单")
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    document.add_paragraph("一、总体安排")
+
+    detection = detect_letterhead(document)
+
+    assert detection.status == "unknown"
+    assert detection.protected_body_indexes == (0,)
+
+
+def test_title_ending_with_file_is_not_semantic_letterhead_mark():
+    document = Document()
+    document.add_paragraph("关于报送规范性文件")
+    document.add_paragraph("正文内容")
+
+    detection = detect_letterhead(document)
+
+    assert detection.status == "none"
+
+
+def test_red_title_starting_with_about_is_not_visual_letterhead_mark():
+    document = Document()
+    paragraph = document.add_paragraph("关于报送规范性文件")
+    paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    paragraph.runs[0].font.color.rgb = RGBColor(255, 0, 0)
+    document.add_paragraph("正文内容。")
+
+    detection = detect_letterhead(document)
+
+    assert detection.status == "none"

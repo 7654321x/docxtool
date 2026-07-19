@@ -81,7 +81,10 @@ function filterCookieHeader(cookieHeader) {
   for (const part of String(cookieHeader || "").split(";")) {
     const trimmed = part.trim();
     if (!trimmed) continue;
-    if (trimmed.startsWith("docxtool_admin_session=")) allowed.push(trimmed);
+    if (
+      trimmed.startsWith("docxtool_admin_session=") ||
+      trimmed.startsWith("docxtool_anon_user=")
+    ) allowed.push(trimmed);
   }
   return allowed.join("; ");
 }

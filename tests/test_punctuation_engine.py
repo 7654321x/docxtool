@@ -10,6 +10,12 @@ def test_normalizes_chinese_context_punctuation_without_spacing_changes() -> Non
     assert "！ " in normalized
 
 
+def test_preserves_numbering_marker_dots_in_chinese_text() -> None:
+    text = "1.测试\n4..还需优化\n附件：2.材料\n正文,测试."
+
+    assert normalize_punctuation_text(text) == "1.测试\n4.还需优化\n附件：2.材料\n正文，测试。"
+
+
 def test_off_mode_returns_input_unchanged() -> None:
     text = '他说"你好,世界..."'
 

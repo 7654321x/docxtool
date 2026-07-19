@@ -130,6 +130,7 @@ class DocumentStructure:
 
 
 _STYLE_KINDS = {
+    "DCT-LetterheadSpacer": ElementKind.LETTERHEAD_MARK,
     "DCT-LetterheadMark": ElementKind.LETTERHEAD_MARK,
     "DCT-DocumentNumber": ElementKind.DOCUMENT_NUMBER,
     "DCT-SignerLine": ElementKind.SIGNER,

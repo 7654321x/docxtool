@@ -500,6 +500,23 @@ class ServerProductionControlsTest(unittest.TestCase):
         self.assertTrue(server._version_payload()["proxy_secret_required"])
         self.assertFalse(server._version_payload()["proxy_secret_configured"])
 
+    def test_production_file_api_requires_proxy_secret_even_from_loopback(self):
+        old_production = server.PRODUCTION_MODE
+        old_proxy_secret = server.PROXY_SECRET
+        try:
+            server.PRODUCTION_MODE = True
+            server.PROXY_SECRET = "proxy-secret"
+            self.assertFalse(server._file_api_authorized({}, ("127.0.0.1", 9527)))
+            self.assertTrue(
+                server._file_api_authorized(
+                    {"X-Proxy-Secret": server.PROXY_SECRET},
+                    ("127.0.0.1", 9527),
+                )
+            )
+        finally:
+            server.PRODUCTION_MODE = old_production
+            server.PROXY_SECRET = old_proxy_secret
+
     def test_error_payload_has_stable_code(self):
         self.assertEqual(
             server._error_payload("FILE_TOO_LARGE", "文件过大")["code"],

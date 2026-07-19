@@ -139,12 +139,28 @@ def test_heading_body_responsibility_and_attachment_styles_are_applied(tmp_path:
     assert _text(responsibility).startswith("责任单位：区政府")
     assert responsibility.find("w:pPr/w:jc", NS).get(qn("w:val")) == "left"
     assert responsibility.find("w:pPr/w:jc", NS).get(qn("w:val")) not in {"both", "distribute"}
+    responsibility_indent = responsibility.find("w:pPr/w:ind", NS)
+    assert responsibility_indent.get(qn("w:leftChars")) == "200"
+    assert responsibility_indent.get(qn("w:firstLineChars")) == "0"
     assert responsibility.findall(".//w:br", NS)
 
     style_by_text = {_text(paragraph): _pstyle(paragraph) for paragraph in _paragraphs(doc_root)}
     assert style_by_text["附件 1"] == "DCT-AttachmentMark"
     assert style_by_text["附件标题"] == "DCT-AttachmentTitle"
     assert style_by_text["附件正文"] == "DCT-AttachmentBody"
+    attachment_title = next(
+        paragraph for paragraph in _paragraphs(doc_root) if _text(paragraph) == "附件标题"
+    )
+    title_spacing = attachment_title.find("w:pPr/w:spacing", NS)
+    assert title_spacing.get(qn("w:beforeLines")) == "100"
+    assert title_spacing.get(qn("w:afterLines")) == "100"
+    attachment_title_style = _style(style_root, "DCT-AttachmentTitle")
+    style_spacing = attachment_title_style.find("w:pPr/w:spacing", NS)
+    assert style_spacing.get(qn("w:beforeLines")) == "100"
+    assert style_spacing.get(qn("w:afterLines")) == "100"
+    paragraph_texts = [_text(paragraph) for paragraph in _paragraphs(doc_root)]
+    title_index = paragraph_texts.index("附件标题")
+    assert paragraph_texts[title_index + 1] == "附件正文"
     for text in ("附件 1", "附件标题"):
         paragraph = next(paragraph for paragraph in _paragraphs(doc_root) if _text(paragraph) == text)
         assert paragraph.find("w:pPr/w:keepNext", NS) is not None

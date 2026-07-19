@@ -216,15 +216,23 @@ class EngineHeadingSpacingTest(unittest.TestCase):
         self.assertIn(_spacing_before_lines(doc.paragraphs[2]), (None, "0"))
         self.assertEqual(doc.paragraphs[1].style.style_id, "DCT-AttachmentNote")
         self.assertEqual(doc.paragraphs[2].style.style_id, "DCT-AttachmentNoteItem")
-        self.assertEqual(_spacing_before_lines(doc.paragraphs[3]), "100")
+        self.assertEqual(_spacing_before_lines(doc.paragraphs[3]), "300")
         self.assertIn(_spacing_before_lines(doc.paragraphs[4]), (None, "0"))
+        note_indent = doc.paragraphs[1]._p.get_or_add_pPr().find(qn("w:ind"))
+        item_indent = doc.paragraphs[2]._p.get_or_add_pPr().find(qn("w:ind"))
+        signature_indent = doc.paragraphs[3]._p.get_or_add_pPr().find(qn("w:ind"))
+        date_indent = doc.paragraphs[4]._p.get_or_add_pPr().find(qn("w:ind"))
+        self.assertEqual(note_indent.get(qn("w:leftChars")), "200")
+        self.assertEqual(item_indent.get(qn("w:leftChars")), "500")
+        self.assertEqual(signature_indent.get(qn("w:rightChars")), "200")
+        self.assertEqual(date_indent.get(qn("w:rightChars")), "400")
 
     def test_export_normalizes_attachment_note_before_signature_block(self):
         doc = self._export([
             ParagraphData("正文内容。", "body", "正文内容。", ParagraphFeatures()),
             ParagraphData("区政协办", "sign_org", "区政协办", ParagraphFeatures()),
-            ParagraphData("2025年10月15日", "sign_date", "2025年10月15日", ParagraphFeatures()),
             ParagraphData("附件：1. 基本情况", "attachment_note", "附件：1. 基本情况", ParagraphFeatures()),
+            ParagraphData("2025年10月15日", "sign_date", "2025年10月15日", ParagraphFeatures()),
             ParagraphData("2. 具体情况", "attachment_note_item", "2. 具体情况", ParagraphFeatures()),
             ParagraphData("3. 超级情况", "attachment_note_item", "3. 超级情况", ParagraphFeatures()),
         ])

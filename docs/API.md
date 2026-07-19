@@ -567,6 +567,20 @@ Worker 还会代理管理页面直接使用的后端路径：
 
 相似但不匹配的路径不会代理，例如 `/apiary`、`/monitor-evil`、`/unknown` 会按静态资源处理。
 
+### 匿名用户模板
+
+- 首次访问 `GET /api/presets` 时，后端通过 `Set-Cookie` 下发签名的
+  `docxtool_anon_user` 匿名用户 Cookie。
+- Cookie 使用 `HttpOnly`、`SameSite=Lax` 和长期 `Max-Age`；HTTPS 部署时同时使用
+  `Secure`。客户端不需要、也不能读取匿名用户 ID。
+- `GET /api/presets` 返回系统模板、公共模板和当前匿名用户的个人模板。
+- 普通用户通过 `POST /api/presets` 创建个人模板，只能修改或删除自己的模板。
+- 匿名模板的 `POST`、`PUT`、`DELETE` 必须来自 `FRONTEND_ORIGIN`；本地开发允许同源
+  `localhost`、`127.0.0.1` 或 `::1`。
+- 管理员会话继续创建和维护公共模板。旧数据库模板迁移后保持公共可见。
+- Cloudflare Worker 只转发 `docxtool_admin_session` 和 `docxtool_anon_user` 两种 Cookie，
+  其他 Cookie 和敏感认证请求头会被过滤。
+
 ## 6. 统一错误格式
 
 接口错误统一返回 JSON：

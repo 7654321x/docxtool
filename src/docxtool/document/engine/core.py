@@ -27,7 +27,7 @@ from docxtool.document.engine.letterhead import apply_letterhead, LetterheadDete
 
 # ── python-docx 模块级导入 ──
 from docx import Document
-from docx.shared import Pt, Cm
+from docx.shared import Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
@@ -210,15 +210,27 @@ class _ReferencedStyleCopier:
         if source_style is None:
             raise ExportError(f"表格引用的源样式不存在: {source_id}")
 
+        is_source_default = (
+            source_style.get(qn("w:type")) == "paragraph"
+            and source_style.get(qn("w:default")) in {"1", "true", "on"}
+        )
         target_id = source_id
         existing = self._find_target(target_id)
-        if existing is not None:
+        if is_source_default or existing is not None:
             target_id = self._next_id(source_id)
         self._mapped[key] = target_id
 
         copied = copy.deepcopy(source_style)
         copied.set(qn("w:styleId"), target_id)
         copied.attrib.pop(qn("w:default"), None)
+        if is_source_default:
+            # WPS may resolve the document grid against the last style named Normal,
+            # even when that copied style is not marked as the package default.
+            style_name = copied.find(qn("w:name"))
+            if style_name is None:
+                style_name = OxmlElement("w:name")
+                copied.insert(0, style_name)
+            style_name.set(qn("w:val"), f"Docxtool Preserved {source_id}")
         for dependency_tag in ("w:basedOn", "w:next", "w:link"):
             dependency = copied.find(qn(dependency_tag))
             if dependency is not None:
@@ -269,12 +281,43 @@ def _sectPr_with_preserved_header_footer_refs(sectPr, doc_part, source_parts, pa
     return copied_sectPr
 
 
+def _sectPr_is_landscape(sectPr) -> bool:
+    pg_sz = sectPr.find(qn("w:pgSz")) if sectPr is not None else None
+    if pg_sz is None:
+        return False
+    if pg_sz.get(qn("w:orient")) == "landscape":
+        return True
+    try:
+        return int(pg_sz.get(qn("w:w"))) > int(pg_sz.get(qn("w:h")))
+    except (TypeError, ValueError):
+        return False
+
+
+def _section_margins_cm(settings: PageSettings, is_landscape: bool) -> tuple[float, float, float, float]:
+    """Return top, bottom, left and right margins after rotating the portrait layout."""
+    if not is_landscape:
+        return (
+            settings.margin_top_cm,
+            settings.margin_bottom_cm,
+            settings.margin_left_cm,
+            settings.margin_right_cm,
+        )
+    # Rotate the configured portrait page clockwise: left -> top, right -> bottom,
+    # bottom -> left, top -> right. This preserves the physical document edges.
+    return (
+        settings.margin_left_cm,
+        settings.margin_right_cm,
+        settings.margin_bottom_cm,
+        settings.margin_top_cm,
+    )
+
+
 def _set_sectPr_page_layout(sectPr, settings: PageSettings, doc_mode: str = "") -> None:
     if sectPr is None:
         return
 
     pg_sz = sectPr.find(qn("w:pgSz"))
-    is_landscape = pg_sz is not None and pg_sz.get(qn("w:orient")) == "landscape"
+    is_landscape = _sectPr_is_landscape(sectPr)
     if not is_landscape:
         if pg_sz is None:
             pg_sz = OxmlElement("w:pgSz")
@@ -282,17 +325,28 @@ def _set_sectPr_page_layout(sectPr, settings: PageSettings, doc_mode: str = "") 
         pg_sz.set(qn("w:w"), str(int(round(settings.page_width_cm * 567))))
         pg_sz.set(qn("w:h"), str(int(round(settings.page_height_cm * 567))))
         pg_sz.attrib.pop(qn("w:orient"), None)
+    elif pg_sz is not None:
+        pg_sz.set(qn("w:orient"), "landscape")
+
+    margin_top, margin_bottom, margin_left, margin_right = _section_margins_cm(
+        settings, is_landscape
+    )
 
     pg_mar = sectPr.find(qn("w:pgMar"))
     if pg_mar is None:
         pg_mar = OxmlElement("w:pgMar")
         sectPr.append(pg_mar)
-    pg_mar.set(qn("w:top"), str(int(round(settings.margin_top_cm * 567))))
-    pg_mar.set(qn("w:bottom"), str(int(round(settings.margin_bottom_cm * 567))))
-    pg_mar.set(qn("w:left"), str(int(round(settings.margin_left_cm * 567))))
-    pg_mar.set(qn("w:right"), str(int(round(settings.margin_right_cm * 567))))
+    top_twips = int(round(margin_top * 567))
+    bottom_twips = int(round(margin_bottom * 567))
+    left_twips = int(round(margin_left * 567))
+    right_twips = int(round(margin_right * 567))
+    pg_mar.set(qn("w:top"), str(top_twips))
+    pg_mar.set(qn("w:bottom"), str(bottom_twips))
+    pg_mar.set(qn("w:left"), str(left_twips))
+    pg_mar.set(qn("w:right"), str(right_twips))
     pg_mar.set(qn("w:header"), "0")
-    pg_mar.set(qn("w:footer"), str(int(round(max(settings.margin_bottom_cm - 0.7, 0.3) * 567))))
+    footer_twips = max(bottom_twips - int(round(0.7 * 567)), int(round(0.3 * 567)))
+    pg_mar.set(qn("w:footer"), str(footer_twips))
 
     for old in sectPr.findall(qn("w:docGrid")):
         sectPr.remove(old)
@@ -399,7 +453,7 @@ def _apply_right_indent(para, n=2):
         ind = OxmlElement('w:ind')
         pPr.append(ind)
     ind.set(qn('w:right'), str(int(n * 560)))
-    ind.set(qn('w:rightChars'), str(n * 100))
+    ind.set(qn('w:rightChars'), str(int(round(n * 100))))
 
 def _apply_first_line_indent_chars(para, chars: int):
     """只设置首行缩进，不设置悬挂缩进。"""
@@ -594,6 +648,44 @@ def _set_zero_first_line_indent(para) -> None:
 def _force_responsibility_paragraph_format(para) -> None:
     para.alignment = WD_ALIGN_PARAGRAPH.LEFT
     _set_zero_first_line_indent(para)
+
+
+def _apply_key_value_line_format(para) -> None:
+    """Apply the fixed A:B key-value line layout without inheriting global spacing."""
+    para.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    pPr = para._element.get_or_add_pPr()
+    ind = pPr.find(qn("w:ind"))
+    if ind is None:
+        ind = OxmlElement("w:ind")
+        pPr.append(ind)
+
+    has_manual_break = para._element.find(".//" + qn("w:br")) is not None
+    if has_manual_break:
+        ind.set(qn("w:leftChars"), "200")
+        ind.set(qn("w:left"), "640")
+        ind.set(qn("w:firstLineChars"), "0")
+        ind.set(qn("w:firstLine"), "0")
+    else:
+        ind.set(qn("w:leftChars"), "0")
+        ind.set(qn("w:left"), "0")
+        ind.set(qn("w:firstLineChars"), "200")
+        ind.set(qn("w:firstLine"), "640")
+    for attr in ("w:hangingChars", "w:hanging"):
+        ind.attrib.pop(qn(attr), None)
+
+    spacing = pPr.find(qn("w:spacing"))
+    if spacing is None:
+        spacing = OxmlElement("w:spacing")
+        pPr.append(spacing)
+    spacing.set(qn("w:before"), "0")
+    spacing.set(qn("w:after"), "0")
+    spacing.set(qn("w:beforeLines"), "0")
+    spacing.set(qn("w:afterLines"), "0")
+    spacing.set(qn("w:line"), "560")
+    spacing.set(qn("w:lineRule"), "exact")
+
+    for run in para.runs:
+        run.font.size = Pt(16)
 
 
 def _apply_responsibility_line(para, text: str) -> None:
@@ -1172,22 +1264,9 @@ def apply_page_settings(doc, settings: PageSettings, doc_mode: str = "") -> None
     rPr.insert(0, rFonts)
 
     for section in doc.sections:
-        # A4 页面尺寸
-        section.page_width = Cm(settings.page_width_cm)
-        section.page_height = Cm(settings.page_height_cm)
-
-        # 页边距
-        section.top_margin = Cm(settings.margin_top_cm)
-        section.bottom_margin = Cm(settings.margin_bottom_cm)
-        section.left_margin = Cm(settings.margin_left_cm)
-        section.right_margin = Cm(settings.margin_right_cm)
-
-        # 页码距版心下边缘 7mm → 页脚距页底 = 下边距 - 0.7cm = 2.8cm（GB/T 9704-2012 7.5）
-        section.header_distance = Cm(0)
-        section.footer_distance = Cm(settings.margin_bottom_cm - 0.7)
-
-        # 页面尺寸经 python-docx 取整后再计算网格，避免 WPS 临界超宽少显示一字。
-        _write_doc_grid(section, settings, doc_mode)
+        # Keep imported landscape page sizes and rotate the configured portrait
+        # margins before calculating the grid from the final integer XML values.
+        _set_sectPr_page_layout(section._sectPr, settings, doc_mode)
 
     logger.info(f"[页面] 边距 上{settings.margin_top_cm} 下{settings.margin_bottom_cm} 左{settings.margin_left_cm} 右{settings.margin_right_cm} cm")
 
@@ -1559,7 +1638,7 @@ TYPE_TO_STYLE_ID: Dict[str, str] = {
     "attachment_body": "DCT-AttachmentBody",
 }
 
-HEAD_TYPES_REQUIRING_GAP = ("title", "title_cont", "date_line", "author_line", "role_name", "attachment_title")
+HEAD_TYPES_REQUIRING_GAP = ("title", "title_cont", "date_line", "author_line", "role_name")
 HEAD_GAP_FOLLOW_TYPES = ("body", "attachment_body", "heading1")
 
 
@@ -1653,20 +1732,23 @@ def _is_standalone_keep_heading(
 def _normalize_signature_attachment_order(paragraphs: list[ParagraphData]) -> list[ParagraphData]:
     """Enforce body → attachment note block → signature organization → date."""
     normalized = list(paragraphs)
-    i = 0
-    while i < len(normalized) - 2:
-        if normalized[i].type_id != "sign_org" or normalized[i + 1].type_id != "sign_date":
-            i += 1
+    allowed = {"attachment_note", "attachment_note_item", "sign_org", "sign_date"}
+    index = 0
+    while index < len(normalized):
+        if normalized[index].type_id not in allowed:
+            index += 1
             continue
-        if normalized[i + 2].type_id != "attachment_note":
-            i += 1
-            continue
-
-        note_end = i + 3
-        while note_end < len(normalized) and normalized[note_end].type_id == "attachment_note_item":
-            note_end += 1
-        normalized[i:note_end] = normalized[i + 2:note_end] + normalized[i:i + 2]
-        i = note_end
+        end = index
+        while end < len(normalized) and normalized[end].type_id in allowed:
+            end += 1
+        block = normalized[index:end]
+        notes = [item for item in block if item.type_id == "attachment_note"]
+        if notes:
+            note_items = [item for item in block if item.type_id == "attachment_note_item"]
+            organizations = [item for item in block if item.type_id == "sign_org"]
+            dates = [item for item in block if item.type_id == "sign_date"]
+            normalized[index:end] = notes + note_items + organizations + dates
+        index = end
     return normalized
 
 def export_doc(doc_data: DocumentData, rules: List[StyleRule],
@@ -1876,6 +1958,13 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
 
             _apply_rule_paragraph_format(para, resolved, line_twips)
 
+            # GB/T 9704 落款位置：发文机关右空 2 字，成文日期右空 4 字。
+            # 直接格式固定最终位置，避免浏览器旧配置覆盖规范值。
+            if pd.type_id == "sign_org":
+                _apply_right_indent(para, 2)
+            elif pd.type_id == "sign_date":
+                _apply_right_indent(para, 4)
+
             # 头部署名/日期的相邻间距：
             # 主标题与职务姓名之间空 1 行，职务姓名与后续标题/正文也空 1 行。
             if pd.type_id in ("role_name", "author_line"):
@@ -1900,6 +1989,10 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
                 _set_para_spacing(para, before_lines=0, after_lines=1, line_twips=line_twips)
             elif pd.type_id in ("heading2", "heading3", "heading4"):
                 _set_para_spacing(para, before_lines=0, after_lines=0, line_twips=line_twips)
+            elif pd.type_id == "sign_org" and prev_type_id in (
+                "attachment_note", "attachment_note_item"
+            ):
+                _set_para_spacing(para, before_lines=3, after_lines=0, line_twips=line_twips)
 
             # (colon_inline_body removed — scheme mode deleted)            # date_line 强制适应一行（自动计算压缩量）
             if getattr(resolved, 'date_line_compress', False):
@@ -1987,6 +2080,9 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
             # 冒号关键词加粗（如"责任单位：区政府" → "责任单位："加粗）
             if pd.type_id != "responsibility_line" and pd.meta.get("colon_bold") and para.runs:
                 _apply_colon_bold(para, pd.text)
+
+            if (pd.type_id == "responsibility_line" or pd.meta.get("colon_bold")) and para.runs:
+                _apply_key_value_line_format(para)
 
             # heading1_report 句号后换行
             if pd.meta.get("heading1_report_split") and para.runs:

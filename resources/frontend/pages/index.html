@@ -282,12 +282,11 @@ h1{font-size:clamp(38px,5.4vw,64px);letter-spacing:0;line-height:1.08;margin-bot
   padding-right:7px;
 }
 
-.letterhead-toggle{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:12px 0;border-bottom:1px solid rgba(255,255,255,.1)}
-.letterhead-toggle strong{display:block;font-size:14px}.letterhead-toggle small,.letterhead-note{display:block;color:var(--muted2);font-size:11.5px;line-height:1.6}
+.letterhead-block-head{align-items:center;flex-direction:row}.letterhead-note{display:block;color:var(--muted2);font-size:11.5px;line-height:1.6}
 .letterhead-fields[hidden]{display:none}.letterhead-subsection{padding:14px 0;border-bottom:1px solid rgba(255,255,255,.09)}.letterhead-subsection:last-child{border-bottom:0;padding-bottom:0}
 .letterhead-subsection h4{font-size:13px;margin-bottom:10px}.letterhead-basic{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
 .agency-list,.signer-list{display:grid;gap:8px}.agency-row{display:grid;grid-template-columns:minmax(180px,1.4fr) minmax(140px,1fr) 110px auto;gap:8px;align-items:end}
-.row-actions{display:flex;gap:5px}.icon-btn{width:34px;height:34px;border-radius:8px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.07);color:#fff;font-size:15px;display:grid;place-items:center}.icon-btn:hover{border-color:rgba(246,200,95,.45);color:#ffe7a4}
+.row-actions{display:flex;gap:5px}.icon-btn{width:34px;height:34px;border-radius:8px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.07);color:#fff;font-size:15px;display:grid;place-items:center}.icon-btn:hover{border-color:rgba(246,200,95,.45);color:#ffe7a4}.icon-btn:disabled{opacity:.3;cursor:not-allowed;border-color:rgba(255,255,255,.1);color:var(--muted2)}
 .letterhead-add{margin-top:9px}.signer-group{padding:10px 0;border-bottom:1px solid rgba(255,255,255,.07)}.signer-group:last-child{border-bottom:0}.signer-group-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}.signer-group-head strong{font-size:12px}.signer-row{display:grid;grid-template-columns:minmax(180px,1fr) 100px 34px;gap:8px;margin-bottom:7px}
 .letterhead-preview-wrap{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:16px;align-items:start}.letterhead-preview{aspect-ratio:210/297;background:#fff;color:#111;padding:28px 24px 22px;box-shadow:0 10px 30px rgba(0,0,0,.25);overflow:hidden}.preview-mark{text-align:center;color:#e60012;font-family:"方正小标宋简体","SimSun",serif;font-size:22px;line-height:1.35;white-space:pre-line}.preview-meta{margin-top:28px}.preview-meta.upward{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:end}.preview-number{text-align:center;font-family:"FangSong","仿宋",serif;font-size:11px}.preview-meta.upward .preview-number{text-align:left}.preview-signers{font-family:"FangSong","仿宋",serif;font-size:10px;line-height:1.7;text-align:right;white-space:pre-line;padding-right:1em}.preview-separator{border-bottom:2px solid #f00;margin-top:8px}.preview-title{text-align:center;font-family:"SimSun",serif;font-size:15px;margin-top:28px;font-weight:700}
 @media(max-width:900px){.letterhead-basic,.agency-row{grid-template-columns:1fr 1fr}.row-actions{grid-column:1/-1}.letterhead-preview-wrap{grid-template-columns:1fr}.letterhead-preview{max-width:300px}}
@@ -342,8 +341,7 @@ h1{font-size:clamp(38px,5.4vw,64px);letter-spacing:0;line-height:1.08;margin-bot
 
       <div class="settings-main">
         <section class="settings-block" id="settingLetterhead">
-          <div class="block-head"><div><h3>版头设置</h3><p>生成正文流中的机关标志、发文字号、签发人和红色分隔线。</p></div></div>
-          <div class="letterhead-toggle"><span><strong>生成版头</strong><small id="letterheadDisabledNote">关闭时不新增、不替换，已有版头原样保留。</small></span><label class="switch"><input type="checkbox" id="letterheadEnabled" onchange="renderLetterhead()"><span></span></label></div>
+          <div class="block-head letterhead-block-head"><h3>版头设置</h3><label class="switch" title="启用版头设置"><input type="checkbox" id="letterheadEnabled" onchange="renderLetterhead()"><span></span></label></div>
           <div class="letterhead-fields" id="letterheadFields" hidden>
             <div class="letterhead-subsection">
               <h4>基本信息</h4>
@@ -429,28 +427,18 @@ h1{font-size:clamp(38px,5.4vw,64px);letter-spacing:0;line-height:1.08;margin-bot
               <div class="compact-grid">
                 <div class="field"><label>字体</label><select id="pageFont"></select></div>
                 <div class="field"><label>字号</label><select id="pageSize"></select></div>
-                <div class="field"><label>样式</label><select id="pageStyle"><option>— 1 —</option><option>- 1 -</option><option>1</option><option>第 1 页</option><option>第 1 页 / 共 n 页</option><option>1 / n</option></select></div>
-                <div class="field"><label>语言</label><select id="pageLanguage"></select></div>
-                <div class="field"><label>位置</label><select id="pagePosition"></select></div>
+                <div class="field"><label>样式</label><select id="pageStyle"><option value="dash">— 1 —</option><option value="plain">1</option><option value="cn">第 1 页</option><option value="cn_total">第 1 页 / 共 n 页</option></select></div>
+                <div class="field"><label>位置</label><select id="pagePosition"><option value="outside">奇右偶左</option><option value="center">居中</option><option value="left">左对齐</option><option value="right">右对齐</option></select></div>
               </div>
             </div>
 
             <div class="global-card simple-inline-card">
               <div class="global-card-title"><i>署</i><div><h4>落款版式</h4></div></div>
               <div class="compact-grid compact-grid-2">
-                <div class="field"><label>版式</label><select id="signatureBlockMode"><option value="preserve">保留原排版</option><option value="without_seal">不加盖印章</option><option value="with_seal">加盖印章</option></select></div>
+                <div class="field"><label>版式</label><select id="signatureBlockMode"><option value="preserve">保留原落款版式</option><option value="without_seal">不加盖印章版式</option><option value="with_seal">加盖印章版式（不生成印章）</option></select></div>
               </div>
             </div>
 
-            <div class="global-card">
-              <div class="global-card-title"><i>¹</i><div><h4>正文上标</h4></div></div>
-              <div class="compact-grid">
-                <div class="field"><label>字体</label><select id="supFont"></select></div>
-                <div class="field"><label>字号</label><select id="supSize"></select></div>
-                <div class="field"><label>样式</label><select id="supPattern"><option>[n]</option><option>〔n〕</option><option>(n)</option><option>①</option><option>1</option><option>n</option></select></div>
-                <div class="field"><label>语言</label><select id="supLanguage"></select></div>
-              </div>
-            </div>
           </div>
         </section>
 
@@ -615,6 +603,30 @@ function displayPattern(pattern){
   if(raw==='（{d}）')return '(1)';
   return raw;
 }
+function pageStyleLabel(value){
+  return {dash:'— 1 —',plain:'1',number:'1',page:'1',cn:'第 1 页',chinese:'第 1 页',cn_total:'第 1 页 / 共 n 页',chinese_total:'第 1 页 / 共 n 页',page_numpages:'第 1 页 / 共 n 页'}[value]||'— 1 —';
+}
+function pageStyleValue(value){
+  return {'— 1 —':'dash','1':'plain','第 1 页':'cn','第 1 页 / 共 n 页':'cn_total',number:'plain',page:'plain',chinese:'cn',chinese_total:'cn_total',page_numpages:'cn_total'}[value]||value||'dash';
+}
+function pagePositionLabel(value){
+  return {outside:'奇右|偶左',center:'居中',centre:'居中',left:'左对齐',right:'右对齐'}[value]||'奇右|偶左';
+}
+function pagePositionValue(value){
+  return {'奇右偶左':'outside','奇右|偶左':'outside','居中':'center','左对齐':'left','右对齐':'right',centre:'center'}[value]||value||'outside';
+}
+function paperDimensions(value){
+  if(value==='A3')return {paper_size:'A3',width_cm:29.7,height_cm:42.0};
+  if(value==='Letter')return {paper_size:'Letter',width_cm:21.59,height_cm:27.94};
+  return {paper_size:'A4',width_cm:21.0,height_cm:29.7};
+}
+function paperSizeFromPage(page){
+  if(page?.paper_size||page?.paper)return page.paper_size||page.paper;
+  const width=Number(page?.width_cm),height=Number(page?.height_cm);
+  if(Math.abs(width-29.7)<0.02&&Math.abs(height-42)<0.02)return 'A3';
+  if(Math.abs(width-21.59)<0.02&&Math.abs(height-27.94)<0.02)return 'Letter';
+  return 'A4';
+}
 function base64UrlJson(value){
   const bytes=new TextEncoder().encode(JSON.stringify(value));
   let binary='';
@@ -763,20 +775,31 @@ function setLetterheadSponsor(id){
 }
 function addLetterheadAgency(){
   if(letterheadAgencies.length>=10)return;
+  const mode=letterheadElement('letterheadIssuanceMode');if(mode)mode.value='joint';
   letterheadAgencies.push({id:nextAgencyId(),name:'',short_name:'',role:'joint',order:letterheadAgencies.length+1});renderLetterhead();
 }
 function removeLetterheadAgency(id){
-  if(letterheadAgencies.length<=2)return;
+  if(letterheadAgencies.length<=1)return;
   const removed=letterheadAgencies.find(item=>item.id===id);letterheadAgencies=letterheadAgencies.filter(item=>item.id!==id);
   letterheadSigners=letterheadSigners.filter(signer=>signer.agency_id!==id);
-  if(removed?.role==='sponsor'&&letterheadAgencies[0])letterheadAgencies[0].role='sponsor';
+  if(letterheadAgencies.length===1){
+    letterheadAgencies[0].role='sponsor';
+    const mode=letterheadElement('letterheadIssuanceMode');if(mode)mode.value='single';
+  }else if(removed?.role==='sponsor'&&letterheadAgencies[0])letterheadAgencies[0].role='sponsor';
   letterheadAgencies.forEach((agency,index)=>agency.order=index+1);renderLetterhead();
 }
 function moveLetterheadAgency(id,delta){
   const index=letterheadAgencies.findIndex(item=>item.id===id);const target=index+delta;
-  if(index<=0||target<=0||target>=letterheadAgencies.length)return;
+  if(index<0||target<0||target>=letterheadAgencies.length)return;
   [letterheadAgencies[index],letterheadAgencies[target]]=[letterheadAgencies[target],letterheadAgencies[index]];
+  if(index===0||target===0){
+    letterheadAgencies.forEach((agency,agencyIndex)=>agency.role=agencyIndex===0?'sponsor':'joint');
+  }
   letterheadAgencies.forEach((agency,order)=>agency.order=order+1);renderLetterhead();
+}
+function renderAgencyMoveActions(agency,index,joint){
+  if(!joint||letterheadAgencies.length<2)return '';
+  return `<button type="button" class="icon-btn" title="上移" onclick="moveLetterheadAgency('${escapeHtml(agency.id)}',-1)" ${index===0?'disabled':''}>↑</button><button type="button" class="icon-btn" title="下移" onclick="moveLetterheadAgency('${escapeHtml(agency.id)}',1)" ${index===letterheadAgencies.length-1?'disabled':''}>↓</button>`;
 }
 function addLetterheadSigner(agencyId){
   const count=letterheadSigners.filter(item=>item.agency_id===agencyId).length;
@@ -794,7 +817,7 @@ function removeLetterheadSigner(id){
 function renderLetterheadAgencies(){
   const body=letterheadElement('letterheadAgencies');if(!body)return;
   const joint=letterheadElement('letterheadIssuanceMode')?.value==='joint';
-  body.innerHTML=letterheadAgencies.map((agency,index)=>`<div class="agency-row" data-agency-id="${escapeHtml(agency.id)}"><div class="field"><label>机关名称</label><input maxlength="80" value="${escapeHtml(agency.name)}" oninput="updateLetterheadAgency('${escapeHtml(agency.id)}','name',this.value)"></div><div class="field"><label>规范化简称（可选）</label><input maxlength="80" value="${escapeHtml(agency.short_name)}" oninput="updateLetterheadAgency('${escapeHtml(agency.id)}','short_name',this.value)"></div><div class="field"><label>机关角色</label><select onchange="if(this.value==='sponsor')setLetterheadSponsor('${escapeHtml(agency.id)}');else this.value='${agency.role}'"><option value="sponsor" ${agency.role==='sponsor'?'selected':''}>主办机关</option><option value="joint" ${agency.role==='joint'?'selected':''}>联合机关</option></select></div><div class="row-actions"><button type="button" class="icon-btn" title="上移" onclick="moveLetterheadAgency('${escapeHtml(agency.id)}',-1)" ${index<=1?'disabled':''}>↑</button><button type="button" class="icon-btn" title="下移" onclick="moveLetterheadAgency('${escapeHtml(agency.id)}',1)" ${index===0||index===letterheadAgencies.length-1?'disabled':''}>↓</button><button type="button" class="icon-btn" title="删除" onclick="removeLetterheadAgency('${escapeHtml(agency.id)}')" ${!joint||letterheadAgencies.length<=2?'disabled':''}>×</button></div></div>`).join('');
+  body.innerHTML=letterheadAgencies.map((agency,index)=>`<div class="agency-row" data-agency-id="${escapeHtml(agency.id)}"><div class="field"><label>机关名称</label><input maxlength="80" value="${escapeHtml(agency.name)}" oninput="updateLetterheadAgency('${escapeHtml(agency.id)}','name',this.value)"></div><div class="field"><label>规范化简称（可选）</label><input maxlength="80" value="${escapeHtml(agency.short_name)}" oninput="updateLetterheadAgency('${escapeHtml(agency.id)}','short_name',this.value)"></div><div class="field"><label>机关角色</label><select onchange="if(this.value==='sponsor')setLetterheadSponsor('${escapeHtml(agency.id)}');else this.value='${agency.role}'" ${!joint?'disabled':''}><option value="sponsor" ${agency.role==='sponsor'?'selected':''}>主办机关</option><option value="joint" ${agency.role==='joint'?'selected':''}>联合机关</option></select></div><div class="row-actions">${renderAgencyMoveActions(agency,index,joint)}<button type="button" class="icon-btn" title="删除" onclick="removeLetterheadAgency('${escapeHtml(agency.id)}')" ${letterheadAgencies.length<=1?'disabled':''}>×</button></div></div>`).join('');
 }
 function renderLetterheadSigners(){
   const body=letterheadElement('letterheadSigners');if(!body)return;
@@ -809,7 +832,6 @@ function ensureUpwardSigners(){
 function renderLetterhead(){
   const enabled=!!letterheadElement('letterheadEnabled')?.checked;
   if(letterheadElement('letterheadFields'))letterheadElement('letterheadFields').hidden=!enabled;
-  if(letterheadElement('letterheadDisabledNote'))letterheadElement('letterheadDisabledNote').hidden=enabled;
   const joint=letterheadElement('letterheadIssuanceMode')?.value==='joint';
   if(letterheadElement('letterheadJointScopeWrap'))letterheadElement('letterheadJointScopeWrap').hidden=!joint;
   if(letterheadElement('addAgencyBtn'))letterheadElement('addAgencyBtn').hidden=!joint;
@@ -864,16 +886,17 @@ function updateNumberingType(row){
 
 function initSettings(){
   document.getElementById('settingMode').value='smart';
+  document.getElementById('outputSuffix').value='_排版';
   document.getElementById('pageNumberEnabled').checked=true;
   document.getElementById('signatureBlockMode').value=SIGNATURE_BLOCK_DEFAULT.mode;
   ['marginTop','marginBottom','marginLeft','marginRight'].forEach((id,i)=>fillSelect(id,margins,['3.7cm','3.5cm','2.8cm','2.6cm'][i]));
   fillSelect('lineSpacing',lineSpacings,'28磅');fillSelect('linesPerPage',Array.from({length:13},(_,i)=>String(18+i)),'22');fillSelect('charsPerLine',Array.from({length:12},(_,i)=>String(24+i)),'28');fillSelect('spaceBefore',beforeAfter,'0行');fillSelect('spaceAfter',beforeAfter,'0行');
-  ['numberFont','letterFont','pageFont','supFont'].forEach(id=>fillSelect(id,fonts,id==='pageFont'?'宋体':id==='supFont'?'仿宋_GB2312':'Times New Roman'));
+  ['numberFont','letterFont','pageFont'].forEach(id=>fillSelect(id,fonts,id==='pageFont'?'宋体':'Times New Roman'));
   fillNullableSizeSelect('numberSize','');
   fillNullableSizeSelect('letterSize','');
-  ['pageSize','supSize'].forEach(id=>fillSelect(id,sizes,id==='pageSize'?'四号':'三号'));
-  ['pageLanguage','supLanguage'].forEach(id=>fillSelect(id,languages,{pageLanguage:'阿拉伯数字',supLanguage:'阿拉伯数字'}[id]||'中文'));
-  fillSelect('pagePosition',alignments,'奇右偶左');
+  fillSelect('pageSize',sizes,'四号');
+  document.getElementById('pageStyle').value='dash';
+  document.getElementById('pagePosition').value='outside';
   renderStyleMatrix();
   applyLetterheadConfig(LETTERHEAD_DEFAULT);
 }
@@ -905,6 +928,9 @@ function collectConfig(){
     };
   });
   const styleByName=Object.fromEntries(rows.map(r=>[r.name,r]));
+  const paper=paperDimensions(get('paperSize'));
+  const pageStyle=pageStyleValue(get('pageStyle'));
+  const pagePosition=pagePositionValue(get('pagePosition'));
   const styles=[
     styleByName['主标题']||{name:'主标题',font:'方正小标宋简体',size:'二号',bold:false,pattern:'',lang:'中文',indent:0,align:'居中'},
     styleByName['一级标题']||{name:'一级标题',font:'黑体',size:'三号',bold:false,pattern:'{a}、',lang:'中文',indent:2,align:'左对齐'},
@@ -914,13 +940,13 @@ function collectConfig(){
     styleByName['正文']||{name:'正文',font:'仿宋_GB2312',size:'三号',bold:false,pattern:'',lang:'',indent:2,align:'两端对齐'},
     optionalSizeStyle({name:'数字',font:get('numberFont')||'Times New Roman',bold:false,pattern:'',lang:'',indent:0,align:'左对齐'},get('numberSize')),
     optionalSizeStyle({name:'字母',font:get('letterFont')||'Times New Roman',bold:false,pattern:'',lang:'',indent:0,align:'左对齐'},get('letterSize')),
-    {name:'页码设置',font:get('pageFont')||'宋体',size:get('pageSize')||'四号',bold:false,pattern:get('pageStyle')||'— 1 —',lang:get('pageLanguage')||'阿拉伯数字',indent:0,align:get('pagePosition')||'奇右|偶左'}
+    {name:'页码设置',font:get('pageFont')||'宋体',size:get('pageSize')||'四号',bold:false,pattern:pageStyleLabel(pageStyle),lang:'阿拉伯数字',indent:0,align:pagePositionLabel(pagePosition)},
+    {name:'正文上标',font:'Times New Roman',size:'三号',bold:false,pattern:'[n]',lang:'阿拉伯数字',indent:0,align:'左对齐'}
   ];
   return normalizeTransportConfig({
     styles,
     page:{
-      width_cm:get('paperSize')==='A3'?29.7:21.0,
-      height_cm:get('paperSize')==='A3'?42.0:29.7,
+      ...paper,
       margin_top_cm:cmNumber(get('marginTop'),3.7),
       margin_bottom_cm:cmNumber(get('marginBottom'),3.5),
       margin_left_cm:cmNumber(get('marginLeft'),2.8),
@@ -941,11 +967,12 @@ function collectConfig(){
     punctuation:{enabled:checked('punctuationSafeEnabled'),mode:'safe',scope:{body:true,tables:false,headers:false,footers:false}},
     classification:{enabled:true,minimum_auto_format_confidence:0.85},
     numbering:{enabled:checked('numberingEnabled'),mode:'safe'},
-    page_number:{enabled:checked('pageNumberEnabled'),style:'dash',position:'outside',font_name:get('pageFont')||'宋体',font_size_pt:FONT_SIZE_POINTS[get('pageSize')]||14,bold:false,first_page:true,section_numbering:'continue',offset_from_text_mm:7},
+    page_number:{enabled:checked('pageNumberEnabled'),style:pageStyle,position:pagePosition,font_name:get('pageFont')||'宋体',font_size_pt:FONT_SIZE_POINTS[get('pageSize')]||14,bold:false,first_page:true,section_numbering:'continue',offset_from_text_mm:7},
     signature_block:{mode:get('signatureBlockMode')||SIGNATURE_BLOCK_DEFAULT.mode},
     table_format:{enabled:checked('tableFormatEnabled'),smart_alignment:false},
     cleanup:{enabled:checked('cleanupEnabled'),mode:'safe'},
-    letterhead:collectLetterheadConfig()
+    letterhead:collectLetterheadConfig(),
+    output_suffix:(get('outputSuffix')||'_排版').trim()||'_排版'
   });
 }
 function normalizeConfig(config,tpl){
@@ -1096,7 +1123,7 @@ function applyConfigToForm(config,keepTemplate=true){
     renderStyleMatrix();
   }
   const page=cfg.page||{};
-  set('paperSize',page.paper_size||page.paper);
+  set('paperSize',paperSizeFromPage(page));
   set('marginTop',page.margin_top||((page.margin_top_cm??'')&&page.margin_top_cm+'cm'));
   set('marginBottom',page.margin_bottom||((page.margin_bottom_cm??'')&&page.margin_bottom_cm+'cm'));
   set('marginLeft',page.margin_left||((page.margin_left_cm??'')&&page.margin_left_cm+'cm'));
@@ -1120,16 +1147,11 @@ function applyConfigToForm(config,keepTemplate=true){
   const pn=g.page_number||{};
   set('pageFont',canonicalPn.font_name||pn.font);
   set('pageSize',canonicalPn.font_size_pt===undefined?pn.size:pointSizeLabel(canonicalPn.font_size_pt));
-  set('pageStyle',pn.style);
-  set('pagePosition',pn.position);
+  set('pageStyle',pageStyleValue(canonicalPn.style||pn.style));
+  set('pagePosition',pagePositionValue(canonicalPn.position||pn.position));
   const pageEnabled=canonicalPn.enabled!==undefined?canonicalPn.enabled:(cfg.features||{}).page_number_enabled;
   if(document.getElementById('pageNumberEnabled')&&pageEnabled!==undefined)document.getElementById('pageNumberEnabled').checked=!!pageEnabled;
   set('signatureBlockMode',(cfg.signature_block||SIGNATURE_BLOCK_DEFAULT).mode);
-  const sup=g.body_superscript||{};
-  set('supFont',sup.font);
-  set('supSize',sup.size);
-  set('supPattern',sup.style||sup.pattern);
-  set('supLanguage',sup.language);
   const f=cfg.features||{};
   const featureMap={punctuationEnabled:'punctuation',tableEnabled:'table_optimize',specialBold:'special_bold'};
   Object.keys(featureMap).forEach(id=>{

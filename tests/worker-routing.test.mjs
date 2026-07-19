@@ -53,7 +53,7 @@ async function callWorker(pathname, options = {}) {
 
   globalThis.fetch = async (target, init) => {
     fetchCalls.push({ init, target: String(target) });
-    return new Response("proxied", { status: 209 });
+    return new Response("proxied", { headers: options.backendHeaders || {}, status: 209 });
   };
 
   try {
@@ -191,7 +191,7 @@ test("proxy strips sensitive inbound headers and forwards only allowed cookies",
     headers: {
       Authorization: "Bearer user-secret",
       "CF-Connecting-IP": "203.0.113.5",
-      Cookie: "docxtool_admin_session=session-id; other=value",
+      Cookie: "docxtool_admin_session=session-id; docxtool_anon_user=v1.token; other=value",
       "X-Admin-Token": "admin-secret",
       "X-Custom": "kept",
       "X-Forwarded-For": "198.51.100.1",
@@ -208,8 +208,21 @@ test("proxy strips sensitive inbound headers and forwards only allowed cookies",
   assert.equal(headers.get("CF-Connecting-IP"), "203.0.113.5");
   assert.equal(headers.get("X-Forwarded-For"), "203.0.113.5");
   assert.equal(headers.get("X-Real-IP"), "203.0.113.5");
-  assert.equal(headers.get("Cookie"), "docxtool_admin_session=session-id");
+  assert.equal(headers.get("Cookie"), "docxtool_admin_session=session-id; docxtool_anon_user=v1.token");
   assert.equal(headers.get("X-Custom"), "kept");
   assert.equal(headers.has("Authorization"), false);
   assert.equal(headers.has("X-Admin-Token"), false);
+});
+
+test("proxy preserves anonymous Set-Cookie from backend", async () => {
+  const result = await callWorker("/api/presets", {
+    backendHeaders: {
+      "Set-Cookie": "docxtool_anon_user=v1.token; HttpOnly; SameSite=Lax; Secure",
+    },
+  });
+
+  assert.equal(
+    result.response.headers.get("Set-Cookie"),
+    "docxtool_anon_user=v1.token; HttpOnly; SameSite=Lax; Secure",
+  );
 });
