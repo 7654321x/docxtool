@@ -45,6 +45,7 @@ from docxtool.document.style_config import (
 )
 from docxtool.paths import project_path, resource_path, runtime_dir
 from docxtool.storage.database import connect as _db_connect, default_database_path
+from docxtool.auth import hash_password, verify_password, validate_password, validate_username
 
 BASE_DIR = str(project_path())
 _SQL_LOCK = threading.Lock()
@@ -59,6 +60,10 @@ DEFAULT_PROXY_SECRET = "docxtool-proxy-20260601-9ec0d6e2443a4f5f9784f0f04bb62917
 ADMIN_SESSION_COOKIE = "docxtool_admin_session"
 ANONYMOUS_USER_COOKIE = "docxtool_anon_user"
 ANONYMOUS_USER_COOKIE_MAX_AGE = 2 * 365 * 24 * 60 * 60
+USER_SESSION_COOKIE = "docxtool_user_session"
+USER_SESSION_MAX_AGE = 30 * 24 * 60 * 60
+USER_SESSION_DAYS = 30
+USER_SESSION_REFRESH_SECONDS = 300
 ADMIN_CSRF_HEADER = "X-CSRF-Token"
 DEFAULT_ADMIN_SESSION_TTL_SECONDS = 12 * 60 * 60
 
@@ -220,6 +225,17 @@ def _sql_init():
                 last_seen_at INTEGER NOT NULL,
                 expires_at INTEGER NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS users (
+                id TEXT PRIMARY KEY, username TEXT NOT NULL, username_norm TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL, display_name TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'active', created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL, last_login_at INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS user_sessions (
+                session_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL, csrf_token TEXT NOT NULL,
+                created_at INTEGER NOT NULL, last_seen_at INTEGER NOT NULL,
+                expires_at INTEGER NOT NULL, user_agent TEXT NOT NULL DEFAULT '', remote_ip TEXT NOT NULL DEFAULT ''
+            );
             CREATE INDEX IF NOT EXISTS idx_tasks_ip ON tasks(ip);
             CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks(created_at);
             CREATE INDEX IF NOT EXISTS idx_tasks_ip_created ON tasks(ip, created_at);
@@ -260,6 +276,8 @@ def _sql_init():
             conn.execute("ALTER TABLE tasks ADD COLUMN safe_download_filename TEXT DEFAULT ''")
         if "input_size" not in cols:
             conn.execute("ALTER TABLE tasks ADD COLUMN input_size INTEGER DEFAULT 0")
+        if "owner_id" not in cols:
+            conn.execute("ALTER TABLE tasks ADD COLUMN owner_id TEXT DEFAULT ''")
         preset_cols = {r["name"] for r in conn.execute("PRAGMA table_info(presets)").fetchall()}
         if "is_system" not in preset_cols:
             conn.execute("ALTER TABLE presets ADD COLUMN is_system INTEGER DEFAULT 0")
@@ -278,6 +296,8 @@ def _sql_init():
         conn.execute("UPDATE presets SET owner_id='' WHERE owner_id IS NULL")
         conn.execute("UPDATE presets SET visibility='public' WHERE visibility IS NULL OR visibility=''")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_presets_owner_visibility ON presets(owner_id, visibility)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_owner_created ON tasks(owner_id, created_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_user_sessions_expires ON user_sessions(expires_at)")
         conn.commit()
         _seed_default_presets(conn)
         conn.close()
@@ -533,7 +553,7 @@ def log_sql(task_id, ip, ua, filename, file_size, doc_type,
         conn.close()
 
 def record_task_queued(task_id: str, ip: str, ua: str, filename: str, file_size: int = 0,
-                       processing_options: str = "", preset_id: str = ""):
+                       processing_options: str = "", preset_id: str = "", owner_id: str = ""):
     now = _now_local()
     with _SQL_LOCK:
         conn = _sql()
@@ -541,9 +561,9 @@ def record_task_queued(task_id: str, ip: str, ua: str, filename: str, file_size:
                        paragraphs,headings,body,duration_ms,status,error,
                        log_filename,log_path,output_dir,output_filename,output_path,
                        client_ip,original_filename,safe_download_filename,input_size,
-                       processing_options,preset_id,
+                       processing_options,preset_id,owner_id,
                        created_at,done_at)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                        ON CONFLICT(id) DO UPDATE SET
                        ip=excluded.ip, ua=excluded.ua, filename=excluded.filename,
                        file_size=excluded.file_size, status='queued', error='',
@@ -553,10 +573,11 @@ def record_task_queued(task_id: str, ip: str, ua: str, filename: str, file_size:
                        input_size=excluded.input_size,
                        processing_options=excluded.processing_options,
                        preset_id=excluded.preset_id,
+                       owner_id=excluded.owner_id,
                        created_at=excluded.created_at, done_at=''""",
                      (task_id, ip, ua, filename, file_size, "", 0, 0, 0, 0, "queued", "",
                       "", "", "", "", "", ip, filename, _safe_download_filename(filename), file_size,
-                      processing_options, preset_id, now, ""))
+                      processing_options, preset_id, owner_id, now, ""))
         conn.commit()
         conn.close()
 
@@ -655,6 +676,8 @@ try:
     COOKIE_SECURE = resolve_cookie_secure(FRONTEND_ORIGIN, os.environ.get("COOKIE_SECURE"), PRODUCTION_MODE)
 except ValueError as exc:
     raise SystemExit(f"[配置错误] {exc}") from exc
+USER_SESSION_DAYS = max(1, min(365, _parse_int_env("DOCXTOOL_USER_SESSION_DAYS", 30)))
+USER_SESSION_MAX_AGE = USER_SESSION_DAYS * 24 * 60 * 60
 MAX_SIZE = _parse_int_env("MAX_UPLOAD_SIZE_MB", 10) * 1024 * 1024
 UPLOAD_READ_TIMEOUT_SECONDS = _parse_int_env("UPLOAD_READ_TIMEOUT_SECONDS", 15)
 UPLOAD_READ_CHUNK_SIZE = 64 * 1024
@@ -662,9 +685,13 @@ MAX_WORKERS = 4
 MAX_QUEUE = MAX_WORKERS * 2
 PROCESS_TIMEOUT = _parse_int_env("PROCESS_TIMEOUT_SECONDS", 60)
 RATE_WINDOW = 2
-FILE_TTL = 86400
+FILE_RETENTION_DAYS = max(1, _parse_int_env("FILE_RETENTION_DAYS", 7))
+FILE_TTL = FILE_RETENTION_DAYS * 24 * 60 * 60
 MAX_TASKS = _parse_int_env("MAX_TASKS", 200)
-TASK_RETENTION_HOURS = _parse_int_env("TASK_RETENTION_HOURS", 24)
+TASK_RETENTION_HOURS = max(
+    FILE_RETENTION_DAYS * 24,
+    _parse_int_env("TASK_RETENTION_HOURS", FILE_RETENTION_DAYS * 24),
+)
 MAX_CACHED_TASKS = _parse_int_env("MAX_CACHED_TASKS", 500)
 CLEANUP_INTERVAL_MINUTES = _parse_int_env("CLEANUP_INTERVAL_MINUTES", 30)
 DEFAULT_UPLOAD_LIMIT_WINDOW_SECONDS = 3600
@@ -697,6 +724,7 @@ def _validate_secrets_or_exit() -> None:
 
 RATE_LIMIT = {}
 RATE_LOCK = threading.Lock()
+AUTH_RATE_LIMIT = OrderedDict()
 TASKS = OrderedDict()
 TASKS_LOCK = threading.Lock()
 TASK_QUEUE = OrderedDict()
@@ -709,25 +737,9 @@ OUTPUT_DIR = str(runtime_dir("outputs", "OUTPUT_DIR"))
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 def _startup_cleanup():
-    removed = 0
-    if os.path.isdir(RUNTIME_TMP_DIR):
-        for root, dirs, files in os.walk(RUNTIME_TMP_DIR, topdown=False):
-            for name in files:
-                path = os.path.join(root, name)
-                try:
-                    os.unlink(path)
-                    removed += 1
-                except Exception:
-                    pass
-            for name in dirs:
-                path = os.path.join(root, name)
-                try:
-                    if os.path.isdir(path) and not os.listdir(path):
-                        os.rmdir(path)
-                except Exception:
-                    pass
-    if removed:
-        logger.info(f"[Startup] cleaned {removed} project temp files")
+    result = _cleanup_expired_tmp()
+    if result["removed"]:
+        logger.info(f"[Startup] cleaned {result['removed']} expired project input files")
 
 def _task_tmp_dir(task_id: str) -> str:
     return os.path.join(RUNTIME_TMP_DIR, task_id)
@@ -754,6 +766,30 @@ def _cleanup_task_tmp(task_id: str, extra_path: str = "") -> None:
                 os.unlink(path)
         except Exception:
             pass
+
+def _cleanup_expired_tmp(now: float = None) -> dict:
+    now = now or time.time()
+    removed = 0
+    errors = 0
+    if not os.path.isdir(RUNTIME_TMP_DIR):
+        return {"removed": 0, "errors": 0}
+    for root, dirs, files in os.walk(RUNTIME_TMP_DIR, topdown=False):
+        for name in files:
+            path = os.path.join(root, name)
+            try:
+                if now - os.path.getmtime(path) > FILE_TTL:
+                    os.unlink(path)
+                    removed += 1
+            except Exception:
+                errors += 1
+        for name in dirs:
+            path = os.path.join(root, name)
+            try:
+                if os.path.isdir(path) and not os.listdir(path):
+                    os.rmdir(path)
+            except Exception:
+                errors += 1
+    return {"removed": removed, "errors": errors}
 
 def _prune_task_cache() -> None:
     with TASKS_LOCK:
@@ -843,7 +879,22 @@ def _allow(ip: str) -> bool:
         if now - last < RATE_WINDOW:
             return False
         RATE_LIMIT[ip] = now
-    return True
+        return True
+
+
+def _auth_rate_allow(scope: str, key: str, window: int, limit: int) -> tuple[bool, int]:
+    now = time.time()
+    bucket_key = f"{scope}:{key}"
+    with RATE_LOCK:
+        values = [stamp for stamp in AUTH_RATE_LIMIT.get(bucket_key, []) if now - stamp < window]
+        if len(values) >= limit:
+            return False, max(1, int(window - (now - values[0])))
+        values.append(now)
+        AUTH_RATE_LIMIT[bucket_key] = values
+        AUTH_RATE_LIMIT.move_to_end(bucket_key)
+        while len(AUTH_RATE_LIMIT) > 4096:
+            AUTH_RATE_LIMIT.popitem(last=False)
+    return True, 0
 
 def _is_ip(value: str) -> bool:
     try:
@@ -975,13 +1026,15 @@ def _task_queue_info(task_id: str) -> dict:
         "message": f"排队中，前方还有 {idx} 个任务",
     }
 
-def _public_task_state(task_id: str) -> dict:
+def _public_task_state(task_id: str, owner_id: str = "") -> dict:
     with TASKS_LOCK:
         task = dict(TASKS.get(task_id, {}))
+    if task and owner_id and task.get("owner_id", "") != owner_id:
+        task = {}
     if not task:
         with _SQL_LOCK:
             conn = _sql()
-            row = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+            row = conn.execute("SELECT * FROM tasks WHERE id=? AND owner_id=?", (task_id, owner_id)).fetchone()
             conn.close()
         if not row:
             return {}
@@ -1066,7 +1119,7 @@ def _mark_task_terminal(task_id: str, status: str, error: str = "", output_path:
 
 def _enqueue_task(task_id: str, input_path: str, orig_name: str, ip: str, ua: str,
                   format_config: dict = None, request_meta: dict = None,
-                  compatibility_warnings: list[str] = None) -> dict:
+                  compatibility_warnings: list[str] = None, owner_id: str = "") -> dict:
     now = time.time()
     try:
         file_size = os.path.getsize(input_path) if input_path and os.path.exists(input_path) else 0
@@ -1080,7 +1133,7 @@ def _enqueue_task(task_id: str, input_path: str, orig_name: str, ip: str, ua: st
         queued = len(TASK_QUEUE)
         if active + queued >= MAX_QUEUE:
             raise OverflowError("QUEUE_FULL: 服务器繁忙，请稍后再试")
-        record_task_queued(task_id, ip, ua, orig_name, file_size, processing_options=processing_options, preset_id=preset_id)
+        record_task_queued(task_id, ip, ua, orig_name, file_size, processing_options=processing_options, preset_id=preset_id, owner_id=owner_id)
         TASK_QUEUE[task_id] = (input_path, orig_name, ip, ua, format_config, request_meta or {})
         info = _task_queue_info(task_id)
         QUEUE_COND.notify()
@@ -1097,6 +1150,7 @@ def _enqueue_task(task_id: str, input_path: str, orig_name: str, ip: str, ua: st
             "ip": ip,
             "processing_options": processing_options,
             "compatibility_warnings": list(compatibility_warnings or []),
+            "owner_id": owner_id,
         }
     _prune_task_cache()
     return info
@@ -1450,7 +1504,6 @@ def _process_task(task_id: str, input_path: str, orig_name: str = "upload.docx",
     else:
         result = _task_process_subprocess(task_id, input_path, orig_name, ip, ua, format_config, request_meta)
     _record_task_result(task_id, input_path, orig_name, ip, ua, result)
-    _cleanup_task_tmp(task_id, input_path)
 
 def _cleanup_expired_outputs(now: float = None) -> dict:
     now = now or time.time()
@@ -1518,11 +1571,12 @@ def _cleanup_expired_task_records(now: float = None) -> dict:
 def _cleaner_loop():
     while True:
         time.sleep(max(60, CLEANUP_INTERVAL_MINUTES * 60))
+        tmp_result = _cleanup_expired_tmp()
         file_result = _cleanup_expired_outputs()
         db_result = _cleanup_expired_task_records()
-        if file_result["removed"] or db_result["removed"]:
+        if tmp_result["removed"] or file_result["removed"] or db_result["removed"]:
             logger.info(
-                f"[Cleaner] removed files={file_result['removed']} tasks={db_result['removed']}"
+                f"[Cleaner] removed inputs={tmp_result['removed']} files={file_result['removed']} tasks={db_result['removed']}"
             )
 
 threading.Thread(target=_cleaner_loop, daemon=True).start()
@@ -1613,6 +1667,13 @@ def _anonymous_user_cookie_header(token: str) -> str:
         parts.append("Secure")
     return "; ".join(parts)
 
+
+def _anonymous_user_cookie_clear_header() -> str:
+    parts = [f"{ANONYMOUS_USER_COOKIE}=", "HttpOnly", "Path=/", "SameSite=Lax", "Max-Age=0"]
+    if COOKIE_SECURE:
+        parts.append("Secure")
+    return "; ".join(parts)
+
 def _anonymous_user_from_headers(headers, cookie_header: str = "") -> tuple[dict, str]:
     token = _cookie_value(cookie_header, ANONYMOUS_USER_COOKIE)
     if not token and headers:
@@ -1636,6 +1697,128 @@ def _anonymous_template_origin_allowed(headers) -> bool:
     if request_host and parsed.netloc.lower() == request_host:
         return True
     return _is_local_origin_host(parsed.hostname)
+
+
+def _user_session_hash(token: str) -> str:
+    return hashlib.sha256(str(token).encode("ascii", "ignore")).hexdigest()
+
+
+def _user_cookie_header(token: str, clear: bool = False, persistent: bool = True) -> str:
+    parts = [f"{USER_SESSION_COOKIE}={'' if clear else token}", "HttpOnly", "Path=/", "SameSite=Lax"]
+    if clear:
+        parts.append("Max-Age=0")
+    elif persistent:
+        parts.append(f"Max-Age={USER_SESSION_MAX_AGE}")
+    if COOKIE_SECURE:
+        parts.append("Secure")
+    return "; ".join(parts)
+
+
+def _create_user_session(user_id: str, user_agent: str = "", remote_ip: str = "") -> dict:
+    token = base64.urlsafe_b64encode(os.urandom(32)).decode("ascii").rstrip("=")
+    csrf_token = base64.urlsafe_b64encode(os.urandom(32)).decode("ascii").rstrip("=")
+    now = _now_unix()
+    expires = now + USER_SESSION_MAX_AGE
+    with _SQL_LOCK:
+        conn = _sql()
+        conn.execute("DELETE FROM user_sessions WHERE expires_at <= ?", (now,))
+        conn.execute("INSERT INTO user_sessions(session_hash,user_id,csrf_token,created_at,last_seen_at,expires_at,user_agent,remote_ip) VALUES (?,?,?,?,?,?,?,?)",
+                     (_user_session_hash(token), user_id, csrf_token, now, now, expires, user_agent[:300], remote_ip[:80]))
+        conn.commit()
+        conn.close()
+    return {"token": token, "csrf_token": csrf_token, "expires_at": expires}
+
+
+def _user_session_from_headers(headers) -> dict:
+    token = _cookie_value(headers.get("Cookie", "") if headers else "", USER_SESSION_COOKIE)
+    if not token or len(token) < 32:
+        return {}
+    now = _now_unix()
+    session_hash = _user_session_hash(token)
+    with _SQL_LOCK:
+        conn = _sql()
+        row = conn.execute("SELECT s.*, u.username, u.display_name, u.status FROM user_sessions s JOIN users u ON u.id=s.user_id WHERE s.session_hash=? AND s.expires_at>?", (session_hash, now)).fetchone()
+        if not row or row["status"] != "active":
+            conn.execute("DELETE FROM user_sessions WHERE session_hash=?", (session_hash,))
+            conn.commit()
+        if row and row["status"] == "active" and now - int(row["last_seen_at"] or 0) >= USER_SESSION_REFRESH_SECONDS:
+            conn.execute("UPDATE user_sessions SET last_seen_at=? WHERE session_hash=?", (now, session_hash))
+            conn.commit()
+        conn.close()
+    if not row or row["status"] != "active":
+        return {}
+    return {"user_id": row["user_id"], "owner_id": row["user_id"], "username": row["username"], "display_name": row["display_name"], "csrf_token": row["csrf_token"], "token": token, "expires_at": row["expires_at"]}
+
+
+def _delete_user_session(headers) -> None:
+    session = _user_session_from_headers(headers)
+    if not session:
+        return
+    with _SQL_LOCK:
+        conn = _sql()
+        conn.execute("DELETE FROM user_sessions WHERE session_hash=?", (_user_session_hash(session["token"]),))
+        conn.commit()
+        conn.close()
+
+
+def _principal(headers, client_address=None) -> dict:
+    cookie_header = headers.get("Cookie", "") if headers else ""
+    had_user_session_cookie = bool(_cookie_value(cookie_header, USER_SESSION_COOKIE))
+    session = _user_session_from_headers(headers)
+    if session:
+        return {"owner_id": session["user_id"], "authenticated": True, "invalid_user_session": False, **session}
+    identity, cookie = _anonymous_user_from_headers(headers, cookie_header)
+    return {"owner_id": identity["owner_id"], "authenticated": False, "user_id": None, "username": None, "display_name": None, "csrf_token": None, "cookie": cookie,
+            "invalid_user_session": had_user_session_cookie,
+            "has_identity_cookie": bool(_cookie_value(cookie_header, USER_SESSION_COOKIE) or _cookie_value(cookie_header, ANONYMOUS_USER_COOKIE))}
+
+
+def _auth_origin_allowed(headers) -> bool:
+    return _anonymous_template_origin_allowed(headers)
+
+
+def _auth_csrf_allowed(headers, principal) -> bool:
+    if not principal.get("authenticated"):
+        return False
+    value = str(headers.get("X-CSRF-Token", "") or "").strip()
+    return bool(value and hmac.compare_digest(value, principal.get("csrf_token", "")))
+
+
+def _migrate_anonymous_owner(conn, anonymous_id: str, user_id: str) -> None:
+    if not _re.fullmatch(r"usr_[0-9a-f]{32}", str(anonymous_id or "")):
+        return
+    conn.execute("UPDATE tasks SET owner_id=? WHERE owner_id=?", (user_id, anonymous_id))
+    existing_names = {
+        str(row["name"]).casefold()
+        for row in conn.execute(
+            "SELECT name FROM presets WHERE owner_id=? AND visibility='private'",
+            (user_id,),
+        ).fetchall()
+    }
+    migrating = conn.execute(
+        "SELECT id,name FROM presets WHERE owner_id=? AND visibility='private' ORDER BY created_at,id",
+        (anonymous_id,),
+    ).fetchall()
+    for row in migrating:
+        original = str(row["name"] or "个人模板")
+        candidate = original
+        suffix = 2
+        while candidate.casefold() in existing_names:
+            candidate = f"{original}（导入 {suffix}）"
+            suffix += 1
+        if candidate != original:
+            conn.execute("UPDATE presets SET name=? WHERE id=?", (candidate, row["id"]))
+        existing_names.add(candidate.casefold())
+    conn.execute("UPDATE presets SET owner_id=? WHERE owner_id=? AND visibility='private'", (user_id, anonymous_id))
+
+
+def _migrate_anonymous_resources(anonymous_id: str, user_id: str) -> None:
+    with _SQL_LOCK:
+        conn = _sql()
+        conn.execute("BEGIN IMMEDIATE")
+        _migrate_anonymous_owner(conn, anonymous_id, user_id)
+        conn.commit()
+        conn.close()
 
 def _now_unix() -> int:
     return int(time.time())
@@ -2441,7 +2624,7 @@ def _redact_sensitive_log(text: str) -> str:
     for name in ("ADMIN_TOKEN", "PROXY_SECRET", "Authorization", "Proxy-Authorization", "Cookie", "Set-Cookie"):
         value = _re.sub(
             rf"(?im)^({name}\s*[:=]\s*).+$",
-            rf"\1[REDACTED]",
+            r"\1[REDACTED]",
             value,
         )
     return value
@@ -2508,6 +2691,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json(ready, 200 if ready.get("ok") else 503)
         elif path == "/version":
             self._json(_version_payload())
+        elif path == "/auth/me":
+            self._handle_auth_me()
         elif path == "/stats":
             if not self._require_admin(parsed):
                 return
@@ -2560,6 +2745,12 @@ class Handler(BaseHTTPRequestHandler):
             if not self._require_file_api():
                 return
             self._handle_upload_raw()
+        elif path == "/auth/register":
+            self._handle_auth_register()
+        elif path == "/auth/login":
+            self._handle_auth_login()
+        elif path == "/auth/logout":
+            self._handle_auth_logout()
         elif path == "/admin/login":
             self._handle_admin_login()
         elif path == "/admin/logout":
@@ -2730,9 +2921,12 @@ class Handler(BaseHTTPRequestHandler):
             self._json_error("CSRF_INVALID", "模板请求来源校验失败", 403)
             return False
         self._request_params_cache = self._request_params(parsed)
-        identity, cookie = _anonymous_user_from_headers(self.headers, self.headers.get("Cookie", ""))
-        self._preset_owner_id = identity["owner_id"]
-        self._preset_cookie_header = cookie
+        principal = _principal(self.headers, self.client_address)
+        if principal.get("authenticated") and not _auth_csrf_allowed(self.headers, principal):
+            self._json_error("CSRF_INVALID", "CSRF 校验失败", 403)
+            return False
+        self._preset_owner_id = principal["owner_id"]
+        self._preset_cookie_header = principal.get("cookie", "")
         self._preset_public_only = False
         self._preset_admin = False
         return True
@@ -2743,7 +2937,129 @@ class Handler(BaseHTTPRequestHandler):
         self._json_error("PROXY_REQUIRED", "缺少或无效的代理密钥", 403)
         return False
 
+    def _auth_json_request(self) -> dict | None:
+        if not _auth_origin_allowed(self.headers):
+            self._json_error("ORIGIN_INVALID", "请求来源不被允许", 403)
+            return None
+        content_type = (self.headers.get("Content-Type", "") or "").split(";", 1)[0].strip().lower()
+        if content_type != "application/json":
+            self._json_error("CONTENT_TYPE_INVALID", "请求必须使用 application/json", 415)
+            return None
+        payload = self._request_params(urlparse(self.path))
+        return payload if isinstance(payload, dict) else None
+
+    def _handle_auth_me(self):
+        principal = _principal(self.headers, self.client_address)
+        data = {"authenticated": bool(principal.get("authenticated")), "user": None, "csrf_token": None}
+        if principal.get("authenticated"):
+            data["user"] = {"id": principal["user_id"], "username": principal["username"], "display_name": principal.get("display_name", "")}
+            data["csrf_token"] = principal.get("csrf_token")
+        extra = []
+        if principal.get("cookie"):
+            extra.append(("Set-Cookie", principal["cookie"]))
+        if principal.get("invalid_user_session"):
+            extra.append(("Set-Cookie", _user_cookie_header("", clear=True)))
+        self._json({"ok": True, "data": data}, extra_headers=extra)
+
+    def _handle_auth_register(self):
+        payload = self._auth_json_request()
+        if payload is None:
+            return
+        allowed, retry = _auth_rate_allow("register-ip", _client_ip(self.headers, self.client_address), 3600, 5)
+        if not allowed:
+            self._json_error("RATE_LIMITED", "注册请求过于频繁，请稍后再试", 429, retry_after=retry)
+            return
+        try:
+            display, username_norm = validate_username(payload.get("username", ""))
+            password = validate_password(payload.get("password", ""))
+        except ValueError as exc:
+            code, msg = str(exc).split(":", 1)
+            self._json_error(code, msg, 400)
+            return
+        anonymous = _principal(self.headers, self.client_address)
+        user_id = f"usr_{uuid.uuid4().hex}"
+        now = _now_unix()
+        conn = None
+        try:
+            with _SQL_LOCK:
+                conn = _sql()
+                conn.execute("BEGIN IMMEDIATE")
+                conn.execute("INSERT INTO users(id,username,username_norm,password_hash,display_name,created_at,updated_at) VALUES (?,?,?,?,?,?,?)", (user_id, display, username_norm, hash_password(password), display, now, now))
+                _migrate_anonymous_owner(conn, anonymous.get("owner_id", ""), user_id)
+                conn.commit()
+                conn.close()
+        except Exception as exc:
+            if conn is not None:
+                conn.rollback()
+                conn.close()
+            if "UNIQUE constraint" in str(exc):
+                self._json_error("USERNAME_TAKEN", "用户名已存在", 409)
+            else:
+                self._json_error("REGISTER_FAILED", "注册失败", 500)
+            return
+        session = _create_user_session(user_id, self.headers.get("User-Agent", ""), self.client_address[0] if self.client_address else "")
+        self._json({"ok": True, "data": {"user": {"id": user_id, "username": display, "display_name": display}, "csrf_token": session["csrf_token"]}}, 201, [
+            ("Set-Cookie", _user_cookie_header(session["token"])),
+            ("Set-Cookie", _anonymous_user_cookie_clear_header()),
+        ])
+
+    def _handle_auth_login(self):
+        payload = self._auth_json_request()
+        if payload is None:
+            return
+        try:
+            _, username_norm = validate_username(payload.get("username", ""))
+        except ValueError:
+            self._json_error("INVALID_CREDENTIALS", "用户名或密码错误", 401)
+            return
+        ip = _client_ip(self.headers, self.client_address)
+        ip_allowed, ip_retry = _auth_rate_allow("login-ip", ip, 600, 30)
+        name_allowed, name_retry = _auth_rate_allow("login-name", username_norm, 600, 10)
+        if not ip_allowed or not name_allowed:
+            self._json_error("RATE_LIMITED", "登录请求过于频繁，请稍后再试", 429, retry_after=max(ip_retry, name_retry))
+            return
+        password = str(payload.get("password", ""))
+        with _SQL_LOCK:
+            conn = _sql()
+            row = conn.execute("SELECT * FROM users WHERE username_norm=?", (username_norm,)).fetchone()
+            conn.close()
+        if not row or not verify_password(row["password_hash"], password)[0]:
+            self._json_error("INVALID_CREDENTIALS", "用户名或密码错误", 401)
+            return
+        if row["status"] != "active":
+            self._json_error("ACCOUNT_DISABLED", "账号已停用", 403)
+            return
+        _, needs_rehash = verify_password(row["password_hash"], password)
+        with _SQL_LOCK:
+            conn = _sql()
+            now = _now_unix()
+            if needs_rehash:
+                conn.execute("UPDATE users SET password_hash=?, updated_at=? WHERE id=?", (hash_password(password), now, row["id"]))
+            conn.execute("UPDATE users SET last_login_at=? WHERE id=?", (now, row["id"]))
+            conn.commit()
+            conn.close()
+        principal = _principal(self.headers, self.client_address)
+        _migrate_anonymous_resources(principal.get("owner_id", ""), row["id"])
+        session = _create_user_session(row["id"], self.headers.get("User-Agent", ""), self.client_address[0] if self.client_address else "")
+        remember_me = _parse_bool(str(payload.get("remember_me", "true")), True)
+        self._json({"ok": True, "data": {"user": {"id": row["id"], "username": row["username"], "display_name": row["display_name"]}, "csrf_token": session["csrf_token"]}}, extra_headers=[
+            ("Set-Cookie", _user_cookie_header(session["token"], persistent=remember_me)),
+            ("Set-Cookie", _anonymous_user_cookie_clear_header()),
+        ])
+
+    def _handle_auth_logout(self):
+        if not _auth_origin_allowed(self.headers):
+            self._json_error("ORIGIN_INVALID", "请求来源不被允许", 403)
+            return
+        principal = _principal(self.headers, self.client_address)
+        if principal.get("authenticated") and not _auth_csrf_allowed(self.headers, principal):
+            self._json_error("CSRF_INVALID", "CSRF 校验失败", 403)
+            return
+        _delete_user_session(self.headers)
+        self._json({"ok": True, "data": {"logged_out": True}}, extra_headers=[("Set-Cookie", _user_cookie_header("", True))])
+
     def _handle_upload_raw(self):
+        principal = _principal(self.headers, self.client_address)
         ip = _client_ip(self.headers, self.client_address)
         if _is_ip_banned(ip):
             logger.warning(f"[Security] banned ip blocked: {ip}")
@@ -2839,7 +3155,8 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 info = _enqueue_task(task_id, input_path, raw_name, ip, self.headers.get("User-Agent", ""),
                                      format_config=format_config, request_meta=request_meta,
-                                     compatibility_warnings=compatibility_warnings)
+                                     compatibility_warnings=compatibility_warnings,
+                                     owner_id=principal["owner_id"])
             except OverflowError as exc:
                 _cleanup_task_tmp(task_id, input_path)
                 message = str(exc)
@@ -2849,7 +3166,7 @@ class Handler(BaseHTTPRequestHandler):
             payload = {"task_id": task_id, "status": "queued", **info}
             if compatibility_warnings:
                 payload["compatibility_warnings"] = compatibility_warnings
-            self._json(payload)
+            self._json(payload, extra_headers=[("Set-Cookie", principal["cookie"])] if principal.get("cookie") else None)
         except Exception as e:
             try:
                 if 'task_id' in locals():
@@ -2862,7 +3179,8 @@ class Handler(BaseHTTPRequestHandler):
         if not _is_safe_uuid(task_id):
             self._json_error("INVALID_TASK_ID", "无效的任务 ID", 400)
             return
-        task = _public_task_state(task_id)
+        principal = _principal(self.headers, self.client_address)
+        task = _public_task_state(task_id, principal["owner_id"])
         if not task:
             self._json_error("TASK_NOT_FOUND", "任务不存在或已过期", 404)
         else:
@@ -2872,14 +3190,18 @@ class Handler(BaseHTTPRequestHandler):
         if not _is_safe_uuid(task_id):
             self._json_error("INVALID_TASK_ID", "无效的任务 ID", 400)
             return
+        principal = _principal(self.headers, self.client_address)
+        owner_id = principal["owner_id"]
         with TASKS_LOCK:
             task = TASKS.get(task_id)
+            if task and owner_id and task.get("owner_id", "") != owner_id:
+                task = None
         if not task or task.get("status") != "done":
             with _SQL_LOCK:
                 conn = _sql()
                 row = conn.execute(
-                    "SELECT status, output_path, output_filename, filename FROM tasks WHERE id=?",
-                    (task_id,),
+                    "SELECT status, output_path, output_filename, filename FROM tasks WHERE id=? AND owner_id=?",
+                    (task_id, owner_id),
                 ).fetchone()
                 conn.close()
             if not row or row["status"] != "done":
@@ -3001,19 +3323,20 @@ class Handler(BaseHTTPRequestHandler):
         self._redirect("/monitor")
 
     def _handle_cleanup(self, parsed):
+        tmp_result = _cleanup_expired_tmp()
         file_result = _cleanup_expired_outputs()
         db_result = _cleanup_expired_task_records()
         logger.warning(
-            f"[Cleaner] manual cleanup files={file_result['removed']} tasks={db_result['removed']} "
-            f"errors={file_result['errors'] + db_result['errors']}"
+            f"[Cleaner] manual cleanup inputs={tmp_result['removed']} files={file_result['removed']} tasks={db_result['removed']} "
+            f"errors={tmp_result['errors'] + file_result['errors'] + db_result['errors']}"
         )
         self._redirect("/monitor")
 
     def _handle_presets_list(self):
-        identity, cookie = _anonymous_user_from_headers(self.headers, self.headers.get("Cookie", ""))
+        principal = _principal(self.headers, self.client_address)
         self._json(
-            {"presets": _list_presets(identity["owner_id"])},
-            extra_headers=[("Set-Cookie", cookie)] if cookie else None,
+            {"presets": _list_presets(principal["owner_id"])},
+            extra_headers=[("Set-Cookie", principal["cookie"])] if principal.get("cookie") else None,
         )
 
     def _handle_preset_detail(self, preset_id: str):
@@ -3021,12 +3344,12 @@ class Handler(BaseHTTPRequestHandler):
         if not preset_id:
             self._json_error("TEMPLATE_ID_INVALID", "无效的模板 ID", 400)
             return
-        identity, cookie = _anonymous_user_from_headers(self.headers, self.headers.get("Cookie", ""))
-        preset = _get_preset(preset_id, owner_id=identity["owner_id"])
+        principal = _principal(self.headers, self.client_address)
+        preset = _get_preset(preset_id, owner_id=principal["owner_id"])
         if not preset:
             self._json_error("TEMPLATE_NOT_FOUND", "模板不存在", 404)
             return
-        self._json(preset, extra_headers=[("Set-Cookie", cookie)] if cookie else None)
+        self._json(preset, extra_headers=[("Set-Cookie", principal["cookie"])] if principal.get("cookie") else None)
 
     def _handle_preset_create(self):
         payload = getattr(self, "_request_params_cache", {})
@@ -3163,8 +3486,17 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def _json_error(self, code: str, message: str, status: int, *, field: str = "", reason: str = ""):
-        self._json(_error_payload(code, message, field=field, reason=reason), status)
+    def _json_error(self, code: str, message: str, status: int, *, field: str = "", reason: str = "", retry_after: int = 0):
+        headers = [("Retry-After", str(retry_after))] if retry_after else None
+        if _route_path(urlparse(self.path).path).startswith("/auth/"):
+            error = {"code": code, "message": message}
+            if field:
+                error["field"] = field
+            if reason:
+                error["reason"] = reason
+            self._json({"ok": False, "error": error}, status, extra_headers=headers)
+            return
+        self._json(_error_payload(code, message, field=field, reason=reason), status, extra_headers=headers)
 
     def log_message(self, fmt, *args):
         pass

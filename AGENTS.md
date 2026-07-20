@@ -91,6 +91,13 @@ pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m pytest tests/test_struct
 3. Nginx模板只允许固定本机上游 `127.0.0.1:9527`，服务器公网地址通过 Cloudflare Pages 的 `BACKEND_BASE_URL`配置，不写入源码。
 4. 修改路径或部署入口后至少运行 `tests/test_paths.py`，并从项目目录之外执行 `pwsh -NoProfile -File <项目目录>\run.ps1 -CheckOnly`。
 
+## IDE 快捷方式启动失败
+
+1. 触发场景：Codex 右上角或系统快捷方式启动 PyCharm 时出现 `Start Failed`，并指向 `AppData\Local\JetBrains\PyCharm*\.port`、`DirectoryLock` 或本地 socket 错误。
+2. 先确认系统快捷方式的目标仍是有效的 `pycharm64.exe`，再检查是否存在无窗口、无响应的 `pycharm64` 残留进程；只停止已确认的残留 PID，不终止其他 IDE、Java 或 Python 进程。
+3. 仅在 PyCharm 进程完全停止后删除对应版本目录中的异常 `.port` 文件，再通过正式可执行文件打开项目验证。不要删除整个 JetBrains 配置目录，也不要使用“Reset Settings & Plugins”作为默认修复方式。
+4. 验证命令应确认新 `pycharm64` 进程 `Responding=True` 且出现项目窗口标题。
+
 ## 数据和密钥保护
 
 不要提交或上传：

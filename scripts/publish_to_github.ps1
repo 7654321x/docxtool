@@ -11,6 +11,13 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$sourceVenvPython = Join-Path $SourceRoot ".venv\Scripts\python.exe"
+$testPython = if (Test-Path -LiteralPath $sourceVenvPython -PathType Leaf) {
+    $sourceVenvPython
+}
+else {
+    (Get-Command python -ErrorAction Stop).Source
+}
 
 function Invoke-Checked {
     param(
@@ -120,6 +127,9 @@ $requiredFiles = @(
     "src/docxtool/__main__.py",
     "src/docxtool/env.py",
     "src/docxtool/paths.py",
+    "src/docxtool/auth/__init__.py",
+    "src/docxtool/auth/passwords.py",
+    "src/docxtool/auth/service.py",
     "src/docxtool/web/__init__.py",
     "src/docxtool/web/app.py",
     "src/docxtool/document/__init__.py",
@@ -184,8 +194,8 @@ try {
 
         Assert-NoForbiddenFiles -CloneRoot $tempRoot
 
-        Invoke-Checked python @("-m", "pytest")
-        Invoke-Checked python @("-m", "ruff", "check", "src", "tests", "scripts")
+        Invoke-Checked $testPython @("-m", "pytest")
+        Invoke-Checked $testPython @("-m", "ruff", "check", "src", "tests", "scripts")
         if ($nodeTestFiles) {
             Invoke-Checked node (@("--test") + $nodeTestFiles)
         }

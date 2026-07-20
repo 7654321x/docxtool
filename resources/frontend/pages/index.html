@@ -285,6 +285,14 @@ h1{font-size:clamp(38px,5.4vw,64px);letter-spacing:0;line-height:1.08;margin-bot
 .letterhead-block-head{align-items:center;flex-direction:row}.letterhead-note{display:block;color:var(--muted2);font-size:11.5px;line-height:1.6}
 .letterhead-fields[hidden]{display:none}.letterhead-subsection{padding:14px 0;border-bottom:1px solid rgba(255,255,255,.09)}.letterhead-subsection:last-child{border-bottom:0;padding-bottom:0}
 .letterhead-subsection h4{font-size:13px;margin-bottom:10px}.letterhead-basic{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.auth-area{display:flex;align-items:center;gap:8px}.auth-name{font-size:12px;color:var(--muted)}
+.auth-screen{padding:0;background:rgba(3,6,12,.84);backdrop-filter:blur(18px);align-items:stretch;justify-content:stretch}
+.auth-screen.open{display:block;overflow:auto}
+.auth-shell{width:min(100%,1120px);min-height:100%;margin:0 auto;padding:30px 34px 48px;display:flex;flex-direction:column}
+.auth-topbar{display:flex;align-items:center;justify-content:space-between;gap:18px}.auth-brand{display:inline-flex;align-items:center;gap:10px;color:#fff;text-decoration:none}.auth-brand .mark{width:38px;height:38px;font-size:17px}.auth-brand strong{display:block;font-size:14px}.auth-brand small{display:block;color:var(--muted);font-size:10px;margin-top:2px}
+.auth-close{width:40px;height:40px;border-radius:13px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.07);color:#fff;font-size:22px;cursor:pointer}.auth-close:hover{border-color:rgba(246,200,95,.55);color:#ffe7a4}
+.auth-main{width:min(100%,430px);margin:auto;padding:34px 0 22px}.auth-kicker{color:var(--gold);font-size:11px;letter-spacing:.16em;text-transform:uppercase;margin-bottom:14px}.auth-main h2{font-size:34px;line-height:1.2;margin:0 0 10px;letter-spacing:0}.auth-subtitle{color:var(--muted);font-size:14px;line-height:1.7;margin:0 0 34px}.auth-form{display:grid;gap:19px}.auth-field{display:grid;gap:8px}.auth-field[hidden]{display:none}.auth-field label{color:#dbe5fa;font-size:13px;font-weight:800}.auth-required{color:#fda4af;margin-left:3px}.auth-control{position:relative}.auth-control input{width:100%;height:52px;border-radius:14px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.075);color:#fff;padding:0 46px 0 45px;outline:none;font-size:14px;transition:border-color .2s,box-shadow .2s,background .2s}.auth-control input::placeholder{color:#7f8eac}.auth-control input:focus{border-color:rgba(246,200,95,.7);background:rgba(255,255,255,.105);box-shadow:0 0 0 4px rgba(246,200,95,.1)}.auth-icon{position:absolute;left:15px;top:50%;transform:translateY(-50%);color:#9ba9c2;font-size:17px;pointer-events:none}.auth-toggle{position:absolute;right:11px;top:50%;transform:translateY(-50%);width:32px;height:32px;border:0;border-radius:9px;background:transparent;color:#aebbd0;cursor:pointer;font-size:17px}.auth-toggle:hover{color:#ffe7a4;background:rgba(255,255,255,.08)}.auth-remember{display:flex;align-items:flex-start;gap:10px;color:#cbd5e1;font-size:12px;line-height:1.55;cursor:pointer}.auth-remember[hidden]{display:none}.auth-remember input{width:18px;height:18px;margin:1px 0 0;accent-color:#c89118;flex:0 0 auto}.auth-remember small{display:block;color:var(--muted2);font-size:10px;margin-top:2px}.auth-error{min-height:20px;color:#fb7185;font-size:12px;line-height:1.5}.auth-submit{width:100%;min-height:52px;border:0;border-radius:14px;background:linear-gradient(135deg,#d9a62b,#b97e10);box-shadow:0 15px 30px rgba(190,133,25,.24);color:#fff;font-size:15px;font-weight:900;cursor:pointer;transition:transform .2s,box-shadow .2s}.auth-submit:hover{transform:translateY(-2px);box-shadow:0 20px 35px rgba(190,133,25,.34)}.auth-submit:disabled{opacity:.65;cursor:wait;transform:none}.auth-submit span{margin-left:8px;font-size:20px;vertical-align:-1px}.auth-switch{display:flex;align-items:center;gap:12px;margin-top:28px;color:var(--muted);font-size:13px;white-space:nowrap}.auth-switch::before,.auth-switch::after{content:"";height:1px;background:rgba(255,255,255,.12);flex:1}.auth-link{border:0;background:transparent;color:#f6c85f;font:inherit;font-weight:800;cursor:pointer;padding:0}.auth-link:hover{color:#ffe7a4}.auth-note{color:var(--muted2);font-size:11px;line-height:1.6;text-align:center;margin-top:22px}
+@media(max-width:620px){.auth-shell{padding:20px 20px 34px}.auth-main{padding:38px 0 14px}.auth-main h2{font-size:29px}.auth-subtitle{margin-bottom:28px}.auth-control input{height:50px}}
 .agency-list,.signer-list{display:grid;gap:8px}.agency-row{display:grid;grid-template-columns:minmax(180px,1.4fr) minmax(140px,1fr) 110px auto;gap:8px;align-items:end}
 .row-actions{display:flex;gap:5px}.icon-btn{width:34px;height:34px;border-radius:8px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.07);color:#fff;font-size:15px;display:grid;place-items:center}.icon-btn:hover{border-color:rgba(246,200,95,.45);color:#ffe7a4}.icon-btn:disabled{opacity:.3;cursor:not-allowed;border-color:rgba(255,255,255,.1);color:var(--muted2)}
 .letterhead-add{margin-top:9px}.signer-group{padding:10px 0;border-bottom:1px solid rgba(255,255,255,.07)}.signer-group:last-child{border-bottom:0}.signer-group-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}.signer-group-head strong{font-size:12px}.signer-row{display:grid;grid-template-columns:minmax(180px,1fr) 100px 34px;gap:8px;margin-bottom:7px}
@@ -296,7 +304,7 @@ h1{font-size:clamp(38px,5.4vw,64px);letter-spacing:0;line-height:1.08;margin-bot
 </head>
 <body>
 <div class="blob one"></div><div class="blob two"></div><div class="blob three"></div>
-<header class="navbar"><div class="shell"><a class="brand" href="#home"><div class="mark">文</div><div><strong>公文智能排版</strong><small>Word 格式规范化工具</small></div></a><nav class="navlinks"><a class="active" href="#home">首页</a><a href="#upload">上传</a><a href="#tips">提示</a><a href="#faq">问题</a></nav><a class="nav-cta" href="#upload">立即上传</a></div></header>
+<header class="navbar"><div class="shell"><a class="brand" href="#home"><div class="mark">文</div><div><strong>公文智能排版</strong><small>Word 格式规范化工具</small></div></a><nav class="navlinks"><a class="active" href="#home">首页</a><a href="#upload">上传</a><a href="#tips">提示</a><a href="#faq">问题</a></nav><div class="auth-area"><span class="auth-name" id="authName"></span><button class="nav-cta" id="authButton" type="button" onclick="openAuth()">登录 / 注册</button><button class="btn btn-small btn-secondary" id="logoutButton" type="button" onclick="logoutUser()" hidden>退出</button></div></div></header>
 <main id="home">
   <section class="section" id="upload"><div class="shell"><div class="section-head reveal"><div class="section-title"><div class="section-label">Upload</div><h2>选择文件后自动开始处理</h2><p>默认按党政机关公文格式排版。需要调整字体、字号、页边距时，再打开排版设置。</p></div></div><div class="upload-card glass reveal d1"><div class="upload-grid"><div class="dropzone" id="dropZone" onclick="document.getElementById('file').click()"><div class="upload-icon">📄</div><h3>拖拽 Word 到这里</h3><p>或点击选择本地 .docx 文件。上传后会显示处理步骤，完成后自动下载。</p><div class="upload-hint"><span class="pill">.docx</span><span class="pill">≤ 10MB</span><span class="pill">请勿上传涉密文件</span></div></div><aside class="side-panel"><div class="current-rule current-rule-simple"><div style="width:100%"><strong>当前规则</strong><select class="home-rule-select" id="homeTemplateSelect" onchange="selectTemplate(this.value)"></select></div></div><input type="file" id="file" accept=".docx" onchange="upload(this.files[0])"><div class="hero-actions" style="margin:0 0 8px"><button class="btn btn-primary" onclick="document.getElementById('file').click()">选择文件</button><button class="btn btn-secondary" onclick="openSettings()">排版设置</button></div><div class="meta-info" id="meta">还没有选择文件</div><div class="progress-area" id="progressArea"><div class="progress-track"><div class="progress-fill" id="bar"></div></div><div class="status-msg" id="msg"></div><div class="stepper" id="stepper"><div class="mini-step" data-step="1"><i>1</i>上传文件</div><div class="mini-step" data-step="2"><i>2</i>读取文档结构</div><div class="mini-step" data-step="3"><i>3</i>应用公文格式</div><div class="mini-step" data-step="4"><i>4</i>生成下载文件</div></div></div><div class="result-card" id="resultCard"><h3>排版完成</h3><p>文件已自动下载，也可以重新下载或继续处理下一个文件。</p><div class="hero-actions" style="margin:0"><button class="btn btn-small btn-primary" id="redownloadBtn" onclick="redownload()">重新下载</button><button class="btn btn-small btn-secondary" onclick="resetUpload()">处理下一个</button></div></div></aside></div></div></div></section>
 
@@ -306,6 +314,30 @@ h1{font-size:clamp(38px,5.4vw,64px);letter-spacing:0;line-height:1.08;margin-bot
 
   <section class="section" id="faq"><div class="shell"><div class="section-head reveal"><div class="section-title"><h2>常见问题</h2></div></div><div class="faq-grid"><article class="faq-item reveal"><h3>排版后是否还要人工检查？</h3><p>建议检查。系统能完成大部分格式统一，但复杂表格、图片和特殊格式仍建议人工复核。</p></article><article class="faq-item reveal d1"><h3>为什么上传后提示失败？</h3><p>常见原因是文件不是 .docx、文件超过 10MB、文档损坏，或包含无法解析的特殊对象。</p></article><article class="faq-item reveal d2"><h3>上传文件会保存多久？</h3><p>上传原文件处理完成后应尽快清理，输出文件建议限时保留，请及时下载。</p></article><article class="faq-item reveal d3"><h3>能不能调整默认格式？</h3><p>可以。点击“排版设置”后可调整常用字体、字号、页边距、行距，也可以展开完整设置。</p></article></div></div></section>
 </main>
+
+<div class="modal auth-screen" id="authModal" role="dialog" aria-modal="true" aria-labelledby="authTitle" onclick="closeAuth(event)">
+  <div class="auth-shell" onclick="event.stopPropagation()">
+    <div class="auth-topbar">
+      <a class="auth-brand" href="#home" onclick="closeAuth()"><div class="mark">文</div><div><strong>公文智能排版</strong><small>Word 格式规范化工具</small></div></a>
+      <button class="auth-close" type="button" onclick="closeAuth()" aria-label="关闭认证页面">×</button>
+    </div>
+    <main class="auth-main">
+      <div class="auth-kicker">DOCXTOOL ACCOUNT</div>
+      <h2 id="authTitle">登录账户</h2>
+      <p class="auth-subtitle" id="authSubtitle">登录后继续使用你的模板和排版任务</p>
+      <form class="auth-form" id="authForm" autocomplete="off" onsubmit="submitAuth(event)">
+        <div class="auth-field"><label for="authUsername">用户名<span class="auth-required">*</span></label><div class="auth-control"><span class="auth-icon" aria-hidden="true">✉</span><input id="authUsername" name="username" autocomplete="username" minlength="3" maxlength="32" placeholder="请输入用户名" required></div></div>
+        <div class="auth-field"><label for="authPassword">密码<span class="auth-required">*</span></label><div class="auth-control"><span class="auth-icon" aria-hidden="true">▣</span><input id="authPassword" name="password" type="password" autocomplete="new-password" minlength="8" maxlength="128" placeholder="请输入密码" required><button class="auth-toggle" id="authPasswordToggle" type="button" onclick="toggleAuthPassword('authPassword',this)" aria-label="显示密码">◉</button></div></div>
+        <div class="auth-field" id="authConfirmField" hidden><label for="authConfirmPassword">确认密码<span class="auth-required">*</span></label><div class="auth-control"><span class="auth-icon" aria-hidden="true">▣</span><input id="authConfirmPassword" type="password" autocomplete="new-password" minlength="8" maxlength="128" placeholder="请再次输入密码"><button class="auth-toggle" type="button" onclick="toggleAuthPassword('authConfirmPassword',this)" aria-label="显示确认密码">◉</button></div></div>
+        <label class="auth-remember" id="authRememberField"><input id="authRemember" name="remember" type="checkbox" checked><span>保持登录状态<small>服务器保存加密会话，30 天内再次访问时自动登录</small></span></label>
+        <div class="auth-error" id="authError" role="alert"></div>
+        <button class="auth-submit" id="authSubmit" type="submit">登录<span aria-hidden="true">→</span></button>
+      </form>
+      <div class="auth-switch"><span id="authSwitchText">还没有账号？</span><button class="auth-link" id="authSwitchButton" type="button" onclick="toggleAuthMode()">创建账号</button></div>
+      <p class="auth-note">账号用于隔离你的模板和排版记录，不会改变当前文档处理流程。</p>
+    </main>
+  </div>
+</div>
 
 <div class="modal" id="settingsModal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
   <div class="settings settings-wide" onclick="event.stopPropagation()">
@@ -469,6 +501,7 @@ const LOCAL_TEMPLATE_KEY='docxtool_custom_templates_v2';
 const API_PREFIX = '/api';
 let lastDownloadUrl='',lastDownloadName='',templateApiAvailable=false;
 let adminCsrfToken='';
+let userCsrfToken='',currentUser=null,authMode='login';
 let currentPresetId=DEFAULT_PRESET_ID;
 let templateStore=[
   {id:DEFAULT_PRESET_ID,name:'党政机关公文格式',type:'system',template_type:'system',is_system:true,is_default:true,description:'默认公文格式，适合通知、报告、请示、汇报等正式材料。'},
@@ -1034,16 +1067,74 @@ async function requestJson(path,options={}){
   const init={...options,headers:{...(options.headers||{})}};
   if(init.body&&!init.headers['Content-Type'])init.headers['Content-Type']='application/json';
   init.credentials='same-origin';
-  if(init.method&&init.method!=='GET'&&init.method!=='HEAD'&&adminCsrfToken&&!init.headers['X-CSRF-Token']){
-    init.headers['X-CSRF-Token']=adminCsrfToken;
+  if(init.method&&init.method!=='GET'&&init.method!=='HEAD'&&(userCsrfToken||adminCsrfToken)&&!init.headers['X-CSRF-Token']){
+    init.headers['X-CSRF-Token']=userCsrfToken||adminCsrfToken;
   }
   const resp=await fetch(api(path),init);
   if(!resp.ok){
     let err={};
     try{err=await resp.json()}catch(_){}
-    throw new Error(err.error||resp.statusText||'request failed');
+    throw new Error(err.error?.message||err.error||resp.statusText||'request failed');
   }
   return resp.json();
+}
+function renderAuth(){
+  document.getElementById('authName').textContent=currentUser?(currentUser.display_name||currentUser.username):'';
+  document.getElementById('authButton').hidden=!!currentUser;
+  document.getElementById('logoutButton').hidden=!currentUser;
+}
+function openAuth(){
+  document.getElementById('authModal').classList.add('open');
+  document.body.style.overflow='hidden';
+  document.getElementById('authPassword').value='';
+  document.getElementById('authConfirmPassword').value='';
+  setAuthMode('login');
+  requestAnimationFrame(()=>document.getElementById('authUsername').focus());
+}
+function closeAuth(event){
+  if(event&&event.target!==event.currentTarget)return;
+  document.getElementById('authModal').classList.remove('open');
+  document.body.style.overflow='';
+  document.getElementById('authError').textContent='';
+  document.getElementById('authPassword').value='';
+  document.getElementById('authConfirmPassword').value='';
+}
+function setAuthMode(mode){
+  authMode=mode;
+  const registering=mode==='register';
+  document.getElementById('authTitle').textContent=registering?'创建账户':'登录账户';
+  document.getElementById('authSubtitle').textContent=registering?'填写以下信息注册新账户':'登录后继续使用你的模板和排版任务';
+  document.getElementById('authSubmit').innerHTML=(registering?'创建账户':'登录')+'<span aria-hidden="true">→</span>';
+  document.getElementById('authSwitchText').textContent=registering?'已有账号？':'还没有账号？';
+  document.getElementById('authSwitchButton').textContent=registering?'返回登录':'创建账号';
+  document.getElementById('authConfirmField').hidden=!registering;
+  document.getElementById('authRememberField').hidden=registering;
+  document.getElementById('authConfirmPassword').required=registering;
+  document.getElementById('authPassword').autocomplete='new-password';
+  document.getElementById('authError').textContent='';
+}
+function toggleAuthMode(){setAuthMode(authMode==='login'?'register':'login');document.getElementById('authUsername').focus()}
+function toggleAuthPassword(inputId,button){
+  const input=document.getElementById(inputId);const showing=input.type==='text';
+  input.type=showing?'password':'text';
+  button.textContent=showing?'◉':'◎';
+  button.setAttribute('aria-label',showing?'显示密码':'隐藏密码');
+  input.focus();
+}
+async function refreshUserSession(){
+  try{const response=await requestJson('/auth/me');const data=response.data||{};currentUser=data.authenticated?data.user:null;userCsrfToken=data.csrf_token||''}catch(_){currentUser=null;userCsrfToken=''}
+  renderAuth();
+}
+async function submitAuth(event){
+  event.preventDefault();const button=document.getElementById('authSubmit');const error=document.getElementById('authError');button.disabled=true;error.textContent='';
+  const password=document.getElementById('authPassword').value;
+  if(authMode==='register'&&password!==document.getElementById('authConfirmPassword').value){error.textContent='两次输入的密码不一致';button.disabled=false;document.getElementById('authConfirmPassword').focus();return}
+  const rememberMe=authMode==='login'&&document.getElementById('authRemember').checked;
+  try{const response=await requestJson('/auth/'+authMode,{method:'POST',body:JSON.stringify({username:document.getElementById('authUsername').value,password,remember_me:rememberMe})});currentUser=response.data.user;userCsrfToken=response.data.csrf_token||'';closeAuth();renderAuth();await loadRemoteTemplates()}catch(e){error.textContent=e.message||'请求失败'}finally{button.disabled=false}
+}
+async function logoutUser(){
+  try{await requestJson('/auth/logout',{method:'POST',body:'{}'})}catch(e){status(e.message||'退出失败','error');return}
+  currentUser=null;userCsrfToken='';renderAuth();templateStore=templateStore.filter(t=>!t.remote||t.type==='builtin');await loadRemoteTemplates();
 }
 async function refreshAdminSession(){
   try{
@@ -1321,7 +1412,8 @@ async function upload(f){
   status('排版超时，请稍后重试或重新上传','error');
 }
 function triggerDownload(url,name){const a=document.createElement('a');a.href=url;a.download=name;a.click()}function redownload(){if(lastDownloadUrl)triggerDownload(lastDownloadUrl,lastDownloadName)}function resetUpload(){document.getElementById('file').value='';meta.textContent='还没有选择文件';progressArea.style.display='none';resultCard.style.display='none';bar.style.width='0';status('',null);setStep(0)}
-async function bootstrap(){loadLocalTemplates();initSettings();renderTemplateOptions();await refreshAdminSession();await loadRemoteTemplates()}
+async function bootstrap(){loadLocalTemplates();initSettings();renderTemplateOptions();await refreshUserSession();await refreshAdminSession();await loadRemoteTemplates()}
+document.addEventListener('keydown',event=>{if(event.key==='Escape'&&document.getElementById('authModal').classList.contains('open'))closeAuth()});
 bootstrap();
 </script>
 </body>

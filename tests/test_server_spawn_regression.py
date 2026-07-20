@@ -63,7 +63,9 @@ def _json_request(url: str, headers: dict[str, str] | None = None) -> dict:
 def _upload_docx(base_url: str, payload: bytes, headers: dict[str, str]) -> dict:
     req = Request(f"{base_url}/upload", data=payload, method="PUT", headers=headers)
     with urlopen(req, timeout=10) as response:
-        return json.loads(response.read().decode("utf-8"))
+        result = json.loads(response.read().decode("utf-8"))
+        result["_cookie"] = response.headers.get("Set-Cookie", "").split(";", 1)[0]
+        return result
 
 
 def _read_download(base_url: str, task_id: str, headers: dict[str, str]) -> bytes:
@@ -192,23 +194,34 @@ def test_spawn_worker_completes_upload_with_default_format_config(tmp_path: Path
 
         upload = _upload_docx(base_url, _docx_bytes(), headers)
         task_id = upload["task_id"]
+        headers["Cookie"] = upload["_cookie"]
         status = {}
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
-            status = _json_request(f"{base_url}/status/{task_id}", {"X-Proxy-Secret": STRONG_PROXY_SECRET})
+            status = _json_request(f"{base_url}/status/{task_id}", headers)
             if status.get("status") in {"done", "error", "timeout", "failed"}:
                 break
             time.sleep(0.1)
 
         assert status.get("status") == "done", status
-        downloaded = _read_download(base_url, task_id, {"X-Proxy-Secret": STRONG_PROXY_SECRET})
+        downloaded = _read_download(base_url, task_id, headers)
         assert zipfile.is_zipfile(io.BytesIO(downloaded))
         assert Document(io.BytesIO(downloaded)).paragraphs
 
         task_tmp_dir = tmp_path / "runtime" / "tmp" / task_id
-        deadline = time.monotonic() + 5
-        while task_tmp_dir.exists() and time.monotonic() < deadline:
-            time.sleep(0.05)
+        assert task_tmp_dir.exists()
+        retained_input = task_tmp_dir / "input.docx"
+        assert retained_input.exists()
+
+        old_mtime = time.time() - server.FILE_TTL - 60
+        os.utime(retained_input, (old_mtime, old_mtime))
+        old_runtime_tmp = server.RUNTIME_TMP_DIR
+        server.RUNTIME_TMP_DIR = str(tmp_path / "runtime" / "tmp")
+        try:
+            cleanup_result = server._cleanup_expired_tmp()
+        finally:
+            server.RUNTIME_TMP_DIR = old_runtime_tmp
+        assert cleanup_result["removed"] == 1
         assert not task_tmp_dir.exists()
     except HTTPError as exc:
         raise AssertionError(exc.read().decode("utf-8", errors="replace")) from exc

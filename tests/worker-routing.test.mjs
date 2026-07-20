@@ -191,7 +191,7 @@ test("proxy strips sensitive inbound headers and forwards only allowed cookies",
     headers: {
       Authorization: "Bearer user-secret",
       "CF-Connecting-IP": "203.0.113.5",
-      Cookie: "docxtool_admin_session=session-id; docxtool_anon_user=v1.token; other=value",
+      Cookie: "docxtool_admin_session=session-id; docxtool_anon_user=v1.token; docxtool_user_session=user-token; other=value",
       "X-Admin-Token": "admin-secret",
       "X-Custom": "kept",
       "X-Forwarded-For": "198.51.100.1",
@@ -208,10 +208,19 @@ test("proxy strips sensitive inbound headers and forwards only allowed cookies",
   assert.equal(headers.get("CF-Connecting-IP"), "203.0.113.5");
   assert.equal(headers.get("X-Forwarded-For"), "203.0.113.5");
   assert.equal(headers.get("X-Real-IP"), "203.0.113.5");
-  assert.equal(headers.get("Cookie"), "docxtool_admin_session=session-id; docxtool_anon_user=v1.token");
+  assert.equal(headers.get("Cookie"), "docxtool_admin_session=session-id; docxtool_anon_user=v1.token; docxtool_user_session=user-token");
   assert.equal(headers.get("X-Custom"), "kept");
   assert.equal(headers.has("Authorization"), false);
   assert.equal(headers.has("X-Admin-Token"), false);
+});
+
+test("user auth routes proxy only their allowed methods", async () => {
+  assert.equal((await callWorker("/api/auth/me", { method: "GET" })).response.status, 209);
+  assert.equal((await callWorker("/api/auth/me", { method: "POST" })).response.status, 405);
+  for (const path of ["/api/auth/register", "/api/auth/login", "/api/auth/logout"]) {
+    assert.equal((await callWorker(path, { method: "POST", body: "{}" })).response.status, 209, path);
+    assert.equal((await callWorker(path, { method: "GET" })).response.status, 405, path);
+  }
 });
 
 test("proxy preserves anonymous Set-Cookie from backend", async () => {

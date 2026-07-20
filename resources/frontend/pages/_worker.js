@@ -3,6 +3,7 @@ const API_STATUS = "/api/status/";
 const API_DOWNLOAD = "/api/download/";
 const API_PRESETS = "/api/presets";
 const API_ADMIN_SESSION = "/api/admin/session";
+const API_AUTH_PREFIX = "/api/auth/";
 const ADMIN_EXACT_PATHS = new Set([
   "/admin/login",
   "/admin/logout",
@@ -32,6 +33,7 @@ function backendPath(pathname) {
   if (pathname === API_PRESETS) return "/presets";
   if (pathname.startsWith(API_PRESETS + "/")) return "/presets/" + pathname.slice((API_PRESETS + "/").length);
   if (pathname === API_ADMIN_SESSION) return "/admin/session";
+  if (pathname.startsWith(API_AUTH_PREFIX)) return pathname;
   if (pathname.startsWith("/api/admin/")) return "/admin/" + pathname.slice("/api/admin/".length);
   if (pathname === "/api/health") return "/health";
   if (pathname === "/api/ready") return "/ready";
@@ -61,6 +63,8 @@ function methodAllowed(pathname, method) {
   if (pathname === API_PRESETS) return method === "GET" || method === "POST";
   if (pathname.startsWith(API_PRESETS + "/")) return method === "GET" || method === "PUT" || method === "DELETE";
   if (pathname === API_ADMIN_SESSION) return method === "GET";
+  if (pathname === "/api/auth/me") return method === "GET";
+  if (pathname === "/api/auth/register" || pathname === "/api/auth/login" || pathname === "/api/auth/logout") return method === "POST";
   if (pathname === "/admin/login") return method === "GET" || method === "POST";
   if (pathname === "/admin/logout") return method === "POST";
   if (pathname === "/admin/session") return method === "GET";
@@ -84,6 +88,7 @@ function filterCookieHeader(cookieHeader) {
     if (
       trimmed.startsWith("docxtool_admin_session=") ||
       trimmed.startsWith("docxtool_anon_user=")
+      || trimmed.startsWith("docxtool_user_session=")
     ) allowed.push(trimmed);
   }
   return allowed.join("; ");

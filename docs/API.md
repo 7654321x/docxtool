@@ -73,6 +73,29 @@ HTTP 状态码为 `403`。
 
 `OPTIONS` 预检请求固定返回 `204`。
 
+## 1.4 普通用户账号
+
+普通用户与管理员会话相互独立。用户登录成功后，服务设置 `docxtool_user_session` HttpOnly Cookie；数据库只保存 Session Token 的 SHA-256 摘要。密码使用 Argon2id 保存。
+
+```http
+GET  /api/auth/me
+POST /api/auth/register
+POST /api/auth/login
+POST /api/auth/logout
+```
+
+注册和登录请求必须使用 `application/json`，并通过配置的 `FRONTEND_ORIGIN` 来源校验。退出以及已登录用户的模板写操作还必须携带 `/api/auth/me` 返回的 `X-CSRF-Token`。CSRF Token 仅保存在页面内存中。
+
+用户登录后，个人模板、任务状态和下载文件按账号隔离；未登录用户继续使用签名匿名 Cookie。公共模板和系统模板仍可被所有用户读取。
+
+生产环境建议配置：
+
+```text
+DOCXTOOL_USER_SESSION_DAYS=30
+COOKIE_SECURE=1
+FRONTEND_ORIGIN=https://docxtool.pages.dev
+```
+
 ## 2. 健康检查与页面接口
 
 ### 2.1 首页
@@ -135,7 +158,7 @@ GET /version
 - `version`: 应用版本号。
 - `started_at`: 服务启动时间。
 - `bind_host`: 当前绑定地址。
-- `file_ttl_seconds`: 输出文件保留时间，默认 86400 秒。
+- `file_ttl_seconds`: 上传原件、输出文件和任务临时文件的保留时间，默认 604800 秒（7 天）。
 - `max_upload_mb`: 单文件最大上传大小，默认 10 MB。
 - `max_workers`: 后台处理线程数。
 - `max_queue`: 最大排队容量。
@@ -383,7 +406,7 @@ curl "http://127.0.0.1:9527/download/b3e4d8a8-0f3a-4f1b-b8c3-5f8b35d02c11" \
 | 403 | `PROXY_REQUIRED` | 缺少或错误的 `X-Proxy-Secret` |
 | 410 | `FILE_EXPIRED` | 输出文件已过期或被清理 |
 
-输出文件默认保留 86400 秒，后台清理线程每 60 秒检查一次过期文件。
+上传原件、输出文件和任务临时文件默认保留 604800 秒（7 天），后台清理线程按 `CLEANUP_INTERVAL_MINUTES` 检查过期文件。下载不会立即删除文件。
 
 ## 4. 管理与监控接口
 

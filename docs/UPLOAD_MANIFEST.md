@@ -46,6 +46,9 @@ git@github.com:7654321x/docxtool.git
 | `src/docxtool/__main__.py` | `python -m docxtool` 入口 |
 | `src/docxtool/paths.py` | 项目路径、运行目录和默认资源定位 |
 | `src/docxtool/env.py` | 环境变量加载和本地启动配置 |
+| `src/docxtool/auth/__init__.py` | 普通用户认证包入口 |
+| `src/docxtool/auth/passwords.py` | Argon2id 密码哈希与校验 |
+| `src/docxtool/auth/service.py` | 用户名和密码输入归一化及验证 |
 | `src/docxtool/web/__init__.py` | Web 包入口 |
 | `src/docxtool/web/app.py` | Web 服务入口、上传下载、任务队列、管理后台、健康检查 |
 | `src/docxtool/document/__init__.py` | 文档处理包入口 |

@@ -54,8 +54,9 @@ class ServerProductionControlsTest(unittest.TestCase):
             server.TASK_QUEUE.clear()
         self.tmp.cleanup()
 
-    def test_file_ttl_is_24_hours(self):
-        self.assertEqual(server.FILE_TTL, 86400)
+    def test_file_ttl_is_seven_days(self):
+        self.assertEqual(server.FILE_TTL, 7 * 24 * 60 * 60)
+        self.assertGreaterEqual(server.TASK_RETENTION_HOURS, 7 * 24)
 
     def test_default_tokens_allow_simple_startup(self):
         self.assertEqual(server.DEFAULT_ADMIN_TOKEN, "7654321xxx")
@@ -481,6 +482,26 @@ class ServerProductionControlsTest(unittest.TestCase):
         self.assertFalse(old_file.exists())
         self.assertTrue(new_file.exists())
 
+    def test_cleanup_expired_inputs_deletes_only_old_files(self):
+        old_runtime_tmp = server.RUNTIME_TMP_DIR
+        with tempfile.TemporaryDirectory() as tmp:
+            server.RUNTIME_TMP_DIR = str(Path(tmp) / "tmp")
+            task_dir = Path(server.RUNTIME_TMP_DIR) / "task-input"
+            task_dir.mkdir(parents=True)
+            old_file = task_dir / "input.docx"
+            new_file = task_dir / "new-input.docx"
+            old_file.write_text("old", encoding="utf-8")
+            new_file.write_text("new", encoding="utf-8")
+            old_mtime = time.time() - server.FILE_TTL - 60
+            os.utime(old_file, (old_mtime, old_mtime))
+
+            result = server._cleanup_expired_tmp()
+
+            self.assertEqual(result["removed"], 1)
+            self.assertFalse(old_file.exists())
+            self.assertTrue(new_file.exists())
+        server.RUNTIME_TMP_DIR = old_runtime_tmp
+
     def test_health_ready_version_payloads(self):
         self.assertEqual(server._health_payload()["status"], "ok")
 
@@ -491,7 +512,7 @@ class ServerProductionControlsTest(unittest.TestCase):
         self.assertTrue(ready["checks"]["log_dir"])
 
         version = server._version_payload()
-        self.assertEqual(version["file_ttl_seconds"], 86400)
+        self.assertEqual(version["file_ttl_seconds"], 7 * 24 * 60 * 60)
         self.assertEqual(version["max_upload_mb"], 10)
         self.assertIn("started_at", version)
 
