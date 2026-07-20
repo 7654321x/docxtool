@@ -54,5 +54,6 @@ def default_format_config_path() -> Path:
 def runtime_dir(kind: str, env_name: str) -> Path:
     override = os.environ.get(env_name)
     if override:
-        return Path(override)
+        path = Path(override)
+        return path if path.is_absolute() else project_path(str(path))
     return var_path(kind)

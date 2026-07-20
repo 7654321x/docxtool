@@ -107,6 +107,8 @@ $requiredFiles = @(
     "docs/UPLOAD_MANIFEST.md",
     "requirements.txt",
     "run.sh",
+    "run.ps1",
+    "deploy/nginx-docxtool.conf",
     "pyproject.toml",
     "src/docxtool/resources/__init__.py",
     "src/docxtool/resources/config/default-format.json",

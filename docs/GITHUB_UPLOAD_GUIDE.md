@@ -47,7 +47,8 @@ pwsh -NoProfile -Command "git ls-remote git@github.com:7654321x/docxtool.git ref
 默认发布以下类型文件：
 
 - 项目文档：`README.md`、`docs/DEPLOY.md`、`docs/API.md`、`docs/UPLOAD_MANIFEST.md`、`docs/GITHUB_UPLOAD_GUIDE.md`、`AGENTS.md`、`CONVENTIONS.md`
-- 依赖和启动：`requirements.txt`、`run.sh`
+- 依赖和启动：`requirements.txt`、`run.sh`、`run.ps1`
+- 服务器代理模板：`deploy/nginx-docxtool.conf`
 - 配置：`.env.example`、`.gitignore`、`.gitattributes`、`pytest.ini`、`ruff.toml`、`pyproject.toml`、`.github/workflows/ci.yml`
 - 后端和排版核心：`server.py`、`src/docxtool/**/*.py`、`src/docxtool/resources/config/default-format.json`
 - 脚本：`scripts/generate_secrets.py`、`scripts/migrate_legacy_database.ps1`、`scripts/publish_to_github.ps1`

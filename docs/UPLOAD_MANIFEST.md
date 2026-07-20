@@ -28,6 +28,8 @@ git@github.com:7654321x/docxtool.git
 | `requirements.txt` | Python 依赖 | 当前位于仓库根目录 |
 | `pyproject.toml` | Python 包配置 | `src` 布局和 wheel 资源打包 |
 | `run.sh` | Linux 启动脚本 | 调用 `server.py` |
+| `run.ps1` | Windows 启动脚本 | 基于脚本自身目录创建虚拟环境并启动后端 |
+| `deploy/nginx-docxtool.conf` | Nginx代理模板 | 不包含服务器IP或磁盘绝对路径 |
 | `.env.example` | 环境变量示例 | 不含真实密钥 |
 | `.gitignore` | Git 忽略规则 | 不会自动移除已跟踪文件 |
 | `.gitattributes` | Git 文本/二进制规则 | 控制换行和二进制文件处理 |

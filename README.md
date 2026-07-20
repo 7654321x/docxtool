@@ -27,6 +27,8 @@
 - 可选 `letterhead` 配置用于在首页正文流生成机关标志、结构化发文字号、上行文签发人和红色段落边框；默认关闭，外部或无法可靠识别的已有版头保持原样。
 - `requirements.txt`：Python 运行依赖。
 - `run.sh`：Linux 启动脚本。
+- `run.ps1`：Windows可移动部署启动脚本，所有相对路径以项目根目录解析。
+- `deploy/nginx-docxtool.conf`：服务器Nginx反向代理模板。
 - `.env.example`：环境变量示例，不包含真实密钥。
 - `docs/API.md`：HTTP 接口、鉴权、错误码说明。
 - `docs/DEPLOY.md`：生产部署说明。
@@ -39,11 +41,17 @@
 Windows PowerShell 7：
 
 ```pwsh
-pwsh -NoProfile -Command "python -m venv .venv"
-pwsh -NoProfile -Command ".\.venv\Scripts\python -m pip install --upgrade pip"
-pwsh -NoProfile -Command ".\.venv\Scripts\python -m pip install -r requirements.txt"
-pwsh -NoProfile -Command "$env:ADMIN_TOKEN='换成你的长随机管理密钥'; $env:PROXY_SECRET='换成你的长随机代理密钥'; python server.py"
+Copy-Item .env.example .env
+# 编辑 .env 后首次运行：
+pwsh -NoProfile -File .\run.ps1 -InstallDependencies
+# 后续运行：
+pwsh -NoProfile -File .\run.ps1
+# 注册为Windows计划任务，退出远程桌面后仍运行：
+pwsh -NoProfile -File .\run.ps1 -InstallService
 ```
+
+`run.ps1`每次启动前都会核对`requirements.txt`，缺少依赖时自动下载并安装；
+已满足的依赖不会重复下载。
 
 Linux：
 
@@ -56,7 +64,9 @@ export PROXY_SECRET='换成你的长随机代理密钥'
 ./run.sh
 ```
 
-默认监听 `127.0.0.1:9527`。如需直接监听公网网卡：
+默认监听 `127.0.0.1:9527`。生产环境通过Nginx反向代理访问，不要将9527开放到公网。
+
+仅在明确需要直接调试网络监听时使用：
 
 ```bash
 BIND_HOST=0.0.0.0 PORT=9527 ./run.sh

@@ -1028,9 +1028,9 @@ if __name__ == "__main__":
     assert _sanitize_log_stem("新建 DOCX 文档 (2).docx") == "新建 DOCX 文档 (2)"
     assert _sanitize_log_stem('a<b>:c?.docx') == "a_b_c"
     assert _build_document_log_path(
-        r"C:\Users\94575\Desktop\新建 DOCX 文档 (2).docx",
-        r"D:\logs",
+        "新建 DOCX 文档 (2).docx",
+        "logs",
         timestamp="20260531_160000",
-    ).endswith(r"D:\logs\20260531_160000_新建 DOCX 文档 (2).log")
+    ).endswith(_os.path.join("logs", "20260531_160000_新建 DOCX 文档 (2).log"))
 
     print("✅ 样式配置纯函数验证全部通过")

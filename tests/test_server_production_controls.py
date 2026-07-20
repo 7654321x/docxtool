@@ -66,6 +66,7 @@ class ServerProductionControlsTest(unittest.TestCase):
         urls = server._startup_urls()
 
         self.assertEqual(urls["tool"], "http://127.0.0.1:9527")
+        self.assertEqual(urls["admin_login"], "http://127.0.0.1:9527/admin/login")
         self.assertEqual(urls["monitor"], "http://127.0.0.1:9527/monitor")
         self.assertEqual(urls["tunnel_command"], "cloudflared tunnel --url http://127.0.0.1:9527")
 
@@ -678,6 +679,36 @@ class ServerProductionControlsTest(unittest.TestCase):
         self.assertNotIn('id="filterForm"', html)
         self.assertNotIn('monitorAutoRefreshPaused', html)
         self.assertIn('setInterval', html)
+
+    def test_monitor_uses_admin_workbench_sections(self):
+        html = server._monitor_html(server.get_sql_stats(), "secret")
+
+        self.assertIn("管理员工作台", html)
+        self.assertIn('id="overview"', html)
+        self.assertIn('id="tasks"', html)
+        self.assertIn('id="security"', html)
+        self.assertIn('id="runtime"', html)
+        self.assertIn('id="logs"', html)
+        self.assertIn("当前排队", html)
+        self.assertIn("当前处理", html)
+        self.assertIn("任务趋势", html)
+        self.assertIn("运行状态", html)
+
+    def test_admin_log_redacts_sensitive_headers(self):
+        source = "\n".join([
+            "PROXY_SECRET=server-secret",
+            "Authorization: Bearer private-token",
+            "Cookie: docxtool_admin_session=session-id",
+            "normal diagnostic line",
+        ])
+
+        redacted = server._redact_sensitive_log(source)
+
+        self.assertNotIn("server-secret", redacted)
+        self.assertNotIn("private-token", redacted)
+        self.assertNotIn("session-id", redacted)
+        self.assertEqual(redacted.count("[REDACTED]"), 3)
+        self.assertIn("normal diagnostic line", redacted)
 
 
 if __name__ == "__main__":

@@ -2160,6 +2160,7 @@ def _startup_urls() -> dict:
     base = f"http://{BIND_HOST}:{PORT}"
     return {
         "tool": base,
+        "admin_login": f"{base}/admin/login",
         "monitor": f"{base}/monitor",
         "tunnel_command": f"cloudflared tunnel --url {base}",
     }
@@ -2213,115 +2214,114 @@ def _monitor_html(stats: dict, admin_token: str = "") -> str:
     query = stats.get("query", _normalize_monitor_query())
     recent_pager = _pager_html(stats, admin_token, "recent_page", "recent_pages")
     ip_pager = _pager_html(stats, admin_token, "ip_page", "ip_pages")
+    ready = _ready_payload()
+    version = _version_payload()
+    ready_state = "在线" if ready.get("ok") else "需检查"
+    ready_class = "online" if ready.get("ok") else "offline"
+    trend = stats.get("trend", [])
+    max_trend = max([int(item.get("total", 0) or 0) for item in trend] + [1])
     rows = []
     for item in stats.get("recent", []):
         st = item.get("status", "")
         tag, cls = _status_badge(st)
         rows.append(
-            f"<tr><td>{_html_escape(str(item.get('created_at','')))[:16]}</td>"
-            f"<td class=fn>{_html_escape(str(item.get('filename','-')))[:40]}</td>"
-            f"<td>{_html_escape(item.get('ip','-'))}</td>"
-            f"<td>{(item.get('file_size',0)/1024):.0f}KB</td>"
-            f"<td>{item.get('doc_type','-')}</td>"
+            f"<tr><td class=mono>{_html_escape(str(item.get('created_at','')))[:16]}</td>"
+            f"<td class=fn title=\"{_html_escape(str(item.get('filename','-')))}\">{_html_escape(str(item.get('filename','-')))[:40]}</td>"
+            f"<td class=mono>{_html_escape(item.get('ip','-'))}</td>"
+            f"<td>{(item.get('file_size',0)/1024):.0f} KB</td>"
+            f"<td>{_html_escape(item.get('doc_type','-'))}</td>"
             f"<td>{item.get('paragraphs',0)}</td>"
             f"<td>{((item.get('duration_ms',0) or 0)/1000):.1f}s</td>"
-            f"<td><span class=\"tag {cls}\">{tag}</span></td>"
-            f"<td><a href=\"{_admin_url('/log/' + _html_escape(item.get('id','')), admin_token)}\" target=\"_blank\">日志</a></td></tr>")
+            f"<td><span class=\"status-tag {cls}\">{tag}</span></td>"
+            f"<td><a class=\"table-action\" href=\"{_admin_url('/log/' + _html_escape(item.get('id','')), admin_token)}\" target=\"_blank\">查看日志</a></td></tr>")
     ips = "".join(
         f"<tr><td class=mono>{_html_escape(r.get('ip','-'))}</td>"
             f"<td>{r.get('c',0)}</td><td class=ok>{r.get('done',0)}</td><td class=badtxt>{r.get('error',0)}</td>"
             f"<td class=mono>{_html_escape(str(r.get('last','')))[:16]}</td>"
-            f"<td class=fn>{_html_escape(r.get('last_filename','-'))[:32]}</td>"
-        f"<td><a href=\"{_admin_url('/ip?addr=' + quote(str(r.get('ip','')), safe=''), admin_token)}\" target=\"_blank\">明细</a>"
-        f" · <form method=\"post\" action=\"/ban\" style=\"display:inline;margin:0\" onsubmit=\"return confirm('确认封禁该 IP？')\">{csrf_input}<input type=\"hidden\" name=\"ip\" value=\"{_html_escape(r.get('ip',''))}\"><input type=\"hidden\" name=\"reason\" value=\"monitor\"><button type=\"submit\" style=\"border:0;background:none;color:#b71c1c;cursor:pointer;padding:0\">封禁</button></form></td></tr>"
+            f"<td class=fn title=\"{_html_escape(r.get('last_filename','-'))}\">{_html_escape(r.get('last_filename','-'))[:32]}</td>"
+        f"<td class=actions><a class=\"table-action\" href=\"{_admin_url('/ip?addr=' + quote(str(r.get('ip','')), safe=''), admin_token)}\" target=\"_blank\">明细</a>"
+        f"<form method=\"post\" action=\"/ban\" onsubmit=\"return confirm('确认封禁该 IP？')\">{csrf_input}<input type=\"hidden\" name=\"ip\" value=\"{_html_escape(r.get('ip',''))}\"><input type=\"hidden\" name=\"reason\" value=\"monitor\"><button class=\"link-danger\" type=\"submit\">封禁</button></form></td></tr>"
         for r in stats.get("top_ips", []))
     banned_rows = "".join(
         f"<tr><td class=mono>{_html_escape(r.get('ip','-'))}</td>"
         f"<td>{_html_escape(r.get('reason',''))}</td>"
         f"<td class=mono>{_html_escape(str(r.get('created_at','')))[:16]}</td>"
-        f"<td><form method=\"post\" action=\"/unban\" style=\"display:inline;margin:0\">{csrf_input}<input type=\"hidden\" name=\"ip\" value=\"{_html_escape(r.get('ip',''))}\"><button type=\"submit\" style=\"border:0;background:none;color:#b71c1c;cursor:pointer;padding:0\">解封</button></form></td></tr>"
+        f"<td><form method=\"post\" action=\"/unban\">{csrf_input}<input type=\"hidden\" name=\"ip\" value=\"{_html_escape(r.get('ip',''))}\"><button class=\"link-danger\" type=\"submit\">解封</button></form></td></tr>"
         for r in stats.get("banned_ips", []))
+    trend_bars = "".join(
+        f"<div class=\"trend-row\"><span class=\"trend-date\">{_html_escape(item.get('date', '-'))}</span>"
+        f"<div class=\"trend-track\"><i class=\"trend-done\" style=\"width:{max(2, int(item.get('done', 0) or 0) / max_trend * 100):.1f}%\"></i>"
+        f"<i class=\"trend-error\" style=\"width:{max(0, int(item.get('error', 0) or 0) / max_trend * 100):.1f}%\"></i></div>"
+        f"<span class=\"trend-count\">{item.get('total', 0)}<small>项</small></span></div>"
+        for item in trend[-14:]) or '<div class="empty-state">暂无趋势数据，完成任务后将在此显示。</div>'
+    check_items = "".join(
+        f"<li class={'check-ok' if value else 'check-bad'}><span></span>{_html_escape(label)}<b>{'正常' if value else '异常'}</b></li>"
+        for label, value in (("数据库", ready.get("checks", {}).get("database")), ("输出目录", ready.get("checks", {}).get("output_dir")), ("日志目录", ready.get("checks", {}).get("log_dir")))
+    )
     return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>监控面板 · 公文排版</title>
+<title>工作台 · 公文智能排版</title>
 <style>
-:root{{--red:#b71c1c;--bg:#f5f4f0;--paper:#fff;--border:#e0dcd5}}
+:root{{--bg:#07101f;--panel:#0d1a2e;--panel2:#111f35;--line:rgba(160,181,215,.17);--muted:#8fa2be;--text:#edf4ff;--gold:#f6c85f;--gold-soft:rgba(246,200,95,.12);--blue:#74b9ff;--green:#55d6a0;--red:#fb7185}}
 *{{margin:0;padding:0;box-sizing:border-box}}
-body{{font-family:"Microsoft YaHei","Noto Sans CJK SC","WenQuanYi Micro Hei","PingFang SC",Arial,sans-serif;background:var(--bg);color:#222;padding:20px 24px;max-width:1100px;margin:0 auto}}
-.topbar{{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}}
-h1{{font-size:22px;color:var(--red)}}
-.nav{{font-size:13px}}.nav a{{color:var(--red);text-decoration:none;margin-left:16px}}
-.grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:20px}}
-.stat{{background:var(--paper);border:1px solid var(--border);padding:16px;text-align:center}}
-.stat .n{{font-size:28px;font-weight:700;color:var(--red)}}
-.stat .l{{font-size:12px;color:#888;margin-top:2px}}
-.stat.good .n{{color:#2e7d32}}.stat.bad .n{{color:#c62828}}
-.section{{margin-bottom:24px}}
-.section h2{{font-size:16px;border-bottom:2px solid var(--border);padding-bottom:6px;margin-bottom:12px;display:flex;justify-content:space-between}}
-.section h2 span{{font-size:12px;color:#999;font-weight:400}}
-table{{width:100%;border-collapse:collapse;background:var(--paper);border:1px solid var(--border)}}
-th{{background:#f8f6f2;font-size:12px;color:#666;text-align:left;padding:8px 10px;font-weight:500}}
-td{{font-size:13px;padding:7px 10px;border-top:1px solid #f4f2ee}}
-.fn{{max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}}
-.mono{{font-family:Consolas,"Noto Sans Mono CJK SC","WenQuanYi Micro Hei",monospace;font-size:12px}}
-.ok{{color:#2e7d32}}.badtxt{{color:#c62828}}
-.tag{{display:inline-block;padding:2px 6px;border-radius:2px;font-size:11px;font-weight:600}}
-.tag.done{{background:#e8f5e9;color:#2e7d32}}
-.tag.error{{background:#ffebee;color:#c62828}}
-.tag.queued{{background:#fff8e1;color:#8a5a00}}
-.tag.processing{{background:#e3f2fd;color:#1565c0}}
-.limit-box{{background:var(--paper);border:1px solid var(--border);padding:12px 14px;display:flex;flex-wrap:wrap;gap:12px;align-items:center}}
-.limit-box label{{font-size:13px;color:#444;display:flex;gap:6px;align-items:center}}
-.limit-box input[type=number]{{width:90px;padding:5px 6px;border:1px solid var(--border);background:#fff}}
-.limit-box button{{padding:6px 12px;border:0;background:var(--red);color:#fff;cursor:pointer}}
-.limit-box a{{color:var(--red);text-decoration:none;font-size:13px}}
-.pager{{display:flex;gap:12px;align-items:center;justify-content:flex-end;margin-top:8px;font-size:13px;color:#666}}
-.pager a{{color:var(--red);text-decoration:none}}
-.pager a.disabled{{pointer-events:none;color:#bbb}}
-.hint{{font-size:12px;color:#777}}
+html{{scroll-behavior:smooth}}
+body{{font-family:"Microsoft YaHei","Noto Sans CJK SC","WenQuanYi Micro Hei","PingFang SC",Arial,sans-serif;background:var(--bg);color:var(--text);min-height:100vh}}
+a{{color:inherit;text-decoration:none}}button,input{{font:inherit}}
+.shell{{display:grid;grid-template-columns:224px minmax(0,1fr);min-height:100vh}}
+.sidebar{{position:sticky;top:0;height:100vh;padding:24px 16px;border-right:1px solid var(--line);background:linear-gradient(180deg,#0b1729,#07101f);display:flex;flex-direction:column}}
+.brand{{display:flex;align-items:center;gap:11px;padding:0 8px 25px;border-bottom:1px solid var(--line)}}
+.brand-mark{{width:36px;height:36px;border-radius:10px;display:grid;place-items:center;background:linear-gradient(135deg,#f6c85f,#e89c3a);color:#152238;font-weight:900;font-size:18px}}
+.brand strong{{display:block;font-size:14px;letter-spacing:.02em}}.brand small{{display:block;color:var(--muted);font-size:11px;margin-top:3px}}
+.nav-label{{color:#637a9c;font-size:10px;letter-spacing:.12em;margin:24px 10px 8px;text-transform:uppercase}}
+.side-nav{{display:grid;gap:5px}}.side-nav a{{display:flex;align-items:center;gap:10px;padding:11px 12px;border:1px solid transparent;border-radius:10px;color:#b8c8df;font-size:13px;transition:.18s}}
+.side-nav a:hover,.side-nav a.active{{background:var(--gold-soft);border-color:rgba(246,200,95,.2);color:#ffe7a4}}
+.nav-index{{width:22px;color:var(--gold);font-family:Consolas,monospace;font-size:11px}}
+.side-footer{{margin-top:auto;padding:13px 10px;border-top:1px solid var(--line);color:var(--muted);font-size:11px;line-height:1.7}}
+.side-footer b{{color:#cfe0f8;font-weight:600}}
+.main{{min-width:0;padding:22px 30px 40px}}
+.topbar{{display:flex;justify-content:space-between;align-items:center;gap:18px;padding-bottom:18px;border-bottom:1px solid var(--line)}}
+.eyebrow{{color:var(--gold);font-size:11px;letter-spacing:.12em;text-transform:uppercase;margin-bottom:5px}}h1{{font-size:24px;letter-spacing:.01em}}
+.top-actions{{display:flex;align-items:center;gap:9px;flex-wrap:wrap;justify-content:flex-end}}
+.service-pill{{display:inline-flex;align-items:center;gap:7px;padding:8px 11px;border:1px solid rgba(85,214,160,.25);background:rgba(85,214,160,.08);border-radius:999px;color:#a7f3d0;font-size:12px}}
+.service-pill.offline{{border-color:rgba(251,113,133,.3);background:rgba(251,113,133,.08);color:#fecdd3}}.service-dot{{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 0 4px rgba(85,214,160,.12)}}.offline .service-dot{{background:var(--red);box-shadow:0 0 0 4px rgba(251,113,133,.12)}}
+.top-link,.top-button{{padding:8px 11px;border:1px solid var(--line);border-radius:8px;background:rgba(255,255,255,.04);color:#b9c9df;font-size:12px;cursor:pointer}}.top-link:hover,.top-button:hover{{border-color:rgba(246,200,95,.4);color:#ffe7a4}}
+.alert{{display:flex;gap:12px;align-items:flex-start;padding:12px 14px;margin:18px 0;border:1px solid rgba(251,113,133,.3);border-radius:10px;background:rgba(251,113,133,.09);color:#fecdd3;font-size:12px;line-height:1.6}}
+.section{{scroll-margin-top:20px;margin-top:24px}}.section-heading{{display:flex;justify-content:space-between;align-items:flex-end;gap:14px;margin-bottom:12px}}.section-heading h2{{font-size:16px}}.section-heading p{{color:var(--muted);font-size:12px;margin-top:4px}}.section-meta{{color:var(--muted);font-size:12px}}
+.metric-grid{{display:grid;grid-template-columns:repeat(8,minmax(100px,1fr));gap:9px}}
+.metric{{min-width:0;padding:15px 14px;border:1px solid var(--line);border-radius:10px;background:linear-gradient(145deg,rgba(18,35,59,.9),rgba(10,24,42,.9))}}.metric .value{{font-size:24px;color:#f6d985;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}.metric .label{{color:var(--muted);font-size:11px;margin-top:6px}}.metric.good .value{{color:var(--green)}}.metric.bad .value{{color:#ff9cab}}
+.work-grid{{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(270px,.8fr);gap:14px}}.panel{{min-width:0;border:1px solid var(--line);border-radius:12px;background:linear-gradient(145deg,rgba(14,30,51,.96),rgba(9,21,37,.96));overflow:hidden}}.panel-head{{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding:17px 18px;border-bottom:1px solid var(--line)}}.panel-head h3{{font-size:14px}}.panel-head p{{color:var(--muted);font-size:11px;margin-top:4px}}.panel-body{{padding:17px 18px}}
+.health-list{{display:grid;gap:9px}}.health-list li{{list-style:none;display:flex;align-items:center;gap:9px;color:#b9c9df;font-size:12px}}.health-list li span{{width:7px;height:7px;border-radius:50%;background:var(--green)}}.health-list li.check-bad span{{background:var(--red)}}.health-list li b{{margin-left:auto;font-size:11px;color:var(--green);font-weight:600}}.health-list li.check-bad b{{color:#ff9cab}}
+.runtime-grid{{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:16px}}.runtime-item{{padding:10px;border-radius:8px;background:rgba(255,255,255,.04);border:1px solid rgba(160,181,215,.1)}}.runtime-item b{{display:block;font-size:15px;color:#e6effd}}.runtime-item span{{display:block;color:var(--muted);font-size:10px;margin-top:4px}}
+.trend{{display:grid;gap:8px}}.trend-row{{display:grid;grid-template-columns:86px minmax(0,1fr) 42px;gap:10px;align-items:center}}.trend-date,.trend-count{{color:var(--muted);font-size:11px}}.trend-count{{text-align:right;color:#dce8fa}}.trend-count small{{color:var(--muted);margin-left:2px}}.trend-track{{height:12px;display:flex;gap:2px;background:rgba(255,255,255,.06);border-radius:99px;overflow:hidden}}.trend-track i{{display:block;height:100%;min-width:0}}.trend-done{{background:var(--green)}}.trend-error{{background:var(--red)}}
+.legend{{display:flex;gap:14px;margin-top:15px;color:var(--muted);font-size:11px}}.legend i{{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px}}.legend .done{{background:var(--green)}}.legend .error{{background:var(--red)}}
+.table-wrap{{overflow-x:auto}}table{{width:100%;min-width:840px;border-collapse:collapse}}th{{padding:10px 11px;text-align:left;color:#7890b2;font-size:10px;font-weight:600;letter-spacing:.04em;white-space:nowrap;background:rgba(4,13,25,.4)}}td{{padding:10px 11px;border-top:1px solid rgba(160,181,215,.09);color:#c8d6e9;font-size:12px;white-space:nowrap}}tr:hover td{{background:rgba(246,200,95,.045)}}.fn{{max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}.mono{{font-family:Consolas,"Noto Sans Mono CJK SC","WenQuanYi Micro Hei",monospace;font-size:11px}}.ok{{color:var(--green)}}.badtxt{{color:#ff9cab}}.status-tag{{display:inline-flex;padding:4px 7px;border-radius:5px;font-size:10px;font-weight:700}}.status-tag.done{{background:rgba(85,214,160,.12);color:#a7f3d0}}.status-tag.error{{background:rgba(251,113,133,.12);color:#fecdd3}}.status-tag.queued{{background:rgba(246,200,95,.12);color:#ffe7a4}}.status-tag.processing{{background:rgba(116,185,255,.12);color:#bfdbfe}}.table-action{{color:#9bc8ff;font-size:11px}}.table-action:hover{{color:#ffe7a4}}.actions{{display:flex;align-items:center;gap:10px}}.actions form{{margin:0}}.link-danger{{border:0;background:transparent;color:#ff9cab;padding:0;cursor:pointer;font-size:11px}}.link-danger:hover{{color:#fff}}
+.control-grid{{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,.8fr);gap:14px}}.control-form{{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap}}.control-form label{{display:grid;gap:6px;color:#9eb1cb;font-size:11px}}.control-form input[type=number]{{width:100px;height:36px;border:1px solid var(--line);border-radius:7px;background:#081529;color:#edf4ff;padding:0 9px}}.control-form input[type=checkbox]{{accent-color:var(--gold)}}.primary-btn{{height:36px;padding:0 13px;border:1px solid rgba(246,200,95,.35);border-radius:7px;background:var(--gold-soft);color:#ffe7a4;cursor:pointer;font-size:12px}}.primary-btn:hover{{background:rgba(246,200,95,.2)}}.danger-btn{{height:36px;padding:0 13px;border:1px solid rgba(251,113,133,.3);border-radius:7px;background:rgba(251,113,133,.08);color:#fecdd3;cursor:pointer;font-size:12px}}
+.empty-state{{padding:24px 10px;text-align:center;color:var(--muted);font-size:12px}}.pager{{display:flex;gap:12px;align-items:center;justify-content:flex-end;padding:12px 18px 16px;color:var(--muted);font-size:11px}}.pager a{{color:#9bc8ff}}.pager a.disabled{{pointer-events:none;color:#536985}}.hint{{color:var(--muted);font-size:11px;line-height:1.6}}
+@media(max-width:1180px){{.metric-grid{{grid-template-columns:repeat(4,minmax(120px,1fr))}}}}
+@media(max-width:900px){{.shell{{display:block}}.sidebar{{position:static;height:auto;padding:14px 18px;display:block;border-right:0;border-bottom:1px solid var(--line)}}.brand{{padding-bottom:12px;border-bottom:0}}.nav-label,.side-footer{{display:none}}.side-nav{{display:flex;overflow-x:auto;padding-top:8px;scrollbar-width:none}}.side-nav::-webkit-scrollbar{{display:none}}.side-nav a{{white-space:nowrap;padding:8px 10px}}.main{{padding:18px}}.work-grid,.control-grid{{grid-template-columns:1fr}}}}
+@media(max-width:560px){{.main{{padding:14px}}.topbar{{align-items:flex-start;flex-direction:column}}.top-actions{{justify-content:flex-start}}h1{{font-size:21px}}.metric-grid{{grid-template-columns:repeat(2,minmax(0,1fr))}}.metric .value{{font-size:21px}}.panel-head,.panel-body{{padding:14px}}.section{{margin-top:18px}}}}
 </style></head>
 <body>
-<div class="topbar"><h1>公文排版 · 监控面板</h1>
-<div class="nav"><a href="/">返回工具</a><a href="/stats" target="_blank">JSON API</a><form method="post" action="/cleanup" style="display:inline;margin-left:16px">{csrf_input}<button type="submit" style="border:0;background:none;color:#b71c1c;cursor:pointer;padding:0">清理过期文件</button></form><form method="post" action="/admin/logout" style="display:inline;margin-left:16px">{csrf_input}<button type="submit" style="border:0;background:none;color:#b71c1c;cursor:pointer;padding:0">退出登录</button></form><a href="/admin/login" style="margin-left:16px">管理员登录</a></div></div>
-<div class="grid">
-<div class="stat"><div class="n">{stats.get('total',0)}</div><div class="l">总任务</div></div>
-<div class="stat good"><div class="n">{stats.get('done',0)}</div><div class="l">成功</div></div>
-<div class="stat {"bad" if stats.get('error',0) else ""}"><div class="n">{stats.get('error',0)}</div><div class="l">失败</div></div>
-<div class="stat good"><div class="n">{stats.get('rate',0)}%</div><div class="l">成功率</div></div>
-<div class="stat"><div class="n">{stats.get('unique_ips',0)}</div><div class="l">独立 IP</div></div>
-<div class="stat"><div class="n">{stats.get('total_mb',0)} MB</div><div class="l">总数据量</div></div>
-<div class="stat"><div class="n">{stats.get('avg_s',0)}s</div><div class="l">平均耗时</div></div>
-<div class="stat"><div class="n">{stats.get('avg_paragraphs',0)}</div><div class="l">平均段数</div></div>
-</div>
-<div class="section"><h2>显示设置 <span>控制每页显示数量</span></h2>
-<form class="limit-box" method="get" action="/monitor">
-{csrf_input}
-<label>最近任务/页<input type="number" min="1" max="{MAX_MONITOR_PAGE_SIZE}" name="recent_size" value="{query['recent_size']}"></label>
-<label>活跃 IP/页<input type="number" min="1" max="{MAX_MONITOR_PAGE_SIZE}" name="ip_size" value="{query['ip_size']}"></label>
-<button type="submit">应用</button>
-<a href="/monitor">恢复默认</a>
-<span class="hint">默认每页 50 条，最多 {MAX_MONITOR_PAGE_SIZE} 条。</span>
-</form></div>
-<div class="section"><h2>上传限额 <span>{limit_state}</span></h2>
-<form class="limit-box" method="post" action="/limit">
-{csrf_input}
-<label><input type="checkbox" name="enabled" value="1"{limit_checked}>启用限额</label>
-<label>时间窗口（秒）<input type="number" min="1" name="window_seconds" value="{limit['window_seconds']}"></label>
-<label>允许次数<input type="number" min="1" name="count" value="{limit['count']}"></label>
-<button type="submit">保存</button>
-<span class="hint">开启后，同一 IP 在 {limit['window_seconds']} 秒内最多排版 {limit['count']} 个文件。</span>
-</form></div>
-<div class="section"><h2>最近任务 <span>{len(stats.get('recent',[]))} / {stats.get('recent_total',0)} 条</span></h2>
-<table><thead><tr><th>时间</th><th>文件名</th><th>IP</th><th>大小</th><th>类型</th><th>段数</th><th>耗时</th><th>状态</th><th>日志</th></tr></thead>
-<tbody>{"".join(rows) or '<tr><td colspan="9">暂无数据</td></tr>'}</tbody></table>{recent_pager}</div>
-<div class="section"><h2>活跃 IP <span>{len(stats.get('top_ips',[]))} / {stats.get('ip_total',0)} 个</span></h2>
-<table><thead><tr><th>IP</th><th>上传</th><th>成功</th><th>失败</th><th>最近活跃</th><th>最近文件</th><th>操作</th></tr></thead>
-<tbody>{ips or '<tr><td colspan="7">暂无数据</td></tr>'}</tbody></table>{ip_pager}</div>
-<div class="section"><h2>封禁 IP <span>{len(stats.get('banned_ips',[]))} 个</span></h2>
-<table><thead><tr><th>IP</th><th>原因</th><th>封禁时间</th><th>操作</th></tr></thead>
-<tbody>{banned_rows or '<tr><td colspan="4">暂无封禁</td></tr>'}</tbody></table></div>
+<div class="shell">
+<aside class="sidebar"><a class="brand" href="/"><span class="brand-mark">文</span><span><strong>公文智能排版</strong><small>管理员工作台</small></span></a>
+<div class="nav-label">WORKSPACE</div><nav class="side-nav">
+<a class="active" href="#overview"><span class="nav-index">01</span>总览</a><a href="#tasks"><span class="nav-index">02</span>任务中心</a><a href="#security"><span class="nav-index">03</span>安全与访问</a><a href="#runtime"><span class="nav-index">04</span>运行设置</a><a href="#logs"><span class="nav-index">05</span>日志查询</a>
+</nav><div class="side-footer">当前服务<br><b>Python · 9527</b><br>数据目录受项目路径管理</div></aside>
+<main class="main">
+<header class="topbar"><div><div class="eyebrow">ADMIN WORKSPACE / {html.escape(str(version.get('version', '')))}</div><h1>运行总览</h1></div><div class="top-actions"><span class="service-pill {ready_class}"><i class="service-dot"></i>服务{ready_state}</span><button class="top-button" type="button" onclick="window.location.reload()">刷新</button><a class="top-link" href="/">返回工具</a><a class="top-link" href="/stats" target="_blank">JSON</a><form method="post" action="/admin/logout">{csrf_input}<button class="top-button" type="submit">退出</button></form></div></header>
+{('<div class="alert"><strong>运行检查</strong><span>数据库、输出目录或日志目录存在异常，请先检查运行环境，再处理任务。</span></div>') if not ready.get('ok') else ''}
+<section id="overview" class="section"><div class="section-heading"><div><h2>关键指标</h2><p>排版服务当前累计运行数据</p></div><span class="section-meta">自动刷新 · 15 秒</span></div><div class="metric-grid">
+<div class="metric"><div class="value">{stats.get('total',0)}</div><div class="label">总任务</div></div><div class="metric good"><div class="value">{stats.get('done',0)}</div><div class="label">成功任务</div></div><div class="metric bad"><div class="value">{stats.get('error',0)}</div><div class="label">失败任务</div></div><div class="metric good"><div class="value">{stats.get('rate',0)}%</div><div class="label">成功率</div></div><div class="metric"><div class="value">{version.get('queued',0)}</div><div class="label">当前排队</div></div><div class="metric"><div class="value">{version.get('processing',0)}</div><div class="label">当前处理</div></div><div class="metric"><div class="value">{stats.get('avg_s',0)}s</div><div class="label">平均耗时</div></div><div class="metric"><div class="value">{stats.get('unique_ips',0)}</div><div class="label">独立 IP</div></div>
+</div></section>
+<section class="section"><div class="work-grid"><div class="panel"><div class="panel-head"><div><h3>任务趋势</h3><p>按日期统计成功与失败任务</p></div><span class="section-meta">最近 {len(trend[-14:])} 个记录日</span></div><div class="panel-body"><div class="trend">{trend_bars}</div><div class="legend"><span><i class="done"></i>成功</span><span><i class="error"></i>失败</span></div></div></div><div class="panel"><div class="panel-head"><div><h3>运行状态</h3><p>服务依赖和处理队列</p></div><span class="service-pill {ready_class}">{ready_state}</span></div><div class="panel-body"><ul class="health-list">{check_items}</ul><div class="runtime-grid"><div class="runtime-item"><b>{version.get('max_workers',0)}</b><span>工作线程</span></div><div class="runtime-item"><b>{version.get('max_queue',0)}</b><span>队列上限</span></div><div class="runtime-item"><b>{version.get('max_upload_mb',0)} MB</b><span>单文件上限</span></div><div class="runtime-item"><b>{version.get('process_timeout_seconds',0)}s</b><span>处理超时</span></div></div></div></div></div></section>
+<section id="tasks" class="section"><div class="section-heading"><div><h2>任务中心</h2><p>优先处理失败任务，点击日志查看完整排版过程</p></div><span class="section-meta">{len(stats.get('recent',[]))} / {stats.get('recent_total',0)} 条</span></div><div class="panel"><div class="table-wrap"><table><thead><tr><th>时间</th><th>文件名</th><th>来源 IP</th><th>大小</th><th>类型</th><th>段数</th><th>耗时</th><th>状态</th><th>操作</th></tr></thead><tbody>{"".join(rows) or '<tr><td colspan="9"><div class="empty-state">暂无任务，用户上传 DOCX 后将在此显示。</div></td></tr>'}</tbody></table></div>{recent_pager}</div></section>
+<section id="security" class="section"><div class="section-heading"><div><h2>安全与访问</h2><p>查看访问活跃度并处理异常来源</p></div><span class="section-meta">{stats.get('ip_total',0)} 个活跃 IP · {len(stats.get('banned_ips',[]))} 个封禁</span></div><div class="work-grid"><div class="panel"><div class="panel-head"><div><h3>活跃 IP</h3><p>按最近访问时间排序</p></div></div><div class="table-wrap"><table><thead><tr><th>IP</th><th>上传</th><th>成功</th><th>失败</th><th>最近活跃</th><th>最近文件</th><th>操作</th></tr></thead><tbody>{ips or '<tr><td colspan="7"><div class="empty-state">暂无访问记录。</div></td></tr>'}</tbody></table></div>{ip_pager}</div><div class="panel"><div class="panel-head"><div><h3>封禁 IP</h3><p>危险操作需要管理员确认</p></div></div><div class="table-wrap"><table><thead><tr><th>IP</th><th>原因</th><th>时间</th><th>操作</th></tr></thead><tbody>{banned_rows or '<tr><td colspan="4"><div class="empty-state">暂无封禁 IP。</div></td></tr>'}</tbody></table></div></div></div></section>
+<section id="runtime" class="section"><div class="section-heading"><div><h2>运行设置</h2><p>调整访问限额、列表密度和过期文件清理</p></div><span class="section-meta">限额{limit_state}</span></div><div class="control-grid"><div class="panel"><div class="panel-head"><div><h3>上传限额</h3><p>同一 IP 在指定时间窗口内的排版次数限制</p></div></div><div class="panel-body"><form class="control-form" method="post" action="/limit">{csrf_input}<label><span>状态</span><span><input type="checkbox" name="enabled" value="1"{limit_checked}> 启用</span></label><label><span>时间窗口（秒）</span><input type="number" min="1" name="window_seconds" value="{limit['window_seconds']}"></label><label><span>允许次数</span><input type="number" min="1" name="count" value="{limit['count']}"></label><button class="primary-btn" type="submit">保存设置</button></form></div></div><div class="panel"><div class="panel-head"><div><h3>文件维护</h3><p>清理超过 TTL 的临时输入和输出文件</p></div></div><div class="panel-body"><p class="hint">文件保留时间：{version.get('file_ttl_seconds', FILE_TTL)} 秒。清理操作不会删除数据库任务记录。</p><form method="post" action="/cleanup" style="margin-top:13px">{csrf_input}<button class="danger-btn" type="submit">清理过期文件</button></form></div></div></div><div class="panel" style="margin-top:14px"><div class="panel-head"><div><h3>显示设置</h3><p>控制任务中心和活跃 IP 每页显示数量</p></div></div><div class="panel-body"><form class="control-form" method="get" action="/monitor"><label><span>最近任务/页</span><input type="number" min="1" max="{MAX_MONITOR_PAGE_SIZE}" name="recent_size" value="{query['recent_size']}"></label><label><span>活跃 IP/页</span><input type="number" min="1" max="{MAX_MONITOR_PAGE_SIZE}" name="ip_size" value="{query['ip_size']}"></label><button class="primary-btn" type="submit">应用</button><a class="top-link" href="/monitor">恢复默认</a><span class="hint">默认每页 50 条，最多 {MAX_MONITOR_PAGE_SIZE} 条。</span></form></div></div></section>
+<section id="logs" class="section"><div class="panel"><div class="panel-head"><div><h3>日志查询</h3><p>从任务中心的“查看日志”进入具体任务日志</p></div><a class="top-link" href="/stats" target="_blank">打开 JSON API</a></div><div class="panel-body"><p class="hint">日志仅保存在服务端运行目录，页面不会显示 Cookie、管理员密钥或代理密钥。失败任务优先从任务中心进入排查。</p></div></div></section>
+<footer class="side-footer" style="margin-top:24px">最后生成：{_html_escape(_now_local()[:19])} · 页面每 15 秒自动刷新</footer>
+</main></div>
 <script>
 setInterval(() => {{
   if (document.hidden) return;
@@ -2346,32 +2346,24 @@ def _ip_detail_html(ip: str, admin_token: str = "") -> str:
             f"<td>{(item.get('file_size',0)/1024):.0f}KB</td>"
             f"<td>{item.get('paragraphs',0)}</td>"
             f"<td>{((item.get('duration_ms',0) or 0)/1000):.1f}s</td>"
-            f"<td><span class=\"tag {cls}\">{tag}</span></td>"
-            f"<td><a href=\"{_admin_url('/log/' + _html_escape(item.get('id','')), admin_token)}\" target=\"_blank\">日志</a></td></tr>")
+            f"<td><span class=\"status-tag {cls}\">{tag}</span></td>"
+            f"<td><a class=\"action-link\" href=\"{_admin_url('/log/' + _html_escape(item.get('id','')), admin_token)}\" target=\"_blank\">查看日志</a></td></tr>")
     total = _ip_upload_count(ip)
     last_hour = _ip_upload_count(ip, 3600)
     banned = _is_ip_banned(ip)
-    action = (f"<form method=\"post\" action=\"/unban\" style=\"display:inline;margin:0\">{csrf_input}<input type=\"hidden\" name=\"ip\" value=\"{_html_escape(ip)}\"><button type=\"submit\" style=\"border:0;background:none;color:#b71c1c;cursor:pointer;padding:0\">解封 IP</button></form>"
+    action = (f"<form method=\"post\" action=\"/unban\">{csrf_input}<input type=\"hidden\" name=\"ip\" value=\"{_html_escape(ip)}\"><button class=\"danger-btn\" type=\"submit\">解封 IP</button></form>"
               if banned else
-              f"<form method=\"post\" action=\"/ban\" style=\"display:inline;margin:0\" onsubmit=\"return confirm('确认封禁该 IP？')\">{csrf_input}<input type=\"hidden\" name=\"ip\" value=\"{_html_escape(ip)}\"><input type=\"hidden\" name=\"reason\" value=\"monitor\"><button type=\"submit\" style=\"border:0;background:none;color:#b71c1c;cursor:pointer;padding:0\">封禁 IP</button></form>")
+              f"<form method=\"post\" action=\"/ban\" onsubmit=\"return confirm('确认封禁该 IP？')\">{csrf_input}<input type=\"hidden\" name=\"ip\" value=\"{_html_escape(ip)}\"><input type=\"hidden\" name=\"reason\" value=\"monitor\"><button class=\"danger-btn\" type=\"submit\">封禁 IP</button></form>")
     return f"""<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
-<title>IP 明细 · {html.escape(ip)}</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>IP 明细 · {html.escape(ip)}</title>
 <style>
-body{{font-family:"Microsoft YaHei","Noto Sans CJK SC","WenQuanYi Micro Hei","PingFang SC",Arial,sans-serif;background:#f5f4f0;color:#222;padding:20px 24px;max-width:1100px;margin:0 auto}}
-h1{{font-size:22px;color:#b71c1c;margin-bottom:12px}}.nav{{font-size:13px;margin-bottom:18px}}.nav a{{color:#b71c1c;text-decoration:none;margin-right:16px}}
-.cards{{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:18px}}
-.card{{background:#fff;border:1px solid #e0dcd5;padding:14px;text-align:center}}.n{{font-size:24px;font-weight:700;color:#b71c1c}}
-table{{width:100%;border-collapse:collapse;background:#fff;border:1px solid #e0dcd5}}th{{background:#f8f6f2;text-align:left;padding:8px 10px;color:#666;font-size:12px}}td{{font-size:13px;padding:7px 10px;border-top:1px solid #f4f2ee}}
-.mono{{font-family:Consolas,"Noto Sans Mono CJK SC","WenQuanYi Micro Hei",monospace;font-size:12px}}.fn{{max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}}
-.tag{{display:inline-block;padding:2px 6px;border-radius:2px;font-size:11px;font-weight:600}}.tag.done{{background:#e8f5e9;color:#2e7d32}}.tag.error{{background:#ffebee;color:#c62828}}
+:root{{--bg:#07101f;--panel:#0d1a2e;--line:rgba(160,181,215,.17);--text:#edf4ff;--muted:#8fa2be;--gold:#f6c85f;--green:#55d6a0;--red:#fb7185}}*{{box-sizing:border-box}}body{{margin:0;background:var(--bg);color:var(--text);font-family:"Microsoft YaHei","Noto Sans CJK SC","WenQuanYi Micro Hei","PingFang SC",Arial,sans-serif}}.page{{width:min(1180px,calc(100% - 36px));margin:0 auto;padding:24px 0 40px}}.topbar{{display:flex;align-items:center;justify-content:space-between;gap:16px;padding-bottom:18px;border-bottom:1px solid var(--line)}}.nav{{display:flex;gap:9px;align-items:center}}.nav a,.danger-btn{{height:34px;padding:0 11px;border:1px solid var(--line);border-radius:7px;background:rgba(255,255,255,.04);color:#b9c9df;text-decoration:none;font-size:11px;display:inline-flex;align-items:center;cursor:pointer}}.danger-btn{{border-color:rgba(251,113,133,.28);background:rgba(251,113,133,.08);color:#fecdd3}}.nav form{{margin:0}}.eyebrow{{color:var(--gold);font-size:10px;letter-spacing:.12em;margin-bottom:5px}}h1{{font-size:22px;margin:0}}.mono{{font-family:Consolas,"Noto Sans Mono CJK SC","WenQuanYi Micro Hei",monospace;font-size:11px}}.cards{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:20px 0}}.card{{padding:16px;border:1px solid var(--line);border-radius:10px;background:linear-gradient(145deg,rgba(18,35,59,.9),rgba(10,24,42,.9))}}.n{{font-size:23px;font-weight:800;color:#f6d985}}.card div:last-child{{font-size:11px;color:var(--muted);margin-top:5px}}.panel{{border:1px solid var(--line);border-radius:12px;background:var(--panel);overflow:hidden}}.panel-head{{padding:16px 18px;border-bottom:1px solid var(--line)}}.panel-head h2{{font-size:15px;margin:0}}.panel-head p{{font-size:11px;color:var(--muted);margin:4px 0 0}}.table-wrap{{overflow-x:auto}}table{{width:100%;min-width:780px;border-collapse:collapse}}th{{background:rgba(4,13,25,.4);text-align:left;padding:10px 11px;color:#7890b2;font-size:10px}}td{{font-size:12px;padding:10px 11px;border-top:1px solid rgba(160,181,215,.09);color:#c8d6e9;white-space:nowrap}}.fn{{max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}.status-tag{{display:inline-flex;padding:4px 7px;border-radius:5px;font-size:10px;font-weight:700}}.status-tag.done{{background:rgba(85,214,160,.12);color:#a7f3d0}}.status-tag.error{{background:rgba(251,113,133,.12);color:#fecdd3}}.action-link{{color:#9bc8ff;text-decoration:none;font-size:11px}}.empty{{padding:28px;text-align:center;color:var(--muted)}}@media(max-width:640px){{.page{{width:min(100% - 24px,1180px);padding-top:14px}}.topbar{{align-items:flex-start;flex-direction:column}}.cards{{grid-template-columns:1fr}}}}
 </style></head><body>
-<div class="nav"><a href="/monitor">返回监控面板</a>{action}</div>
-<h1>IP 上传明细：<span class="mono">{html.escape(ip)}</span></h1>
+<main class="page"><header class="topbar"><div><div class="eyebrow">SECURITY / IP DETAIL</div><h1>IP 上传明细：<span class="mono">{html.escape(ip)}</span></h1></div><div class="nav"><a href="/monitor#security">返回工作台</a>{action}</div></header>
 <div class="cards"><div class="card"><div class="n">{total}</div><div>总上传次数</div></div>
 <div class="card"><div class="n">{last_hour}</div><div>最近 1 小时</div></div>
 <div class="card"><div class="n">{"已封禁" if banned else "正常"}</div><div>当前状态</div></div></div>
-<table><thead><tr><th>时间</th><th>文件名</th><th>大小</th><th>段数</th><th>耗时</th><th>状态</th><th>日志</th></tr></thead>
-<tbody>{"".join(rows) or '<tr><td colspan="7">暂无上传记录</td></tr>'}</tbody></table>
+<section class="panel"><div class="panel-head"><h2>任务记录</h2><p>该 IP 最近关联的排版任务和处理状态</p></div><div class="table-wrap"><table><thead><tr><th>时间</th><th>文件名</th><th>大小</th><th>段数</th><th>耗时</th><th>状态</th><th>日志</th></tr></thead><tbody>{"".join(rows) or '<tr><td colspan="7"><div class="empty">暂无上传记录</div></td></tr>'}</tbody></table></div></section></main>
 </body></html>"""
 
 
@@ -2443,6 +2435,16 @@ def _compare_secret(value: str, secret: str) -> bool:
 
 def _html_escape(text: str) -> str:
     return html.escape(str(text or ""))
+
+def _redact_sensitive_log(text: str) -> str:
+    value = str(text or "")
+    for name in ("ADMIN_TOKEN", "PROXY_SECRET", "Authorization", "Proxy-Authorization", "Cookie", "Set-Cookie"):
+        value = _re.sub(
+            rf"(?im)^({name}\s*[:=]\s*).+$",
+            rf"\1[REDACTED]",
+            value,
+        )
+    return value
 
 def _split_ip_header(value: str):
     return [p.strip() for p in str(value or "").split(",") if p.strip()]
@@ -2627,27 +2629,16 @@ class Handler(BaseHTTPRequestHandler):
         body = """<!doctype html>
 <html lang="zh-CN">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>管理员登录 · 公文排版</title>
+<title>管理员登录 · 公文智能排版</title>
 <style>
-body{font-family:"Microsoft YaHei","Noto Sans CJK SC",sans-serif;background:#f5f4f0;color:#222;max-width:640px;margin:0 auto;padding:32px 20px}
-.card{background:#fff;border:1px solid #e0dcd5;border-radius:14px;padding:22px}
-h1{font-size:22px;color:#b71c1c;margin-bottom:10px}
-p{color:#666;line-height:1.7;margin-bottom:16px}
-label{display:block;font-size:13px;font-weight:700;margin:12px 0 6px}
-input{width:100%;height:42px;border:1px solid #d9d4cc;border-radius:10px;padding:0 12px;font-size:14px}
-button{margin-top:16px;height:42px;border:0;border-radius:10px;background:#b71c1c;color:#fff;font-weight:700;padding:0 16px;cursor:pointer}
-.hint{font-size:12px;color:#888;margin-top:10px}
+:root{--bg:#07101f;--panel:#0d1a2e;--line:rgba(160,181,215,.18);--text:#edf4ff;--muted:#8fa2be;--gold:#f6c85f}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;font-family:"Microsoft YaHei","Noto Sans CJK SC","PingFang SC",sans-serif;background:radial-gradient(circle at 25% 20%,rgba(66,100,150,.16),transparent 32%),var(--bg);color:var(--text)}
+.workspace{width:min(920px,100%);display:grid;grid-template-columns:minmax(0,1.05fr) minmax(340px,.75fr);border:1px solid var(--line);border-radius:14px;overflow:hidden;background:rgba(7,16,31,.86);box-shadow:0 28px 80px rgba(0,0,0,.35)}
+.intro{padding:52px 48px;background:linear-gradient(145deg,rgba(18,36,61,.94),rgba(9,23,40,.94));border-right:1px solid var(--line)}.mark{width:46px;height:46px;display:grid;place-items:center;border-radius:11px;background:linear-gradient(135deg,#f6c85f,#e89c3a);color:#152238;font-size:22px;font-weight:900;margin-bottom:28px}.eyebrow{color:var(--gold);font-size:11px;letter-spacing:.13em;margin-bottom:10px}h1{font-size:29px;margin:0 0 13px}.intro p{max-width:38ch;color:#a9bad1;line-height:1.8;font-size:14px;margin:0}.status{display:grid;gap:10px;margin-top:34px}.status span{display:flex;align-items:center;gap:9px;color:#8fa2be;font-size:12px}.status i{width:7px;height:7px;border-radius:50%;background:#55d6a0}
+.login{padding:48px 40px;background:rgba(9,21,37,.92);display:flex;flex-direction:column;justify-content:center}.login h2{font-size:18px;margin:0 0 6px}.login>p{color:var(--muted);font-size:12px;line-height:1.7;margin:0 0 24px}label{display:block;color:#b9c9df;font-size:12px;font-weight:700;margin-bottom:8px}input{width:100%;height:44px;border:1px solid var(--line);border-radius:8px;background:#071426;color:#fff;padding:0 12px;font-size:14px;outline:none}input:focus{border-color:rgba(246,200,95,.5);box-shadow:0 0 0 4px rgba(246,200,95,.08)}button{width:100%;height:44px;margin-top:15px;border:1px solid rgba(246,200,95,.42);border-radius:8px;background:rgba(246,200,95,.14);color:#ffe7a4;font-weight:800;cursor:pointer}button:hover{background:rgba(246,200,95,.22)}.hint{font-size:11px;color:#6f85a4;margin-top:14px;line-height:1.65}.back{display:inline-block;color:#9bc8ff;font-size:11px;margin-top:18px;text-decoration:none}
+@media(max-width:760px){.workspace{grid-template-columns:1fr}.intro{padding:30px;border-right:0;border-bottom:1px solid var(--line)}.intro p,.status{display:none}.mark{margin-bottom:18px}.login{padding:30px}}
 </style></head>
-<body><div class="card">
-<h1>管理员登录</h1>
-<p>请输入管理员密钥。登录后会建立安全会话 Cookie，并跳转回监控面板。</p>
-<form method="post" action="/admin/login">
-<label for="admin_token">管理员密钥</label>
-<input id="admin_token" name="admin_token" type="password" autocomplete="current-password" required>
-<button type="submit">登录</button>
-</form>
-<div class="hint">如果你已经登录过，直接访问 /monitor 即可。</div>
-</div></body></html>"""
+<body><main class="workspace"><section class="intro"><div class="mark">文</div><div class="eyebrow">DOCXTOOL ADMIN</div><h1>公文排版工作台</h1><p>集中查看任务状态、运行指标、访问安全和服务配置。管理员会话通过安全 Cookie 建立。</p><div class="status"><span><i></i>后端服务已连接</span><span><i></i>管理员会话受保护</span></div></section><section class="login"><h2>管理员登录</h2><p>输入服务器配置的管理员密钥，登录后进入运行工作台。</p><form method="post" action="/admin/login"><label for="admin_token">管理员密钥</label><input id="admin_token" name="admin_token" type="password" autocomplete="current-password" required autofocus><button type="submit">进入工作台</button></form><div class="hint">密钥仅用于建立当前管理员会话，不会写入页面地址。</div><a class="back" href="/">返回公文排版工具</a></section></main></body></html>"""
         self._text(body, "text/html")
 
     def _admin_context_or_default(self):
@@ -3106,11 +3097,16 @@ button{margin-top:16px;height:42px;border:0;border-radius:10px;background:#b71c1
                 filename = task.get("log_filename", "")
                 if filename:
                     path = os.path.join(LOG_DIR, filename)
+        with _SQL_LOCK:
+            conn = _sql()
+            row = conn.execute(
+                """SELECT filename, status, duration_ms, error_code, error_message,
+                          created_at, log_path
+                   FROM tasks WHERE id=?""",
+                (task_id,),
+            ).fetchone()
+            conn.close()
         if not path:
-            with _SQL_LOCK:
-                conn = _sql()
-                row = conn.execute("SELECT log_path FROM tasks WHERE id=?", (task_id,)).fetchone()
-                conn.close()
             path = row["log_path"] if row else ""
         if not path:
             self._json_error("LOG_NOT_FOUND", "日志不存在", 404)
@@ -3121,7 +3117,17 @@ button{margin-top:16px;height:42px;border:0;border-radius:10px;background:#b71c1
             self._json_error("LOG_NOT_FOUND", "日志不存在或已过期", 404)
             return
         with open(path, "r", encoding="utf-8", errors="replace") as f:
-            self._text(f.read(), "text/plain")
+            log_text = _redact_sensitive_log(f.read())
+        filename = _html_escape(row["filename"] if row else "-")
+        status = _html_escape(row["status"] if row else "-")
+        duration = ((row["duration_ms"] or 0) / 1000) if row else 0
+        error_code = _html_escape(row["error_code"] if row else "") or "-"
+        created_at = _html_escape(row["created_at"] if row else "-")
+        escaped_log = _html_escape(log_text)
+        body = f"""<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>任务日志 · {filename}</title><style>
+:root{{--bg:#07101f;--panel:#0d1a2e;--line:rgba(160,181,215,.17);--text:#edf4ff;--muted:#8fa2be;--gold:#f6c85f;--red:#fb7185}}*{{box-sizing:border-box}}body{{margin:0;background:var(--bg);color:var(--text);font-family:"Microsoft YaHei","Noto Sans CJK SC","PingFang SC",sans-serif}}.page{{width:min(1180px,calc(100% - 32px));margin:0 auto;padding:22px 0 36px}}.topbar{{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;padding-bottom:17px;border-bottom:1px solid var(--line)}}.eyebrow{{color:var(--gold);font-size:10px;letter-spacing:.12em;margin-bottom:5px}}h1{{font-size:20px;margin:0;max-width:780px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}.actions{{display:flex;gap:8px}}.btn{{height:34px;padding:0 11px;border:1px solid var(--line);border-radius:7px;background:rgba(255,255,255,.04);color:#b9c9df;font-size:11px;display:inline-flex;align-items:center;cursor:pointer;text-decoration:none}}.btn:hover{{border-color:rgba(246,200,95,.4);color:#ffe7a4}}.meta{{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;margin:18px 0}}.meta div{{padding:13px;border:1px solid var(--line);border-radius:9px;background:var(--panel)}}.meta span{{display:block;color:var(--muted);font-size:10px;margin-bottom:5px}}.meta b{{font-size:13px;font-weight:650}}.log-panel{{border:1px solid var(--line);border-radius:11px;overflow:hidden;background:#050d19}}.log-head{{padding:12px 15px;border-bottom:1px solid var(--line);color:#9eb1cb;font-size:11px}}pre{{margin:0;padding:18px;min-height:360px;overflow:auto;color:#c9d8eb;font:12px/1.75 Consolas,"Noto Sans Mono CJK SC",monospace;white-space:pre-wrap;word-break:break-word}}@media(max-width:700px){{.topbar{{flex-direction:column}}.meta{{grid-template-columns:1fr 1fr}}h1{{white-space:normal}}}}
+</style></head><body><main class="page"><header class="topbar"><div><div class="eyebrow">TASK LOG / {_html_escape(task_id)}</div><h1>{filename}</h1></div><div class="actions"><a class="btn" href="/monitor#tasks">返回工作台</a><button class="btn" type="button" onclick="navigator.clipboard.writeText(document.getElementById('taskLog').textContent).then(()=>this.textContent='已复制')">复制日志</button></div></header><section class="meta"><div><span>任务状态</span><b>{status}</b></div><div><span>创建时间</span><b>{created_at}</b></div><div><span>处理耗时</span><b>{duration:.1f}s</b></div><div><span>错误码</span><b>{error_code}</b></div></section><section class="log-panel"><div class="log-head">日志内容 · 已自动隐藏敏感认证字段</div><pre id="taskLog">{escaped_log}</pre></section></main></body></html>"""
+        self._text(body, "text/html")
 
     def _text(self, body: str, mime: str, status: int = 200, extra_headers=None):
         data = body.encode("utf-8")
@@ -3179,7 +3185,8 @@ def main():
     server.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     urls = _startup_urls()
     print(f"排版工具:   {urls['tool']}")
-    print(f"监控面板:   {urls['monitor']}")
+    print(f"管理员登录: {urls['admin_login']}")
+    print(f"监控面板:   登录后访问 {urls['monitor']}")
     print("鉴权配置:   ADMIN_TOKEN 已设置 | PROXY_SECRET 已设置")
     print(f"线程池: {MAX_WORKERS} | 队列: {MAX_QUEUE} | 上限: {MAX_SIZE//1048576}MB")
     print(f"限流: {RATE_WINDOW}s/IP | 文件TTL: {FILE_TTL}s")

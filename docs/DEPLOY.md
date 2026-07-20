@@ -31,6 +31,52 @@ resources/frontend/pages/_worker.js
 
 ## 安装依赖
 
+### Windows 服务器
+
+把整个项目目录复制到服务器任意位置。启动脚本始终以自身所在目录作为项目根，
+不依赖盘符、当前工作目录或固定部署路径：
+
+```pwsh
+Copy-Item .env.example .env
+# 编辑 .env，设置生产密钥、FRONTEND_ORIGIN 和 PRODUCTION_MODE=true
+pwsh -NoProfile -File .\run.ps1 -InstallDependencies
+```
+
+后续启动：
+
+```pwsh
+pwsh -NoProfile -File .\run.ps1
+```
+
+脚本每次启动前都会通过项目虚拟环境核对`requirements.txt`。已满足的依赖会被
+直接复用，缺失或版本不满足的依赖会自动下载安装；因此服务器首次启动和依赖补齐时
+需要能够访问Python软件包源。
+
+将后端注册为开机启动、退出远程桌面后仍保持运行的Windows计划任务：
+
+```pwsh
+pwsh -NoProfile -File .\run.ps1 -InstallService
+```
+
+该任务使用`SYSTEM`账户启动，异常退出后自动重启。服务输出追加到
+`var/logs/service-console.log`，排版日志仍写入`var/logs`。
+
+卸载计划任务：
+
+```pwsh
+pwsh -NoProfile -File .\run.ps1 -UninstallService
+```
+
+仅检查入口和虚拟环境，不启动服务：
+
+```pwsh
+pwsh -NoProfile -File .\run.ps1 -CheckOnly
+```
+
+`.env`中的相对路径统一相对于项目根目录解析，移动整个项目目录后仍然有效。
+
+### Linux 服务器
+
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
@@ -84,6 +130,14 @@ PROXY_SECRET=替换为和服务器一致的长随机代理密钥
 - `PROXY_SECRET` 必须与服务器环境变量完全一致。
 
 ## Nginx 示例配置
+
+仓库提供不包含服务器IP或磁盘路径的模板：
+
+```text
+deploy/nginx-docxtool.conf
+```
+
+模板只代理到服务器本机`127.0.0.1:9527`，不要将9527开放到公网。
 
 ```nginx
 server {
