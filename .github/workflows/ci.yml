@@ -7,6 +7,10 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.14"]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -14,7 +18,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
         run: |
@@ -26,6 +30,12 @@ jobs:
 
       - name: Run worker routing tests
         run: node --test tests/worker-routing.test.mjs
+
+      - name: Run frontend format configuration tests
+        run: node --test tests/frontend-format-config.test.mjs
+
+      - name: Run recognition regression tests
+        run: python -m pytest tests/test_recognition_decoder.py
 
       - name: Run ruff
         run: python -m ruff check src tests scripts

@@ -418,6 +418,42 @@ class BodyOrderExportTest(unittest.TestCase):
             self.assertEqual(counts["line_breaks"], 1)
             self.assertEqual(counts["tabs"], 1)
 
+    def test_removes_only_redundant_trailing_page_break_from_body_text(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            source = tmp / "source.docx"
+            output = tmp / "output.docx"
+
+            doc = Document()
+            doc.add_paragraph("测试材料")
+            body = doc.add_paragraph()
+            body.add_run("正文内容。")
+            body.runs[0].add_break(WD_BREAK.PAGE)
+            interrupted = doc.add_paragraph()
+            interrupted.add_run("正文前半句，")
+            interrupted.runs[0].add_break(WD_BREAK.PAGE)
+            interrupted.add_run("正文后半句。")
+            embedded = doc.add_paragraph()
+            embedded.add_run("段内前")
+            embedded.runs[0].add_break(WD_BREAK.PAGE)
+            embedded.add_run("段内后")
+            doc.add_paragraph("后续正文。")
+            doc.save(source)
+
+            data = DocxImporter().load(str(source), _rules())
+            export_doc(data, _rules(), PageSettings(), str(output))
+
+            rendered = Document(output)
+            first = next(paragraph for paragraph in rendered.paragraphs if paragraph.text == "正文内容。")
+            interrupted = next(paragraph for paragraph in rendered.paragraphs if paragraph.text == "正文前半句，正文后半句。")
+            second = next(paragraph for paragraph in rendered.paragraphs if paragraph.text == "段内前段内后")
+            first_breaks = first._p.findall(".//" + qn("w:br"))
+            interrupted_breaks = interrupted._p.findall(".//" + qn("w:br"))
+            second_breaks = second._p.findall(".//" + qn("w:br"))
+            self.assertEqual(first_breaks, [])
+            self.assertEqual(interrupted_breaks, [])
+            self.assertEqual(len(second_breaks), 1)
+
     def test_last_rendered_page_break_is_not_rewritten_as_manual_break(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)

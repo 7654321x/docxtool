@@ -46,12 +46,12 @@ pwsh -NoProfile -Command "git ls-remote git@github.com:7654321x/docxtool.git ref
 
 默认发布以下类型文件：
 
-- 项目文档：`README.md`、`docs/DEPLOY.md`、`docs/API.md`、`docs/UPLOAD_MANIFEST.md`、`docs/GITHUB_UPLOAD_GUIDE.md`、`AGENTS.md`、`CONVENTIONS.md`
+- 项目文档：`README.md`、`docs/DEPLOY.md`、`docs/API.md`、`docs/RECOGNITION_ARCHITECTURE.md`、`docs/RECOGNITION_RELEASE.md`、`docs/UPLOAD_MANIFEST.md`、`docs/GITHUB_UPLOAD_GUIDE.md`、`AGENTS.md`、`CONVENTIONS.md`
 - 依赖和启动：`requirements.txt`、`run.sh`、`run.ps1`
 - 服务器代理模板：`deploy/nginx-docxtool.conf`
 - 配置：`.env.example`、`.gitignore`、`.gitattributes`、`pytest.ini`、`ruff.toml`、`pyproject.toml`、`.github/workflows/ci.yml`
 - 后端和排版核心：`server.py`、`src/docxtool/**/*.py`、`src/docxtool/resources/config/default-format.json`
-- 脚本：`scripts/generate_secrets.py`、`scripts/migrate_legacy_database.ps1`、`scripts/publish_to_github.ps1`
+- 脚本：`scripts/generate_secrets.py`、`scripts/benchmark_recognition.py`、`scripts/compare_recognition_runs.py`、`scripts/migrate_legacy_database.ps1`、`scripts/publish_to_github.ps1`
 - 前端和 Cloudflare Pages：`resources/frontend/pages/index.html`、`resources/frontend/pages/_worker.js`
 - 运行目录占位：`var/data/.gitkeep`、`var/logs/.gitkeep`、`var/outputs/.gitkeep`、`var/runtime/.gitkeep`
 - 测试：`tests/test_*.py`、`tests/*.test.mjs`

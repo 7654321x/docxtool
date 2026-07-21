@@ -32,6 +32,8 @@ class BlockKind(str, Enum):
 class ElementKind(str, Enum):
     LETTERHEAD_MARK = "letterhead_mark"
     DOCUMENT_NUMBER = "document_number"
+    MEETING_METADATA = "meeting_metadata"
+    EMBEDDED_DOCUMENT_TITLE = "embedded_document_title"
     SIGNER = "signer"
     LETTERHEAD_SEPARATOR = "letterhead_separator"
     DOCUMENT_TITLE = "document_title"
@@ -139,6 +141,9 @@ _STYLE_KINDS = {
 _TYPE_KINDS = {
     "title": ElementKind.DOCUMENT_TITLE,
     "title_cont": ElementKind.DOCUMENT_TITLE,
+    "dispatch_number": ElementKind.DOCUMENT_NUMBER,
+    "meeting_meta": ElementKind.MEETING_METADATA,
+    "embedded_document_title": ElementKind.EMBEDDED_DOCUMENT_TITLE,
     "heading1": ElementKind.HEADING_1,
     "heading1_report": ElementKind.HEADING_1,
     "heading2": ElementKind.HEADING_2,

@@ -17,6 +17,8 @@ from types import SimpleNamespace
 from typing import Dict, List, Optional, Tuple
 
 from docxtool.document.classifier import ClassificationOptions, classify_paragraphs
+from docxtool.document.recognition import apply_recognition
+from docxtool.document.recognition.version import RECOGNITION_VERSION_TAG
 from docxtool.document.style_config import (
     NB_FIXED, NB_SUFFIXES,
     logger, ImportError,
@@ -1586,7 +1588,7 @@ def detect_paragraph_type(text: str, feats: ParagraphFeatures,
             meta["colon_bold"] = True
         # 报告首句加粗（current_level==1 + 首句≤30字 + 非报告回顾/称呼）。
         # 一是/二是/三是类段落已有 numbered_bold，避免两套 run 重写规则叠加。
-        if (ctx.current_level == 1 and not meta.get("numbered_bold")
+        if (ctx.doc_mode == "REPORT" and ctx.current_level == 1 and not meta.get("numbered_bold")
                 and not text.startswith((*_REPORT_HEADING_STARTS, '各位委员', '各位同志'))):
             period = text.find('。')
             if 0 < period <= 26:  # 首句≤26字加粗
@@ -2045,6 +2047,12 @@ class DocxImporter:
             if sectPr is not None:
                 meta_patch = dict(meta_patch or {})
                 meta_patch["sectPr"] = sectPr
+            meta_patch = dict(meta_patch or {})
+            meta_patch["legacy_type_id"] = {
+                "value": type_id,
+                "source": "legacy_importer",
+                "recognition_version": RECOGNITION_VERSION_TAG,
+            }
             pd = ParagraphData(
                 text=clean_text, type_id=type_id,
                 original_text=line, features=sub_pf, meta=meta_patch,
@@ -2062,6 +2070,7 @@ class DocxImporter:
         self._assign_numbering(data.paragraphs, rules)
         self._merge_siblings(data.paragraphs)
         self._apply_core_classification(data, features)
+        apply_recognition(data)
         # (old classification loop removed — replaced by flat_lines single pass above)
 
         # 第三半：编号连续性检查（需在编号赋值之后）

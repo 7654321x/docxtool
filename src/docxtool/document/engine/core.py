@@ -101,6 +101,61 @@ def _write_inline_tokens(para, tokens) -> None:
             run.add_break(WD_BREAK.PAGE)
 
 
+def _without_redundant_trailing_body_page_breaks(pd, next_pd, tokens):
+    """Drop trailing and clearly mid-sentence page breaks from ordinary body text."""
+    values = list(tokens or [])
+    if pd.type_id != "body" or not pd.text.strip() or next_pd is None:
+        return values
+    if next_pd.type_id in {
+        "attachment_page_mark", "attachment_title", "attachment_body", "glossary_title",
+        "__table__", "__image__", "__object_caption__",
+    }:
+        return values
+    last_text = max(
+        (
+            index for index, token in enumerate(values)
+            if getattr(token, "kind", "") == "text" and getattr(token, "text", "")
+        ),
+        default=-1,
+    )
+    if last_text < 0:
+        return values
+    filtered = []
+    for index, token in enumerate(values):
+        if getattr(token, "kind", "") != "page_break":
+            filtered.append(token)
+            continue
+        preceding = "".join(
+            getattr(item, "text", "")
+            for item in values[:index]
+            if getattr(item, "kind", "") == "text"
+        ).rstrip()
+        following = "".join(
+            getattr(item, "text", "")
+            for item in values[index + 1:]
+            if getattr(item, "kind", "") == "text"
+        ).lstrip()
+        if preceding.endswith(("，", ",", "、", "；", ";", "：", ":")) and following:
+            continue
+        filtered.append(token)
+    values = filtered
+    last_text = max(
+        (
+            index for index, token in enumerate(values)
+            if getattr(token, "kind", "") == "text" and getattr(token, "text", "")
+        ),
+        default=-1,
+    )
+    trailing = values[last_text + 1:]
+    if trailing and all(
+        getattr(token, "kind", "") == "page_break"
+        or (getattr(token, "kind", "") == "text" and not getattr(token, "text", ""))
+        for token in trailing
+    ):
+        return values[:last_text + 1]
+    return values
+
+
 class _SectionRelationshipCopier:
     """Copy header/footer parts and their relationship trees into an output package."""
 
@@ -1600,10 +1655,11 @@ def _copy_image(doc, source_para, part_copier, style_copier=None):
 # ═══════════════════════════════════════════════════════════════
 
 TYPE_TO_RULE_INDEX: Dict[str, int] = {
-    "title": 0, "title_cont": 0,     # 主标题 + 续行 → row 0
+    "title": 0, "title_cont": 0, "embedded_document_title": 0,
     "heading1": 1, "heading1_report": 1,  # 报告 heading1 同 row 1，但无编号
     "heading2": 2, "heading3": 3, "heading4": 4,
     "body": 5, "attachment": 5, "responsibility_line": 5,
+    "dispatch_number": 5, "meeting_meta": 5,
     "addressing": 10, "date_line": 11, "author_line": 12, "role_name": 13,
     "title2": 14, "sign_off": 15,
     "glossary_title": 0, "glossary_item": 16,
@@ -1617,6 +1673,9 @@ TYPE_TO_RULE_INDEX: Dict[str, int] = {
 TYPE_TO_STYLE_ID: Dict[str, str] = {
     "title": "DCT-Title",
     "title_cont": "DCT-Title",
+    "embedded_document_title": "DCT-Title",
+    "dispatch_number": "DCT-Body",
+    "meeting_meta": "DCT-Body",
     "date_line": "DCT-Date",
     "author_line": "DCT-Author",
     "role_name": "DCT-RoleName",
@@ -1658,7 +1717,11 @@ def _feature_enabled(options: dict | None, default: bool = False) -> bool:
 
 
 def _style_id_for_type(type_id: str) -> str:
-    return TYPE_TO_STYLE_ID.get(type_id, "DCT-Body")
+    style_id = TYPE_TO_STYLE_ID.get(type_id)
+    if style_id is None:
+        logger.warning("[渲染] 未知段落类型 %r，显式使用正文样式", type_id)
+        return "DCT-Body"
+    return style_id
 
 
 def _set_paragraph_style_id(paragraph, style_id: str) -> None:
@@ -1855,7 +1918,10 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
             logger.debug(f"[引擎] 段落 {para_no}: type={pd.type_id} text='{pd.text[:30]}'")
 
             # 确定对应的 StyleRule 索引
-            rule_index = TYPE_TO_RULE_INDEX.get(pd.type_id, 5)  # fallback → 正文
+            rule_index = TYPE_TO_RULE_INDEX.get(pd.type_id)
+            if rule_index is None:
+                logger.warning("[渲染] 未知段落类型 %r，显式使用正文规则", pd.type_id)
+                rule_index = 5
             raw_rule = rules[rule_index] if rule_index < len(rules) else StyleRule.default_for_row(rule_index)
 
             # glossary_title 特殊处理（内联段落）
@@ -1910,7 +1976,11 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
                 if pd.type_id in ("heading1", "heading2"):
                     text = _handle_heading_period(text)
 
-            inline_tokens = getattr(pd, "inline_tokens", None)
+            inline_tokens = _without_redundant_trailing_body_page_breaks(
+                pd,
+                render_items[i + 1] if i + 1 < len(render_items) else None,
+                getattr(pd, "inline_tokens", None),
+            )
             if inline_tokens and text == pd.text:
                 para = doc.add_paragraph("")
                 _write_inline_tokens(para, inline_tokens)

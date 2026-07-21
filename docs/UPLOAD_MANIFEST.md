@@ -21,6 +21,8 @@ git@github.com:7654321x/docxtool.git
 | `README.md` | 项目说明和本地运行方式 | GitHub 首页会使用 |
 | `docs/DEPLOY.md` | 生产部署说明 | Cloudflare Pages + Python 后端 |
 | `docs/API.md` | HTTP 接口、鉴权、错误码 | 前后端联调和排错 |
+| `docs/RECOGNITION_ARCHITECTURE.md` | 识别架构和稳定边界 | 识别层维护依据 |
+| `docs/RECOGNITION_RELEASE.md` | 识别发布门禁和回滚 | 发布验收依据 |
 | `docs/UPLOAD_MANIFEST.md` | 本清单 | 上传范围依据 |
 | `docs/GITHUB_UPLOAD_GUIDE.md` | GitHub 发布说明 | 不包含私钥 |
 | `AGENTS.md` | 本地协作规则 | Codex/AI 工作规则 |
@@ -55,6 +57,7 @@ git@github.com:7654321x/docxtool.git
 | `src/docxtool/document/importer.py` | DOCX 结构识别、段落分类、元数据生成 |
 | `src/docxtool/document/classifier.py` | 文档模式和段落结构分类 |
 | `src/docxtool/document/letterhead_config.py` | 版头配置归一化和安全校验 |
+| `src/docxtool/document/recognition/` | 候选、Beam 解码、诊断、验证和兼容映射 |
 | `src/docxtool/document/style_config.py` | 样式规则、页面设置、日志配置、默认配置读取 |
 | `src/docxtool/resources/__init__.py` | 打包资源包入口 |
 | `src/docxtool/resources/config/default-format.json` | 默认公文格式配置，随 wheel 安装 |
@@ -79,6 +82,8 @@ git@github.com:7654321x/docxtool.git
 | `src/docxtool/storage/__init__.py` | 存储包入口 |
 | `src/docxtool/storage/database.py` | SQLite 路径和连接辅助 |
 | `scripts/generate_secrets.py` | 生成随机密钥辅助脚本 |
+| `scripts/benchmark_recognition.py` | 无正文识别性能基准 |
+| `scripts/compare_recognition_runs.py` | 安全识别差分和确定性检查 |
 | `scripts/migrate_legacy_database.ps1` | 旧数据库复制迁移辅助脚本，默认 dry run |
 | `scripts/publish_to_github.ps1` | 安全发布到 GitHub 的脚本 |
 
