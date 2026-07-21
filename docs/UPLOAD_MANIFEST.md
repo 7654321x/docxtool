@@ -84,6 +84,11 @@ git@github.com:7654321x/docxtool.git
 | `scripts/generate_secrets.py` | 生成随机密钥辅助脚本 |
 | `scripts/benchmark_recognition.py` | 无正文识别性能基准 |
 | `scripts/compare_recognition_runs.py` | 安全识别差分和确定性检查 |
+| `scripts/analyze_end_format.py` | 排版结果与正确模板的无正文格式差异分析 |
+| `scripts/analyze_letterhead_batch.py` | 批量版头状态与问题归类 |
+| `scripts/batch_test_docx.py` | 编号测试文档批处理与安全报告 |
+| `scripts/generate_005_format_fixtures.py` | 可复现的本地乱格式测试文档生成 |
+| `scripts/normalize_correct_template_role_spacing.py` | 正确模板职务姓名空段归一化 |
 | `scripts/migrate_legacy_database.ps1` | 旧数据库复制迁移辅助脚本，默认 dry run |
 | `scripts/publish_to_github.ps1` | 安全发布到 GitHub 的脚本 |
 

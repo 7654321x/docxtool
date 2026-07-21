@@ -58,6 +58,10 @@ id_ed25519
 # Root-level user DOCX samples. Keep explicit test fixtures under tests/ only when reviewed.
 /*.docx
 ~$*.docx
+/test_docx/
+
+# Generated portable deployment copy; canonical source remains at repository root.
+/docx/
 
 # IDE and OS files
 .idea/
