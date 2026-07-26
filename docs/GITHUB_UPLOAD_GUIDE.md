@@ -5,7 +5,7 @@
 ## 1. 目标仓库
 
 ```text
-git@github.com:7654321x/docxtool.git
+https://github.com/7654321x/docxtool.git
 ```
 
 默认分支：
@@ -37,7 +37,7 @@ Hi 7654321x! You've successfully authenticated, but GitHub does not provide shel
 检查目标仓库：
 
 ```pwsh
-pwsh -NoProfile -Command "git ls-remote git@github.com:7654321x/docxtool.git refs/heads/main"
+pwsh -NoProfile -Command "git ls-remote https://github.com/7654321x/docxtool.git refs/heads/main"
 ```
 
 只允许把 `.pub` 公钥配置到 GitHub。不要把无扩展名私钥、`.pem`、`.key`、`ADMIN_TOKEN`、`PROXY_SECRET` 或 Cookie 写进仓库。
@@ -47,7 +47,7 @@ pwsh -NoProfile -Command "git ls-remote git@github.com:7654321x/docxtool.git ref
 默认发布以下类型文件：
 
 - 项目文档：`README.md`、`docs/DEPLOY.md`、`docs/API.md`、`docs/RECOGNITION_ARCHITECTURE.md`、`docs/RECOGNITION_RELEASE.md`、`docs/UPLOAD_MANIFEST.md`、`docs/GITHUB_UPLOAD_GUIDE.md`、`AGENTS.md`、`CONVENTIONS.md`
-- 依赖和启动：`requirements.txt`、`run.sh`、`run.ps1`
+- 依赖和启动：`requirements.txt`、`requirements.lock`、`requirements-dev.lock`、`run.sh`、`run.ps1`
 - 服务器代理模板：`deploy/nginx-docxtool.conf`
 - 配置：`.env.example`、`.gitignore`、`.gitattributes`、`pytest.ini`、`ruff.toml`、`pyproject.toml`、`.github/workflows/ci.yml`
 - 后端和排版核心：`server.py`、`src/docxtool/**/*.py`、`src/docxtool/resources/config/default-format.json`
@@ -85,7 +85,7 @@ pwsh -NoProfile -File .\scripts\publish_to_github.ps1
 
 演练会：
 
-- 临时克隆 `git@github.com:7654321x/docxtool.git`
+- 临时克隆 `https://github.com/7654321x/docxtool.git`
 - 清空临时克隆工作区，但保留 `.git`
 - 复制允许发布的真实项目文件
 - 运行 `pytest`、Ruff、Node Worker 测试

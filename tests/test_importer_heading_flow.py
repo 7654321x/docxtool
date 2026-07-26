@@ -28,7 +28,7 @@ class ImporterHeadingFlowTest(unittest.TestCase):
             doc.add_paragraph(line)
         path = self.root / "input.docx"
         doc.save(path)
-        return DocxImporter().load(str(path), _rules())
+        return DocxImporter().load(str(path), _rules(), strict_preservation=False)
 
     def _find_original(self, data, prefix):
         for pd in data.paragraphs:

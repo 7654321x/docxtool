@@ -28,7 +28,7 @@ class SignatureAttachmentDetectionTest(unittest.TestCase):
             doc.add_paragraph(line)
         path = self.root / "input.docx"
         doc.save(path)
-        return DocxImporter().load(str(path), _rules())
+        return DocxImporter().load(str(path), _rules(), strict_preservation=False)
 
     def test_sign_org_date_and_attachment_page(self):
         data = self._load_lines([

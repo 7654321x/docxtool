@@ -209,10 +209,10 @@ def test_wrong_heading_legacy_does_not_override_meeting_metadata():
 def test_every_paragraph_type_has_explicit_render_mapping():
     for paragraph_type in ParagraphType:
         type_id, rule_index, style_id = resolve_render_mapping(paragraph_type)
-        assert type_id
         if paragraph_type is ParagraphType.UNKNOWN:
-            assert rule_index is None and style_id is None
+            assert type_id is None and rule_index is None and style_id is None
         else:
+            assert type_id
             assert isinstance(rule_index, int)
             assert style_id and style_id.startswith("DCT-")
 
@@ -341,7 +341,8 @@ def test_review_flags_and_safe_summary_do_not_change_final_types():
 
     clear_diagnostic = clear.recognition_diagnostics["paragraphs"][0]
     ambiguous_diagnostic = ambiguous.recognition_diagnostics["paragraphs"][0]
-    assert clear_diagnostic["needs_review"] is False
+    assert clear_diagnostic["needs_review"] is True
+    assert "LEGACY_TYPE_CONFLICT" in clear_diagnostic["review_reasons"]
     assert ambiguous_diagnostic["needs_review"] is True
     assert ambiguous_diagnostic["review_reasons"]
     assert clear.paragraphs[0].type_id == "dispatch_number"

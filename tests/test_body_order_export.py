@@ -160,7 +160,7 @@ class BodyOrderExportTest(unittest.TestCase):
             doc.add_paragraph("after")
             doc.save(source)
 
-            data = DocxImporter().load(str(source), _rules())
+            data = DocxImporter().load(str(source), _rules(), strict_preservation=False)
             export_doc(data, _rules(), PageSettings(), str(output))
 
             self.assertEqual(
@@ -196,6 +196,35 @@ class BodyOrderExportTest(unittest.TestCase):
             exported_rel = exported.part.rels[link.get(qn("r:id"))]
             self.assertTrue(exported_rel.is_external)
             self.assertEqual(exported_rel.target_ref, "https://example.com/table")
+
+    def test_removes_unsafe_external_table_relationship_without_dangling_reference(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            source = tmp / "source.docx"
+            output = tmp / "output.docx"
+
+            doc = Document()
+            cell_para = doc.add_table(rows=1, cols=1).cell(0, 0).paragraphs[0]
+            rid = cell_para.part.relate_to("file:///C:/private/document.docx", RT.HYPERLINK, is_external=True)
+            hyperlink = OxmlElement("w:hyperlink")
+            hyperlink.set(qn("r:id"), rid)
+            run = OxmlElement("w:r")
+            text = OxmlElement("w:t")
+            text.text = "unsafe link"
+            run.append(text)
+            hyperlink.append(run)
+            cell_para._p.append(hyperlink)
+            doc.save(source)
+
+            data = DocxImporter().load(str(source), _rules())
+            stats = export_doc(data, _rules(), PageSettings(), str(output))
+
+            exported = Document(output)
+            link = exported.tables[0]._tbl.find(".//" + qn("w:hyperlink"))
+            self.assertIsNotNone(link)
+            self.assertIsNone(link.get(qn("r:id")))
+            self.assertFalse(any(rel.is_external and rel.target_ref.startswith("file:") for rel in exported.part.rels.values()))
+            self.assertTrue(stats["removed_external_relationships"])
 
     def test_preserves_table_and_following_caption_xml_unchanged(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -347,7 +376,7 @@ class BodyOrderExportTest(unittest.TestCase):
             following.runs[0].font.color.rgb = RGBColor(255, 0, 0)
             doc.save(source)
 
-            data = DocxImporter().load(str(source), _rules())
+            data = DocxImporter().load(str(source), _rules(), strict_preservation=False)
 
             self.assertEqual(data.paragraphs[0].type_id, "__image__")
             following_data = next(item for item in data.paragraphs if item.text == "图2 这是普通正文")
@@ -440,7 +469,7 @@ class BodyOrderExportTest(unittest.TestCase):
             doc.add_paragraph("后续正文。")
             doc.save(source)
 
-            data = DocxImporter().load(str(source), _rules())
+            data = DocxImporter().load(str(source), _rules(), strict_preservation=False)
             export_doc(data, _rules(), PageSettings(), str(output))
 
             rendered = Document(output)

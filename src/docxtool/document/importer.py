@@ -11,7 +11,10 @@
 """
 
 import copy
+import hashlib
+import os
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Dict, List, Optional, Tuple
@@ -44,6 +47,16 @@ class ParagraphFeatures:
     is_in_table: bool = False
     contains_image: bool = False
     is_new_line: bool = False     # 是否由 \n 拆分出的新行
+    first_run_font_name: str = ""
+    first_run_font_size_pt: Optional[float] = None
+    first_run_bold: bool = False
+    dominant_font_name: str = ""
+    weighted_font_size: Optional[float] = None
+    max_font_size: Optional[float] = None
+    min_font_size: Optional[float] = None
+    bold_char_ratio: float = 0.0
+    italic_char_ratio: float = 0.0
+    explicitly_formatted_char_ratio: float = 0.0
 
 
 @dataclass
@@ -84,6 +97,21 @@ class DocumentData:
     section_relationship_parts: Dict[str, object] = field(default_factory=dict)
     even_and_odd_headers: object = None
     letterhead_detection: object = None
+    strict_preservation: bool = False
+    recognition_mode: str = "authoritative"
+    normalization_changes: list = field(default_factory=list)
+    recognition_diagnostics: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class NormalizationChange:
+    paragraph_index: int
+    action: str
+    before: str
+    after: str
+    reason_code: str
+    confidence: float
+    applied: bool
 
 
 _OBJECT_CAPTION_RE = re.compile(
@@ -119,19 +147,69 @@ def extract_features(paragraph, index: int) -> ParagraphFeatures:
     if paragraph.style:
         pf.style_name = paragraph.style.name or ""
 
-    # 字体属性（选取第一个有内容的 run）
+    # 保留首个有效 run 供兼容诊断，同时用全部 run 的非空白字符数汇总特征。
+    font_weights: Counter[str] = Counter()
+    size_weights: Counter[float] = Counter()
+    total_chars = 0
+    bold_chars = 0
+    italic_chars = 0
+    explicit_chars = 0
+    explicit_sizes: list[float] = []
+    style_font = getattr(getattr(paragraph, "style", None), "font", None)
+    style_font_name = getattr(style_font, "name", None) or ""
+    style_font_size = getattr(style_font, "size", None)
+    style_font_size_pt = style_font_size.pt if style_font_size is not None else None
+    first_run_seen = False
     if paragraph.runs:
         for run in paragraph.runs:
-            if run.text.strip():
-                try:
-                    if run.font.name:
-                        pf.font_name = run.font.name
-                    if run.font.size:
-                        pf.font_size_pt = run.font.size / 12700
-                    pf.bold = bool(run.font.bold)
-                except Exception:
-                    pass
-                break
+            char_count = len(re.sub(r"\s+", "", run.text or ""))
+            if not char_count:
+                continue
+            try:
+                run_font = run.font.name or style_font_name
+                run_size = run.font.size.pt if run.font.size is not None else style_font_size_pt
+                if not first_run_seen:
+                    pf.first_run_font_name = run.font.name or ""
+                    pf.first_run_font_size_pt = run.font.size.pt if run.font.size is not None else None
+                    pf.first_run_bold = bool(run.font.bold)
+                    first_run_seen = True
+                total_chars += char_count
+                if run_font:
+                    font_weights[run_font] += char_count
+                if run_size is not None:
+                    size_weights[float(run_size)] += char_count
+                if run.font.size is not None:
+                    explicit_sizes.append(float(run.font.size.pt))
+                if bool(run.font.bold):
+                    bold_chars += char_count
+                if bool(run.font.italic):
+                    italic_chars += char_count
+                if any(value is not None for value in (run.font.name, run.font.size, run.font.bold, run.font.italic)):
+                    explicit_chars += char_count
+            except (AttributeError, TypeError, ValueError):
+                continue
+
+    pf.dominant_font_name = font_weights.most_common(1)[0][0] if font_weights else style_font_name
+    if size_weights:
+        weighted_total = sum(size * weight for size, weight in size_weights.items())
+        weight_total = sum(size_weights.values())
+        pf.weighted_font_size = weighted_total / weight_total
+        pf.max_font_size = max(size_weights)
+        pf.min_font_size = min(size_weights)
+    elif style_font_size_pt is not None:
+        pf.weighted_font_size = float(style_font_size_pt)
+        pf.max_font_size = float(style_font_size_pt)
+        pf.min_font_size = float(style_font_size_pt)
+    if explicit_sizes:
+        pf.max_font_size = max(explicit_sizes)
+        pf.min_font_size = min(explicit_sizes)
+    if total_chars:
+        pf.bold_char_ratio = bold_chars / total_chars
+        pf.italic_char_ratio = italic_chars / total_chars
+        pf.explicitly_formatted_char_ratio = explicit_chars / total_chars
+    pf.font_name = pf.dominant_font_name or pf.first_run_font_name
+    pf.font_size_pt = pf.weighted_font_size or pf.first_run_font_size_pt
+    pf.bold = pf.bold_char_ratio >= 0.5
 
     # 对齐（统一小写 + 处理 None）
     try:
@@ -167,7 +245,7 @@ def extract_features(paragraph, index: int) -> ParagraphFeatures:
                 has_literal = bool(re.match(r'^[（\(]?\d+[）\)\.．]', text.strip()))
                 if not pf.numbering_prefix and not has_literal:
                     pf.numbering_prefix = f"@lvl_{lvl}"
-                    logger.debug(f"[多级列表] ilvl={lvl} → heading{lvl+2} text={text[:30]}")
+                    logger.debug("[多级列表] ilvl=%s → heading%s chars=%s", lvl, lvl + 2, len(text))
     except Exception as e:
         logger.debug(f"[多级列表] 提取失败: {e}")
 
@@ -372,7 +450,7 @@ class ScoreBoard:
 
     def debug_log(self, para_index: int, text: str) -> None:
         """输出完整评分明细到 DEBUG 日志。"""
-        logger.debug(f"[评分] para={para_index} text={text[:30]}")
+        logger.debug("[评分] para=%s chars=%s", para_index, len(text))
         for item in self.explain():
             parts = " + ".join(f"{s}={v:.0f}" for s, v in item["reasons"])
             logger.debug(f"  {item['type']:15} = {item['score']:5.0f}  ({parts})")
@@ -1486,7 +1564,7 @@ def _repair_level(type_id: str, feats, ctx) -> str:
 def _repair_heading4_colon(type_id: str, text: str, feats, ctx) -> str:
     """heading4 + 含冒号 → 回退为 body。"""
     if type_id == "heading4" and _contains_colon(text):
-        logger.debug(f"[修复] heading4 含冒号→body: '{text[:30]}'")
+        logger.debug("[修复] heading4 含冒号→body chars=%s", len(text))
         return "body"
     return type_id
 
@@ -1562,17 +1640,17 @@ def detect_paragraph_type(text: str, feats: ParagraphFeatures,
         and not ctx.has_seen_body
     ):
         type_id = "heading1"
-        logger.debug(f"[修复] OCR 标题升级: '{text[:30]}'")
+        logger.debug("[修复] OCR 标题升级 chars=%s", len(text))
 
     # ── 打分日志 ──
     scores_str = ' → '.join(score_log) if score_log else 'by_style'
-    logger.info(f"[打分] \"{text[:28]}\" | {scores_str} → {type_id}")
+    logger.info("[打分] chars=%s text_sha256=%s | %s → %s", len(text), hashlib.sha256(text.encode("utf-8")).hexdigest()[:12], scores_str, type_id)
 
     # ── heading2 续行修复：前段 heading2 + 短句含句号 → 缺编号的 heading2 ──
     if type_id == "body" and ctx.prev_type_id == "heading2" and len(text) <= 30 and text.endswith('。'):
         type_id = "heading2"
         meta["heading2_cont"] = True  # 不自动编号
-        logger.debug(f"[修复] heading2 续行: '{text[:30]}'")
+        logger.debug("[修复] heading2 续行 chars=%s", len(text))
 
     # ── Meta 补充：body 内部加粗标记 ──
     if type_id in ("heading1", "heading2") and _heading_has_inline_body(text):
@@ -1683,6 +1761,7 @@ def _repair_broken_rels(filepath: str) -> str:
     """
     import zipfile as _zipfile
     import tempfile as _tempfile
+    import os as _os
     from xml.etree import ElementTree as _ET
 
     def remove_null_relationships(data: bytes) -> tuple[bytes, bool]:
@@ -1701,8 +1780,12 @@ def _repair_broken_rels(filepath: str) -> str:
     need_fix = False
     try:
         with _zipfile.ZipFile(filepath, 'r') as z:
-            if 'word/_rels/document.xml.rels' in z.namelist():
-                _, need_fix = remove_null_relationships(z.read('word/_rels/document.xml.rels'))
+            rels_items = [
+                item for item in z.infolist()
+                if item.filename.replace('\\', '/') == 'word/_rels/document.xml.rels'
+            ]
+            if len(rels_items) == 1:
+                _, need_fix = remove_null_relationships(z.read(rels_items[0]))
     except Exception:
         return filepath
 
@@ -1710,28 +1793,44 @@ def _repair_broken_rels(filepath: str) -> str:
         return filepath
 
     logger.info("[修复] 检测到损坏引用 Target=\"../NULL\"，自动修复…")
-    tmp = _tempfile.NamedTemporaryFile(delete=False, suffix='.docx')
+    tmp = _tempfile.NamedTemporaryFile(
+        delete=False,
+        suffix='.docx',
+        dir=_os.path.dirname(_os.path.abspath(filepath)),
+    )
     tmp.close()
 
     try:
         with _zipfile.ZipFile(filepath, 'r') as zin:
             with _zipfile.ZipFile(tmp.name, 'w', _zipfile.ZIP_DEFLATED) as zout:
                 for item in zin.infolist():
-                    data = zin.read(item.filename)
+                    data = zin.read(item)
                     if item.filename == 'word/_rels/document.xml.rels':
                         data, _ = remove_null_relationships(data)
                     zout.writestr(item, data)
-        logger.info(f"[修复] 完成 → {tmp.name}")
+        logger.info("[修复] 损坏关系已写入任务临时副本")
         return tmp.name
     except Exception as e:
-        logger.warning(f"[修复] 失败: {e}")
+        try:
+            _os.unlink(tmp.name)
+        except OSError:
+            logger.warning("[修复] 临时文件清理失败")
+        logger.warning("[修复] 失败: %s", type(e).__name__)
         return filepath
 
 
 class DocxImporter:
     """.docx 文件导入器。"""
 
-    def load(self, filepath: str, rules: List[StyleRule], features: dict = None) -> DocumentData:
+    def load(
+        self,
+        filepath: str,
+        rules: List[StyleRule],
+        features: dict = None,
+        *,
+        strict_preservation: bool = True,
+        recognition_mode: str = "authoritative",
+    ) -> DocumentData:
         """加载 .docx，识别段落类型，返回 DocumentData。"""
         try:
             from docx import Document as DocxDocument
@@ -1739,6 +1838,15 @@ class DocxImporter:
             raise ImportError("请安装 python-docx: pip install python-docx")
 
         features = features or {}
+        processing_options = features.get("processing", {}) if isinstance(features.get("processing", {}), dict) else {}
+        strict_preservation = _feature_bool(
+            processing_options.get("strict_preservation", strict_preservation),
+            strict_preservation,
+        )
+        recognition_options = features.get("recognition", {}) if isinstance(features.get("recognition", {}), dict) else {}
+        recognition_mode = str(recognition_options.get("mode", recognition_mode) or recognition_mode).lower()
+        if recognition_mode not in {"legacy", "shadow", "authoritative"}:
+            raise ImportError("识别模式必须为 legacy、shadow 或 authoritative")
         punctuation_options = features.get("punctuation", {}) if isinstance(features.get("punctuation", {}), dict) else {}
         new_punctuation_enabled = _feature_bool(punctuation_options.get("enabled", False), False)
         punctuation_mode = str(punctuation_options.get("mode", "safe") or "safe")
@@ -1746,6 +1854,8 @@ class DocxImporter:
 
         def normalize_text(text: str) -> str:
             if not text:
+                return text
+            if strict_preservation:
                 return text
             if new_punctuation_enabled:
                 from docxtool.document.engine.punctuation import normalize_punctuation_text
@@ -1756,6 +1866,8 @@ class DocxImporter:
             return text
 
         def normalize_tokens(tokens: List[InlineToken]) -> List[InlineToken]:
+            if strict_preservation:
+                return list(tokens or [])
             normalized = _normalize_inline_tokens(tokens, punctuation_enabled and not new_punctuation_enabled)
             if not new_punctuation_enabled:
                 if not punctuation_enabled:
@@ -1769,15 +1881,26 @@ class DocxImporter:
                 for token in normalized
             ]
 
-        # 自动修复损坏的 .rels 引用
-        filepath = _repair_broken_rels(filepath)
-
+        # 自动修复损坏的 .rels 引用；修复副本只由本次导入持有。
+        original_filepath = filepath
+        repaired_filepath = _repair_broken_rels(filepath)
         try:
-            doc = DocxDocument(filepath)
+            doc = DocxDocument(repaired_filepath)
         except Exception as e:
-            raise ImportError(f"无法打开文件 {filepath}: {e}")
+            raise ImportError(f"无法打开文件: {type(e).__name__}") from e
+        finally:
+            if repaired_filepath != original_filepath:
+                try:
+                    os.unlink(repaired_filepath)
+                except OSError:
+                    logger.warning("[修复] 临时 DOCX 清理失败")
 
-        data = DocumentData(filepath=filepath)
+        data = DocumentData(
+            filepath=original_filepath,
+            strict_preservation=strict_preservation,
+            recognition_mode=recognition_mode,
+        )
+        source_visible_texts = [paragraph.text for paragraph in doc.paragraphs if paragraph.text]
         from docxtool.document.engine.letterhead import detect_letterhead
 
         data.letterhead_detection = detect_letterhead(doc)
@@ -1807,7 +1930,7 @@ class DocxImporter:
                     raw_blocks.append(("letterhead_paragraph_xml", para))
                 elif pf.contains_image:
                     raw_blocks.append(("paragraph_xml", para))
-                elif para.text.strip() or sectPr is not None or any(token.kind == "page_break" for token in inline_tokens):
+                elif strict_preservation or para.text.strip() or sectPr is not None or any(token.kind == "page_break" for token in inline_tokens):
                     raw_blocks.append(("paragraph", para, pf, inline_tokens, sectPr))
             elif child.tag == _qn_body('w:tbl'):
                 table = DocxTable(child, doc._body)
@@ -1848,6 +1971,10 @@ class DocxImporter:
                 flat_lines.append(block)
                 continue
             _, para, pf, inline_tokens, sectPr = block
+            if strict_preservation:
+                raw_text = inline_tokens_text(inline_tokens) if inline_tokens else para.text
+                flat_lines.append(("text", raw_text, pf, list(inline_tokens), sectPr))
+                continue
             text = para.text.strip()
             text = normalize_text(text)
             if not text and sectPr is not None:
@@ -1959,8 +2086,9 @@ class DocxImporter:
                 data.paragraphs.append(pd)
                 continue
             if item[0] == "protected_paragraph_xml":
-                pd = ParagraphData(text="", type_id="__object_caption__",
-                                   original_text="", features=None,
+                caption_text = item[1].text
+                pd = ParagraphData(text=caption_text, type_id="__object_caption__",
+                                   original_text=caption_text, features=extract_features(item[1], i),
                                    meta={"paragraph_xml": item[1]})
                 data.paragraphs.append(pd)
                 continue
@@ -2009,6 +2137,11 @@ class DocxImporter:
                     type_id, meta_patch, prefix = detect_paragraph_type(line, sub_pf, ctx, rules)
                     clean_text = strip_numbering(line, prefix)
 
+            if strict_preservation:
+                clean_text = line
+                meta_patch = dict(meta_patch or {})
+                meta_patch.pop("numbering", None)
+
             if ctx.attachment_page_mode and type_id == "body":
                 type_id = "attachment_body"
 
@@ -2056,32 +2189,140 @@ class DocxImporter:
             pd = ParagraphData(
                 text=clean_text, type_id=type_id,
                 original_text=line, features=sub_pf, meta=meta_patch,
-                inline_tokens=inline_tokens if clean_text == line else [],
+                inline_tokens=inline_tokens if strict_preservation or clean_text == line else [],
             )
             data.paragraphs.append(pd)
-            # 分类日志
-            preview = clean_text[:28].replace('\n', ' ')
-            logger.info(f"[识别] #{len(data.paragraphs)-1} {type_id} | \"{preview}\"{' meta='+str(meta_patch) if meta_patch else ''}")
+            text_hash = hashlib.sha256(clean_text.encode("utf-8")).hexdigest()[:12]
+            logger.info(
+                "[识别] #%s type=%s chars=%s text_sha256=%s",
+                len(data.paragraphs) - 1,
+                type_id,
+                len(clean_text),
+                text_hash,
+            )
             # (body_blocks removed — tables/images now use paragraph stream placeholders)
 
         data.doc_mode = ctx.doc_mode
-        _normalize_tail_structures(data.paragraphs)
-        self._reorder_attachment_note_before_signature(data.paragraphs)
-        self._assign_numbering(data.paragraphs, rules)
-        self._merge_siblings(data.paragraphs)
+        visible_paragraphs = [
+            paragraph for paragraph in data.paragraphs
+            if not paragraph.type_id.startswith("__")
+        ]
+        before_normalization = [
+            (
+                source_text,
+                source_text,
+                visible_paragraphs[index].type_id if index < len(visible_paragraphs) else "",
+            )
+            for index, source_text in enumerate(source_visible_texts)
+        ]
+        if strict_preservation:
+            self._record_strict_normalization_suggestions(data)
+        else:
+            _normalize_tail_structures(data.paragraphs)
+            self._reorder_attachment_note_before_signature(data.paragraphs)
+            self._assign_numbering(data.paragraphs, rules)
+            self._merge_siblings(data.paragraphs)
+            self._record_applied_normalization_changes(data, before_normalization)
         self._apply_core_classification(data, features)
-        apply_recognition(data)
+        from dataclasses import replace
+        from docxtool.document.recognition.config import DEFAULT_CONFIG
+
+        apply_recognition(data, replace(DEFAULT_CONFIG, mode=recognition_mode))
         # (old classification loop removed — replaced by flat_lines single pass above)
 
         # 第三半：编号连续性检查（需在编号赋值之后）
-        self._fix_numbering_gaps(data.paragraphs)
+        if not strict_preservation:
+            self._fix_numbering_gaps(data.paragraphs)
 
         # 第三步：剥离 Word 自动编号
-        for para in doc.paragraphs:
-            self._strip_auto_numbering(para)
+        if not strict_preservation:
+            for para in doc.paragraphs:
+                self._strip_auto_numbering(para)
 
-        logger.info(f"[导入] {filepath}: {len(data.paragraphs)} 段, {len(data.tables)} 表格")
+        logger.info(
+            "[导入] file_sha256=%s paragraphs=%s tables=%s strict=%s recognition=%s",
+            hashlib.sha256(str(original_filepath).encode("utf-8")).hexdigest()[:12],
+            len(data.paragraphs),
+            len(data.tables),
+            strict_preservation,
+            recognition_mode,
+        )
         return data
+
+    def _record_strict_normalization_suggestions(self, data: DocumentData) -> None:
+        from docxtool.document.engine.punctuation import normalize_punctuation_text
+
+        for index, paragraph in enumerate(data.paragraphs):
+            if paragraph.type_id.startswith("__"):
+                continue
+            proposed = normalize_punctuation_text(paragraph.original_text, mode="safe")
+            if proposed != paragraph.original_text:
+                data.normalization_changes.append(NormalizationChange(
+                    paragraph_index=index,
+                    action="normalize_punctuation",
+                    before=paragraph.original_text,
+                    after=proposed,
+                    reason_code="PUNCTUATION_NORMALIZATION_SUGGESTED",
+                    confidence=0.9,
+                    applied=False,
+                ))
+        for index in range(len(data.paragraphs) - 2):
+            current = data.paragraphs[index]
+            following = data.paragraphs[index + 1]
+            trailing = data.paragraphs[index + 2]
+            if (
+                current.type_id == "sign_org"
+                and following.type_id == "sign_date"
+                and trailing.type_id == "attachment_note"
+            ):
+                data.normalization_changes.append(NormalizationChange(
+                    paragraph_index=index,
+                    action="reorder_tail_structure",
+                    before="sign_org,sign_date,attachment_note",
+                    after="attachment_note,sign_org,sign_date",
+                    reason_code="TAIL_STRUCTURE_REORDER_SUGGESTED",
+                    confidence=0.85,
+                    applied=False,
+                ))
+        for index in range(len(data.paragraphs) - 1):
+            current = data.paragraphs[index]
+            following = data.paragraphs[index + 1]
+            if current.type_id.startswith("heading") and current.type_id == following.type_id:
+                data.normalization_changes.append(NormalizationChange(
+                    paragraph_index=index,
+                    action="merge_sibling_heading",
+                    before=current.original_text,
+                    after=f"{current.original_text}{following.original_text}",
+                    reason_code="SIBLING_HEADING_MERGE_SUGGESTED",
+                    confidence=0.7,
+                    applied=False,
+                ))
+
+    def _record_applied_normalization_changes(
+        self,
+        data: DocumentData,
+        before: list[tuple[str, str, str]],
+    ) -> None:
+        after = [
+            (paragraph.original_text, paragraph.text, paragraph.type_id)
+            for paragraph in data.paragraphs
+            if not paragraph.type_id.startswith("__")
+        ]
+        max_length = max(len(before), len(after))
+        for index in range(max_length):
+            old = before[index] if index < len(before) else ("", "", "")
+            new = after[index] if index < len(after) else ("", "", "")
+            if old == new:
+                continue
+            data.normalization_changes.append(NormalizationChange(
+                paragraph_index=index,
+                action="normalize_structure",
+                before=old[1] or old[0],
+                after=new[1] or new[0],
+                reason_code="LEGACY_NORMALIZATION_APPLIED",
+                confidence=0.8,
+                applied=True,
+            ))
 
     def _apply_core_classification(self, data: DocumentData, features: dict) -> None:
         classification_options = features.get("classification", {}) if isinstance(features.get("classification", {}), dict) else {}
@@ -2145,13 +2386,10 @@ class DocxImporter:
 
         四级计数器 a/b/c/d，级联清零。Renderer 只负责显示，不计算。
         """
-        # 内联中文数字（绕过模块缓存问题）
-        _CN = ["零","一","二","三","四","五","六","七","八","九","十",
-               "十一","十二","十三","十四","十五","十六","十七","十八","十九","二十"]
+        from docxtool.document.engine.numbering import chinese_integer
+
         def _cn(n):
-            r = _CN[n] if 0 <= n <= 20 else (_CN[n//10] + "十" + (_CN[n%10] if n%10 else ""))
-            logger.debug(f"[CN] _cn({n}) = {r!r}")
-            return r
+            return chinese_integer(n)
         def _ar(n): return str(n)
 
         counters = {"a": 0, "b": 0, "c": 0, "d": 0}
@@ -2211,7 +2449,7 @@ class DocxImporter:
                 numPr = pPr.find(qn('w:numPr'))
                 if numPr is not None:
                     pPr.remove(numPr)
-                    logger.debug(f"[导入] 剥离自动编号: '{paragraph.text[:30]}'")
+                    logger.debug("[导入] 剥离自动编号 chars=%s", len(paragraph.text))
         except Exception:
             pass
 

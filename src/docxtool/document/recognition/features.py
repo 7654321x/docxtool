@@ -16,7 +16,7 @@ NUMBERING_RE = re.compile(r"^(?P<prefix>(?:[一二三四五六七八九十百千
 KEY_VALUE_RE = re.compile(r"^(?P<label>[^:：]{1,24})(?P<separator>[:：])(?P<value>.*)$")
 MEETING_LABELS = frozenset({"时间", "地点", "主持", "记录", "出席", "缺席", "列席", "参会", "参加", "议题", "议定事项", "会议名称", "会议时间", "会议地点"})
 SOURCE_NOTE_RE = re.compile(r"^(?:来源|注|说明|备注)\s*[:：]")
-ATTACHMENT_RE = re.compile(r"^附件\s*(?:[:：]|[0-9一二三四五六七八九十]+)?")
+ATTACHMENT_RE = re.compile(r"^附件\s*[:：]")
 RECIPIENT_RE = re.compile(r"^[\u4e00-\u9fffA-Za-z0-9、，,（）()\s]{2,40}[:：]$")
 
 
@@ -24,6 +24,7 @@ class BlockKind(str):
     PARAGRAPH = "paragraph"
     TABLE = "table"
     IMAGE = "image"
+    CAPTION = "caption"
     EMPTY = "empty"
     PAGE_BREAK = "page_break"
     SECTION_BREAK = "section_break"
@@ -45,6 +46,14 @@ class DocumentBlock:
     page_break_after: bool = False
     section_break: bool = False
     raw_reference: object | None = None
+    legacy_type_id: str = ""
+    dominant_font_name: str = ""
+    weighted_font_size: float | None = None
+    max_font_size: float | None = None
+    min_font_size: float | None = None
+    bold_char_ratio: float = 0.0
+    italic_char_ratio: float = 0.0
+    explicitly_formatted_char_ratio: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -78,9 +87,17 @@ class ParagraphFeatures:
     is_bold: bool
     font_size_pt: float | None
     style_name: str
+    legacy_type_id: str
     is_docxtool_style: bool
     previous_visible_block_index: int | None
     next_visible_block_index: int | None
+    dominant_font_name: str = ""
+    weighted_font_size: float | None = None
+    max_font_size: float | None = None
+    min_font_size: float | None = None
+    bold_char_ratio: float = 0.0
+    italic_char_ratio: float = 0.0
+    explicitly_formatted_char_ratio: float = 0.0
 
 
 def normalize_text(value: str) -> str:
@@ -101,13 +118,37 @@ def _paragraph_blocks(data: Any) -> list[DocumentBlock]:
             kind = BlockKind.TABLE
             current_table = table_index
             table_index += 1
-        elif type_id in {"__image__", "__object_caption__", "__letterhead__"}:
+        elif type_id in {"__image__", "__letterhead__"}:
             kind = BlockKind.IMAGE
+        elif type_id == "__object_caption__":
+            kind = BlockKind.CAPTION
         tokens = getattr(paragraph, "inline_tokens", ()) or ()
         has_page_break = any(getattr(token, "kind", "") == "page_break" for token in tokens)
         has_section_break = (getattr(paragraph, "meta", {}) or {}).get("sectPr") is not None
-        paragraph_index = index if kind in {BlockKind.PARAGRAPH, BlockKind.EMPTY} else None
-        blocks.append(DocumentBlock(index, kind, text, paragraph_index, getattr(pf, "style_name", ""), getattr(pf, "alignment", ""), getattr(pf, "bold", None), getattr(pf, "font_size_pt", None), kind == BlockKind.IMAGE, current_table, False, has_page_break, has_section_break, paragraph))
+        paragraph_index = index if kind in {BlockKind.PARAGRAPH, BlockKind.EMPTY, BlockKind.CAPTION} else None
+        blocks.append(DocumentBlock(
+            index=index,
+            kind=kind,
+            text=text,
+            paragraph_index=paragraph_index,
+            style_name=getattr(pf, "style_name", ""),
+            alignment=getattr(pf, "alignment", ""),
+            bold=getattr(pf, "bold", None),
+            font_size_pt=getattr(pf, "weighted_font_size", None) or getattr(pf, "font_size_pt", None),
+            has_image=kind == BlockKind.IMAGE,
+            table_index=current_table,
+            page_break_after=has_page_break,
+            section_break=has_section_break,
+            raw_reference=paragraph,
+            legacy_type_id=type_id,
+            dominant_font_name=getattr(pf, "dominant_font_name", "") or getattr(pf, "font_name", ""),
+            weighted_font_size=getattr(pf, "weighted_font_size", None),
+            max_font_size=getattr(pf, "max_font_size", None),
+            min_font_size=getattr(pf, "min_font_size", None),
+            bold_char_ratio=float(getattr(pf, "bold_char_ratio", 0.0) or 0.0),
+            italic_char_ratio=float(getattr(pf, "italic_char_ratio", 0.0) or 0.0),
+            explicitly_formatted_char_ratio=float(getattr(pf, "explicitly_formatted_char_ratio", 0.0) or 0.0),
+        ))
     return blocks
 
 
@@ -124,7 +165,15 @@ def extract_features(block: DocumentBlock, previous: DocumentBlock | None = None
     prefix = numbering.group("prefix") if numbering else None
     content = numbering.group("body").strip() if numbering else normalized
     compact_content = re.sub(r"\s+", "", content)
-    level = 1 if prefix and (prefix.endswith("、") and not prefix[0].isdigit()) else 2 if prefix and prefix.startswith(("（", "(")) else 3 if prefix and prefix[0].isdigit() else None
+    level = None
+    if prefix:
+        if prefix.endswith("、") and not prefix[0].isdigit():
+            level = 1
+        elif prefix.startswith(("（", "(")):
+            inner = prefix[1:-1].strip()
+            level = 4 if inner and inner[0].isdigit() else 2
+        elif prefix[0].isdigit():
+            level = 3
     kv = KEY_VALUE_RE.match(compact_content)
     label = kv.group("label") if kv else None
     value = kv.group("value") if kv else None
@@ -140,29 +189,69 @@ def extract_features(block: DocumentBlock, previous: DocumentBlock | None = None
         label if kv else None, value if kv else None, kv.group("separator") if kv else None,
         prefix if kv and label in MEETING_LABELS else None,
         bool(dispatch), dispatch.groupdict() if dispatch else None,
-        bool(DATE_RE.fullmatch(compact)), bool(RECIPIENT_RE.fullmatch(normalized)) and not bool(kv),
+        bool(DATE_RE.fullmatch(compact)), bool(RECIPIENT_RE.fullmatch(normalized)) and (not bool(kv) or label not in MEETING_LABELS),
         bool(ATTACHMENT_RE.match(compact)), bool(len(compact) <= 16 and not re.search(r"[。！？]", compact)),
         bool(SOURCE_NOTE_RE.match(compact)), level,
         0.8 if level and len(content) <= 40 else 0.2,
         0.8 if block.alignment and "CENTER" in str(block.alignment).upper() and len(normalized) <= 50 else 0.1,
         normalized.endswith(("。", "！", "？", ".", "!", "?")), ":" in normalized or "：" in normalized,
-        len(compact), bool(block.alignment and "CENTER" in str(block.alignment).upper()), bool(block.bold), block.font_size_pt,
-        style, style.startswith("DCT-"),
+        len(compact), bool(block.alignment and "CENTER" in str(block.alignment).upper()), block.bold_char_ratio >= 0.5 if block.bold_char_ratio else bool(block.bold), block.weighted_font_size or block.font_size_pt,
+        style, block.legacy_type_id, style.startswith("DCT-"),
         previous.index if previous else None, next_block.index if next_block else None,
+        block.dominant_font_name, block.weighted_font_size, block.max_font_size,
+        block.min_font_size, block.bold_char_ratio, block.italic_char_ratio,
+        block.explicitly_formatted_char_ratio,
     )
 
 
 def detect_mode(features: list[ParagraphFeatures], legacy: str = "") -> DocumentModeDecision:
-    texts = [item.compact_text for item in features[:20]]
-    joined = " ".join(texts)
+    visible = [item for item in features if item.compact_text]
     meeting_count = sum(1 for item in features[:40] if item.key_value_label in MEETING_LABELS)
-    if any(token in joined for token in ("会议纪要", "党委会纪要", "党组会议纪要", "办公会议纪要", "专题会议纪要", "工作会议纪要", "会议记录")) or meeting_count >= 2 or any("会议认为" in item.compact_text or "会议指出" in item.compact_text for item in features[:40]):
+    title_region = visible[:8]
+    body_sizes = sorted(item.weighted_font_size or item.font_size_pt for item in visible[3:] if (item.weighted_font_size or item.font_size_pt))
+    body_size = body_sizes[len(body_sizes) // 2] if body_sizes else None
+
+    def title_evidence(item: ParagraphFeatures, index: int) -> tuple[str, ...]:
+        evidence = ["front-position"] if index < 5 else []
+        style = re.sub(r"\s+", " ", item.style_name.strip().casefold())
+        if style in {"title", "标题", "subtitle", "副标题"}:
+            evidence.append("title-style")
+        if item.legacy_type_id in {"title", "title_cont", "subtitle"}:
+            evidence.append("legacy-title-classification")
+        if item.is_centered:
+            evidence.append("centered")
+        if item.bold_char_ratio >= 0.5 or item.is_bold:
+            evidence.append("bold-majority")
+        size = item.weighted_font_size or item.font_size_pt
+        if size and body_size and size >= body_size + 1:
+            evidence.append("larger-than-body")
+        if 4 <= item.text_length <= 60:
+            evidence.append("title-length")
+        return tuple(evidence)
+
+    meeting_titles = ("会议纪要", "党委会纪要", "党组会议纪要", "办公会议纪要", "专题会议纪要", "工作会议纪要", "会议记录")
+    for index, item in enumerate(title_region):
+        evidence = title_evidence(item, index)
+        strong = {
+            "title-style", "legacy-title-classification", "centered",
+            "bold-majority", "larger-than-body",
+        }.intersection(evidence)
+        if item.compact_text.endswith(meeting_titles) and len(evidence) >= 3 and strong:
+            return DocumentModeDecision(DocumentMode.MEETING_MINUTES, min(0.99, 0.72 + meeting_count * 0.06), evidence + ("meeting-title-suffix",))
+    if meeting_count >= 2:
         return DocumentModeDecision(DocumentMode.MEETING_MINUTES, min(0.99, 0.75 + meeting_count * 0.06), ("meeting-title-or-metadata",))
-    if "报告" in joined or "工作回顾" in joined:
-        return DocumentModeDecision(DocumentMode.REPORT, 0.82, ("report-title",))
-    if "通知" in joined:
-        return DocumentModeDecision(DocumentMode.NOTICE, 0.8, ("notice-title",))
-    if "实施方案" in joined or "工作方案" in joined:
-        return DocumentModeDecision(DocumentMode.PLAN, 0.8, ("plan-title",))
-    legacy_map = {"NORMAL": DocumentMode.NORMAL, "REPORT": DocumentMode.REPORT}
-    return DocumentModeDecision(legacy_map.get(str(legacy).upper(), DocumentMode.UNKNOWN), 0.45, ("legacy-mode",))
+    suffixes = (
+        (DocumentMode.REPORT, ("报告",), "report-title-suffix"),
+        (DocumentMode.NOTICE, ("通知",), "notice-title-suffix"),
+        (DocumentMode.PLAN, ("实施方案", "工作方案"), "plan-title-suffix"),
+    )
+    for index, item in enumerate(title_region):
+        evidence = title_evidence(item, index)
+        strong = {
+            "title-style", "legacy-title-classification", "centered",
+            "bold-majority", "larger-than-body",
+        }.intersection(evidence)
+        for mode, endings, reason in suffixes:
+            if item.compact_text.endswith(endings) and len(evidence) >= 3 and strong:
+                return DocumentModeDecision(mode, min(0.95, 0.55 + len(evidence) * 0.07), evidence + (reason,))
+    return DocumentModeDecision(DocumentMode.UNKNOWN, 0.25, ("insufficient-title-evidence",))

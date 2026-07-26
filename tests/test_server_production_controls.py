@@ -54,9 +54,9 @@ class ServerProductionControlsTest(unittest.TestCase):
             server.TASK_QUEUE.clear()
         self.tmp.cleanup()
 
-    def test_file_ttl_is_seven_days(self):
-        self.assertEqual(server.FILE_TTL, 7 * 24 * 60 * 60)
-        self.assertGreaterEqual(server.TASK_RETENTION_HOURS, 7 * 24)
+    def test_default_file_ttl_is_at_most_twenty_four_hours(self):
+        self.assertLessEqual(server.FILE_TTL, 24 * 60 * 60)
+        self.assertEqual(server.TASK_RETENTION_HOURS, 24)
 
     def test_default_tokens_allow_simple_startup(self):
         self.assertEqual(server.DEFAULT_ADMIN_TOKEN, "7654321xxx")
@@ -294,7 +294,7 @@ class ServerProductionControlsTest(unittest.TestCase):
             paragraphs = [FakeParagraph()]
 
         class FakeImporter:
-            def load(self, _input_path, _rules):
+            def load(self, _input_path, _rules, **_kwargs):
                 return FakeDocData()
 
         def fake_export_doc(_doc_data, _rules, _settings, output_path, numbered_bold_enabled=True):
@@ -317,6 +317,7 @@ class ServerProductionControlsTest(unittest.TestCase):
 
         self.assertEqual(observed_statuses, ["processing"])
         self.assertEqual(server._public_task_state("task-a")["status"], "done")
+        self.assertFalse(input_path.exists())
 
     def test_invalid_generated_docx_is_not_marked_done_or_downloadable(self):
         input_path = Path(server.OUTPUT_DIR) / "input.docx"
@@ -330,7 +331,7 @@ class ServerProductionControlsTest(unittest.TestCase):
             paragraphs = [FakeParagraph()]
 
         class FakeImporter:
-            def load(self, _input_path, _rules):
+            def load(self, _input_path, _rules, **_kwargs):
                 return FakeDocData()
 
         def fake_export_doc(_doc_data, _rules, _settings, output_path, **_kwargs):
@@ -385,8 +386,10 @@ class ServerProductionControlsTest(unittest.TestCase):
         state = server._public_task_state("task-invalid")
         self.assertEqual(state["status"], "error")
         self.assertEqual(state["error_code"], "OUTPUT_DOCX_INVALID")
-        self.assertEqual(state["error"], "生成的 DOCX 未通过完整性检查")
+        self.assertEqual(state["message"], "排版失败")
+        self.assertNotIn("error", state)
         self.assertNotIn("error_message", state)
+        self.assertFalse(input_path.exists())
         self.assertFalse((Path(server.OUTPUT_DIR) / "task-invalid").exists())
 
         with server._SQL_LOCK:
@@ -400,6 +403,25 @@ class ServerProductionControlsTest(unittest.TestCase):
         self.assertEqual(row["error_code"], "OUTPUT_DOCX_INVALID")
         self.assertIn("MISSING_REL_TARGET", row["error_message"])
         self.assertEqual(row["output_path"], "")
+
+    def test_failed_input_retention_requires_explicit_opt_in(self):
+        result = {
+            "status": "error",
+            "error_code": "TASK_PROCESSING_ERROR",
+            "error_message": "internal",
+        }
+        for keep_failed in (False, True):
+            task_id = f"failed-retention-{keep_failed}"
+            task_dir = Path(server.RUNTIME_TMP_DIR) / task_id
+            task_dir.mkdir(parents=True, exist_ok=True)
+            input_path = task_dir / "input.docx"
+            input_path.write_bytes(b"input")
+            with patch.object(server, "KEEP_FAILED_INPUTS", keep_failed), \
+                 patch.object(server, "_task_process_direct", return_value=dict(result)), \
+                 patch.object(server, "_record_task_result"):
+                server._process_task(task_id, str(input_path), "input.docx")
+            self.assertEqual(input_path.exists(), keep_failed)
+            server._cleanup_task_tmp(task_id, str(input_path))
 
     def test_processing_task_has_no_queue_ahead(self):
         with server.TASKS_LOCK:
@@ -460,13 +482,13 @@ class ServerProductionControlsTest(unittest.TestCase):
         self.assertFalse(server._file_api_authorized({"X-Proxy-Secret": "wrong"}))
         self.assertTrue(server._file_api_authorized({"X-Proxy-Secret": "proxy-secret"}))
 
-    def test_file_api_allows_localhost_direct_use(self):
+    def test_file_api_uses_real_loopback_peer_not_host_header(self):
         server.PROXY_SECRET = "proxy-secret"
 
-        self.assertTrue(server._file_api_authorized({"Host": "127.0.0.1:9527"}))
-        self.assertTrue(server._file_api_authorized({"Host": "localhost:9527"}))
-        self.assertTrue(server._file_api_authorized({"Host": "[::1]:9527"}))
-        self.assertFalse(server._file_api_authorized({"Host": "example.trycloudflare.com"}))
+        self.assertFalse(server._file_api_authorized({"Host": "127.0.0.1:9527"}, ("203.0.113.8", 1234)))
+        self.assertFalse(server._file_api_authorized({"Host": "localhost:9527"}, ("203.0.113.8", 1234)))
+        self.assertTrue(server._file_api_authorized({}, ("127.0.0.1", 1234)))
+        self.assertTrue(server._file_api_authorized({}, ("::1", 1234)))
 
     def test_cleanup_expired_outputs_deletes_only_old_files(self):
         old_file = Path(server.OUTPUT_DIR) / "old.docx"
@@ -512,7 +534,7 @@ class ServerProductionControlsTest(unittest.TestCase):
         self.assertTrue(ready["checks"]["log_dir"])
 
         version = server._version_payload()
-        self.assertEqual(version["file_ttl_seconds"], 7 * 24 * 60 * 60)
+        self.assertEqual(version["file_ttl_seconds"], 24 * 60 * 60)
         self.assertEqual(version["max_upload_mb"], 10)
         self.assertIn("started_at", version)
 

@@ -48,7 +48,7 @@ pwsh -NoProfile -File .\run.ps1 -InstallDependencies
 pwsh -NoProfile -File .\run.ps1
 ```
 
-脚本每次启动前都会通过项目虚拟环境核对`requirements.txt`。已满足的依赖会被
+脚本每次启动前都会通过项目虚拟环境核对`requirements.lock`。已满足的依赖会被
 直接复用，缺失或版本不满足的依赖会自动下载安装；因此服务器首次启动和依赖补齐时
 需要能够访问Python软件包源。
 
@@ -81,7 +81,21 @@ pwsh -NoProfile -File .\run.ps1 -CheckOnly
 python3 -m venv .venv
 . .venv/bin/activate
 pip install --upgrade pip
-pip install -r requirements.txt
+pip install --require-hashes -r requirements.lock
+```
+
+开发环境可继续使用 `requirements.txt`。生产环境固定使用 `requirements.lock`；该文件由
+`pyproject.toml` 通过以下命令生成，禁止手工编造或修改包哈希：
+
+```bash
+python -m piptools compile pyproject.toml --generate-hashes --no-emit-index-url --no-emit-trusted-host --output-file requirements.lock
+```
+
+本地测试和 CI 使用 `requirements-dev.lock`，其中固定了 `pytest`、`ruff`、`build` 与
+`pip-tools` 的版本。需要更新开发依赖时使用：
+
+```bash
+python -m piptools compile --extra dev pyproject.toml --generate-hashes --no-emit-index-url --no-emit-trusted-host --output-file requirements-dev.lock
 ```
 
 ## Python 后端环境变量
@@ -93,7 +107,8 @@ export BIND_HOST=127.0.0.1
 export PORT=9527
 export ADMIN_TOKEN="替换为长随机管理密钥"
 export PROXY_SECRET="替换为和 Cloudflare Pages 一致的长随机代理密钥"
-export FILE_RETENTION_DAYS=7
+export FILE_RETENTION_HOURS=24
+export DOCXTOOL_KEEP_FAILED_INPUTS=false
 export TASK_RETENTION_HOURS=168
 export MAX_CACHED_TASKS=500
 export CLEANUP_INTERVAL_MINUTES=30

@@ -39,10 +39,23 @@ class StructuralCandidateProvider:
 
     def propose(self, block, features, context):
         result = []
+        if block.kind == "caption":
+            return [Candidate(ParagraphType.CAPTION, 1.0, self.name, ("object-caption",), hard=True, section_hint=SectionKind.BODY)]
+        if features.compact_text.startswith(("图", "表")):
+            marker = features.compact_text[1:]
+            if marker and marker[0] in "0123456789一二三四五六七八九十百":
+                return [Candidate(
+                    ParagraphType.BODY,
+                    1.0,
+                    self.name,
+                    ("unbound-caption-like-body",),
+                    hard=True,
+                    section_hint=SectionKind.BODY,
+                )]
         if features.dispatch_number_match:
             result.append(Candidate(ParagraphType.DISPATCH_NUMBER, 1.0, self.name, ("dispatch-number",), hard=True, section_hint=SectionKind.DISPATCH_META))
         if features.date_match:
-            result.append(Candidate(ParagraphType.SIGNATURE_DATE, 0.99, self.name, ("date",), hard=True, section_hint=SectionKind.SIGNATURE))
+            result.append(Candidate(ParagraphType.SIGNATURE_DATE, 0.85, self.name, ("date-shape",), section_hint=SectionKind.SIGNATURE))
         if features.recipient_match:
             result.append(Candidate(ParagraphType.RECIPIENT, 0.95, self.name, ("recipient",), hard=True, section_hint=SectionKind.RECIPIENT))
         if features.attachment_note_match:
@@ -67,11 +80,17 @@ class NumberingCandidateProvider:
     def propose(self, block, features, context):
         if features.heading_shape_level is None or features.key_value_label:
             return []
-        mapping = {1: ParagraphType.HEADING_1, 2: ParagraphType.HEADING_2, 3: ParagraphType.HEADING_3}
+        mapping = {1: ParagraphType.HEADING_1, 2: ParagraphType.HEADING_2, 3: ParagraphType.HEADING_3, 4: ParagraphType.HEADING_4}
         kind = mapping.get(features.heading_shape_level)
         if kind is None:
             return []
-        return [Candidate(kind, 0.68, self.name, (f"heading-level-{features.heading_shape_level}",), heading_level=features.heading_shape_level)]
+        return [Candidate(
+            kind,
+            0.93,
+            self.name,
+            (f"heading-level-{features.heading_shape_level}",),
+            heading_level=features.heading_shape_level,
+        )]
 
 
 class SemanticCandidateProvider:
@@ -82,7 +101,7 @@ class SemanticCandidateProvider:
         if context.index == 0 and features.title_shape_score >= 0.5:
             result.append(Candidate(ParagraphType.MAIN_TITLE, 0.82, self.name, ("title-shape",), section_hint=SectionKind.HEADER))
         if not context.boundary_before and context.previous_type in {ParagraphType.MAIN_TITLE, ParagraphType.TITLE_CONTINUATION} and features.title_shape_score >= 0.5:
-            result.append(Candidate(ParagraphType.TITLE_CONTINUATION, 0.64, self.name, ("title-continuation",), section_hint=SectionKind.HEADER))
+            result.append(Candidate(ParagraphType.TITLE_CONTINUATION, 0.94, self.name, ("title-continuation",), section_hint=SectionKind.HEADER))
         return result
 
 
@@ -107,6 +126,7 @@ class CoreCandidateProvider:
             "body": ParagraphType.BODY,
             "attachment_note": ParagraphType.ATTACHMENT_NOTE,
             "attachment_title": ParagraphType.ATTACHMENT_TITLE,
+            "signature_org": ParagraphType.SIGNATURE_ORG,
             "signature_date": ParagraphType.SIGNATURE_DATE,
             "date_line": ParagraphType.DATE_LINE,
             "author_line": ParagraphType.AUTHOR_LINE,
@@ -134,16 +154,36 @@ class StyleCandidateProvider:
     def propose(self, block, features, context):
         if not features.style_name:
             return []
-        score = 0.08 if features.is_docxtool_style else 0.18
-        evidence = "docxtool-style-low-weight" if features.is_docxtool_style else "external-style"
-        return [Candidate(ParagraphType.BODY, score, self.name, (evidence,), section_hint=SectionKind.BODY)]
+        style = " ".join(features.style_name.strip().casefold().split())
+        compact = style.replace(" ", "")
+        mapping = {
+            "title": (ParagraphType.MAIN_TITLE, 0.9, "word-style-title"),
+            "标题": (ParagraphType.MAIN_TITLE, 0.9, "word-style-title-zh"),
+            "subtitle": (ParagraphType.TITLE_CONTINUATION, 0.86, "word-style-subtitle"),
+            "副标题": (ParagraphType.TITLE_CONTINUATION, 0.86, "word-style-subtitle-zh"),
+            "heading1": (ParagraphType.HEADING_1, 0.9, "word-style-heading1"),
+            "标题1": (ParagraphType.HEADING_1, 0.9, "word-style-heading1-zh"),
+            "heading2": (ParagraphType.HEADING_2, 0.9, "word-style-heading2"),
+            "标题2": (ParagraphType.HEADING_2, 0.9, "word-style-heading2-zh"),
+            "heading3": (ParagraphType.HEADING_3, 0.9, "word-style-heading3"),
+            "标题3": (ParagraphType.HEADING_3, 0.9, "word-style-heading3-zh"),
+            "heading4": (ParagraphType.HEADING_4, 0.9, "word-style-heading4"),
+            "标题4": (ParagraphType.HEADING_4, 0.9, "word-style-heading4-zh"),
+            "normal": (ParagraphType.BODY, 0.62, "word-style-normal"),
+            "正文": (ParagraphType.BODY, 0.62, "word-style-body-zh"),
+        }
+        mapped = mapping.get(compact)
+        if mapped is None:
+            return []
+        paragraph_type, score, evidence = mapped
+        return [Candidate(paragraph_type, score, self.name, (evidence,), section_hint=SectionKind.HEADER if paragraph_type in {ParagraphType.MAIN_TITLE, ParagraphType.TITLE_CONTINUATION} else SectionKind.BODY)]
 
 
 class LegacyCandidateProvider:
     name = "legacy"
 
     def propose(self, block, features, context):
-        return [Candidate(_legacy_type(block.raw_reference), 0.55, self.name, ("legacy-importer",))]
+        return [Candidate(_legacy_type(block.raw_reference), 0.88, self.name, ("legacy-importer",))]
 
 
 def _legacy_type(paragraph) -> ParagraphType:

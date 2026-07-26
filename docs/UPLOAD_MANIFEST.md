@@ -11,7 +11,7 @@ D:\PycharmProjects\docxtool
 目标 GitHub 仓库：
 
 ```text
-git@github.com:7654321x/docxtool.git
+https://github.com/7654321x/docxtool.git
 ```
 
 ## 1. 每次都应上传或保留的项目文件
@@ -28,9 +28,11 @@ git@github.com:7654321x/docxtool.git
 | `AGENTS.md` | 本地协作规则 | Codex/AI 工作规则 |
 | `CONVENTIONS.md` | 开发约定 | 排版边界和人工验证说明 |
 | `requirements.txt` | Python 依赖 | 当前位于仓库根目录 |
+| `requirements.lock` | 带哈希的生产依赖锁 | 使用 `pip install --require-hashes -r requirements.lock` |
+| `requirements-dev.lock` | 带哈希的开发与 CI 依赖锁 | 固定 pytest、ruff、build 和 pip-tools |
 | `pyproject.toml` | Python 包配置 | `src` 布局和 wheel 资源打包 |
 | `run.sh` | Linux 启动脚本 | 调用 `server.py` |
-| `run.ps1` | Windows 启动脚本 | 基于脚本自身目录创建虚拟环境并启动后端 |
+| `run.ps1` | Windows 启动脚本 | 优先使用项目 Python 3.10 虚拟环境并启动后端 |
 | `deploy/nginx-docxtool.conf` | Nginx代理模板 | 不包含服务器IP或磁盘绝对路径 |
 | `.env.example` | 环境变量示例 | 不含真实密钥 |
 | `.gitignore` | Git 忽略规则 | 不会自动移除已跟踪文件 |

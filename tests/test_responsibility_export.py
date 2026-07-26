@@ -170,10 +170,11 @@ def test_generic_key_value_line_is_detected_from_source_document(tmp_path: Path)
         str(source),
         _rules(),
         features={"punctuation": {"enabled": True, "mode": "safe"}},
+        strict_preservation=False,
     )
     key_value = next(paragraph for paragraph in data.paragraphs if paragraph.original_text == "联系人：张三")
 
-    assert key_value.type_id == "body"
+    assert key_value.type_id == "responsibility_line"
     assert key_value.meta["colon_bold"] is True
 
 
@@ -193,7 +194,7 @@ def test_soft_broken_key_value_lines_are_split_and_detected(tmp_path: Path) -> N
     paragraph.add_run("超长键名边界测试字段：这是一个会自动换行的长值，用于验证标签和值格式。")
     document.save(source)
 
-    data = DocxImporter().load(str(source), _rules())
+    data = DocxImporter().load(str(source), _rules(), strict_preservation=False)
     values = [item for item in data.paragraphs if item.meta.get("colon_bold")]
 
     assert [item.text for item in values] == [

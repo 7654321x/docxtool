@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 import hashlib
+import math
 import re
 from typing import Any
 
 from .candidates import Candidate, CandidateContext, DEFAULT_PROVIDERS
-from .compatibility import to_type_id
+from .compatibility import to_paragraph_type
 from .config import DEFAULT_CONFIG, RecognitionConfig
 from .features import DocumentBlock, detect_mode, extract_blocks, extract_features
 from .model import DocumentMode, ParagraphType, RecognitionSummary, SectionKind
@@ -62,13 +63,13 @@ def _extra_candidates(block: DocumentBlock, features, context: _Context, previou
     if features.source_note_match:
         result.append(Candidate(ParagraphType.SOURCE_NOTE, 0.97, "structural", ("source-note",), hard=True, section_hint=SectionKind.SOURCE_NOTE))
     if features.date_match:
-        result.append(Candidate(ParagraphType.SIGNATURE_DATE, 0.99, "structural", ("date-boundary",), hard=True, section_hint=SectionKind.SIGNATURE))
+        result.append(Candidate(ParagraphType.SIGNATURE_DATE, 0.85, "structural", ("date-shape",), section_hint=SectionKind.SIGNATURE))
     if features.recipient_match:
         result.append(Candidate(ParagraphType.RECIPIENT, 0.95, "structural", ("recipient-boundary",), hard=True, section_hint=SectionKind.RECIPIENT))
     has_following_chapter = any(re.match(r"^(?:第[一二三四五六七八九十百0-9]+章|[一二三四五六七八九十]+、)", item.compact_text) for item in lookahead)
     if previous_features and (previous_features.date_match or "本文有删减" in previous_features.compact_text or "本文有删减" in text):
         if _EMBEDDED_TITLE_RE.fullmatch(text):
-            score = 0.5
+            score = 0.86 if has_following_chapter else 0.5
             result.append(Candidate(ParagraphType.EMBEDDED_DOCUMENT_TITLE, score, "embedded-document", ("after-signature-or-source-note", "following-chapter" if has_following_chapter else "no-following-chapter"), hard=False, section_hint=SectionKind.EMBEDDED_DOCUMENT))
     if context.mode == DocumentMode.MEETING_MINUTES and features.key_value_label in _MEETING_LABELS:
         result.append(Candidate(ParagraphType.MEETING_META, 1.0, "meeting", ("meeting-metadata",), hard=True, section_hint=SectionKind.MEETING_META))
@@ -118,7 +119,7 @@ def _transition(previous: ParagraphType | None, current: Candidate, previous_sec
     return 0.0
 
 
-def _hard_veto(candidate: Candidate, features, mode: DocumentMode) -> bool:
+def _hard_veto(candidate: Candidate, features, mode: DocumentMode, context: _Context, block: DocumentBlock) -> bool:
     # Structural facts veto visually plausible headings before scoring.
     if features.dispatch_number_match and candidate.paragraph_type != ParagraphType.DISPATCH_NUMBER:
         return True
@@ -130,6 +131,32 @@ def _hard_veto(candidate: Candidate, features, mode: DocumentMode) -> bool:
         return True
     if mode == DocumentMode.MEETING_MINUTES and features.key_value_label in _MEETING_LABELS and candidate.paragraph_type != ParagraphType.MEETING_META:
         return True
+    heading_levels = {
+        ParagraphType.HEADING_1: 1,
+        ParagraphType.HEADING_2: 2,
+        ParagraphType.HEADING_3: 3,
+        ParagraphType.HEADING_4: 4,
+    }
+    previous_level = heading_levels.get(context.previous_type)
+    current_level = heading_levels.get(candidate.paragraph_type)
+    if previous_level is not None and current_level is not None and current_level > previous_level + 1:
+        return True
+    if (
+        context.previous_type in {ParagraphType.ATTACHMENT_NOTE, ParagraphType.ATTACHMENT_NOTE_ITEM}
+        and features.numbering_prefix
+        and candidate.paragraph_type in heading_levels
+    ):
+        return True
+    if candidate.paragraph_type == ParagraphType.SIGNATURE_DATE:
+        paragraph = block.raw_reference
+        meta = getattr(paragraph, "meta", {}) or {}
+        stored = meta.get("legacy_type_id")
+        if isinstance(stored, dict):
+            legacy_record = stored.get("value", "")
+        else:
+            legacy_record = stored or getattr(paragraph, "type_id", "")
+        if legacy_record not in {"sign_date", "signature_date"} and context.previous_type != ParagraphType.SIGNATURE_ORG:
+            return True
     return False
 
 
@@ -137,7 +164,8 @@ def apply_recognition(data: Any, config: RecognitionConfig | None = None) -> Non
     """Resolve all text blocks using a width-12 beam and preserve diagnostics."""
     config = config or DEFAULT_CONFIG
     blocks = extract_blocks(data)
-    paragraph_blocks = [block for block in blocks if block.paragraph_index is not None and block.kind in {"paragraph", "empty", "image"}]
+    execution_mode = config.mode
+    paragraph_blocks = [block for block in blocks if block.paragraph_index is not None and block.kind in {"paragraph", "empty", "caption"}]
     boundary_prefix = [0]
     for item in blocks:
         boundary_prefix.append(boundary_prefix[-1] + int(item.kind in {"table", "image", "page_break", "section_break"}))
@@ -146,7 +174,8 @@ def apply_recognition(data: Any, config: RecognitionConfig | None = None) -> Non
         previous = paragraph_blocks[pos - 1] if pos else None
         following = paragraph_blocks[pos + 1] if pos + 1 < len(paragraph_blocks) else None
         extracted.append(extract_features(block, previous, following))
-    decision = detect_mode(extracted, getattr(data, "doc_mode", ""))
+    legacy_document_mode = getattr(data, "doc_mode", "")
+    decision = detect_mode(extracted, legacy_document_mode)
     mode = decision.mode
     beams = [_Beam(0.0, (), (), ())]
     candidate_trace: list[dict[str, Any]] = []
@@ -165,8 +194,11 @@ def apply_recognition(data: Any, config: RecognitionConfig | None = None) -> Non
         for beam in beams:
             context = _Context(mode, beam.types[-1] if beam.types else None, pos, boundary_before)
             options = _limit_candidates(_candidates(block, features, context, previous_features, lookahead), config)
+            hard_types = {item.paragraph_type for item in options if item.hard}
             for candidate in options:
-                if _hard_veto(candidate, features, mode):
+                if hard_types and candidate.paragraph_type not in hard_types:
+                    continue
+                if _hard_veto(candidate, features, mode, context, block):
                     continue
                 section = candidate.section_hint or SectionKind.BODY
                 next_beams.append(_Beam(beam.score + candidate.score + _transition(context.previous_type, candidate, beam.sections[-1] if beam.sections else None, mode, boundary_before), beam.types + (candidate.paragraph_type,), beam.reasons + (f"{candidate.source}:{','.join(candidate.evidence)}",), beam.sections + (section,)))
@@ -178,44 +210,106 @@ def apply_recognition(data: Any, config: RecognitionConfig | None = None) -> Non
     diagnostics = []
     if beams:
         best = beams[0]
-        for block, features, type_value, reason, section in zip(paragraph_blocks, extracted, best.types, best.reasons, best.sections):
+        for position, (block, features, type_value, reason, section) in enumerate(zip(paragraph_blocks, extracted, best.types, best.reasons, best.sections)):
             paragraph = getattr(block, "raw_reference", None)
             if paragraph is None:
                 continue
             existing_meta = dict(getattr(paragraph, "meta", {}) or {})
             legacy_record = existing_meta.get("legacy_type_id")
             legacy_type_id = (legacy_record.get("value") if isinstance(legacy_record, dict) else legacy_record) or paragraph.type_id
-            compatible = to_type_id(type_value)
-            # Every final decision passes through one compatibility mapper.
-            # Legacy and core providers still compete as candidates, so this
-            # assignment is the sole final type write for text paragraphs.
-            # Existing structural/legacy stages still own established types
-            # until their providers are migrated one by one. New structural
-            # types are written here through the single compatibility exit.
-            if type_value in {ParagraphType.DISPATCH_NUMBER, ParagraphType.MEETING_META, ParagraphType.EMBEDDED_DOCUMENT_TITLE, ParagraphType.SOURCE_NOTE}:
+            compatible = to_paragraph_type(type_value)
+            mapping_failed = compatible is None
+            mapping_applied = execution_mode == "authoritative" and not mapping_failed
+            if mapping_applied:
                 paragraph.type_id = compatible
+            final_type_id = paragraph.type_id
             meta = existing_meta
             if not isinstance(meta.get("legacy_type_id"), dict):
                 meta["legacy_type_id"] = {"value": legacy_type_id, "source": "observed_input", "recognition_version": RECOGNITION_VERSION_TAG}
-            meta.update({"recognition_type": type_value.value, "recognition_section": section.value, "recognition_provider": reason, "recognition_mode": mode.value, "recognition_confidence": round(min(1.0, 0.5 + best.score / max(1, len(best.types)) / 2), 3)})
-            if mode != DocumentMode.REPORT:
-                meta.pop("report_first_sentence_bold", None)
-            paragraph.meta = meta
             options = candidate_summary[features.paragraph_index]
             selected = next((item for item in options if item.paragraph_type == type_value), None)
             final_score = selected.score if selected else 0.0
+            scores = [item.score for item in options]
+            max_score = max(scores, default=0.0)
+            weights = [math.exp(score - max_score) for score in scores]
+            denominator = sum(weights)
+            selected_index = next((index for index, item in enumerate(options) if item.paragraph_type == type_value), None)
+            local_confidence = (
+                weights[selected_index] / denominator
+                if selected_index is not None and denominator > 0
+                else 0.0
+            )
             competing_scores = sorted((item.score for item in options if item.paragraph_type != type_value), reverse=True)
             margin = final_score - competing_scores[0] if competing_scores else None
+            previous_type = best.types[position - 1] if position else None
+            previous_section = best.sections[position - 1] if position else None
+            boundary_start = paragraph_blocks[position - 1].index + 1 if position else 0
+            boundary_before = boundary_prefix[block.index] > boundary_prefix[boundary_start]
+            transition_contribution = _transition(
+                previous_type,
+                selected or Candidate(type_value, final_score, "selected"),
+                previous_section,
+                mode,
+                boundary_before,
+            )
             review_reasons = []
-            if final_score < config.review_low_score:
-                review_reasons.append("LOW_FINAL_SCORE")
+            if local_confidence < config.review_low_score:
+                review_reasons.append("LOW_LOCAL_CONFIDENCE")
             if margin is not None and margin < config.review_margin:
                 review_reasons.append("SMALL_CANDIDATE_MARGIN")
-            if type_value == ParagraphType.UNKNOWN:
-                review_reasons.append("UNKNOWN_TYPE_FALLBACK")
-            diagnostics.append({"paragraph_index": features.paragraph_index, "block_index": block.index, "text_preview": hashlib.sha256(features.normalized_text.encode("utf-8")).hexdigest()[:config.text_preview_length], "document_mode": mode.value, "state_before": best.sections[max(0, len(best.sections) - len(paragraph_blocks) + len(diagnostics) - 1)].value if best.sections else SectionKind.BODY.value, "state_after": section.value, "candidate_count": len(options), "candidate_types": [item.paragraph_type.value for item in options], "provider": reason, "final_type": type_value.value, "final_score": round(final_score, 4), "candidate_margin": round(margin, 4) if margin is not None else None, "needs_review": bool(review_reasons), "review_reasons": review_reasons, "validator_actions": [], "legacy_type_id": legacy_type_id})
-    setattr(data, "doc_mode", _mode_as_legacy(mode))
-    report = {"engine_version": RECOGNITION_ENGINE_VERSION, "schema_version": RECOGNITION_DIAGNOSTIC_SCHEMA_VERSION, "config": {"beam_width": config.beam_width, "max_candidates_per_paragraph": config.max_candidates_per_paragraph, "diagnostics": config.enable_diagnostics, "review_low_score": config.review_low_score, "review_margin": config.review_margin}, "mode": mode.value, "mode_confidence": decision.confidence, "mode_evidence": decision.evidence, "beam_width": config.beam_width, "blocks": [{"index": block.index, "kind": block.kind, "paragraph_index": block.paragraph_index} for block in blocks], "candidate_trace": candidate_trace, "paragraphs": diagnostics}
+            if mapping_failed:
+                review_reasons.append("TYPE_MAPPING_FAILED")
+            if compatible is not None and compatible != legacy_type_id:
+                review_reasons.append("LEGACY_TYPE_CONFLICT")
+            if execution_mode == "shadow":
+                review_reasons.append("SHADOW_RESULT_NOT_APPLIED")
+            meta.update({
+                "recognition_type": type_value.value,
+                "recognized_type": type_value.value,
+                "recognition_section": section.value,
+                "recognition_provider": reason,
+                "recognition_mode": execution_mode,
+                "document_mode": mode.value,
+                "recognition_confidence": round(local_confidence, 4),
+                "mapping_applied": mapping_applied,
+                "mapping_failed": mapping_failed,
+                "final_type": final_type_id,
+            })
+            if mode != DocumentMode.REPORT:
+                meta.pop("report_first_sentence_bold", None)
+            paragraph.meta = meta
+            diagnostics.append({
+                "paragraph_index": features.paragraph_index,
+                "block_index": block.index,
+                "text_preview": hashlib.sha256(features.normalized_text.encode("utf-8")).hexdigest()[:config.text_preview_length],
+                "document_mode": mode.value,
+                "recognition_mode": execution_mode,
+                "result_applied": execution_mode == "authoritative",
+                "state_before": previous_section.value if previous_section else SectionKind.BODY.value,
+                "state_after": section.value,
+                "candidate_count": len(options),
+                "candidate_types": [item.paragraph_type.value for item in options],
+                "provider": reason,
+                "legacy_type": legacy_type_id,
+                "legacy_type_id": legacy_type_id,
+                "recognized_type": type_value.value,
+                "final_type": final_type_id,
+                "mapping_applied": mapping_applied,
+                "mapping_failed": mapping_failed,
+                "recognition_confidence": round(local_confidence, 4),
+                "selected_candidate_score": round(final_score, 4),
+                "document_path_score": round(best.score, 4),
+                "transition_contribution": round(transition_contribution, 4),
+                "final_score": round(final_score, 4),
+                "candidate_margin": round(margin, 4) if margin is not None else None,
+                "single_candidate": len(options) == 1,
+                "needs_review": bool(review_reasons),
+                "review_reasons": review_reasons,
+                "validator_actions": [],
+            })
+    if execution_mode == "authoritative":
+        setattr(data, "doc_mode", _mode_as_legacy(mode))
+    report = {"engine_version": RECOGNITION_ENGINE_VERSION, "schema_version": RECOGNITION_DIAGNOSTIC_SCHEMA_VERSION, "config": {"mode": execution_mode, "beam_width": config.beam_width, "max_candidates_per_paragraph": config.max_candidates_per_paragraph, "diagnostics": config.enable_diagnostics, "review_low_score": config.review_low_score, "review_margin": config.review_margin}, "recognition_mode": execution_mode, "result_applied": execution_mode == "authoritative", "mode": mode.value, "mode_confidence": decision.confidence, "mode_evidence": decision.evidence, "beam_width": config.beam_width, "blocks": [{"index": block.index, "kind": block.kind, "paragraph_index": block.paragraph_index} for block in blocks], "candidate_trace": candidate_trace, "paragraphs": diagnostics}
     report["validation"] = validate_diagnostics(report)
     candidate_counts = [item["candidate_count"] for item in diagnostics]
     hard_count = sum(any(candidate.hard for candidate in options) for options in candidate_summary.values())
@@ -246,7 +340,7 @@ def apply_recognition(data: Any, config: RecognitionConfig | None = None) -> Non
         paragraph_count=len(diagnostics),
         table_count=sum(block.kind == "table" for block in blocks),
         image_count=sum(block.kind == "image" for block in blocks),
-        low_confidence_count=sum(item["final_score"] < config.review_low_score for item in diagnostics),
+        low_confidence_count=sum(item["recognition_confidence"] < config.review_low_score for item in diagnostics),
         needs_review_count=sum(item["needs_review"] for item in diagnostics),
         validator_action_count=sum(len(item["validator_actions"]) for item in diagnostics),
         unknown_type_fallback_count=sum(item["final_type"] == ParagraphType.UNKNOWN.value for item in diagnostics),

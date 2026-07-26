@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class RecognitionConfig:
+    mode: str = "authoritative"
     beam_width: int = 12
     max_candidates_per_paragraph: int = 8
     hard_structure_min: float = 0.95
@@ -22,6 +23,8 @@ class RecognitionConfig:
     review_margin: float = 0.08
 
     def __post_init__(self) -> None:
+        if self.mode not in {"legacy", "shadow", "authoritative"}:
+            raise ValueError("mode must be 'legacy', 'shadow', or 'authoritative'")
         if self.beam_width < 2:
             raise ValueError("beam_width must be at least 2")
         if self.max_candidates_per_paragraph < 2:

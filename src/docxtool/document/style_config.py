@@ -69,17 +69,11 @@ ROW_NAMES: List[str] = [
 # 工具函数
 # ═══════════════════════════════════════════════════════════════
 
-_CHINESE_DIGITS = ["零", "一", "二", "三", "四", "五", "六", "七", "八", "九", "十",
-                   "十一", "十二", "十三", "十四", "十五", "十六", "十七", "十八", "十九", "二十"]
-
-
 def chinese_number(n: int) -> str:
-    """阿拉伯数字 → 中文数字。1→"一", 12→"十二", 20→"二十", 21→"二十一"。"""
-    if 0 <= n <= 20:
-        return _CHINESE_DIGITS[n]
-    tens = n // 10
-    ones = n % 10
-    return _CHINESE_DIGITS[tens] + "十" + (_CHINESE_DIGITS[ones] if ones else "")
+    """Compatibility wrapper for the single Chinese integer converter."""
+    from docxtool.document.engine.numbering import chinese_integer
+
+    return chinese_integer(n)
 
 
 def arabic_number(n: int) -> str:

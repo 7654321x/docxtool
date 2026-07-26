@@ -64,7 +64,14 @@ class ParagraphType(str, Enum):
     LETTER = "letter"
     PAGE_NUMBER = "page_number"
     SUPERSCRIPT = "superscript"
+    CAPTION = "caption"
     UNKNOWN = "unknown"
+
+
+class RecognitionMode(str, Enum):
+    LEGACY = "legacy"
+    SHADOW = "shadow"
+    AUTHORITATIVE = "authoritative"
 
 
 @dataclass(frozen=True)

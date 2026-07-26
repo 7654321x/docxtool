@@ -218,7 +218,7 @@ def test_import_export_keeps_input_sha256_unchanged(tmp_path: Path) -> None:
     document.save(source)
     before = hashlib.sha256(source.read_bytes()).hexdigest()
 
-    data = DocxImporter().load(str(source), _rules())
+    data = DocxImporter().load(str(source), _rules(), strict_preservation=False)
     export_doc(data, _rules(), PageSettings(), str(output))
 
     assert hashlib.sha256(source.read_bytes()).hexdigest() == before
@@ -239,7 +239,7 @@ def test_responsibility_line_normalizes_quotes_and_repeated_labels(tmp_path: Pat
     document.add_paragraph("“责任单位：区政府责任单位：商务局”")
     document.save(source)
 
-    data = DocxImporter().load(str(source), _rules())
+    data = DocxImporter().load(str(source), _rules(), strict_preservation=False)
     responsibility = next(paragraph for paragraph in data.paragraphs if paragraph.type_id == "responsibility_line")
     assert responsibility.text == "责任单位：区政府\n责任单位：商务局"
 
@@ -414,7 +414,7 @@ def test_imported_heading3_heading4_and_responsibility_are_exported_without_blan
         document.add_paragraph(text)
     document.save(source)
 
-    data = DocxImporter().load(str(source), _rules())
+    data = DocxImporter().load(str(source), _rules(), strict_preservation=False)
     type_by_original = {paragraph.original_text: paragraph.type_id for paragraph in data.paragraphs}
 
     assert type_by_original["1.测试"] == "heading3"

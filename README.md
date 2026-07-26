@@ -50,7 +50,7 @@ pwsh -NoProfile -File .\run.ps1
 pwsh -NoProfile -File .\run.ps1 -InstallService
 ```
 
-`run.ps1`每次启动前都会核对`requirements.txt`，缺少依赖时自动下载并安装；
+`run.ps1`每次启动前都会核对`requirements.lock`，缺少依赖时自动下载并安装；
 已满足的依赖不会重复下载。
 
 Linux：
@@ -62,6 +62,25 @@ pip install -r requirements.txt
 export ADMIN_TOKEN='换成你的长随机管理密钥'
 export PROXY_SECRET='换成你的长随机代理密钥'
 ./run.sh
+```
+
+生产部署应使用带哈希的锁文件：
+
+```bash
+python -m pip install --require-hashes -r requirements.lock
+```
+
+`requirements.lock` 由 `pyproject.toml` 生成，不手工维护哈希：
+
+```bash
+python -m piptools compile pyproject.toml --generate-hashes --no-emit-index-url --no-emit-trusted-host --output-file requirements.lock
+```
+
+开发、测试和打包使用同一套锁定工具版本：
+
+```bash
+python -m pip install --require-hashes -r requirements-dev.lock
+python -m piptools compile --extra dev pyproject.toml --generate-hashes --no-emit-index-url --no-emit-trusted-host --output-file requirements-dev.lock
 ```
 
 默认监听 `127.0.0.1:9527`。生产环境通过Nginx反向代理访问，不要将9527开放到公网。

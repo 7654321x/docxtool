@@ -11,7 +11,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $root = (Resolve-Path -LiteralPath $PSScriptRoot).Path
-$requirements = Join-Path $root "requirements.txt"
+$requirementsLock = Join-Path $root "requirements.lock"
 $envFile = Join-Path $root ".env"
 $taskName = "DocxtoolBackend"
 $srcDirectory = Join-Path $root "src"
@@ -32,20 +32,33 @@ function Assert-Administrator {
 }
 
 function Install-BackendDependencies {
-    if (-not (Test-Path -LiteralPath $requirements -PathType Leaf)) {
-        throw "Missing requirements.txt next to run.ps1."
+    if (-not (Test-Path -LiteralPath $requirementsLock -PathType Leaf)) {
+        throw "Missing requirements.lock next to run.ps1."
     }
-    Invoke-BackendPython @("-m", "pip", "install", "-r", $requirements)
+    Invoke-BackendPython @("-m", "pip", "install", "--require-hashes", "-r", $requirementsLock)
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to verify or install project dependencies."
     }
 }
 
 function Resolve-BackendPython {
+    $venvPython = Join-Path $root ".venv\Scripts\python.exe"
+    if (Test-Path -LiteralPath $venvPython -PathType Leaf) {
+        & $venvPython -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 10) else 1)"
+        if ($LASTEXITCODE -ne 0) {
+            throw "The project virtual environment must use Python 3.10. Recreate .venv with Python 3.10 before starting the backend."
+        }
+        return [pscustomobject]@{
+            Executable = $venvPython
+            Prefix = @()
+            Display = $venvPython
+        }
+    }
+
     $pyLauncher = Get-Command py.exe -ErrorAction SilentlyContinue
 
     if ($pyLauncher) {
-        foreach ($selector in @("-3.11", "-3.10", "-3")) {
+        foreach ($selector in @("-3.10")) {
             $previousErrorAction = $ErrorActionPreference
             try {
                 # Windows PowerShell 5.1 turns py.exe's missing-version stderr into
@@ -77,7 +90,7 @@ function Resolve-BackendPython {
         }
     }
 
-    throw "Python was not found. Install Python 3.11 or Python 3.10 and ensure py.exe or python.exe is available."
+    throw "Python 3.10 was not found. Install Python 3.10 and ensure py.exe or python.exe is available."
 }
 
 function Invoke-BackendPython {

@@ -30,7 +30,7 @@ from queue import Empty
 from datetime import timezone, timedelta
 from email.utils import parsedate_to_datetime
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 from urllib.parse import unquote, urlparse, parse_qs, quote, urlencode
 from urllib.request import Request, urlopen
 
@@ -685,12 +685,13 @@ MAX_WORKERS = 4
 MAX_QUEUE = MAX_WORKERS * 2
 PROCESS_TIMEOUT = _parse_int_env("PROCESS_TIMEOUT_SECONDS", 60)
 RATE_WINDOW = 2
-FILE_RETENTION_DAYS = max(1, _parse_int_env("FILE_RETENTION_DAYS", 7))
-FILE_TTL = FILE_RETENTION_DAYS * 24 * 60 * 60
+FILE_RETENTION_HOURS = max(1, _parse_int_env("FILE_RETENTION_HOURS", 24))
+FILE_TTL = FILE_RETENTION_HOURS * 60 * 60
+KEEP_FAILED_INPUTS = _parse_bool(os.environ.get("DOCXTOOL_KEEP_FAILED_INPUTS", "false"), False)
 MAX_TASKS = _parse_int_env("MAX_TASKS", 200)
 TASK_RETENTION_HOURS = max(
-    FILE_RETENTION_DAYS * 24,
-    _parse_int_env("TASK_RETENTION_HOURS", FILE_RETENTION_DAYS * 24),
+    FILE_RETENTION_HOURS,
+    _parse_int_env("TASK_RETENTION_HOURS", FILE_RETENTION_HOURS),
 )
 MAX_CACHED_TASKS = _parse_int_env("MAX_CACHED_TASKS", 500)
 CLEANUP_INTERVAL_MINUTES = _parse_int_env("CLEANUP_INTERVAL_MINUTES", 30)
@@ -1039,7 +1040,10 @@ def _public_task_state(task_id: str, owner_id: str = "") -> dict:
         if not row:
             return {}
         task = dict(row)
-    for key in ("output", "output_path", "output_dir", "download_name", "error_message"):
+    for key in (
+        "output", "output_path", "output_dir", "download_name", "error",
+        "error_message", "internal_error_detail", "log_path", "client_ip", "ip", "ua",
+    ):
         task.pop(key, None)
     status = task.get("status", "")
     if status == "queued":
@@ -1055,6 +1059,51 @@ def _public_task_state(task_id: str, owner_id: str = "") -> dict:
     elif status == "expired":
         task.update({"queue_position": 0, "queue_ahead": 0, "message": "任务已过期"})
     return task
+
+
+def _safe_file_identifier(filename: str) -> str:
+    return hashlib.sha256(str(filename or "").encode("utf-8")).hexdigest()[:12]
+
+
+def _sanitize_internal_error_detail(value: object, limit: int = 500) -> str:
+    """Keep bounded diagnostics without retaining paths or authentication data."""
+    detail = str(value or "")
+    detail = _re.sub(
+        r"(?i)\b(authorization|cookie|password|token|secret|api[_-]?key)\b\s*[:=]\s*[^\s,;]+",
+        lambda match: f"{match.group(1)}=[redacted]",
+        detail,
+    )
+    detail = _re.sub(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+", "Bearer [redacted]", detail)
+    detail = _re.sub(r"[A-Za-z]:[\\/][^\r\n\t\"'<>|]+", "[local-path]", detail)
+    detail = _re.sub(r"(?<!:)\/(?:[^\s/]+\/)+[^\s\"'<>|]*", "[local-path]", detail)
+    return detail[: max(0, int(limit))]
+
+
+def _public_recognition_summary(doc_data) -> dict:
+    diagnostics = getattr(doc_data, "recognition_diagnostics", {}) or {}
+    paragraphs = [item for item in diagnostics.get("paragraphs", []) if isinstance(item, dict)]
+    type_counts = Counter(str(item.get("final_type", "") or "unknown") for item in paragraphs)
+    review_items = []
+    for item in paragraphs:
+        if not item.get("needs_review"):
+            continue
+        review_items.append({
+            "paragraph_index": int(item.get("paragraph_index", -1)),
+            "legacy_type": str(item.get("legacy_type", "")),
+            "recognized_type": str(item.get("recognized_type", "")),
+            "final_type": str(item.get("final_type", "")),
+            "confidence": float(item.get("recognition_confidence", 0.0) or 0.0),
+            "candidate_margin": item.get("candidate_margin"),
+            "reason_codes": [str(value) for value in item.get("review_reasons", [])],
+        })
+    return {
+        "recognition_mode": str(diagnostics.get("recognition_mode", "authoritative")),
+        "result_applied": bool(diagnostics.get("result_applied", True)),
+        "paragraph_count": len(paragraphs),
+        "needs_review_count": len(review_items),
+        "type_counts": dict(sorted(type_counts.items())),
+        "review_items": review_items,
+    }
 
 def _task_output_dir(task_id: str) -> str:
     return os.path.join(OUTPUT_DIR, task_id)
@@ -1160,11 +1209,12 @@ def _task_process_body(task_id: str, input_path: str, orig_name: str, ip: str, u
     """Run the actual DOCX pipeline and return a structured result."""
     t0 = time.time()
     request_meta = request_meta or {}
-    log_path = make_document_log_path(orig_name, log_dir=LOG_DIR, suffix=task_id[:8])
+    file_id = _safe_file_identifier(orig_name)
+    log_path = make_document_log_path("document", log_dir=LOG_DIR, suffix=task_id[:8])
     log_filename = os.path.basename(log_path)
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
     with open(log_path, "a", encoding="utf-8") as f:
-        f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} [INFO ] docx_tool | [Task] {task_id[:8]} log created file={orig_name}\n")
+        f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} [INFO ] docx_tool | [Task] {task_id[:8]} log created file_id={file_id}\n")
     token = set_context_log_path(log_path)
     try:
         rules, settings, features = load_rules_and_settings(format_config)
@@ -1174,13 +1224,23 @@ def _task_process_body(task_id: str, input_path: str, orig_name: str, ip: str, u
         features.setdefault("numbered_bold_enabled", True)
         features.setdefault("punctuation_enabled", True)
         features.setdefault("page_number_enabled", True)
+        processing_options = features.setdefault("processing", {})
+        if not isinstance(processing_options, dict):
+            processing_options = {}
+            features["processing"] = processing_options
+        processing_options.setdefault("strict_preservation", True)
+        recognition_options = features.setdefault("recognition", {})
+        if not isinstance(recognition_options, dict):
+            recognition_options = {}
+            features["recognition"] = recognition_options
+        recognition_options.setdefault("mode", "authoritative")
         for key, value in _core_feature_config_defaults().items():
             features.setdefault(key, value)
         body_rule = rules[5] if len(rules) > 5 else StyleRule.default_for_row(5)
         letterhead_summary = features.get("letterhead", {})
         letterhead_agencies = letterhead_summary.get("agencies", [])
         logger.info(
-            f"[Task] {task_id[:8]} start file={orig_name} ip={ip} log={log_filename} "
+            f"[Task] {task_id[:8]} start file_id={file_id} log={log_filename} "
             f"preset={request_meta.get('preset_name','')} mode={request_meta.get('processing_mode','smart')} "
             f"frontend_config={bool(format_config)} body={body_rule.font}/{body_rule.font_size_label} "
             f"margins=top{settings.margin_top_cm} bottom{settings.margin_bottom_cm} "
@@ -1192,10 +1252,13 @@ def _task_process_body(task_id: str, input_path: str, orig_name: str, ip: str, u
             f"letterhead_scope={letterhead_summary.get('joint_mark_scope', 'all_agencies')}"
         )
         importer = DocxImporter()
-        try:
-            doc_data = importer.load(input_path, rules, features=features)
-        except TypeError:
-            doc_data = importer.load(input_path, rules)
+        doc_data = importer.load(
+            input_path,
+            rules,
+            features=features,
+            strict_preservation=True,
+            recognition_mode="authoritative",
+        )
         output_dir = _ensure_path_within(OUTPUT_DIR, _task_output_dir(task_id))
         os.makedirs(output_dir, exist_ok=True)
         output_path = _ensure_path_within(output_dir, _task_output_path(task_id))
@@ -1245,9 +1308,10 @@ def _task_process_body(task_id: str, input_path: str, orig_name: str, ip: str, u
                 "paragraphs": len(doc_data.paragraphs),
                 "headings": sum(1 for pd in doc_data.paragraphs if pd.type_id.startswith("heading")),
                 "body": sum(1 for pd in doc_data.paragraphs if pd.type_id == "body"),
-                "error": "生成的 DOCX 未通过完整性检查",
+                "error": "",
                 "error_code": "OUTPUT_DOCX_INVALID",
-                "error_message": f"{exc.code}: {exc.message}"[:500],
+                "error_message": _sanitize_internal_error_detail(f"{exc.code}: {exc.message}"),
+                "recognition_summary": _public_recognition_summary(doc_data),
             }
         duration = round(time.time() - t0, 2)
         hc = sum(1 for pd in doc_data.paragraphs if pd.type_id.startswith("heading"))
@@ -1268,10 +1332,11 @@ def _task_process_body(task_id: str, input_path: str, orig_name: str, ip: str, u
             "error": "",
             "error_code": "",
             "error_message": "",
+            "recognition_summary": _public_recognition_summary(doc_data),
             "compatibility_warnings": list(export_stats.get("compatibility_warnings", []) or []),
         }
     except Exception as exc:
-        logger.exception(f"[Task] {task_id[:8]} error: {exc}")
+        logger.error("[Task] %s internal failure type=%s", task_id[:8], type(exc).__name__)
         return {
             "status": "error",
             "log_filename": log_filename,
@@ -1285,9 +1350,10 @@ def _task_process_body(task_id: str, input_path: str, orig_name: str, ip: str, u
             "paragraphs": 0,
             "headings": 0,
             "body": 0,
-            "error": str(exc)[:200],
+            "error": "",
             "error_code": "TASK_PROCESSING_ERROR",
-            "error_message": str(exc)[:500],
+            "error_message": _sanitize_internal_error_detail(exc),
+            "recognition_summary": {},
         }
     finally:
         reset_context_log_path(token)
@@ -1310,9 +1376,10 @@ def _task_process_entry(result_queue, task_id: str, input_path: str, orig_name: 
             "paragraphs": 0,
             "headings": 0,
             "body": 0,
-            "error": f"{type(exc).__name__}: {exc}"[:200],
+            "error": "",
             "error_code": "TASK_PROCESSING_ERROR",
-            "error_message": f"{type(exc).__name__}: {exc}"[:500],
+            "error_message": _sanitize_internal_error_detail(f"{type(exc).__name__}: {exc}"),
+            "recognition_summary": {},
         }
     try:
         result_queue.put(result)
@@ -1425,7 +1492,11 @@ def _record_task_result(task_id: str, input_path: str, orig_name: str, ip: str, 
             error_message=error_message,
         )
     except Exception:
-        logger.exception(f"[Stats] failed to record task={task_id[:8]} ip={ip} file={orig_name}")
+        logger.exception(
+            "[Stats] failed to record task=%s file_id=%s",
+            task_id[:8],
+            _safe_file_identifier(orig_name),
+        )
 
     if status != "done":
         _cleanup_output_path(_task_output_dir(task_id))
@@ -1448,6 +1519,7 @@ def _record_task_result(task_id: str, input_path: str, orig_name: str, ip: str, 
         task["safe_download_filename"] = output_filename
         task["original_filename"] = orig_name
         task["client_ip"] = ip
+        task["recognition_summary"] = result.get("recognition_summary", {})
         if status == "done":
             task["output"] = output_path
             task["error"] = ""
@@ -1462,12 +1534,12 @@ def _record_task_result(task_id: str, input_path: str, orig_name: str, ip: str, 
     _prune_task_cache()
 
     if status == "done":
-        logger.info(f"[Stats] recorded task={task_id[:8]} status=done ip={ip} file={orig_name}")
+        logger.info("[Stats] recorded task=%s status=done file_id=%s", task_id[:8], _safe_file_identifier(orig_name))
         logger.info(f"[Task] {task_id[:8]} done {result.get('duration_s', 0)}s")
     elif status == "timeout":
-        logger.warning(f"[Task] {task_id[:8]} timeout after {PROCESS_TIMEOUT}s file={orig_name}")
+        logger.warning("[Task] %s timeout after %ss file_id=%s", task_id[:8], PROCESS_TIMEOUT, _safe_file_identifier(orig_name))
     else:
-        logger.warning(f"[Task] {task_id[:8]} failed file={orig_name} err={error}")
+        logger.warning("[Task] %s failed file_id=%s code=%s", task_id[:8], _safe_file_identifier(orig_name), error_code)
 
 def _worker_loop():
     while True:
@@ -1504,6 +1576,8 @@ def _process_task(task_id: str, input_path: str, orig_name: str = "upload.docx",
     else:
         result = _task_process_subprocess(task_id, input_path, orig_name, ip, ua, format_config, request_meta)
     _record_task_result(task_id, input_path, orig_name, ip, ua, result)
+    if result.get("status") == "done" or not KEEP_FAILED_INPUTS:
+        _cleanup_task_tmp(task_id, input_path)
 
 def _cleanup_expired_outputs(now: float = None) -> dict:
     now = now or time.time()
@@ -1919,10 +1993,12 @@ def _file_api_authorized(headers, client_address=None) -> bool:
     # file API call; only the Worker-injected secret is sufficient.
     if PRODUCTION_MODE:
         return False
-    host = headers.get("Host", "") if headers else ""
-    if _is_local_host(host):
-        return True
-    return bool(client_address and client_address[0] in {"127.0.0.1", "::1"})
+    if not client_address:
+        return False
+    try:
+        return ipaddress.ip_address(str(client_address[0])).is_loopback
+    except ValueError:
+        return False
 
 class FormatConfigRequestError(ValueError):
     def __init__(
@@ -2593,16 +2669,6 @@ def _content_disposition_filename(filename: str) -> str:
         ascii_fallback = "formatted.docx"
     return f"attachment; filename=\"{ascii_fallback}\"; filename*=UTF-8''{quote(safe, safe='')}"
 
-def _is_local_host(host: str) -> bool:
-    host = (host or "").strip().lower()
-    if not host:
-        return False
-    if host.startswith("[") and "]" in host:
-        host = host[1:host.index("]")]
-        return host in {"localhost", "127.0.0.1", "::1"}
-    host = host.split(":", 1)[0]
-    return host in {"localhost", "127.0.0.1", "::1"}
-
 def _trusted_proxy_source(client_address) -> bool:
     if not TRUST_PROXY_HEADERS:
         return False
@@ -3109,9 +3175,9 @@ class Handler(BaseHTTPRequestHandler):
                 _cleanup_task_tmp(task_id, input_path)
                 self._json_error("UPLOAD_TIMEOUT", "文件上传超时", 408)
                 return
-            except Exception as exc:
+            except Exception:
                 _cleanup_task_tmp(task_id, input_path)
-                self._json_error("UPLOAD_FAILED", f"文件上传失败: {exc}"[:200], 400)
+                self._json_error("UPLOAD_FAILED", "文件上传失败，请重试", 400)
                 return
             finally:
                 if old_timeout is not None:
@@ -3167,13 +3233,13 @@ class Handler(BaseHTTPRequestHandler):
             if compatibility_warnings:
                 payload["compatibility_warnings"] = compatibility_warnings
             self._json(payload, extra_headers=[("Set-Cookie", principal["cookie"])] if principal.get("cookie") else None)
-        except Exception as e:
+        except Exception:
             try:
                 if 'task_id' in locals():
                     _cleanup_task_tmp(task_id, locals().get("input_path", ""))
             except Exception:
                 pass
-            self._json_error("INTERNAL_ERROR", str(e)[:200], 500)
+            self._json_error("INTERNAL_ERROR", "服务器处理失败，请稍后重试", 500)
 
     def _handle_status(self, task_id: str):
         if not _is_safe_uuid(task_id):

@@ -7,6 +7,7 @@
 """
 
 import copy
+import hashlib
 import io
 import math
 import re
@@ -24,6 +25,10 @@ from docxtool.document.engine.page_number import apply_page_number
 from docxtool.document.engine.signature_block import apply_signature_block
 from docxtool.document.engine.style_catalog import ensure_document_styles
 from docxtool.document.engine.letterhead import apply_letterhead, LetterheadDetection
+from docxtool.security.external_relationships import (
+    external_relationship_policy,
+    sanitized_external_target,
+)
 
 # ── python-docx 模块级导入 ──
 from docx import Document
@@ -156,11 +161,47 @@ def _without_redundant_trailing_body_page_breaks(pd, next_pd, tokens):
     return values
 
 
+def _external_relationship_record(rel) -> dict:
+    allowed, reason_code, scheme = external_relationship_policy(rel.reltype, rel.target_ref)
+    return {
+        "allowed": allowed,
+        "relationship_type": rel.reltype.rsplit("/", 1)[-1],
+        "sanitized_target": sanitized_external_target(rel.target_ref),
+        "scheme": scheme,
+        "reason_code": reason_code,
+    }
+
+
+def _sanitize_relationship_xml(blob: bytes, relationships, removed: list[dict]) -> bytes:
+    disallowed = {
+        rel.rId: _external_relationship_record(rel)
+        for rel in relationships
+        if rel.is_external and not external_relationship_policy(rel.reltype, rel.target_ref)[0]
+    }
+    if not disallowed:
+        return blob
+    try:
+        from lxml import etree
+
+        root = etree.fromstring(blob)
+        for node in root.iter():
+            for attribute, value in list(node.attrib.items()):
+                if value not in disallowed:
+                    continue
+                node.attrib.pop(attribute, None)
+                if disallowed[value] not in removed:
+                    removed.append(disallowed[value])
+        return etree.tostring(root, encoding="UTF-8", xml_declaration=True, standalone=True)
+    except (ValueError, TypeError) as exc:
+        raise ExportError("无法安全移除外部 OOXML 关系引用") from exc
+
+
 class _SectionRelationshipCopier:
     """Copy header/footer parts and their relationship trees into an output package."""
 
-    def __init__(self, package):
+    def __init__(self, package, removed_external_relationships=None):
         self._package = package
+        self._removed_external_relationships = removed_external_relationships if removed_external_relationships is not None else []
         self._parts_by_source_id = {}
         self._used_partnames = {str(part.partname) for part in package.iter_parts()}
 
@@ -170,18 +211,25 @@ class _SectionRelationshipCopier:
             return self._parts_by_source_id[key]
 
         partname = self._next_partname(source_part)
+        source_blob = _sanitize_relationship_xml(
+            source_part.blob,
+            source_part.rels.values(),
+            self._removed_external_relationships,
+        )
         if source_part.content_type == CT.WML_HEADER:
-            copied = HeaderPart.load(partname, source_part.content_type, source_part.blob, self._package)
+            copied = HeaderPart.load(partname, source_part.content_type, source_blob, self._package)
         elif source_part.content_type == CT.WML_FOOTER:
-            copied = FooterPart.load(partname, source_part.content_type, source_part.blob, self._package)
+            copied = FooterPart.load(partname, source_part.content_type, source_blob, self._package)
         else:
-            copied = Part.load(partname, source_part.content_type, source_part.blob, self._package)
+            copied = Part.load(partname, source_part.content_type, source_blob, self._package)
 
         self._parts_by_source_id[key] = copied
 
         for rel in source_part.rels.values():
             if rel.is_external:
-                copied.load_rel(rel.reltype, rel.target_ref, rel.rId, is_external=True)
+                allowed, _reason, _scheme = external_relationship_policy(rel.reltype, rel.target_ref)
+                if allowed:
+                    copied.load_rel(rel.reltype, rel.target_ref, rel.rId, is_external=True)
             else:
                 copied.load_rel(rel.reltype, self.copy_part(rel.target_part), rel.rId)
 
@@ -1554,9 +1602,15 @@ def _remap_element_relationships(element, source_part, target_part, part_copier)
             if old_rid not in remapped:
                 rel = source_rels[old_rid]
                 if rel.is_external:
-                    new_rid = target_part.relate_to(
-                        rel.target_ref, rel.reltype, is_external=True
-                    )
+                    allowed, _reason, _scheme = external_relationship_policy(rel.reltype, rel.target_ref)
+                    if not allowed:
+                        node.attrib.pop(attr_name, None)
+                        if part_copier is not None:
+                            record = _external_relationship_record(rel)
+                            if record not in part_copier._removed_external_relationships:
+                                part_copier._removed_external_relationships.append(record)
+                        continue
+                    new_rid = target_part.relate_to(rel.target_ref, rel.reltype, is_external=True)
                 else:
                     if part_copier is None:
                         raise ExportError(f"缺少关系部件复制器，无法复制表格关系: {old_rid}")
@@ -1646,7 +1700,7 @@ def _set_object_caption_zero_spacing(paragraph_element) -> None:
 def _copy_image(doc, source_para, part_copier, style_copier=None):
     """Copy an image paragraph and all package relationships unchanged."""
     element = _copy_preserved_paragraph(doc, source_para, part_copier, style_copier)
-    logger.debug(f"[引擎] 图片段落已原样复制: '{source_para.text[:30]}'")
+    logger.debug("[引擎] 图片段落已原样复制 chars=%s", len(source_para.text))
     return element
 
 
@@ -1830,13 +1884,18 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
         dict: 排版统计信息。
     """
 
-    logger.info(f"[引擎] 排版开始: {doc_data.filepath} → {output_path}")
+    source_id = hashlib.sha256(str(doc_data.filepath).encode("utf-8")).hexdigest()[:12]
+    logger.info("[引擎] 排版开始 source_sha256=%s", source_id)
     logger.info(f"[引擎] 共 {len(doc_data.paragraphs)} 段, {len(doc_data.tables)} 表格")
 
     doc = Document()
     ensure_document_styles(doc, rules, settings)
     section_relationship_parts = getattr(doc_data, "section_relationship_parts", {}) or {}
-    relationship_part_copier = _SectionRelationshipCopier(doc.part.package)
+    removed_external_relationships: list[dict] = []
+    relationship_part_copier = _SectionRelationshipCopier(
+        doc.part.package,
+        removed_external_relationships,
+    )
     referenced_style_copier = _ReferencedStyleCopier(doc.styles.element)
     section_part_copier = relationship_part_copier if section_relationship_parts else None
 
@@ -1845,6 +1904,7 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
         "heading1": 0, "heading1_report": 0, "heading2": 0, "heading3": 0, "heading4": 0,
         "body": 0, "fallback_count": 0, "style_fallback_count": 0, "numpr_removed": 0,
         "output_path": output_path,
+        "removed_external_relationships": removed_external_relationships,
     }
 
     # 查找页码规则（row 7）
@@ -1855,8 +1915,13 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
     line_twips = _line_spacing_twips(settings)
     numbering_enabled = _feature_enabled(numbering_options, False)
     numbering_mode = str(_feature_options(numbering_options).get("mode", "safe") or "safe").lower()
+    strict_preservation = bool(getattr(doc_data, "strict_preservation", False))
 
-    render_items = _normalize_signature_attachment_order(doc_data.paragraphs)
+    render_items = (
+        list(doc_data.paragraphs)
+        if strict_preservation
+        else _normalize_signature_attachment_order(doc_data.paragraphs)
+    )
     paragraph_i = 0
     _deferred_body_log = []  # heading1 拆出的 body 日志
     section_paragraphs = []
@@ -1915,7 +1980,7 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
         para_no = paragraph_i
         paragraph_i += 1
         try:
-            logger.debug(f"[引擎] 段落 {para_no}: type={pd.type_id} text='{pd.text[:30]}'")
+            logger.debug("[引擎] 段落 %s: type=%s chars=%s", para_no, pd.type_id, len(pd.text))
 
             # 确定对应的 StyleRule 索引
             rule_index = TYPE_TO_RULE_INDEX.get(pd.type_id)
@@ -1955,7 +2020,7 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
                         and prev_type_id not in ("date_line", "role_name")
                         and pd.text.strip())
 
-            if need_gap and not letterhead_enabled:
+            if need_gap and not letterhead_enabled and not strict_preservation:
                 spacer = doc.add_paragraph("")
                 spPPr = spacer._element.get_or_add_pPr()
                 spSpacing = OxmlElement('w:spacing')
@@ -1966,21 +2031,23 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
 
             # 标题先清理旧编号，再建段落
             text = pd.text
-            if numbering_enabled:
+            if numbering_enabled and not strict_preservation:
                 numbering_result = normalize_numbering_text(text, safe=numbering_mode != "off")
                 if numbering_result.changed:
                     text = numbering_result.text
-            if pd.type_id.startswith("heading"):
+            if pd.type_id.startswith("heading") and not strict_preservation:
                 text = _strip_heading_numbering(text)
                 # 一/二级标题特殊处理：句号分割的行内标题（政协报告体例）
                 if pd.type_id in ("heading1", "heading2"):
                     text = _handle_heading_period(text)
 
-            inline_tokens = _without_redundant_trailing_body_page_breaks(
-                pd,
-                render_items[i + 1] if i + 1 < len(render_items) else None,
-                getattr(pd, "inline_tokens", None),
-            )
+            inline_tokens = list(getattr(pd, "inline_tokens", None) or [])
+            if not strict_preservation:
+                inline_tokens = _without_redundant_trailing_body_page_breaks(
+                    pd,
+                    render_items[i + 1] if i + 1 < len(render_items) else None,
+                    inline_tokens,
+                )
             if inline_tokens and text == pd.text:
                 para = doc.add_paragraph("")
                 _write_inline_tokens(para, inline_tokens)
@@ -1998,6 +2065,8 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
             before_lines = settings.space_before_line + (
                 1 if need_gap and letterhead_enabled else 0
             )
+            if strict_preservation and need_gap and not letterhead_enabled:
+                before_lines += 1
             before_twip = int(before_lines * line_twips)
             after_twip = int(settings.space_after_line * line_twips)
             spacing.set(qn('w:before'), str(before_twip))
@@ -2085,7 +2154,7 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
                 _set_para_spacing(para, before_lines=1, after_lines=1, line_twips=line_twips)
 
             # heading1/heading2 行内标题：句号分割，标题样式 + 正文仿宋
-            if pd.type_id == "heading1" and "。" in para.text:
+            if not strict_preservation and pd.type_id == "heading1" and "。" in para.text:
                 period_pos = para.text.find("。")  # 用 rendered text
                 full_text = para.text  # 保存全文
                 after = full_text[period_pos + 1:].strip()
@@ -2119,15 +2188,14 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
                     if numbered_bold_enabled:
                         _apply_special_bold(body_para, body_text)
                     _deferred_body_log.append(
-                        f"[排版] #{i}h1→body | "
-                        f"\"{body_text[:28]}\" | "
+                        f"[排版] #{i}h1→body | chars={len(body_text)} | "
                         f"字体={body_rule.font} | 字号={body_rule.font_size_pt}pt | 加粗={body_rule.bold} | "
                         f"对齐={body_rule.alignment} | 首行缩进={body_rule.first_line_indent}字符 | "
                         f"行距={settings.line_spacing_value}pt固定 | 对网=1"
                     )
 
             # heading2 句号分割，标题+正文同段（方案模式不拆分）
-            if pd.type_id == "heading2" and "。" in para.text:
+            if not strict_preservation and pd.type_id == "heading2" and "。" in para.text:
                 period_pos = para.text.find("。")
                 full_text = para.text
                 after = full_text[period_pos + 1:].strip()
@@ -2155,7 +2223,7 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
                 _apply_key_value_line_format(para)
 
             # heading1_report 句号后换行
-            if pd.meta.get("heading1_report_split") and para.runs:
+            if not strict_preservation and pd.meta.get("heading1_report_split") and para.runs:
                 body_rule = rules[5] if len(rules) > 5 else StyleRule.default_for_row(5)
                 body_para = _apply_heading1_report_split(para, pd.text, resolved, body_rule, line_twips)
                 if body_para is not None:
@@ -2166,7 +2234,7 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
                 _apply_report_first_sentence(para, pd.text, resolved)
 
             # 编号：从 meta 读取预计算编号，插入到第一个 run 前
-            numbering = "" if pd.meta.get("colon_inline_body") else pd.meta.get("numbering", "")
+            numbering = "" if strict_preservation or pd.meta.get("colon_inline_body") else pd.meta.get("numbering", "")
             logger.debug(f"[编号] meta={numbering!r} type={pd.type_id}")
             if numbering and para.runs:
                 new_r = OxmlElement('w:r')
@@ -2217,11 +2285,11 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
                     doc_data.doc_mode,
                 )
             # 段落排版日志（每段汇总格式信息）
-            text_preview = pd.text[:28].replace('\n', ' ')
+            text_digest = hashlib.sha256(pd.text.encode("utf-8")).hexdigest()[:12]
             indent = getattr(resolved, 'first_line_indent', 0)
             logger.info(
                 f"[排版] #{i} {pd.type_id} | "
-                f"\"{text_preview}\" | "
+                f"chars={len(pd.text)} text_sha256={text_digest} | "
                 f"字体={resolved.font} | "
                 f"字号={resolved.font_size_pt}pt | "
                 f"加粗={resolved.bold} | "
@@ -2375,7 +2443,7 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
     # 保存
     try:
         doc.save(output_path)
-        logger.info(f"[引擎] 排版完成: {output_path}")
+        logger.info("[引擎] 排版完成 output_sha256=%s", hashlib.sha256(str(output_path).encode("utf-8")).hexdigest()[:12])
     except Exception as e:
         raise ExportError(f"保存失败 {output_path}: {e}")
 

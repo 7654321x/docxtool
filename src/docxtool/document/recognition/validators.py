@@ -20,6 +20,6 @@ def validate_sequence(types: Sequence[str]) -> tuple[dict, ...]:
 
 def validate_diagnostics(diagnostics: dict) -> dict:
     paragraphs = diagnostics.get("paragraphs", ()) if isinstance(diagnostics, dict) else ()
-    types = [item.get("final_type", item.get("type", "")) for item in paragraphs if isinstance(item, dict)]
+    types = [item.get("recognized_type", item.get("final_type", item.get("type", ""))) for item in paragraphs if isinstance(item, dict)]
     issues = validate_sequence(types)
     return {"ok": not issues, "issues": list(issues)}

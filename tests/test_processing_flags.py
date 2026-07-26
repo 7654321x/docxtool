@@ -22,7 +22,10 @@ class ProcessingFlagsTest(unittest.TestCase):
             doc.add_paragraph("甲:乙,丙.丁")
             doc.save(src)
 
-            data = DocxImporter().load(str(src), _rules(), features={"punctuation_enabled": False})
+            data = DocxImporter().load(
+                str(src), _rules(), features={"punctuation_enabled": False},
+                strict_preservation=False,
+            )
 
             self.assertEqual(data.paragraphs[0].text, "甲:乙,丙.丁")
 
@@ -33,7 +36,10 @@ class ProcessingFlagsTest(unittest.TestCase):
             doc.add_paragraph("甲　乙,丙")
             doc.save(src)
 
-            data = DocxImporter().load(str(src), _rules(), features={"punctuation_enabled": True})
+            data = DocxImporter().load(
+                str(src), _rules(), features={"punctuation_enabled": True},
+                strict_preservation=False,
+            )
 
             self.assertEqual(data.paragraphs[0].text, "甲乙，丙")
 

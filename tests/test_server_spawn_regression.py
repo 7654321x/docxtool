@@ -209,19 +209,6 @@ def test_spawn_worker_completes_upload_with_default_format_config(tmp_path: Path
         assert Document(io.BytesIO(downloaded)).paragraphs
 
         task_tmp_dir = tmp_path / "runtime" / "tmp" / task_id
-        assert task_tmp_dir.exists()
-        retained_input = task_tmp_dir / "input.docx"
-        assert retained_input.exists()
-
-        old_mtime = time.time() - server.FILE_TTL - 60
-        os.utime(retained_input, (old_mtime, old_mtime))
-        old_runtime_tmp = server.RUNTIME_TMP_DIR
-        server.RUNTIME_TMP_DIR = str(tmp_path / "runtime" / "tmp")
-        try:
-            cleanup_result = server._cleanup_expired_tmp()
-        finally:
-            server.RUNTIME_TMP_DIR = old_runtime_tmp
-        assert cleanup_result["removed"] == 1
         assert not task_tmp_dir.exists()
     except HTTPError as exc:
         raise AssertionError(exc.read().decode("utf-8", errors="replace")) from exc

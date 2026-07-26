@@ -41,12 +41,18 @@ TYPE_ID_MAP = {
     ParagraphType.LETTER: "letter",
     ParagraphType.PAGE_NUMBER: "page_number",
     ParagraphType.SUPERSCRIPT: "superscript",
-    ParagraphType.UNKNOWN: "body",
+    ParagraphType.CAPTION: "__object_caption__",
 }
 
 
-def to_type_id(paragraph_type: ParagraphType) -> str:
-    return TYPE_ID_MAP[paragraph_type]
+def to_paragraph_type(paragraph_type: ParagraphType) -> str | None:
+    """Map one recognition type to the renderer contract without fallback."""
+    return TYPE_ID_MAP.get(paragraph_type)
+
+
+def to_type_id(paragraph_type: ParagraphType) -> str | None:
+    """Backward-compatible alias for the centralized mapping boundary."""
+    return to_paragraph_type(paragraph_type)
 
 
 # These are deliberately explicit instead of relying on renderer ``dict.get``
@@ -68,6 +74,7 @@ RULE_INDEX_MAP = {
     ParagraphType.LIST: 5, ParagraphType.LIST_ITEM: 5, ParagraphType.QUOTE: 5,
     ParagraphType.ANNOTATION: 5, ParagraphType.CLOSING: 5, ParagraphType.NUMBER: 6,
     ParagraphType.LETTER: 7, ParagraphType.PAGE_NUMBER: 8, ParagraphType.SUPERSCRIPT: 9,
+    ParagraphType.CAPTION: 5,
     ParagraphType.UNKNOWN: None,
 }
 STYLE_ID_MAP = {item: "DCT-Body" for item in ParagraphType}
@@ -85,8 +92,11 @@ STYLE_ID_MAP.update({
 })
 
 
-def resolve_render_mapping(paragraph_type: ParagraphType) -> tuple[str, int | None, str | None]:
+def resolve_render_mapping(paragraph_type: ParagraphType) -> tuple[str | None, int | None, str | None]:
     """Return an explicit legacy id, rule, and style for one internal type."""
     if paragraph_type is ParagraphType.UNKNOWN:
-        return "body", None, None
-    return to_type_id(paragraph_type), RULE_INDEX_MAP[paragraph_type], STYLE_ID_MAP[paragraph_type]
+        return None, None, None
+    mapped = to_paragraph_type(paragraph_type)
+    if mapped is None:
+        return None, None, None
+    return mapped, RULE_INDEX_MAP[paragraph_type], STYLE_ID_MAP[paragraph_type]

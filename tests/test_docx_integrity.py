@@ -61,11 +61,17 @@ def _rels_xml(*relationships: str) -> str:
     )
 
 
-def _relationship(rel_id: str, target: str, *, target_mode: str | None = None) -> str:
+def _relationship(
+    rel_id: str,
+    target: str,
+    *,
+    target_mode: str | None = None,
+    rel_type: str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink",
+) -> str:
     mode = f" TargetMode='{target_mode}'" if target_mode else ""
     return (
         f"<Relationship Id='{rel_id}' "
-        "Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink' "
+        f"Type='{rel_type}' "
         f"Target='{target}'{mode}/>"
     )
 
@@ -162,6 +168,45 @@ def test_external_relationship_not_reported_as_missing_package_part() -> None:
 
     assert report.ok is True
     assert report.relationship_count == 2
+
+
+def test_mailto_external_hyperlink_is_allowed() -> None:
+    archive = _minimal_docx_bytes(
+        {
+            "word/_rels/document.xml.rels": _rels_xml(
+                _relationship("rId9", "mailto:office@example.test", target_mode="External")
+            ),
+        },
+        _document_xml("<w:p><w:hyperlink r:id='rId9'><w:r><w:t>mail</w:t></w:r></w:hyperlink></w:p>"),
+    )
+
+    assert validate_docx_integrity(archive).ok is True
+
+
+@pytest.mark.parametrize(
+    ("target", "rel_type"),
+    [
+        ("file:///C:/private/document.docx", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink"),
+        (r"\\server\share\document.docx", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink"),
+        ("https://example.test/image.png", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"),
+        ("https://example.test/template.dotx", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/attachedTemplate"),
+    ],
+)
+def test_unsafe_external_relationships_are_rejected(target: str, rel_type: str) -> None:
+    archive = _minimal_docx_bytes(
+        {
+            "word/_rels/document.xml.rels": _rels_xml(
+                _relationship("rId9", target, target_mode="External", rel_type=rel_type)
+            ),
+        },
+        _document_xml("<w:p><w:hyperlink r:id='rId9'><w:r><w:t>external</w:t></w:r></w:hyperlink></w:p>"),
+    )
+
+    with pytest.raises(DocxIntegrityError) as error:
+        validate_docx_integrity(archive)
+
+    assert error.value.code == "UNSAFE_EXTERNAL_RELATIONSHIP"
+    assert target not in error.value.message
 
 
 def test_header_footer_image_relationships_validate_recursively() -> None:

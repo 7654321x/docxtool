@@ -30,7 +30,7 @@ class SignatureDetectionTest(unittest.TestCase):
             doc.add_paragraph(line)
         path = self.root / "input.docx"
         doc.save(path)
-        return DocxImporter().load(str(path), _rules())
+        return DocxImporter().load(str(path), _rules(), strict_preservation=False)
 
     def test_normal_document_signature_after_body(self):
         data = self._load_lines([
@@ -135,7 +135,7 @@ class SignatureDetectionTest(unittest.TestCase):
         path = self.root / "soft-broken-title.docx"
         doc.save(path)
 
-        data = DocxImporter().load(str(path), _rules())
+        data = DocxImporter().load(str(path), _rules(), strict_preservation=False)
 
         self.assertEqual(data.paragraphs[2].type_id, "role_name")
         self.assertEqual(data.paragraphs[2].text, "区政协办公室主任  李某某")
@@ -159,7 +159,7 @@ class SignatureDetectionTest(unittest.TestCase):
         path = self.root / "soft-broken-signature.docx"
         doc.save(path)
 
-        data = DocxImporter().load(str(path), _rules())
+        data = DocxImporter().load(str(path), _rules(), strict_preservation=False)
         tail = [(item.type_id, item.text) for item in data.paragraphs[-4:]]
 
         self.assertEqual(tail[0], ("attachment_note", "附件：1. 基本情况"))
@@ -195,6 +195,7 @@ class SignatureDetectionTest(unittest.TestCase):
         data = DocxImporter().load(
             str(path),
             _rules(),
+            strict_preservation=False,
             features={"punctuation": {"enabled": True, "mode": "safe"}},
         )
 
@@ -228,7 +229,7 @@ class SignatureDetectionTest(unittest.TestCase):
         path = self.root / "body-styled-heading2.docx"
         doc.save(path)
 
-        data = DocxImporter().load(str(path), _rules())
+        data = DocxImporter().load(str(path), _rules(), strict_preservation=False)
 
         self.assertEqual(data.paragraphs[1].type_id, "heading2")
         self.assertTrue(data.paragraphs[1].meta.get("heading_inline_body"))
@@ -247,7 +248,7 @@ class SignatureDetectionTest(unittest.TestCase):
         path = self.root / "zero-height-drawing.docx"
         doc.save(path)
 
-        data = DocxImporter().load(str(path), _rules())
+        data = DocxImporter().load(str(path), _rules(), strict_preservation=False)
 
         self.assertEqual(data.paragraphs[1].type_id, "heading2")
         self.assertIn("宗旨意识有所不足", data.paragraphs[1].text)
@@ -264,7 +265,7 @@ class SignatureDetectionTest(unittest.TestCase):
         path = self.root / "leading-soft-break.docx"
         doc.save(path)
 
-        data = DocxImporter().load(str(path), _rules())
+        data = DocxImporter().load(str(path), _rules(), strict_preservation=False)
         body = data.paragraphs[-1]
 
         self.assertEqual(body.type_id, "body")

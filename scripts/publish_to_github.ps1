@@ -3,7 +3,7 @@
 [CmdletBinding()]
 param(
     [switch]$Push,
-    [string]$Repository = "git@github.com:7654321x/docxtool.git",
+    [string]$Repository = "https://github.com/7654321x/docxtool.git",
     [string]$Branch = "main",
     [string]$SourceRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path,
     [string]$CommitMessage = "Sync project files",
@@ -115,6 +115,8 @@ $requiredFiles = @(
     "README.md",
     "docs/UPLOAD_MANIFEST.md",
     "requirements.txt",
+    "requirements.lock",
+    "requirements-dev.lock",
     "run.sh",
     "run.ps1",
     "deploy/nginx-docxtool.conf",
@@ -167,6 +169,7 @@ $requiredFiles = @(
     "src/docxtool/security/__init__.py",
     "src/docxtool/security/docx_integrity.py",
     "src/docxtool/security/docx_validator.py",
+    "src/docxtool/security/external_relationships.py",
     "src/docxtool/storage/__init__.py",
     "src/docxtool/storage/database.py",
     "scripts/generate_secrets.py",
