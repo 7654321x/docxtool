@@ -22,6 +22,23 @@ def test_api_auth_paths_normalize_to_handler_routes():
     assert server._route_path("/api/auth/logout") == "/auth/logout"
 
 
+def test_processing_mode_header_is_normalized_and_conflicts_are_rejected():
+    request_meta = {"processing_mode": "smart"}
+    server._validate_requested_processing_mode(None, request_meta)
+    assert request_meta["processing_strategy"] == "structural"
+
+    request_meta = {"processing_mode": "strict"}
+    server._validate_requested_processing_mode({"processing": {"strategy": "strict"}}, request_meta)
+    assert request_meta["processing_strategy"] == "strict"
+
+    with pytest.raises(server.FormatConfigRequestError) as error:
+        server._validate_requested_processing_mode(
+            {"processing": {"strategy": "structural"}},
+            {"processing_mode": "strict"},
+        )
+    assert error.value.code == "PROCESSING_MODE_CONFLICT"
+
+
 def test_argon2id_hash_is_not_plaintext():
     encoded = hash_password("correct horse battery staple")
     assert encoded.startswith("$argon2id$")

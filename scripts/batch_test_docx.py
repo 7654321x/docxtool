@@ -24,6 +24,8 @@ from docxtool.document.style_config import PageSettings, StyleRule  # noqa: E402
 INPUT_DIR = ROOT / "test_docx" / "strat_docx"
 TEMPLATE_DIR = ROOT / "test_docx" / "correct_docx"
 OUTPUT_DIR = ROOT / "test_docx" / "end_docx"
+SPECIAL_INPUT_DIR = ROOT / "test_docx" / "测试文稿"
+SPECIAL_OUTPUT_DIR = SPECIAL_INPUT_DIR / "测试目录"
 _DISPATCH_NUMBER_RE = re.compile(r"^(?P<agency_code>.+?)〔(?P<year>\d{4})〕(?P<sequence>\d+)号$")
 
 
@@ -75,13 +77,13 @@ def physical_snapshot(path: Path) -> dict:
     }
 
 
-def recognition_snapshot(path: Path, rules: list[StyleRule], *, strict_preservation: bool) -> dict:
+def recognition_snapshot(path: Path, rules: list[StyleRule], *, processing_strategy: str) -> dict:
     data = DocxImporter().load(
         str(path),
         rules,
         features={
             "classification": {"enabled": True},
-            "processing": {"strict_preservation": strict_preservation},
+            "processing": {"strategy": processing_strategy},
         },
     )
     paragraphs = []
@@ -219,7 +221,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--strict-preservation",
         action="store_true",
-        help="Preserve source paragraph structure instead of running normal formatting repairs.",
+        help="Use strict preservation instead of the default smart/structural mode.",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=("structural", "strict", "normalize"),
+        default="structural",
+        help="Processing strategy. The default matches the frontend smart mode.",
     )
     return parser.parse_args(argv)
 
@@ -244,8 +252,89 @@ def visual_rendering_not_run() -> dict[str, str | bool]:
     }
 
 
+def _validate_special_output_dir(path: Path) -> Path:
+    output_dir = path.resolve()
+    expected_root = SPECIAL_OUTPUT_DIR.resolve()
+    if output_dir != expected_root:
+        raise SystemExit(f"special output directory must be {expected_root}: {output_dir}")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return output_dir
+
+
+def _export_and_validate(
+    importer: DocxImporter,
+    source: Path,
+    output: Path,
+    rules: list[StyleRule],
+    settings: PageSettings,
+    processing_features: dict,
+    *,
+    letterhead_options: dict | None = None,
+) -> tuple[object, object]:
+    """Write through a temporary file and accept it only after DOCX checks pass."""
+    temporary = output.with_name(f".{output.stem}.tmp.docx")
+    try:
+        source_data = importer.load(str(source), rules, features=processing_features)
+        export_doc(source_data, rules, settings, str(temporary), letterhead_options=letterhead_options)
+        with zipfile.ZipFile(temporary) as package:
+            bad_member = package.testzip()
+            if bad_member:
+                raise ValueError(f"ZIP_INTEGRITY:{bad_member}")
+        output_data = importer.load(str(temporary), rules, features=processing_features)
+        # Reopening through python-docx makes text extraction part of the gate.
+        Document(temporary)
+        temporary.replace(output)
+        return source_data, output_data
+    except Exception:
+        if temporary.exists():
+            temporary.unlink()
+        raise
+
+
+def _special_record(
+    importer: DocxImporter,
+    source: Path,
+    output_dir: Path,
+    rules: list[StyleRule],
+    settings: PageSettings,
+    processing_features: dict,
+    processing_strategy: str,
+) -> dict:
+    start = time.perf_counter()
+    output = output_dir / f"{source.stem}_排版结果.docx"
+    record = {
+        "文件名": source.name,
+        "输出文件名": output.name,
+        "处理策略": processing_strategy,
+        "成功": False,
+        "错误": "",
+        "耗时_ms": 0,
+    }
+    try:
+        source_data, output_data = _export_and_validate(
+            importer, source, output, rules, settings, processing_features,
+        )
+        diagnostics = getattr(output_data, "recognition_diagnostics", {}) or {}
+        summary = diagnostics.get("summary", {}) if isinstance(diagnostics, dict) else {}
+        record.update({
+            "成功": True,
+            "原文段落数": len(source_data.paragraphs),
+            "输出段落数": len(output_data.paragraphs),
+            "原文文字哈希": text_hash("\n".join(item.original_text for item in source_data.paragraphs)),
+            "输出文字哈希": text_hash("\n".join(item.original_text for item in output_data.paragraphs)),
+            "结构复核数": int(summary.get("needs_review_count", 0) or 0),
+            "关键结构复核数": int(summary.get("critical_review_count", 0) or 0),
+            "表格数": len(output_data.tables),
+        })
+    except Exception as exc:
+        record["错误"] = f"{type(exc).__name__}: {exc}"
+    record["耗时_ms"] = round((time.perf_counter() - start) * 1000, 2)
+    return record
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    processing_strategy = "strict" if args.strict_preservation else args.mode
     sources = sorted(INPUT_DIR.glob("*.docx"))
     if len(sources) != 50:
         raise SystemExit(f"expected 50 input DOCX files, found {len(sources)}")
@@ -255,12 +344,11 @@ def main(argv: list[str] | None = None) -> int:
     settings = PageSettings.from_config()
     importer = DocxImporter()
     template_letterheads: dict[Path, dict | None] = {}
-    processing_features = {"processing": {"strict_preservation": args.strict_preservation}}
+    processing_features = {"processing": {"strategy": processing_strategy}}
     results = []
     for source in sources:
         start = time.perf_counter()
         output = output_dir / source.name.replace("_乱格式测试.docx", "_排版结果.docx")
-        temporary = output_dir / f".{output.stem}.tmp.docx"
         template, template_status = template_for(source)
         letterhead_options = None
         if template is not None and not args.without_template_letterhead:
@@ -268,16 +356,12 @@ def main(argv: list[str] | None = None) -> int:
                 template,
                 letterhead_options_from_template(template),
             )
-        record = {"编号": source.name[:3], "原始文件名": source.name, "输出文件名": output.name, "模板": template.name if template else "", "模板匹配": template_status, "模板版头": bool(letterhead_options), "严格保真": args.strict_preservation, "成功": False, "错误": "", "差异": [], "耗时_ms": 0}
+        record = {"编号": source.name[:3], "原始文件名": source.name, "输出文件名": output.name, "模板": template.name if template else "", "模板匹配": template_status, "模板版头": bool(letterhead_options), "处理策略": processing_strategy, "成功": False, "错误": "", "差异": [], "耗时_ms": 0}
         try:
-            source_data = importer.load(str(source), rules, features=processing_features)
-            export_doc(source_data, rules, settings, str(temporary), letterhead_options=letterhead_options)
-            with zipfile.ZipFile(temporary) as package:
-                bad_member = package.testzip()
-                if bad_member:
-                    raise ValueError(f"ZIP_INTEGRITY:{bad_member}")
-            temporary.replace(output)
-            output_data = importer.load(str(output), rules, features=processing_features)
+            source_data, output_data = _export_and_validate(
+                importer, source, output, rules, settings, processing_features,
+                letterhead_options=letterhead_options,
+            )
             record.update({
                 "成功": True,
                 "原文段落数": len(source_data.paragraphs),
@@ -295,7 +379,7 @@ def main(argv: list[str] | None = None) -> int:
                     "recognition": recognition_snapshot(
                         output,
                         rules,
-                        strict_preservation=args.strict_preservation,
+                        processing_strategy=processing_strategy,
                     ),
                     "physical": physical_snapshot(output),
                 }
@@ -303,7 +387,7 @@ def main(argv: list[str] | None = None) -> int:
                     "recognition": recognition_snapshot(
                         template,
                         rules,
-                        strict_preservation=args.strict_preservation,
+                        processing_strategy=processing_strategy,
                     ),
                     "physical": physical_snapshot(template),
                 }
@@ -314,10 +398,48 @@ def main(argv: list[str] | None = None) -> int:
             record["输出文字哈希"] = text_hash("\n".join(item.original_text for item in output_data.paragraphs))
         except Exception as exc:
             record["错误"] = f"{type(exc).__name__}: {exc}"
-            if temporary.exists():
-                temporary.unlink()
         record["耗时_ms"] = round((time.perf_counter() - start) * 1000, 2)
         results.append(record)
+    special_output_dir = _validate_special_output_dir(SPECIAL_OUTPUT_DIR)
+    special_results = [
+        _special_record(
+            importer,
+            source,
+            special_output_dir,
+            rules,
+            settings,
+            processing_features,
+            processing_strategy,
+        )
+        for source in sorted(SPECIAL_INPUT_DIR.glob("*.docx"))
+    ]
+    special_report = {
+        "总数": len(special_results),
+        "成功数": sum(bool(item["成功"]) for item in special_results),
+        "失败数": sum(not item["成功"] for item in special_results),
+        "处理策略": processing_strategy,
+        "模板对比": "专项集没有统一对照模板，未与 correct_docx 进行格式差异判定。",
+        "视觉渲染检查": visual_rendering_not_run(),
+        "结果": special_results,
+    }
+    (special_output_dir / "批量测试报告.json").write_text(
+        json.dumps(special_report, ensure_ascii=False, indent=2), encoding="utf-8",
+    )
+    (special_output_dir / "批量测试报告.txt").write_text(
+        "\n".join([
+            f"总数：{special_report['总数']}",
+            f"成功：{special_report['成功数']}",
+            f"失败：{special_report['失败数']}",
+            f"处理策略：{processing_strategy}",
+            "模板对比：" + special_report["模板对比"],
+            "视觉渲染检查：" + str(special_report["视觉渲染检查"]["reason"]),
+            *[
+                f"{item['文件名']} | 成功={item['成功']} | 复核={item.get('结构复核数', 0)} | 错误={item['错误']}"
+                for item in special_results
+            ],
+        ]),
+        encoding="utf-8",
+    )
     report = {
         "总数": len(results),
         "成功数": sum(bool(item["成功"]) for item in results),
@@ -328,6 +450,13 @@ def main(argv: list[str] | None = None) -> int:
             for level in ("P0", "P1", "P2", "P3")
         },
         "视觉渲染检查": visual_rendering_not_run(),
+        "专项集": {
+            "目录": str(SPECIAL_INPUT_DIR.relative_to(ROOT)),
+            "结果目录": str(special_output_dir.relative_to(ROOT)),
+            "总数": special_report["总数"],
+            "成功数": special_report["成功数"],
+            "失败数": special_report["失败数"],
+        },
         "结果": results,
     }
     (output_dir / "批量测试报告.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -337,12 +466,13 @@ def main(argv: list[str] | None = None) -> int:
         f"失败：{report['失败数']}",
         f"存在模板差异的文件：{report['差异文件数']}",
         "问题统计：" + json.dumps(report["问题统计"], ensure_ascii=False),
+        "专项集：" + json.dumps(report["专项集"], ensure_ascii=False),
         "视觉渲染检查：" + str(report["视觉渲染检查"]["reason"]),
     ]
     for item in results:
         lines.append(f"{item['编号']} {item['原始文件名']} | 成功={item['成功']} | 差异={len(item['差异'])} | 错误={item['错误']}")
     (output_dir / "批量测试报告.txt").write_text("\n".join(lines), encoding="utf-8")
-    return 0 if report["失败数"] == 0 else 1
+    return 0 if report["失败数"] == 0 and special_report["失败数"] == 0 else 1
 
 
 if __name__ == "__main__":

@@ -22,6 +22,8 @@ var/logs/*
 !var/logs/.gitkeep
 var/outputs/*
 !var/outputs/.gitkeep
+var/uploads/*
+!var/uploads/.gitkeep
 var/runtime/*
 !var/runtime/.gitkeep
 /logs/

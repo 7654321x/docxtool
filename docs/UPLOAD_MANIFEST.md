@@ -60,6 +60,7 @@ https://github.com/7654321x/docxtool.git
 | `src/docxtool/document/classifier.py` | 文档模式和段落结构分类 |
 | `src/docxtool/document/letterhead_config.py` | 版头配置归一化和安全校验 |
 | `src/docxtool/document/recognition/` | 候选、Beam 解码、诊断、验证和兼容映射 |
+| `src/docxtool/document/recognition/global_context.py` | 文首结构、正文边界和同级标题族的全文只读分析 |
 | `src/docxtool/document/style_config.py` | 样式规则、页面设置、日志配置、默认配置读取 |
 | `src/docxtool/resources/__init__.py` | 打包资源包入口 |
 | `src/docxtool/resources/config/default-format.json` | 默认公文格式配置，随 wheel 安装 |

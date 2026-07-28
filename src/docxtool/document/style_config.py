@@ -692,6 +692,7 @@ def _parse_core_feature_options(config_dict: dict) -> dict:
     signature_block = _dict_field(config_dict, "signature_block")
     table_format = _dict_field(config_dict, "table_format")
     cleanup = _dict_field(config_dict, "cleanup")
+    processing = _dict_field(config_dict, "processing")
     raw_features = config_dict.get("features", {})
     legacy_page_number_enabled = None
     if isinstance(raw_features, dict) and "page_number_enabled" in raw_features:
@@ -702,7 +703,31 @@ def _parse_core_feature_options(config_dict: dict) -> dict:
         page_number_enabled = legacy_page_number_enabled
     else:
         page_number_enabled = True
+    raw_processing_mode = (
+        processing.get("strategy")
+        or processing.get("mode")
+        or config_dict.get("processing_mode")
+        or config_dict.get("mode")
+        or "smart"
+    )
+    if not isinstance(raw_processing_mode, str):
+        raise ConfigValidationError("processing.mode", "必须是字符串")
+    processing_mode = raw_processing_mode.strip().lower()
+    processing_strategy = {
+        "smart": "structural",
+        "structural": "structural",
+        "strict": "strict",
+        "normalize": "normalize",
+    }.get(processing_mode)
+    if processing_strategy is None:
+        raise ConfigValidationError(
+            "processing.mode",
+            "仅支持 smart、strict、normalize 或 structural",
+        )
     return {
+        "processing": {
+            "strategy": processing_strategy,
+        },
         "punctuation": {
             "enabled": _safe_bool(punctuation.get("enabled", False), False),
             "mode": _safe_mode("punctuation.mode", punctuation.get("mode", "safe"), {"off", "safe", "standard"}, "safe"),

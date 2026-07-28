@@ -24,7 +24,7 @@ from docxtool.document.engine.numbering import normalize_numbering_text
 from docxtool.document.engine.page_number import apply_page_number
 from docxtool.document.engine.signature_block import apply_signature_block
 from docxtool.document.engine.style_catalog import ensure_document_styles
-from docxtool.document.engine.letterhead import apply_letterhead, LetterheadDetection
+from docxtool.document.engine.letterhead import apply_letterhead, detect_letterhead, LetterheadDetection
 from docxtool.security.external_relationships import (
     external_relationship_policy,
     sanitized_external_target,
@@ -550,13 +550,36 @@ def _doc_grid_char_space(content_width_twips: float, chars_per_line: int,
 
 # ── 落款排版辅助 ──
 def _apply_right_indent(para, n=2):
+    # Signature placement is a final direct format.  Do not leave inherited
+    # distributed alignment or character-based left/first-line indents from a
+    # copied body paragraph in the generated document.
+    para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
     pPr = para._element.get_or_add_pPr()
     ind = pPr.find(qn('w:ind'))
     if ind is None:
         ind = OxmlElement('w:ind')
         pPr.append(ind)
+    for attr in ('w:left', 'w:leftChars', 'w:firstLine', 'w:firstLineChars', 'w:hanging', 'w:hangingChars'):
+        ind.attrib.pop(qn(attr), None)
     ind.set(qn('w:right'), str(int(n * 560)))
     ind.set(qn('w:rightChars'), str(int(round(n * 100))))
+
+
+def _set_widow_control(para, enabled: bool) -> None:
+    pPr = para._element.get_or_add_pPr()
+    widow_control = OxmlElement('w:widowControl')
+    widow_control.set(qn('w:val'), '1' if enabled else '0')
+    _set_unique(pPr, qn('w:widowControl'), widow_control)
+
+
+def _is_terminal_body_paragraph(render_items, index: int, paragraph_data) -> bool:
+    """Protect the final prose paragraph from a one-line trailing page."""
+    if paragraph_data.type_id != 'body':
+        return False
+    return not any(
+        getattr(item, 'type_id', '').strip() and not getattr(item, 'type_id', '').startswith('__')
+        for item in render_items[index + 1:]
+    )
 
 def _apply_first_line_indent_chars(para, chars: int):
     """只设置首行缩进，不设置悬挂缩进。"""
@@ -631,7 +654,11 @@ def _attachment_item_wrap_start_chars(text: str) -> int:
 
 # ── 清理旧编号 ──
 _LEADING_NUM_RE = re.compile(
-    r'^\s*(?:[（(]?[一二三四五六七八九十百千零〇0-9]+[)）]?[、\.．]\s*)+'
+    r"^\s*(?:"
+    r"[一二三四五六七八九十百千零〇]+、"
+    r"|[（(][一二三四五六七八九十百千零〇0-9]+[）)]"
+    r"|\d+[、\.．]"
+    r")\s*"
 )
 
 def _strip_heading_numbering(text: str) -> str:
@@ -1728,7 +1755,7 @@ TYPE_TO_STYLE_ID: Dict[str, str] = {
     "title": "DCT-Title",
     "title_cont": "DCT-Title",
     "embedded_document_title": "DCT-Title",
-    "dispatch_number": "DCT-Body",
+    "dispatch_number": "DCT-DocumentNumber",
     "meeting_meta": "DCT-Body",
     "date_line": "DCT-Date",
     "author_line": "DCT-Author",
@@ -1916,6 +1943,7 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
     numbering_enabled = _feature_enabled(numbering_options, False)
     numbering_mode = str(_feature_options(numbering_options).get("mode", "safe") or "safe").lower()
     strict_preservation = bool(getattr(doc_data, "strict_preservation", False))
+    normalization_processing = getattr(doc_data, "processing_strategy", "") == "normalize"
 
     render_items = (
         list(doc_data.paragraphs)
@@ -2031,18 +2059,30 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
 
             # 标题先清理旧编号，再建段落
             text = pd.text
-            if numbering_enabled and not strict_preservation:
+            # A standalone first-level title is not a body sentence.  Its
+            # terminal Chinese full stop is copied formatting noise and is
+            # removed in every editable processing mode.
+            if (
+                not strict_preservation
+                and pd.type_id == "heading1"
+                and text.rstrip().endswith("。")
+            ):
+                text = text.rstrip()[:-1]
+            if numbering_enabled and normalization_processing:
                 numbering_result = normalize_numbering_text(text, safe=numbering_mode != "off")
                 if numbering_result.changed:
                     text = numbering_result.text
-            if pd.type_id.startswith("heading") and not strict_preservation:
+            numbering_correction = bool(pd.meta.get("numbering_correction"))
+            if pd.type_id.startswith("heading") and (
+                normalization_processing or numbering_correction
+            ):
                 text = _strip_heading_numbering(text)
                 # 一/二级标题特殊处理：句号分割的行内标题（政协报告体例）
-                if pd.type_id in ("heading1", "heading2"):
+                if normalization_processing and pd.type_id in ("heading1", "heading2"):
                     text = _handle_heading_period(text)
 
             inline_tokens = list(getattr(pd, "inline_tokens", None) or [])
-            if not strict_preservation:
+            if normalization_processing:
                 inline_tokens = _without_redundant_trailing_body_page_breaks(
                     pd,
                     render_items[i + 1] if i + 1 < len(render_items) else None,
@@ -2096,6 +2136,10 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
                 _apply_hanging_indent_chars(para, first_start, first_start)
 
             _apply_rule_paragraph_format(para, resolved, line_twips)
+
+            if pd.type_id == "dispatch_number":
+                para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                _apply_first_line_indent_chars(para, 0)
 
             # GB/T 9704 落款位置：发文机关右空 2 字，成文日期右空 4 字。
             # 直接格式固定最终位置，避免浏览器旧配置覆盖规范值。
@@ -2154,7 +2198,7 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
                 _set_para_spacing(para, before_lines=1, after_lines=1, line_twips=line_twips)
 
             # heading1/heading2 行内标题：句号分割，标题样式 + 正文仿宋
-            if not strict_preservation and pd.type_id == "heading1" and "。" in para.text:
+            if normalization_processing and pd.type_id == "heading1" and "。" in para.text:
                 period_pos = para.text.find("。")  # 用 rendered text
                 full_text = para.text  # 保存全文
                 after = full_text[period_pos + 1:].strip()
@@ -2195,7 +2239,7 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
                     )
 
             # heading2 句号分割，标题+正文同段（方案模式不拆分）
-            if not strict_preservation and pd.type_id == "heading2" and "。" in para.text:
+            if normalization_processing and pd.type_id == "heading2" and "。" in para.text:
                 period_pos = para.text.find("。")
                 full_text = para.text
                 after = full_text[period_pos + 1:].strip()
@@ -2223,7 +2267,7 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
                 _apply_key_value_line_format(para)
 
             # heading1_report 句号后换行
-            if not strict_preservation and pd.meta.get("heading1_report_split") and para.runs:
+            if normalization_processing and pd.meta.get("heading1_report_split") and para.runs:
                 body_rule = rules[5] if len(rules) > 5 else StyleRule.default_for_row(5)
                 body_para = _apply_heading1_report_split(para, pd.text, resolved, body_rule, line_twips)
                 if body_para is not None:
@@ -2274,6 +2318,8 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
             snap = OxmlElement('w:snapToGrid')
             snap.set(qn('w:val'), snap_val)
             _set_unique(pPr_final, qn('w:snapToGrid'), snap)
+            if _is_terminal_body_paragraph(render_items, i, pd):
+                _set_widow_control(para, True)
             if pd.meta.get("sectPr") is not None:
                 section_paragraphs.append((para, pd.meta.get("sectPr")))
                 _copy_paragraph_sectPr(
@@ -2344,7 +2390,15 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
     apply_page_settings(doc, page_settings, doc_data.doc_mode)
     _preserve_even_and_odd_headers_setting(doc, doc_data)
 
+    # Structural-preservation mode may split a previously fused leading
+    # paragraph into a document number, title and role line.  The source-level
+    # detector cannot see that virtual structure, so inspect the rebuilt body
+    # once before deciding whether to preserve or complete an existing header.
     apply_detection = letterhead_detection
+    if letterhead_detection.status == "none":
+        rebuilt_detection = detect_letterhead(doc)
+        if rebuilt_detection.status != "none":
+            apply_detection = rebuilt_detection
     if letterhead_enabled and letterhead_detection.status != "none":
         # Existing source blocks were intentionally omitted above. Keep the
         # original status for reporting without applying source indexes to the

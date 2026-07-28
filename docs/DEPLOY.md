@@ -107,9 +107,6 @@ export BIND_HOST=127.0.0.1
 export PORT=9527
 export ADMIN_TOKEN="替换为长随机管理密钥"
 export PROXY_SECRET="替换为和 Cloudflare Pages 一致的长随机代理密钥"
-export FILE_RETENTION_HOURS=24
-export DOCXTOOL_KEEP_FAILED_INPUTS=false
-export TASK_RETENTION_HOURS=168
 export MAX_CACHED_TASKS=500
 export CLEANUP_INTERVAL_MINUTES=30
 export TRUST_PROXY_HEADERS=true
@@ -119,6 +116,8 @@ export PRODUCTION_MODE=true
 export DATABASE_PATH=var/data/stats.db
 ./run.sh
 ```
+
+上传原件、排版结果、任务日志和任务记录永久保留。服务不会按时间自动删除这些文件；请自行监控磁盘空间并安排服务器级备份或归档。旧版 `FILE_RETENTION_HOURS`、`TASK_RETENTION_HOURS` 和 `DOCXTOOL_KEEP_FAILED_INPUTS` 配置已不再参与清理策略。
 
 说明：
 

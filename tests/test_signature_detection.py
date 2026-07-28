@@ -99,6 +99,22 @@ class SignatureDetectionTest(unittest.TestCase):
         self.assertEqual(data.paragraphs[-2].text, "区政协")
         self.assertEqual(data.paragraphs[-1].text, "2025年10月15日")
 
+    def test_common_abbreviated_agencies_are_recognized_before_signature_date(self):
+        for agency in ("区委办", "区政府办", "区政协办", "区委组织部", "区财政局"):
+            with self.subTest(agency=agency):
+                data = self._load_lines([
+                    "总题目",
+                    "一、一级标题",
+                    "这里是正文内容这里是正文内容这里是正文内容。",
+                    agency,
+                    "2025年十月15日",
+                ])
+
+                self.assertEqual(data.paragraphs[-2].type_id, "sign_org")
+                self.assertEqual(data.paragraphs[-2].text, agency)
+                self.assertEqual(data.paragraphs[-1].type_id, "sign_date")
+                self.assertEqual(data.paragraphs[-1].text, "2025年10月15日")
+
     def test_long_role_and_name_line_is_detected_in_head_area(self):
         data = self._load_lines([
             "2026年度测试材料",
@@ -166,6 +182,24 @@ class SignatureDetectionTest(unittest.TestCase):
         self.assertEqual(tail[1], ("attachment_note_item", "2. 具体情况"))
         self.assertEqual(tail[2], ("sign_org", "区政协办"))
         self.assertEqual(tail[3], ("sign_date", "2025年10月15日"))
+
+    def test_signature_org_and_date_in_same_soft_broken_paragraph_are_split(self):
+        doc = Document()
+        doc.add_paragraph("总题目")
+        doc.add_paragraph("一、一级标题")
+        doc.add_paragraph("这里是正文内容这里是正文内容这里是正文内容。")
+        tail = doc.add_paragraph("园区人才保障工作组")
+        tail.add_run().add_break()
+        tail.add_run("2026年5月29日")
+        path = self.root / "soft-broken-signature-pair.docx"
+        doc.save(path)
+
+        data = DocxImporter().load(str(path), _rules(), strict_preservation=False)
+
+        self.assertEqual(
+            [(item.type_id, item.text) for item in data.paragraphs[-2:]],
+            [("sign_org", "园区人才保障工作组"), ("sign_date", "2026年5月29日")],
+        )
 
     def test_soft_broken_tail_splits_signature_note_and_attachment_pages(self):
         doc = Document()

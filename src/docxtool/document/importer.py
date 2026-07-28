@@ -11,6 +11,7 @@
 """
 
 import copy
+from difflib import SequenceMatcher
 import hashlib
 import os
 import re
@@ -98,6 +99,7 @@ class DocumentData:
     even_and_odd_headers: object = None
     letterhead_detection: object = None
     strict_preservation: bool = False
+    processing_strategy: str = "normalize"
     recognition_mode: str = "authoritative"
     normalization_changes: list = field(default_factory=list)
     recognition_diagnostics: dict = field(default_factory=dict)
@@ -509,6 +511,17 @@ _SIGN_ORG_SUFFIX_RE = re.compile(
     r"办公室|街道办事处|领导小组|工作组|党组|党委|政府|政协|人大|"
     r"总工会|局|厅|部|院|处|科|办|镇|乡)$"
 )
+_COMMON_SIGNATURE_ORG_NAMES = frozenset({
+    "党委办公室", "党政办公室", "区委办", "县委办", "市委办", "省政府办公厅",
+    "政府办公室", "区政府办", "县政府办", "市政府办", "政协办公室", "政协办",
+    "人大常委会办公室", "人大办", "组织部", "宣传部", "统战部", "政法委",
+    "纪委监委", "发展和改革局", "发改局", "财政局", "教育局", "公安局",
+    "民政局", "司法局", "人力资源和社会保障局", "人社局", "自然资源局",
+    "生态环境局", "住房和城乡建设局", "住建局", "交通运输局", "农业农村局",
+    "商务局", "文化广电旅游局", "卫生健康局", "卫健局", "应急管理局", "应急局",
+    "审计局", "市场监督管理局", "市场监管局", "统计局", "机关事务管理局",
+    "人民法院", "人民检察院", "总工会", "团委", "妇联", "残联",
+})
 
 def _is_body_context(ctx) -> bool:
     return ctx.last_structural_type in ("body", "addressing",
@@ -571,6 +584,30 @@ def _is_attachment_boundary(text: str) -> bool:
 def _norm_sign_org(text: str) -> str:
     return re.sub(r'^\s*[一二三四五六七八九十百]+、\s*', '', text or "", count=1).strip()
 
+
+def _looks_like_common_signature_org(text: str) -> bool:
+    """Recognize common agency names and small copy/paste variations safely.
+
+    This is recognition evidence only.  A matched abbreviation such as
+    ``区政协办`` is never expanded in the generated document because the full
+    issuing authority cannot be inferred safely from a local abbreviation.
+    """
+    value = re.sub(r"\s+", "", text or "")
+    if not value:
+        return False
+    if any(value.endswith(name) for name in _COMMON_SIGNATURE_ORG_NAMES):
+        return True
+    for name in _COMMON_SIGNATURE_ORG_NAMES:
+        max_size = min(len(value), len(name), 8)
+        for size in range(max_size, 2, -1):
+            suffix = value[-size:]
+            if (
+                SequenceMatcher(None, suffix, name[:size]).ratio() >= 0.86
+                or SequenceMatcher(None, suffix, name[-size:]).ratio() >= 0.86
+            ):
+                return True
+    return False
+
 def _record_structural(ctx, type_id: str, text: str) -> None:
     ctx.last_structural_type = type_id
     ctx.last_structural_text = (text or "").strip()
@@ -599,7 +636,7 @@ def _looks_like_sign_org(text: str, next_text: str, ctx) -> bool:
         return False
     if not _SIGN_DATE_RE2.match(next_text or ""):
         return False
-    return True
+    return bool(_SIGN_ORG_SUFFIX_RE.search(t) or _looks_like_common_signature_org(t))
 
 def _heading_has_inline_body(text: str) -> bool:
     period_pos = (text or "").find("。")
@@ -633,6 +670,33 @@ def _is_auto_numbered_item(feats: Optional[ParagraphFeatures]) -> bool:
 _RESPONSIBILITY_LINE_RE = re.compile(r"^\s*[“”\"'‘’「『]?\s*责\s*任\s*单\s*位\s*[:：]")
 _RESPONSIBILITY_LABEL_RE = re.compile(r"\s*责\s*任\s*单\s*位\s*[:：]\s*")
 _RESPONSIBILITY_WRAPPER_RE = re.compile(r"^\s*[“”\"'‘’「『]\s*(.*?)\s*[”\"'’」』]?\s*$")
+_HEADER_ROLE_KEYWORD_RE = re.compile(
+    r"主任|书记|主席|部长|局长|处长|科长|司长|厅长|市长|县长|区长|镇长|乡长|院长|校长|政委|组长|队长|秘书长|委员|常委|负责人"
+)
+_HEADER_DATE_LINE_RE = re.compile(r"^[（(]\s*(?:19|20)\d{2}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日")
+_OPENING_SPEECH_TITLE_RE = re.compile(r"^在[\u4e00-\u9fffA-Za-z0-9（）()、，,.·\-\s]{3,70}(?:上)?的?讲话$")
+
+
+def _opening_speech_title_text(text: str, ctx) -> str | None:
+    """Return a first-line speech title, ignoring one inferred erroneous H1 prefix."""
+    value = (text or "").strip()
+    if ctx.has_seen_body or ctx.prev_type_id or _contains_colon(value):
+        return None
+    numbered, prefix = _match_numbering(value)
+    if numbered == "heading1" and prefix:
+        candidate = value[len(prefix):].strip()
+        return candidate if _OPENING_SPEECH_TITLE_RE.fullmatch(candidate) else None
+    if numbered:
+        return None
+    return value if _OPENING_SPEECH_TITLE_RE.fullmatch(value) else None
+
+
+def _strip_inferred_speech_numbering(text: str) -> str:
+    value = (text or "").strip()
+    numbered, prefix = _match_numbering(value)
+    if numbered == "heading1" and prefix:
+        return value[len(prefix):].strip()
+    return value
 
 
 def _should_split_structural_line_breaks(parts: list[str], next_text: str) -> bool:
@@ -641,6 +705,16 @@ def _should_split_structural_line_breaks(parts: list[str], next_text: str) -> bo
     if len(nonempty) < 2:
         return False
     if any(_detect_numbering_prefix(part) for part in nonempty[1:]):
+        return True
+    # A numbered heading followed by a manually wrapped body paragraph is a
+    # common copy/paste artefact.  Keep the heading and the real body as two
+    # paragraphs instead of exporting the body with heading formatting.
+    if _detect_numbering_prefix(nonempty[0]) and len(nonempty) >= 2:
+        return True
+    # A leading dispatch number followed by title-area content is an
+    # incomplete letterhead, not a single body paragraph.  Keep each visible
+    # line independent so later letterhead detection can reason over it.
+    if _is_dispatch_number_line(nonempty[0]) and len(nonempty) >= 2:
         return True
     key_value_lines = sum(
         1
@@ -653,11 +727,32 @@ def _should_split_structural_line_breaks(parts: list[str], next_text: str) -> bo
             and any(_is_attachment_boundary(part) for part in nonempty[1:])):
         return True
 
+    # A common manually edited tail keeps the issuing organization and date
+    # in one physical paragraph separated only by a soft line break.  Split
+    # that pair before classification; otherwise the whole paragraph falls
+    # through as body text and inherits justified body formatting.
+    if (
+        len(nonempty) == 2
+        and _is_tail_signature_org_text(nonempty[0])
+        and _SIGN_DATE_RE2.match(nonempty[1])
+    ):
+        return True
+
     # A title block often uses soft line breaks and ends in "职务  姓名".
     role_line = nonempty[-1]
     if (re.fullmatch(r"[\u4e00-\u9fff、，,·]{2,28}\s{2,}[\u4e00-\u9fff·]{2,6}", role_line)
             or (re.search(r"主任|书记|主席|部长|局长|处长|科长|市长|县长|区长|镇长|乡长|院长|校长|政委|组长|队长|秘书长|委员|常委|负责人", role_line)
                 and re.search(r"\s{2,}", role_line))):
+        return True
+
+    # Speech manuscripts commonly put “职务姓名” and a parenthesized meeting
+    # date/place on separate soft lines.  Split this reliable title-block pair
+    # before classification so it cannot inherit the body style.
+    if (
+        len(nonempty) >= 2
+        and _HEADER_ROLE_KEYWORD_RE.search(nonempty[0])
+        and _HEADER_DATE_LINE_RE.match(nonempty[1])
+    ):
         return True
 
     # A signature organization may be separated from the final body paragraph
@@ -669,6 +764,32 @@ def _should_split_structural_line_breaks(parts: list[str], next_text: str) -> bo
     return bool(_SIGN_DATE_RE2.match(next_visible_line)
                 and len(role_line) <= 30
                 and not any(mark in role_line for mark in "。；;：:"))
+
+
+_DISPATCH_NUMBER_LINE_RE = re.compile(
+    r"^(?:[\u4e00-\u9fffA-Za-z0-9]{0,20})[〔\[]\d{4}[〕\]]\s*\d+\s*号$"
+)
+
+
+def _is_dispatch_number_line(text: str) -> bool:
+    return bool(_DISPATCH_NUMBER_LINE_RE.fullmatch(re.sub(r"\s+", "", text or "")))
+
+
+def _split_inline_heading_body(line: str) -> list[str]:
+    """Split a numbered title followed by a real body sentence without editing text.
+
+    This is intentionally narrower than punctuation normalization: only a
+    numbered heading whose first sentence is followed by at least five visible
+    characters becomes two structural paragraphs.  The full source text is
+    retained across the two results.
+    """
+    text = (line or "").strip()
+    if not _detect_numbering_prefix(text):
+        return [text]
+    period_index = text.find("。")
+    if period_index < 0 or len(text[period_index + 1:].strip()) < 5:
+        return [text]
+    return [text[:period_index + 1], text[period_index + 1:].strip()]
 
 
 def _normalize_responsibility_line(text: str) -> str:
@@ -813,7 +934,7 @@ def _is_tail_signature_org_text(text: str) -> bool:
         2 <= len(value) <= 40
         and not value.startswith(_SIGN_ORG_NEGATIVE_STARTS)
         and not any(mark in value for mark in "。；;：:")
-        and _SIGN_ORG_SUFFIX_RE.search(value)
+        and (_SIGN_ORG_SUFFIX_RE.search(value) or _looks_like_common_signature_org(value))
     )
 
 
@@ -858,7 +979,12 @@ def _retag_tail_paragraph(
     paragraph.inline_tokens = []
 
 
-def _normalize_attachment_note_block(note: ParagraphData, items: list[ParagraphData]) -> None:
+def _normalize_attachment_note_block(
+    note: ParagraphData,
+    items: list[ParagraphData],
+    *,
+    normalize_text: bool,
+) -> None:
     match = _ATT_NOTE_RE.match(_tail_source_text(note))
     if match is None:
         return
@@ -874,7 +1000,7 @@ def _normalize_attachment_note_block(note: ParagraphData, items: list[ParagraphD
         _retag_tail_paragraph(
             note,
             "attachment_note",
-            f"附件：{start}. {first_body}".rstrip(),
+            f"附件：{start}. {first_body}".rstrip() if normalize_text else _tail_source_text(note),
             {"attachment_single": False, "attachment_multi": True},
         )
         for offset, item in enumerate(items, start=1):
@@ -882,7 +1008,7 @@ def _normalize_attachment_note_block(note: ParagraphData, items: list[ParagraphD
             _retag_tail_paragraph(
                 item,
                 "attachment_note_item",
-                f"{start + offset}. {item_body}".rstrip(),
+                f"{start + offset}. {item_body}".rstrip() if normalize_text else _tail_source_text(item),
             )
         return
 
@@ -891,13 +1017,22 @@ def _normalize_attachment_note_block(note: ParagraphData, items: list[ParagraphD
     _retag_tail_paragraph(
         note,
         "attachment_note",
-        f"附件：{body}".rstrip(),
+        f"附件：{body}".rstrip() if normalize_text else _tail_source_text(note),
         {"attachment_single": True, "attachment_multi": False},
     )
 
 
-def _normalize_tail_structures(paragraphs: list[ParagraphData]) -> None:
-    """Reclassify and order a reliable document tail independent of source order."""
+def _normalize_tail_structures(
+    paragraphs: list[ParagraphData],
+    *,
+    normalize_text: bool = True,
+) -> None:
+    """Reclassify and order a reliable document tail independent of source order.
+
+    Structural processing may retag and reorder a fully bounded tail region,
+    but must not rewrite its visible text.  Full normalization keeps the legacy
+    behavior of standardizing attachment numbering and dates.
+    """
 
     plain_indexes = [
         index
@@ -967,12 +1102,13 @@ def _normalize_tail_structures(paragraphs: list[ParagraphData]) -> None:
         _normalize_attachment_note_block(
             paragraphs[note_index],
             [paragraphs[index] for index in item_indexes],
+            normalize_text=normalize_text,
         )
     if sign_index is not None:
         _retag_tail_paragraph(
             paragraphs[sign_index],
             "sign_org",
-            _norm_sign_org(_tail_source_text(paragraphs[sign_index])),
+            _norm_sign_org(_tail_source_text(paragraphs[sign_index])) if normalize_text else _tail_source_text(paragraphs[sign_index]),
         )
     if tail_date is not None:
         _retag_tail_paragraph(
@@ -1014,7 +1150,7 @@ def _normalize_tail_structures(paragraphs: list[ParagraphData]) -> None:
             _retag_tail_paragraph(
                 paragraph,
                 "attachment_page_mark",
-                _norm_attach_mark(source_text),
+                _norm_attach_mark(source_text) if normalize_text else source_text,
             )
             attachment_mode = True
             expect_title = True
@@ -1296,6 +1432,9 @@ def _score_05_role_name(text: str, feats, ctx) -> Tuple[int, dict, str]:
     if re.search(_ROLE_KW, text) and role_keyword_match:
         return 110, {}, ""
     if re.search(_ROLE_KW, text) and not re.search(r"\s", text):
+        prev_title = ctx.title_texts[-1] if ctx.title_texts else ""
+        if re.search(r"发言|讲话|致辞|主持词", prev_title):
+            return 95, {}, ""
         return 80, {}, ""
     # 上段标题含文种关键词（汇报/总结/方案/报告）→ 当前短行大概率是署名
     _DOC_TYPE_KW = ('对照检查|述职报告|工作总结|工作计划|实施方案|提纲|发言稿'
@@ -1307,6 +1446,9 @@ def _score_05_role_name(text: str, feats, ctx) -> Tuple[int, dict, str]:
     if (re.search(r'发言|讲话|致辞|主持词', prev_title)
             and re.fullmatch(r'[\u4e00-\u9fff]{2,6}', text)):
         return 92, {}, ""
+    # Some meeting manuscripts use a combined “职务、职务姓名” line rather
+    # than a bare name.  It must outrank title continuation before the next
+    # parenthesized meeting date is classified.
     if re.search(_DOC_TYPE_KW, prev_title) and len(text) < 20 and not _contains_colon(text):
         return 75, {}, ""
     return 0, {}, ""
@@ -1592,6 +1734,15 @@ def detect_paragraph_type(text: str, feats: ParagraphFeatures,
     if unbound_object_label:
         type_id = "body"
         score_log.append("unbound_object_label:100")
+    elif opening_speech_title := _opening_speech_title_text(text, ctx):
+        # Word's built-in Heading 1 is often pasted onto the first line of a
+        # speech manuscript.  A first-line “在……上的讲话” is a main title,
+        # not the first numbered section.
+        type_id = "title"
+        meta["is_title"] = True
+        if opening_speech_title != text.strip():
+            meta["strip_inferred_speech_numbering"] = True
+        score_log.append("opening_speech_title:100")
     else:
         # ── 先检查 Word 样式/多级列表 ──
         style_tid, style_prefix = _match_style_or_lvl(text, feats)
@@ -1839,23 +1990,44 @@ class DocxImporter:
 
         features = features or {}
         processing_options = features.get("processing", {}) if isinstance(features.get("processing", {}), dict) else {}
-        strict_preservation = _feature_bool(
-            processing_options.get("strict_preservation", strict_preservation),
-            strict_preservation,
-        )
+        requested_strategy = str(
+            processing_options.get("strategy")
+            or processing_options.get("mode")
+            or ""
+        ).strip().lower()
+        requested_strategy = {"smart": "structural"}.get(requested_strategy, requested_strategy)
+        if requested_strategy:
+            if requested_strategy not in {"strict", "structural", "normalize"}:
+                raise ImportError("处理模式必须为 strict、smart、structural 或 normalize")
+            processing_strategy = requested_strategy
+        elif "strict_preservation" in processing_options:
+            processing_strategy = "strict" if _feature_bool(
+                processing_options.get("strict_preservation"), strict_preservation
+            ) else "normalize"
+        else:
+            # Preserve the public importer default for library callers.  The
+            # web configuration explicitly selects smart/structural mode.
+            processing_strategy = "strict" if strict_preservation else "normalize"
+        strict_preservation = processing_strategy == "strict"
+        structural_preservation = processing_strategy == "structural"
         recognition_options = features.get("recognition", {}) if isinstance(features.get("recognition", {}), dict) else {}
         recognition_mode = str(recognition_options.get("mode", recognition_mode) or recognition_mode).lower()
         if recognition_mode not in {"legacy", "shadow", "authoritative"}:
             raise ImportError("识别模式必须为 legacy、shadow 或 authoritative")
         punctuation_options = features.get("punctuation", {}) if isinstance(features.get("punctuation", {}), dict) else {}
+        numbering_options = features.get("numbering", {}) if isinstance(features.get("numbering", {}), dict) else {}
+        numbering_enabled = _feature_bool(numbering_options.get("enabled", False), False)
         new_punctuation_enabled = _feature_bool(punctuation_options.get("enabled", False), False)
         punctuation_mode = str(punctuation_options.get("mode", "safe") or "safe")
         punctuation_enabled = _feature_bool(features.get("punctuation_enabled", True), True)
+        punctuation_requested = new_punctuation_enabled or punctuation_enabled
 
         def normalize_text(text: str) -> str:
             if not text:
                 return text
             if strict_preservation:
+                return text
+            if structural_preservation and not punctuation_requested:
                 return text
             if new_punctuation_enabled:
                 from docxtool.document.engine.punctuation import normalize_punctuation_text
@@ -1867,6 +2039,8 @@ class DocxImporter:
 
         def normalize_tokens(tokens: List[InlineToken]) -> List[InlineToken]:
             if strict_preservation:
+                return list(tokens or [])
+            if structural_preservation and not punctuation_requested:
                 return list(tokens or [])
             normalized = _normalize_inline_tokens(tokens, punctuation_enabled and not new_punctuation_enabled)
             if not new_punctuation_enabled:
@@ -1898,6 +2072,7 @@ class DocxImporter:
         data = DocumentData(
             filepath=original_filepath,
             strict_preservation=strict_preservation,
+            processing_strategy=processing_strategy,
             recognition_mode=recognition_mode,
         )
         source_visible_texts = [paragraph.text for paragraph in doc.paragraphs if paragraph.text]
@@ -2009,7 +2184,14 @@ class DocxImporter:
                 # suppress the split.
                 if (has_line_break
                         and _should_split_structural_line_breaks(split_lines, following_text)):
-                    for li, split_line in enumerate(split_lines):
+                    logical_lines = []
+                    for split_line in split_lines:
+                        if split_line:
+                            logical_lines.extend(
+                                _split_inline_heading_body(split_line)
+                                if structural_preservation else [split_line]
+                            )
+                    for li, split_line in enumerate(logical_lines):
                         if not split_line:
                             continue
                         line_numbering = pf.numbering_prefix if li == 0 else _detect_numbering_prefix(split_line)
@@ -2021,7 +2203,7 @@ class DocxImporter:
                             paragraph_index=len(flat_lines),
                             is_new_line=(li > 0),
                         )
-                        flat_lines.append(("text", split_line, sub_pf, [], sectPr if li == len(split_lines) - 1 else None))
+                        flat_lines.append(("text", split_line, sub_pf, [], sectPr if li == len(logical_lines) - 1 else None))
                     continue
                 if not line and has_page_break:
                     line = text
@@ -2038,7 +2220,13 @@ class DocxImporter:
                 preserved_tokens = [] if boundary_whitespace_trimmed else normalized_tokens
                 flat_lines.append(("text", line, sub_pf, preserved_tokens, sectPr))
                 continue
-            for li, line in enumerate(text.split('\n')):
+            logical_lines = []
+            for source_line in text.split('\n'):
+                logical_lines.extend(
+                    _split_inline_heading_body(source_line)
+                    if structural_preservation else [source_line]
+                )
+            for li, line in enumerate(logical_lines):
                 line = line.strip()
                 line = normalize_text(line)
                 if not line:
@@ -2052,7 +2240,7 @@ class DocxImporter:
                     paragraph_index=len(flat_lines),
                     is_new_line=(li > 0),
                 )
-                flat_lines.append(("text", line, sub_pf, [], sectPr if li == len(text.split('\n')) - 1 else None))
+                flat_lines.append(("text", line, sub_pf, [], sectPr if li == len(logical_lines) - 1 else None))
 
         ctx = DetectionContext()
         # 预扫描：找到最后一个正文/标题行的位置，之后的区域视为文档尾部
@@ -2137,10 +2325,12 @@ class DocxImporter:
                     type_id, meta_patch, prefix = detect_paragraph_type(line, sub_pf, ctx, rules)
                     clean_text = strip_numbering(line, prefix)
 
-            if strict_preservation:
+            if strict_preservation or structural_preservation:
                 clean_text = line
                 meta_patch = dict(meta_patch or {})
                 meta_patch.pop("numbering", None)
+                if meta_patch.get("strip_inferred_speech_numbering"):
+                    clean_text = _strip_inferred_speech_numbering(line)
 
             if ctx.attachment_page_mode and type_id == "body":
                 type_id = "attachment_body"
@@ -2217,6 +2407,8 @@ class DocxImporter:
         ]
         if strict_preservation:
             self._record_strict_normalization_suggestions(data)
+        elif structural_preservation:
+            _normalize_tail_structures(data.paragraphs, normalize_text=False)
         else:
             _normalize_tail_structures(data.paragraphs)
             self._reorder_attachment_note_before_signature(data.paragraphs)
@@ -2230,21 +2422,31 @@ class DocxImporter:
         apply_recognition(data, replace(DEFAULT_CONFIG, mode=recognition_mode))
         # (old classification loop removed — replaced by flat_lines single pass above)
 
+        if structural_preservation and numbering_enabled:
+            # Smart mode keeps all non-numbering source text intact.  The user
+            # may still explicitly request canonical heading sequences through
+            # the numbering switch; compute those only after final recognition
+            # has settled every heading level.
+            self._assign_numbering(data.paragraphs, rules)
+            for paragraph in data.paragraphs:
+                if paragraph.type_id.startswith("heading"):
+                    paragraph.meta["numbering_correction"] = True
+
         # 第三半：编号连续性检查（需在编号赋值之后）
-        if not strict_preservation:
+        if processing_strategy == "normalize":
             self._fix_numbering_gaps(data.paragraphs)
 
         # 第三步：剥离 Word 自动编号
-        if not strict_preservation:
+        if processing_strategy == "normalize":
             for para in doc.paragraphs:
                 self._strip_auto_numbering(para)
 
         logger.info(
-            "[导入] file_sha256=%s paragraphs=%s tables=%s strict=%s recognition=%s",
+            "[导入] file_sha256=%s paragraphs=%s tables=%s strategy=%s recognition=%s",
             hashlib.sha256(str(original_filepath).encode("utf-8")).hexdigest()[:12],
             len(data.paragraphs),
             len(data.tables),
-            strict_preservation,
+            processing_strategy,
             recognition_mode,
         )
         return data

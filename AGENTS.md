@@ -83,6 +83,12 @@ pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m pytest tests/test_struct
 28. 触发场景：导入包的 `word/_rels/document.xml.rels` 含 `Target="../NULL"` 时，必须用 XML 解析器按 `Target` 属性删除关系，不能用只匹配无前缀 `<Relationship>` 的正则；序列化后的关系节点常带 `ns0:` 等命名空间前缀。修改后运行 `tests/test_importer_broken_relationships.py` 和 DOCX 完整性测试。
 29. 已有外部版头检测必须限制在正文流开头的连续有界前缀；“红色机关标志 + 结构化发文字号”或“结构化发文字号 + 红色段落边框分割线”可作为强信号。开头只有整行结构化发文字号时标记为不完善版头；只有符合机关名称形态的“××文件”时，还必须通过后续独立标题或文号、签发人、红线等版头信号进行上下文验证，若其后直接进入主送机关或正文则不得按版头删除。正文中的文件编号引用和“关于……文件”标题不得触发。单个红字、图片或红色边框不足以认定版头。识别成功后，保护终点只能到发文字号/签发人及其后紧邻的分割线，后续红色、大字号或带边框的公文标题不得扩大保护范围。修改后运行 `tests/test_letterhead_engine.py`，并用含乱格式红色标题的样本确认标题仍使用 `DCT-Title`。
 30. 横向分节沿用纵向页面参数时，应按物理边旋转页边距：横向上=纵向左、下=纵向右、左=纵向下、右=纵向上；不得只交换页宽页高。每个分节的 `w:docGrid/@w:charSpace` 必须依据该节最终 OOXML 页宽和左右边距单独计算，不能复用纵向 `-842`。修改后运行 `tests/test_body_order_export.py` 和 `tests/test_structured_layout_quality.py`。
+31. 版头开关关闭时，只保留首页开头已识别的外部版头；若连续有界区域仅包含标准或兼容发文字号、可选签发人且没有红色分割线，则只在最后一行签发人后补一个 `DCT-LetterheadSeparator`，不得替换机关、文号或签发人。已有红线、正文引用文号、图片等不确定版头一律不补线。修改后运行 `tests/test_letterhead_engine.py`。
+32. 触发场景：网页请求 `mode=smart` 或 `processing_mode=smart` 时，必须解析为 `structural`（结构拆分保真）策略，不得在服务端改写成 `strict_preservation=True`。该策略只拆分有充分证据的软换行结构、行内编号标题正文和可靠尾部块；保留每个可见文本片段原文，不执行标点转换、编号修复、同级合并或自动编号。尾部在边界完整时允许按“附件说明 → 附件项 → 落款单位 → 日期”重排。`strict` 继续用于完全保留物理段落，`normalize` 才允许旧的文字与编号规范化。修改后至少运行 `tests/test_processing_flags.py tests/test_style_config_features.py tests/test_recognition_decoder.py tests/test_signature_detection.py tests/test_letterhead_engine.py`。
+33. 触发场景：在结构拆分保真模式中识别到成文日期、一级标题和发文字号时，成文日期仍必须转为阿拉伯数字日期，独立一级标题末尾“。”必须删除，发文字号必须使用 `DCT-DocumentNumber` 居中且无首行缩进。常见机关简称只可作为落款识别证据，禁止在没有可靠全称来源时擅自扩写文本。修改后至少运行 `tests/test_processing_flags.py tests/test_signature_detection.py tests/test_engine_heading_spacing.py tests/test_letterhead_engine.py`。
+34. 触发场景：用户开启前端“序号规范”时，结构拆分保真模式也必须在最终识别完成后重建一至四级标题序号；仅替换标题前缀，不改写标题正文、标点或段落顺序。渲染前必须同时清除源前缀“一、”“（一）”“1.”“（1）”及其错误编号，防止重复编号。关闭开关时保留原始编号。修改后至少运行 `tests/test_processing_flags.py tests/test_engine_heading_spacing.py tests/test_config_driven_styles.py`。
+35. 触发场景：`smart`（结构拆分保真）模式不是关闭所有修复。默认保留正文和未启用的文字改写；但用户显式开启的标点修复、序号规范、页码、版头、表格优化、清理、特殊加粗和落款版式必须按各自开关生效。标点修复关闭时不得转换任何普通文本标点；开启时按安全标点规则处理。修改后至少运行 `tests/test_processing_flags.py tests/test_punctuation_engine.py tests/test_config_driven_styles.py`。
+36. 触发场景：文首“在……上的讲话”被 Word 的 Heading 1 样式或既有错误输出误标为一级标题时，必须优先识别为 `title`，不得生成“一、”。仅在首个可分类段落、无冒号且正文去除单个“一、”后仍完整符合“在……上的讲话”时，才移除该推断出的错误前缀；普通一级标题不得受影响。若讲话材料的“职务姓名”和括号日期通过软换行粘连，或编号标题后通过软换行粘连正文，`smart` 模式必须拆为独立结构段，避免职务日期继承正文样式或正文继承标题样式。修改后至少运行 `tests/test_processing_flags.py tests/test_importer_heading_flow.py tests/test_engine_heading_spacing.py tests/test_recognition_decoder.py`。
 
 ## 可移动服务器部署
 
@@ -99,6 +105,8 @@ pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m pytest tests/test_struct
 4. 验证命令应确认新 `pycharm64` 进程 `Responding=True` 且出现项目窗口标题。
 
 ## 数据和密钥保护
+
+已接收的上传原件、生成文件、任务日志和任务记录采用永久保留策略；不得通过 TTL、启动清理、后台定时清理或管理员清理入口删除它们。仅未完成、未通过校验或未入队的上传半成品可以删除。修改存储逻辑后至少验证成功任务和失败任务的原件均可保留、下载结果仍可访问。
 
 不要提交或上传：
 
@@ -130,3 +138,16 @@ GitHub 发布以 `docs/GITHUB_UPLOAD_GUIDE.md` 和 `scripts/publish_to_github.ps
 批量测试必须在 `test_docx/end_docx` 生成 JSON 和文字报告，记录总数、成功/失败数、各级问题数、模板匹配、段落和标题统计、版头/落款/附件识别、文字新增/丢失、表格图片、空白页、处理耗时和错误信息。报告不得包含完整正文、密钥、Cookie 或完整日志。若没有可用渲染器，必须明确记录“未执行视觉渲染检查”，不能据此断言没有空白页。
 
 以后生成新的测试 DOCX，默认放入 `test_docx/strat_docx` 并使用连续编号；不得放入 `end_docx`，不得覆盖原始材料或模板。临时脚本可以在仓库外或 `scripts` 目录使用，但不得复制到 `test_docx`，测试完成后清理临时文件。
+
+除标准 50 篇外，`test_docx/测试文稿` 是长期专项回归集。每次执行“全部测试”或发布前批量验证时，必须同时处理该目录下全部 DOCX：结果写入其下 `测试目录`，每篇先写临时文件并通过 DOCX/ZIP 完整性和文字读取检查后再替换本轮结果。该专项集没有统一对照模板时，不得把不同内容的文档与 `correct_docx` 的单一模板直接判为格式失败；应单独报告处理成功/失败、结构复核项、文字变化、页面渲染结果和人工抽查问题。最终总报告须分别列出标准集与专项集的数量、通过情况和未执行的视觉检查。
+
+## 识别审核诊断
+
+1. 候选排序分数和用户可见的审核置信度不是同一个概念。`recognition_confidence` 保留为原始候选分布诊断，不得直接据此向用户宣称“识别置信度低”。
+2. 审核结论使用 `review_confidence`、`review_level`、`review_reasons` 和脱敏的 `evidence_summary`。明确编号、文号、日期、附件、题注等结构证据，或与旧分类一致的结果，应优先判为 `confirmed`；有强结构证据的重新分类只记录为 `info`。
+3. 只有弱证据、候选接近且可能改变最终结构的段落，才标为 `review` 或 `critical_review` 并进入用户端人工复核列表。修改诊断规则后至少运行：
+
+```pwsh
+pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m pytest -q tests/test_recognition_decoder.py tests/test_audit_hardening.py"
+pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m ruff check src tests scripts"
+```

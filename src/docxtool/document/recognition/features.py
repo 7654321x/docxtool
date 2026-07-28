@@ -174,8 +174,12 @@ def extract_features(block: DocumentBlock, previous: DocumentBlock | None = None
             level = 4 if inner and inner[0].isdigit() else 2
         elif prefix[0].isdigit():
             level = 3
-    kv = KEY_VALUE_RE.match(compact_content)
-    label = kv.group("label") if kv else None
+    # A key-value line is a single visible line.  Collapsing manual line
+    # breaks first turns a date followed by “附件：...” into a fabricated
+    # label/value pair and can steal an entire document tail.
+    has_line_break = "\n" in raw or "\r" in raw
+    kv = None if has_line_break else KEY_VALUE_RE.fullmatch(content)
+    label = re.sub(r"\s+", "", kv.group("label")) if kv else None
     value = kv.group("value") if kv else None
     if label and label in MEETING_LABELS:
         kv_level = 0

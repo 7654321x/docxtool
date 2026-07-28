@@ -80,7 +80,7 @@ def test_missing_null_and_disabled_do_not_generate(tmp_path):
         document = Document(output)
         assert "DCT-LetterheadMark" not in style_ids(document)
         assert [paragraph.text for paragraph in document.paragraphs if paragraph.text] == ["公文标题", "正文内容。"]
-        assert stats["letterhead_action"] == "preserved-disabled"
+        assert stats["letterhead_action"] == "none"
 
 
 def test_single_mark_document_number_separator_and_title_spacing(tmp_path):
@@ -557,7 +557,7 @@ def test_disabled_letterhead_preserves_external_and_unknown_blocks(tmp_path):
         page_number_enabled=False,
         letterhead_options=disabled,
     )
-    assert external_stats["letterhead_action"] == "preserved-disabled"
+    assert external_stats["letterhead_action"] == "preserved"
     assert [p.text for p in Document(external_output).paragraphs[:3]] == [
         "测试机关文件",
         "测发〔2026〕3号",
@@ -587,8 +587,101 @@ def test_disabled_letterhead_preserves_external_and_unknown_blocks(tmp_path):
         page_number_enabled=False,
         letterhead_options=disabled,
     )
-    assert unknown_stats["letterhead_action"] == "preserved-disabled"
+    assert unknown_stats["letterhead_action"] == "ambiguous"
     assert Document(unknown_output).paragraphs[0]._p.find(".//" + qn("w:drawing")) is not None
+
+
+def test_disabled_letterhead_adds_separator_after_leading_document_number(tmp_path):
+    source = tmp_path / "number-only.docx"
+    document = Document()
+    document.add_paragraph("市委办〔2026〕1号")
+    document.add_paragraph("关于推进重点工作的通知")
+    document.add_paragraph("正文内容。")
+    document.save(source)
+
+    imported = DocxImporter().load(str(source), rules(), features={})
+    assert imported.letterhead_detection.details == (
+        "incomplete-document-number", "bounded-prefix"
+    )
+    output = tmp_path / "number-only-output.docx"
+    stats = export_doc(
+        imported,
+        rules(),
+        PageSettings(),
+        str(output),
+        page_number_enabled=False,
+        letterhead_options={**default_letterhead_config(), "enabled": False},
+    )
+
+    result = Document(output)
+    assert stats["letterhead_action"] == "separator-added"
+    assert [paragraph.text for paragraph in result.paragraphs[:3]] == [
+        "市委办〔2026〕1号", "", "关于推进重点工作的通知"
+    ]
+    assert result.paragraphs[1].style.style_id == "DCT-LetterheadSeparator"
+    assert spacing_value(result.paragraphs[1], "afterLines") == "200"
+    assert len(result._element.findall(".//" + qn("w:pBdr") + "/" + qn("w:bottom"))) == 1
+
+
+def test_disabled_letterhead_adds_separator_after_last_signer_line(tmp_path):
+    source = tmp_path / "number-signer.docx"
+    document = Document()
+    document.add_paragraph("市委办〔2026〕1号")
+    document.add_paragraph("签发人：张三")
+    document.add_paragraph("李四")
+    document.add_paragraph("关于推进重点工作的通知")
+    document.save(source)
+
+    imported = DocxImporter().load(str(source), rules(), features={})
+    assert imported.letterhead_detection.details == (
+        "incomplete-document-number-signer", "bounded-prefix"
+    )
+    output = tmp_path / "number-signer-output.docx"
+    stats = export_doc(
+        imported,
+        rules(),
+        PageSettings(),
+        str(output),
+        page_number_enabled=False,
+        letterhead_options={**default_letterhead_config(), "enabled": False},
+    )
+
+    result = Document(output)
+    assert stats["letterhead_action"] == "separator-added"
+    assert [paragraph.text for paragraph in result.paragraphs[:5]] == [
+        "市委办〔2026〕1号", "签发人：张三", "李四", "", "关于推进重点工作的通知"
+    ]
+    assert result.paragraphs[3].style.style_id == "DCT-LetterheadSeparator"
+
+
+def test_disabled_letterhead_does_not_duplicate_existing_separator(tmp_path):
+    source = tmp_path / "complete-external.docx"
+    document = Document()
+    document.add_paragraph("市委办〔2026〕1号")
+    separator = document.add_paragraph()
+    borders = OxmlElement("w:pBdr")
+    bottom = OxmlElement("w:bottom")
+    bottom.set(qn("w:val"), "single")
+    bottom.set(qn("w:color"), "FF0000")
+    borders.append(bottom)
+    separator._p.get_or_add_pPr().append(borders)
+    document.add_paragraph("关于推进重点工作的通知")
+    document.save(source)
+
+    imported = DocxImporter().load(str(source), rules(), features={})
+    output = tmp_path / "complete-external-output.docx"
+    stats = export_doc(
+        imported,
+        rules(),
+        PageSettings(),
+        str(output),
+        page_number_enabled=False,
+        letterhead_options={**default_letterhead_config(), "enabled": False},
+    )
+
+    result = Document(output)
+    assert stats["letterhead_action"] == "preserved"
+    assert len(result._element.findall(".//" + qn("w:pBdr") + "/" + qn("w:bottom"))) == 1
 
 
 def test_random_red_text_and_body_drawing_do_not_create_letterhead_block():

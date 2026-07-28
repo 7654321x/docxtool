@@ -392,10 +392,12 @@ def detect_letterhead(document) -> LetterheadDetection:
     ]
     for signer_index in tuple(signer_indexes):
         following_separators = [index for index in separator_indexes if index > signer_index]
-        if not following_separators:
-            continue
-        separator_index = min(following_separators)
-        for index in range(signer_index + 1, separator_index):
+        # A missing separator is precisely the incomplete-header case we need
+        # to repair. Continue recognizing bounded signer-name rows until a
+        # separator or the first ordinary paragraph, so the new separator is
+        # placed after the final signer instead of splitting that block.
+        end_index = min(following_separators) if following_separators else len(top)
+        for index in range(signer_index + 1, end_index):
             if _is_blank_body_paragraph(top[index], texts[index]):
                 continue
             if top[index].tag != qn("w:p") or not _looks_like_signer_continuation(texts[index]):
@@ -758,6 +760,57 @@ def _move_before(elements: list, anchor) -> None:
         index += 1
 
 
+def _move_after_body_index(elements: list, document, body_index: int) -> bool:
+    """Place newly created elements directly after a preserved header block."""
+
+    body_children = [
+        child
+        for child in document._body._element.iterchildren()
+        if child.tag != qn("w:sectPr")
+    ]
+    if not 0 <= body_index < len(body_children):
+        return False
+    anchor = body_children[body_index]
+    parent = anchor.getparent()
+    if parent is None:
+        return False
+    index = parent.index(anchor) + 1
+    for element in elements:
+        parent.remove(element)
+        parent.insert(index, element)
+        index += 1
+    return True
+
+
+def _detection_has_separator(document, detection: LetterheadDetection) -> bool:
+    body_children = [
+        child
+        for child in document._body._element.iterchildren()
+        if child.tag != qn("w:sectPr")
+    ]
+    return any(
+        0 <= index < len(body_children)
+        and body_children[index].tag == qn("w:p")
+        and _has_red_separator_border(body_children[index])
+        for index in detection.protected_body_indexes
+    )
+
+
+def _can_fill_missing_separator(document, detection: LetterheadDetection) -> bool:
+    """Only complete a bounded document-number header, never an ambiguous block."""
+
+    if detection.status != "unknown" or not detection.protected_body_indexes:
+        return False
+    detail = detection.details[0] if detection.details else ""
+    if detail not in {
+        "incomplete-document-number",
+        "incomplete-document-number-signer",
+        "compatible-document-number",
+    }:
+        return False
+    return not _detection_has_separator(document, detection)
+
+
 def _set_managed_property(document) -> None:
     package = document.part.package
     custom_part = next((part for part in package.parts if str(part.partname) == "/docProps/custom.xml"), None)
@@ -837,10 +890,26 @@ def apply_letterhead(
     normalized = normalize_letterhead_config(config)
     detection = detection or detect_letterhead(document)
     if not normalized["enabled"]:
-        if detection.status == "managed":
-            ensure_letterhead_styles(document, rules, settings or PageSettings())
-            _set_managed_property(document)
-        return LetterheadResult("preserved-disabled", detection.status)
+        if _can_fill_missing_separator(document, detection):
+            resolved_settings = settings or PageSettings()
+            ensure_letterhead_styles(document, rules, resolved_settings)
+            separator = _add_separator(document, resolved_settings)
+            last_header_index = max(detection.protected_body_indexes)
+            if _move_after_body_index([separator._p], document, last_header_index):
+                return LetterheadResult(
+                    "separator-added",
+                    detection.status,
+                    managed_paragraphs=1,
+                    protected_elements=[separator._p],
+                )
+            # A failed placement must not leave an orphan separator at the end.
+            separator._p.getparent().remove(separator._p)
+            return LetterheadResult("ambiguous", detection.status)
+        if detection.status in {"managed", "recognized_external"}:
+            return LetterheadResult("preserved", detection.status)
+        if detection.status == "none":
+            return LetterheadResult("none", detection.status)
+        return LetterheadResult("ambiguous", detection.status)
     if detection.status != "none":
         remove_detected_letterhead(document, detection)
     resolved_settings = settings or PageSettings()

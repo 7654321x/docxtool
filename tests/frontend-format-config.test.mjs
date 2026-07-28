@@ -165,6 +165,8 @@ assert.equal(defaultConfig.page_number.font_size_pt, 14);
 assert.equal(defaultConfig.page_number.bold, false);
 assert.equal(defaultConfig.signature_block.mode, "without_seal");
 assert.equal(defaultConfig.output_suffix, "_排版");
+assert.equal(defaultConfig.mode, "smart");
+assert.equal(defaultConfig.processing_mode, "smart");
 assert.equal(defaultConfig.styles.length, 10);
 assert.equal(defaultConfig.styles[9].name, "正文上标");
 assert.equal(Object.hasOwn(defaultConfig.features, "page_number_enabled"), false);
@@ -235,6 +237,8 @@ assert.equal(effectiveGlobalConfig.output_suffix, "_测试");
 
 elements.get("signatureBlockMode").value = "with_seal";
 assert.equal(frontend.collectConfig().signature_block.mode, "with_seal");
+elements.get("settingMode").value = "strict";
+assert.equal(frontend.collectConfig().processing_mode, "strict");
 
 assert.match(html, /href="#settingLetterhead"><span>01<\/span>版头设置/);
 assert.match(html, /letterhead-block-head[^>]*><h3>版头设置<\/h3><label class="switch" title="启用版头设置">/);
@@ -252,6 +256,10 @@ assert.doesNotMatch(html, /<option>- 1 -<\/option>|<option>1 \/ n<\/option>/);
 assert.match(html, /fetch\(api\('\/upload'\)/);
 assert.match(html, /'X-Format-Config':base64UrlJson\(config\)/);
 assert.match(html, /'X-Format-Config-Encoding':'base64url-json'/);
+assert.match(html, /<form class="auth-form" id="authForm" autocomplete="on"/);
+assert.match(html, /id="authPassword"[^>]*autocomplete="current-password"/);
+assert.match(html, /authPassword'\)\.autocomplete=registering\?'new-password':'current-password'/);
+assert.doesNotMatch(html, /<form class="auth-form" id="authForm" autocomplete="off"/);
 for (const id of ["styleMatrixBody", "marginTop", "pageNumberEnabled", "specialBold"]) {
   assert.equal((html.match(new RegExp(`id="${id}"`, "g")) || []).length, 1);
 }

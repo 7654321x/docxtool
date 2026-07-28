@@ -38,9 +38,15 @@ def test_template_letterhead_options_require_mark_and_dispatch_number(tmp_path: 
     assert batch_test_docx.letterhead_options_from_template(template) is None
 
 
-def test_batch_defaults_to_normal_formatting_mode() -> None:
+def test_batch_defaults_to_frontend_structural_mode() -> None:
     assert batch_test_docx.parse_args([]).strict_preservation is False
+    assert batch_test_docx.parse_args([]).mode == "structural"
     assert batch_test_docx.parse_args(["--strict-preservation"]).strict_preservation is True
+    assert batch_test_docx.parse_args(["--mode", "normalize"]).mode == "normalize"
+
+
+def test_special_output_directory_is_fixed_to_long_term_regression_location() -> None:
+    assert batch_test_docx._validate_special_output_dir(batch_test_docx.SPECIAL_OUTPUT_DIR) == batch_test_docx.SPECIAL_OUTPUT_DIR.resolve()
 
 
 def test_batch_report_marks_visual_rendering_as_not_run() -> None:

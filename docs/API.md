@@ -158,7 +158,8 @@ GET /version
 - `version`: 应用版本号。
 - `started_at`: 服务启动时间。
 - `bind_host`: 当前绑定地址。
-- `file_ttl_seconds`: 上传原件、输出文件和任务临时文件的保留时间，默认 604800 秒（7 天）。
+- `file_retention_policy`: 用户文件保留策略，当前固定为 `permanent`。
+- `file_ttl_seconds`: 兼容字段；永久保留时为 `null`。
 - `max_upload_mb`: 单文件最大上传大小，默认 10 MB。
 - `max_workers`: 后台处理线程数。
 - `max_queue`: 最大排队容量。
@@ -187,7 +188,7 @@ PUT /api/upload
 - `X-Preset-Id: 可选，当前模板 ID`
 - `X-Preset-Name: 可选，URL 编码后的当前模板名称`
 - `X-Template-Type: 可选，`builtin` 或 `custom`
-- `X-Processing-Mode: 可选，处理模式，例如 `smart`
+- `X-Processing-Mode: 可选，处理模式：`smart`、`structural`、`strict` 或 `normalize`。若同时提供配置中的处理模式，二者必须一致。
 - `X-Format-Config-Encoding: 可选；传入前端设置时必须为 `base64url-json`
 - `X-Format-Config: 可选，base64url 编码后的 JSON 配置`
 
@@ -404,9 +405,9 @@ curl "http://127.0.0.1:9527/download/b3e4d8a8-0f3a-4f1b-b8c3-5f8b35d02c11" \
 | 400 | `INVALID_TASK_ID` | 任务 ID 格式错误 |
 | 400 | `FILE_NOT_READY` | 文件尚未生成 |
 | 403 | `PROXY_REQUIRED` | 缺少或错误的 `X-Proxy-Secret` |
-| 410 | `FILE_EXPIRED` | 输出文件已过期或被清理 |
+| 410 | `FILE_EXPIRED` | 文件路径不可用或被服务器管理员手动移除 |
 
-上传原件、输出文件和任务临时文件默认保留 604800 秒（7 天），后台清理线程按 `CLEANUP_INTERVAL_MINUTES` 检查过期文件。下载不会立即删除文件。
+上传原件、输出文件、任务日志和任务记录永久保留；后台不会按时间自动清理。下载不会删除文件。
 
 ## 4. 管理与监控接口
 
@@ -530,13 +531,13 @@ GET /limit?enabled=1&window_seconds=3600&count=10&token={ADMIN_TOKEN}
 
 成功后 `303` 重定向回监控面板。
 
-### 4.7 清理过期输出文件
+### 4.7 历史清理入口
 
 ```http
-GET /cleanup?token={ADMIN_TOKEN}
+POST /cleanup
 ```
 
-手动清理超过保留时间的输出文件。成功后 `303` 重定向回监控面板。
+为兼容已有管理员书签保留该入口，但永久保留策略下不会删除任何用户文件。成功后 `303` 重定向回监控面板。
 
 ### 4.8 查看任务日志
 

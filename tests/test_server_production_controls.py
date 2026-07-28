@@ -18,6 +18,7 @@ class ServerProductionControlsTest(unittest.TestCase):
         self.old_db = server._DB_PATH
         self.old_log_dir = server.LOG_DIR
         self.old_output_dir = server.OUTPUT_DIR
+        self.old_upload_dir = server.UPLOAD_DIR
         self.old_admin_token = server.ADMIN_TOKEN
         self.old_proxy_secret = server.PROXY_SECRET
         self.old_frontend_origin = server.FRONTEND_ORIGIN
@@ -26,6 +27,7 @@ class ServerProductionControlsTest(unittest.TestCase):
         server._DB_PATH = str(root / "stats.db")
         server.LOG_DIR = str(root / "logs")
         server.OUTPUT_DIR = str(root / "outputs")
+        server.UPLOAD_DIR = str(root / "uploads")
         server.ADMIN_TOKEN = ""
         server.PROXY_SECRET = ""
         server.FRONTEND_ORIGIN = ""
@@ -33,6 +35,7 @@ class ServerProductionControlsTest(unittest.TestCase):
         server.PRODUCTION_MODE = False
         os.makedirs(server.LOG_DIR, exist_ok=True)
         os.makedirs(server.OUTPUT_DIR, exist_ok=True)
+        os.makedirs(server.UPLOAD_DIR, exist_ok=True)
         server._sql_init()
         with server.TASKS_LOCK:
             server.TASKS.clear()
@@ -43,6 +46,7 @@ class ServerProductionControlsTest(unittest.TestCase):
         server._DB_PATH = self.old_db
         server.LOG_DIR = self.old_log_dir
         server.OUTPUT_DIR = self.old_output_dir
+        server.UPLOAD_DIR = self.old_upload_dir
         server.ADMIN_TOKEN = self.old_admin_token
         server.PROXY_SECRET = self.old_proxy_secret
         server.FRONTEND_ORIGIN = self.old_frontend_origin
@@ -54,9 +58,10 @@ class ServerProductionControlsTest(unittest.TestCase):
             server.TASK_QUEUE.clear()
         self.tmp.cleanup()
 
-    def test_default_file_ttl_is_at_most_twenty_four_hours(self):
-        self.assertLessEqual(server.FILE_TTL, 24 * 60 * 60)
-        self.assertEqual(server.TASK_RETENTION_HOURS, 24)
+    def test_user_files_and_task_records_have_permanent_retention(self):
+        self.assertEqual(server.FILE_RETENTION_POLICY, "permanent")
+        self.assertIsNone(server.FILE_TTL)
+        self.assertIsNone(server.TASK_RETENTION_HOURS)
 
     def test_default_tokens_allow_simple_startup(self):
         self.assertEqual(server.DEFAULT_ADMIN_TOKEN, "7654321xxx")
@@ -179,10 +184,10 @@ class ServerProductionControlsTest(unittest.TestCase):
             "message": "排队中，前方还有 2 个任务",
         })
 
-    def test_task_temp_paths_live_under_project_runtime_dir(self):
-        task_tmp = server._task_tmp_input_path("task-a", "测试 文件.docx")
-        self.assertIn(os.path.join("runtime", "tmp"), task_tmp)
-        self.assertTrue(task_tmp.endswith(os.path.join("task-a", "input.docx")))
+    def test_accepted_upload_paths_live_under_project_upload_dir(self):
+        task_upload = server._task_upload_input_path("task-a", "测试 文件.docx")
+        self.assertTrue(task_upload.startswith(server.UPLOAD_DIR))
+        self.assertTrue(task_upload.endswith(os.path.join("task-a", "input.docx")))
 
     def test_enqueue_task_is_visible_in_monitor_immediately(self):
         queued_path = Path(server.OUTPUT_DIR) / "queued-input.docx"
@@ -317,7 +322,7 @@ class ServerProductionControlsTest(unittest.TestCase):
 
         self.assertEqual(observed_statuses, ["processing"])
         self.assertEqual(server._public_task_state("task-a")["status"], "done")
-        self.assertFalse(input_path.exists())
+        self.assertTrue(input_path.exists())
 
     def test_invalid_generated_docx_is_not_marked_done_or_downloadable(self):
         input_path = Path(server.OUTPUT_DIR) / "input.docx"
@@ -389,7 +394,7 @@ class ServerProductionControlsTest(unittest.TestCase):
         self.assertEqual(state["message"], "排版失败")
         self.assertNotIn("error", state)
         self.assertNotIn("error_message", state)
-        self.assertFalse(input_path.exists())
+        self.assertTrue(input_path.exists())
         self.assertFalse((Path(server.OUTPUT_DIR) / "task-invalid").exists())
 
         with server._SQL_LOCK:
@@ -404,24 +409,22 @@ class ServerProductionControlsTest(unittest.TestCase):
         self.assertIn("MISSING_REL_TARGET", row["error_message"])
         self.assertEqual(row["output_path"], "")
 
-    def test_failed_input_retention_requires_explicit_opt_in(self):
+    def test_processed_input_is_retained_even_when_formatting_fails(self):
         result = {
             "status": "error",
             "error_code": "TASK_PROCESSING_ERROR",
             "error_message": "internal",
         }
-        for keep_failed in (False, True):
-            task_id = f"failed-retention-{keep_failed}"
-            task_dir = Path(server.RUNTIME_TMP_DIR) / task_id
-            task_dir.mkdir(parents=True, exist_ok=True)
-            input_path = task_dir / "input.docx"
-            input_path.write_bytes(b"input")
-            with patch.object(server, "KEEP_FAILED_INPUTS", keep_failed), \
-                 patch.object(server, "_task_process_direct", return_value=dict(result)), \
-                 patch.object(server, "_record_task_result"):
-                server._process_task(task_id, str(input_path), "input.docx")
-            self.assertEqual(input_path.exists(), keep_failed)
-            server._cleanup_task_tmp(task_id, str(input_path))
+        task_id = "failed-retention"
+        task_dir = Path(server.UPLOAD_DIR) / task_id
+        task_dir.mkdir(parents=True, exist_ok=True)
+        input_path = task_dir / "input.docx"
+        input_path.write_bytes(b"input")
+        with patch.object(server, "_task_process_direct", return_value=dict(result)), \
+             patch.object(server, "_record_task_result"):
+            server._process_task(task_id, str(input_path), "input.docx")
+        self.assertTrue(input_path.exists())
+        server._cleanup_incomplete_upload(task_id, str(input_path))
 
     def test_processing_task_has_no_queue_ahead(self):
         with server.TASKS_LOCK:
@@ -490,21 +493,21 @@ class ServerProductionControlsTest(unittest.TestCase):
         self.assertTrue(server._file_api_authorized({}, ("127.0.0.1", 1234)))
         self.assertTrue(server._file_api_authorized({}, ("::1", 1234)))
 
-    def test_cleanup_expired_outputs_deletes_only_old_files(self):
+    def test_cleanup_expired_outputs_keeps_all_files(self):
         old_file = Path(server.OUTPUT_DIR) / "old.docx"
         new_file = Path(server.OUTPUT_DIR) / "new.docx"
         old_file.write_text("old", encoding="utf-8")
         new_file.write_text("new", encoding="utf-8")
-        old_mtime = time.time() - server.FILE_TTL - 60
+        old_mtime = time.time() - 10 * 365 * 24 * 60 * 60
         os.utime(old_file, (old_mtime, old_mtime))
 
         result = server._cleanup_expired_outputs()
 
-        self.assertEqual(result["removed"], 1)
-        self.assertFalse(old_file.exists())
+        self.assertEqual(result["removed"], 0)
+        self.assertTrue(old_file.exists())
         self.assertTrue(new_file.exists())
 
-    def test_cleanup_expired_inputs_deletes_only_old_files(self):
+    def test_cleanup_expired_inputs_keeps_all_files(self):
         old_runtime_tmp = server.RUNTIME_TMP_DIR
         with tempfile.TemporaryDirectory() as tmp:
             server.RUNTIME_TMP_DIR = str(Path(tmp) / "tmp")
@@ -514,13 +517,13 @@ class ServerProductionControlsTest(unittest.TestCase):
             new_file = task_dir / "new-input.docx"
             old_file.write_text("old", encoding="utf-8")
             new_file.write_text("new", encoding="utf-8")
-            old_mtime = time.time() - server.FILE_TTL - 60
+            old_mtime = time.time() - 10 * 365 * 24 * 60 * 60
             os.utime(old_file, (old_mtime, old_mtime))
 
             result = server._cleanup_expired_tmp()
 
-            self.assertEqual(result["removed"], 1)
-            self.assertFalse(old_file.exists())
+            self.assertEqual(result["removed"], 0)
+            self.assertTrue(old_file.exists())
             self.assertTrue(new_file.exists())
         server.RUNTIME_TMP_DIR = old_runtime_tmp
 
@@ -534,7 +537,8 @@ class ServerProductionControlsTest(unittest.TestCase):
         self.assertTrue(ready["checks"]["log_dir"])
 
         version = server._version_payload()
-        self.assertEqual(version["file_ttl_seconds"], 24 * 60 * 60)
+        self.assertEqual(version["file_retention_policy"], "permanent")
+        self.assertIsNone(version["file_ttl_seconds"])
         self.assertEqual(version["max_upload_mb"], 10)
         self.assertIn("started_at", version)
 
@@ -578,7 +582,8 @@ class ServerProductionControlsTest(unittest.TestCase):
         html = server._monitor_html(server.get_sql_stats(), session["csrf_token"])
 
         self.assertIn('/stats"', html)
-        self.assertIn('method="post" action="/cleanup"', html.replace("\n", " "))
+        self.assertIn("永久保留", html)
+        self.assertNotIn('method="post" action="/cleanup"', html.replace("\n", " "))
         self.assertIn('name="csrf_token" value="' + session["csrf_token"], html)
         self.assertNotIn('token=', html)
 

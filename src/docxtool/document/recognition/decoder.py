@@ -12,6 +12,7 @@ from .candidates import Candidate, CandidateContext, DEFAULT_PROVIDERS
 from .compatibility import to_paragraph_type
 from .config import DEFAULT_CONFIG, RecognitionConfig
 from .features import DocumentBlock, detect_mode, extract_blocks, extract_features
+from .global_context import DocumentContext, analyze_document_context
 from .model import DocumentMode, ParagraphType, RecognitionSummary, SectionKind
 from .validators import validate_diagnostics
 from .version import RECOGNITION_DIAGNOSTIC_SCHEMA_VERSION, RECOGNITION_ENGINE_VERSION, RECOGNITION_VERSION_TAG
@@ -20,6 +21,32 @@ from .version import RECOGNITION_DIAGNOSTIC_SCHEMA_VERSION, RECOGNITION_ENGINE_V
 _EMBEDDED_TITLE_RE = re.compile(r"^.{2,32}(?:规划|方案|办法|规定|报告|意见|要点|决定|通知)$")
 _SOURCE_NOTE_RE = re.compile(r"^(?:来源|注|说明|备注)\s*[:：]")
 _MEETING_LABELS = frozenset({"时间", "地点", "主持", "记录", "出席", "缺席", "列席", "参会", "参加", "议题", "议定事项", "会议名称", "会议时间", "会议地点"})
+_HEADING_TYPES = frozenset({
+    ParagraphType.HEADING_1,
+    ParagraphType.HEADING_2,
+    ParagraphType.HEADING_3,
+    ParagraphType.HEADING_4,
+})
+_STRUCTURE_SENSITIVE_TYPES = frozenset({
+    ParagraphType.MAIN_TITLE,
+    ParagraphType.TITLE_CONTINUATION,
+    ParagraphType.DISPATCH_NUMBER,
+    ParagraphType.RECIPIENT,
+    ParagraphType.SIGNATURE_ORG,
+    ParagraphType.SIGNATURE_DATE,
+    ParagraphType.ATTACHMENT_NOTE,
+    ParagraphType.ATTACHMENT_NOTE_ITEM,
+    ParagraphType.ATTACHMENT_PAGE_MARK,
+    ParagraphType.ATTACHMENT_TITLE,
+    ParagraphType.ATTACHMENT_BODY,
+})
+_FRONT_METADATA_LEGACY_TYPES = frozenset({
+    "role_name",
+    "author_line",
+    "date_line",
+    "meeting_line",
+    "location_line",
+})
 
 
 @dataclass(frozen=True)
@@ -28,6 +55,7 @@ class _Context(CandidateContext):
     previous_type: ParagraphType | None
     index: int
     boundary_before: bool = False
+    document_context: DocumentContext | None = None
 
 
 @dataclass(frozen=True)
@@ -114,6 +142,8 @@ def _transition(previous: ParagraphType | None, current: Candidate, previous_sec
         return 0.05
     if previous_section == SectionKind.SIGNATURE and current.section_hint == SectionKind.BODY:
         return -0.08
+    if previous_section in {SectionKind.BODY, SectionKind.SIGNATURE, SectionKind.ATTACHMENT_NOTE, SectionKind.ATTACHMENT_BODY} and current.section_hint in {SectionKind.HEADER, SectionKind.DISPATCH_META}:
+        return -0.40
     if mode == DocumentMode.MEETING_MINUTES and current.paragraph_type == ParagraphType.MEETING_META:
         return 0.04
     return 0.0
@@ -126,6 +156,22 @@ def _hard_veto(candidate: Candidate, features, mode: DocumentMode, context: _Con
     if features.date_match and candidate.paragraph_type == ParagraphType.TITLE_CONTINUATION:
         return True
     if features.recipient_match and candidate.paragraph_type == ParagraphType.TITLE_CONTINUATION:
+        return True
+    if (
+        str(features.legacy_type_id or "") in _FRONT_METADATA_LEGACY_TYPES
+        and candidate.paragraph_type in {ParagraphType.MAIN_TITLE, ParagraphType.TITLE_CONTINUATION}
+        and context.document_context is not None
+        and context.index in context.document_context.front_positions
+    ):
+        # Do not turn a stable post-title role/date line into another title
+        # merely because its source formatting was copied from the title.
+        return True
+    if (
+        candidate.paragraph_type in {ParagraphType.MAIN_TITLE, ParagraphType.TITLE_CONTINUATION}
+        and context.document_context is not None
+        and not context.document_context.before_body(context.index)
+        and not (candidate.source == "core" and candidate.score >= 0.85)
+    ):
         return True
     if features.key_value_label in _MEETING_LABELS and candidate.paragraph_type in {ParagraphType.HEADING_1, ParagraphType.HEADING_2, ParagraphType.HEADING_3, ParagraphType.HEADING_4}:
         return True
@@ -160,6 +206,129 @@ def _hard_veto(candidate: Candidate, features, mode: DocumentMode, context: _Con
     return False
 
 
+def _clamp(value: float) -> float:
+    return max(0.0, min(1.0, value))
+
+
+def _review_evidence(selected: Candidate | None, features, legacy_type_id: str, compatible: str | None, context_evidence=()) -> tuple[float, list[str], bool]:
+    """Return explainable evidence strength without treating softmax as certainty.
+
+    Candidate scores are ranking values assembled from several providers.  They
+    are intentionally close together, so their raw softmax distribution is a
+    poor user-facing confidence measure.  This helper instead records whether
+    the selected type has a concrete structural signal or stable agreement with
+    the existing classification.
+    """
+    if selected is None:
+        return 0.0, ["selection-missing"], False
+
+    evidence = list(selected.evidence)
+    direct = selected.hard
+    strength = 0.45
+    if selected.hard:
+        strength = 1.0
+        evidence.append("hard-structure")
+    elif selected.paragraph_type in _HEADING_TYPES and features.heading_shape_level:
+        evidence.append("explicit-numbering")
+        if (
+            selected.paragraph_type == ParagraphType.HEADING_1
+            and "parallel-heading-family" not in context_evidence
+            and "nested-heading-support" not in context_evidence
+        ):
+            strength = max(strength, 0.70)
+            evidence.append("single-heading-family")
+        else:
+            direct = True
+            strength = max(strength, 0.93)
+    elif selected.paragraph_type == ParagraphType.KEY_VALUE and features.key_value_label:
+        direct = True
+        strength = max(strength, 0.92)
+        evidence.append("explicit-key-value")
+    elif selected.paragraph_type == ParagraphType.SIGNATURE_DATE and features.date_match:
+        direct = True
+        strength = max(strength, 0.90)
+        evidence.append("date-shape")
+    elif selected.paragraph_type == ParagraphType.SIGNATURE_ORG and features.signature_org_match:
+        direct = True
+        strength = max(strength, 0.86)
+        evidence.append("signature-shape")
+    elif (
+        selected.paragraph_type in {ParagraphType.ROLE_NAME, ParagraphType.DATE_LINE}
+        and any(item in evidence for item in {"front-role-name-shape", "front-date-shape"})
+    ):
+        direct = True
+        strength = max(strength, 0.93)
+        evidence.append("front-metadata-shape")
+    elif selected.paragraph_type in {ParagraphType.MAIN_TITLE, ParagraphType.TITLE_CONTINUATION} and features.title_shape_score >= 0.8:
+        strength = max(strength, 0.80)
+        evidence.append("title-shape")
+
+    if compatible and compatible == legacy_type_id:
+        strength = max(strength, 0.84)
+        evidence.append("legacy-agreement")
+    elif compatible and legacy_type_id:
+        evidence.append("legacy-reclassified")
+
+    # Preserve order while making the public diagnostic deterministic.
+    return strength, list(dict.fromkeys(evidence)), direct
+
+
+def _review_assessment(
+    selected: Candidate | None,
+    features,
+    legacy_type_id: str,
+    compatible: str | None,
+    mapping_failed: bool,
+    final_score: float,
+    margin: float | None,
+    config: RecognitionConfig,
+    execution_mode: str,
+    context_evidence=(),
+) -> tuple[float, str, list[str], list[str]]:
+    """Classify review risk independently from candidate ranking diagnostics."""
+    evidence_strength, evidence_summary, direct_evidence = _review_evidence(
+        selected, features, legacy_type_id, compatible, context_evidence
+    )
+    score_strength = _clamp((final_score - 0.50) / 0.45)
+    margin_strength = 1.0 if margin is None else _clamp((margin + 0.02) / 0.20)
+    review_confidence = round(
+        _clamp(0.35 * score_strength + 0.25 * margin_strength + 0.40 * evidence_strength),
+        4,
+    )
+    type_changed = bool(compatible and compatible != legacy_type_id)
+    sensitive_change = bool(selected and selected.paragraph_type in _STRUCTURE_SENSITIVE_TYPES)
+    close_competition = margin is not None and margin < config.review_margin
+    reasons: list[str] = []
+
+    if mapping_failed:
+        reasons.append("TYPE_MAPPING_FAILED")
+        level = "critical_review"
+    elif type_changed and not direct_evidence and sensitive_change:
+        reasons.extend(("LEGACY_TYPE_CONFLICT", "STRUCTURE_SENSITIVE_CHANGE"))
+        level = "critical_review"
+    elif type_changed and not direct_evidence:
+        reasons.append("LEGACY_TYPE_CONFLICT")
+        level = "review"
+    elif not direct_evidence and close_competition:
+        reasons.append("SMALL_CANDIDATE_MARGIN")
+        level = "review"
+    elif not direct_evidence and review_confidence < config.review_low_score:
+        reasons.append("WEAK_EVIDENCE")
+        level = "review"
+    elif type_changed:
+        # A decisive structural reclassification is recorded, but does not
+        # create noisy manual-review work for the user.
+        reasons.append("STRUCTURE_CONFIRMED_RECLASSIFICATION")
+        level = "info"
+    elif execution_mode == "shadow":
+        reasons.append("SHADOW_RESULT_NOT_APPLIED")
+        level = "info"
+    else:
+        level = "confirmed"
+
+    return review_confidence, level, reasons, evidence_summary
+
+
 def apply_recognition(data: Any, config: RecognitionConfig | None = None) -> None:
     """Resolve all text blocks using a width-12 beam and preserve diagnostics."""
     config = config or DEFAULT_CONFIG
@@ -174,6 +343,7 @@ def apply_recognition(data: Any, config: RecognitionConfig | None = None) -> Non
         previous = paragraph_blocks[pos - 1] if pos else None
         following = paragraph_blocks[pos + 1] if pos + 1 < len(paragraph_blocks) else None
         extracted.append(extract_features(block, previous, following))
+    document_context = analyze_document_context(extracted)
     legacy_document_mode = getattr(data, "doc_mode", "")
     decision = detect_mode(extracted, legacy_document_mode)
     mode = decision.mode
@@ -185,14 +355,14 @@ def apply_recognition(data: Any, config: RecognitionConfig | None = None) -> Non
         next_beams: list[_Beam] = []
         boundary_start = paragraph_blocks[pos - 1].index + 1 if pos else 0
         boundary_before = boundary_prefix[block.index] > boundary_prefix[boundary_start]
-        trace_context = _Context(mode, beams[0].types[-1] if beams[0].types else None, pos, boundary_before)
+        trace_context = _Context(mode, beams[0].types[-1] if beams[0].types else None, pos, boundary_before, document_context)
         lookahead = extracted[pos + 1:pos + 9]
         trace_options = _limit_candidates(_candidates(block, features, trace_context, previous_features, lookahead), config)
         candidate_summary[features.paragraph_index] = tuple(trace_options)
         if config.enable_diagnostics:
             candidate_trace.append({"paragraph_index": features.paragraph_index, "candidate_count": len(trace_options), "candidates": [{"type": item.paragraph_type.value, "score": item.score, "source": item.source, "hard": item.hard, "evidence": item.evidence, "vetoes": sorted(value.value for value in item.vetoes)} for item in trace_options], "boundary_before": boundary_before})
         for beam in beams:
-            context = _Context(mode, beam.types[-1] if beam.types else None, pos, boundary_before)
+            context = _Context(mode, beam.types[-1] if beam.types else None, pos, boundary_before, document_context)
             options = _limit_candidates(_candidates(block, features, context, previous_features, lookahead), config)
             hard_types = {item.paragraph_type for item in options if item.hard}
             for candidate in options:
@@ -252,17 +422,18 @@ def apply_recognition(data: Any, config: RecognitionConfig | None = None) -> Non
                 mode,
                 boundary_before,
             )
-            review_reasons = []
-            if local_confidence < config.review_low_score:
-                review_reasons.append("LOW_LOCAL_CONFIDENCE")
-            if margin is not None and margin < config.review_margin:
-                review_reasons.append("SMALL_CANDIDATE_MARGIN")
-            if mapping_failed:
-                review_reasons.append("TYPE_MAPPING_FAILED")
-            if compatible is not None and compatible != legacy_type_id:
-                review_reasons.append("LEGACY_TYPE_CONFLICT")
-            if execution_mode == "shadow":
-                review_reasons.append("SHADOW_RESULT_NOT_APPLIED")
+            review_confidence, review_level, review_reasons, evidence_summary = _review_assessment(
+                selected,
+                features,
+                legacy_type_id,
+                compatible,
+                mapping_failed,
+                final_score,
+                margin,
+                config,
+                execution_mode,
+                document_context.heading_reasons(position),
+            )
             meta.update({
                 "recognition_type": type_value.value,
                 "recognized_type": type_value.value,
@@ -270,7 +441,13 @@ def apply_recognition(data: Any, config: RecognitionConfig | None = None) -> Non
                 "recognition_provider": reason,
                 "recognition_mode": execution_mode,
                 "document_mode": mode.value,
+                # This remains the raw candidate-distribution diagnostic for
+                # backwards compatibility.  It must not be presented as the
+                # user-facing certainty of the final recognition result.
                 "recognition_confidence": round(local_confidence, 4),
+                "review_confidence": review_confidence,
+                "review_level": review_level,
+                "recognition_evidence": evidence_summary,
                 "mapping_applied": mapping_applied,
                 "mapping_failed": mapping_failed,
                 "final_type": final_type_id,
@@ -287,6 +464,11 @@ def apply_recognition(data: Any, config: RecognitionConfig | None = None) -> Non
                 "result_applied": execution_mode == "authoritative",
                 "state_before": previous_section.value if previous_section else SectionKind.BODY.value,
                 "state_after": section.value,
+                "front_matter": position in document_context.front_positions,
+                "body_start": document_context.body_start == position,
+                "body_start_reason": document_context.body_start_reason if document_context.body_start == position else "",
+                "title_context_evidence": list(document_context.title_reasons(position)),
+                "heading_context_evidence": list(document_context.heading_reasons(position)),
                 "candidate_count": len(options),
                 "candidate_types": [item.paragraph_type.value for item in options],
                 "provider": reason,
@@ -297,19 +479,22 @@ def apply_recognition(data: Any, config: RecognitionConfig | None = None) -> Non
                 "mapping_applied": mapping_applied,
                 "mapping_failed": mapping_failed,
                 "recognition_confidence": round(local_confidence, 4),
+                "review_confidence": review_confidence,
+                "review_level": review_level,
+                "evidence_summary": evidence_summary,
                 "selected_candidate_score": round(final_score, 4),
                 "document_path_score": round(best.score, 4),
                 "transition_contribution": round(transition_contribution, 4),
                 "final_score": round(final_score, 4),
                 "candidate_margin": round(margin, 4) if margin is not None else None,
                 "single_candidate": len(options) == 1,
-                "needs_review": bool(review_reasons),
+                "needs_review": review_level in {"review", "critical_review"},
                 "review_reasons": review_reasons,
                 "validator_actions": [],
             })
     if execution_mode == "authoritative":
         setattr(data, "doc_mode", _mode_as_legacy(mode))
-    report = {"engine_version": RECOGNITION_ENGINE_VERSION, "schema_version": RECOGNITION_DIAGNOSTIC_SCHEMA_VERSION, "config": {"mode": execution_mode, "beam_width": config.beam_width, "max_candidates_per_paragraph": config.max_candidates_per_paragraph, "diagnostics": config.enable_diagnostics, "review_low_score": config.review_low_score, "review_margin": config.review_margin}, "recognition_mode": execution_mode, "result_applied": execution_mode == "authoritative", "mode": mode.value, "mode_confidence": decision.confidence, "mode_evidence": decision.evidence, "beam_width": config.beam_width, "blocks": [{"index": block.index, "kind": block.kind, "paragraph_index": block.paragraph_index} for block in blocks], "candidate_trace": candidate_trace, "paragraphs": diagnostics}
+    report = {"engine_version": RECOGNITION_ENGINE_VERSION, "schema_version": RECOGNITION_DIAGNOSTIC_SCHEMA_VERSION, "config": {"mode": execution_mode, "beam_width": config.beam_width, "max_candidates_per_paragraph": config.max_candidates_per_paragraph, "diagnostics": config.enable_diagnostics, "review_low_score": config.review_low_score, "review_margin": config.review_margin}, "recognition_mode": execution_mode, "result_applied": execution_mode == "authoritative", "mode": mode.value, "mode_confidence": decision.confidence, "mode_evidence": decision.evidence, "beam_width": config.beam_width, "blocks": [{"index": block.index, "kind": block.kind, "paragraph_index": block.paragraph_index} for block in blocks], "candidate_trace": candidate_trace, "paragraphs": diagnostics, "document_context": document_context.diagnostic_summary()}
     report["validation"] = validate_diagnostics(report)
     candidate_counts = [item["candidate_count"] for item in diagnostics]
     hard_count = sum(any(candidate.hard for candidate in options) for options in candidate_summary.values())
@@ -340,7 +525,7 @@ def apply_recognition(data: Any, config: RecognitionConfig | None = None) -> Non
         paragraph_count=len(diagnostics),
         table_count=sum(block.kind == "table" for block in blocks),
         image_count=sum(block.kind == "image" for block in blocks),
-        low_confidence_count=sum(item["recognition_confidence"] < config.review_low_score for item in diagnostics),
+        low_confidence_count=sum(item["review_confidence"] < config.review_low_score for item in diagnostics),
         needs_review_count=sum(item["needs_review"] for item in diagnostics),
         validator_action_count=sum(len(item["validator_actions"]) for item in diagnostics),
         unknown_type_fallback_count=sum(item["final_type"] == ParagraphType.UNKNOWN.value for item in diagnostics),
@@ -349,6 +534,12 @@ def apply_recognition(data: Any, config: RecognitionConfig | None = None) -> Non
         beam_width=config.beam_width,
     )
     report["summary"] = asdict(summary)
+    report["summary"].update({
+        "confirmed_count": sum(item["review_level"] == "confirmed" for item in diagnostics),
+        "info_count": sum(item["review_level"] == "info" for item in diagnostics),
+        "review_count": sum(item["review_level"] == "review" for item in diagnostics),
+        "critical_review_count": sum(item["review_level"] == "critical_review" for item in diagnostics),
+    })
     try:
         from docxtool.document.engine.document_structure import analyze_document_structure
         setattr(data, "recognition_structure", analyze_document_structure(data))

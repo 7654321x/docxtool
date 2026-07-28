@@ -314,7 +314,7 @@ h1{font-size:clamp(38px,5.4vw,64px);letter-spacing:0;line-height:1.08;margin-bot
 
   <section class="section" id="tips"><div class="shell"><div class="section-head reveal"><div class="section-title"><div class="section-label">Tips</div><h2>上传前注意这三点</h2></div></div><div class="tips"><div class="tip reveal"><h3>不要上传涉密文件</h3><p>系统适合处理普通办公文档，涉密或敏感材料请在本地安全环境处理。</p></div><div class="tip reveal d1"><h3>优先使用 .docx</h3><p>如果是 .doc 或 WPS 文件，建议先另存为 .docx 后再上传。</p></div><div class="tip reveal d2"><h3>处理后建议复核</h3><p>复杂表格、图片、特殊对象和特殊编号，建议下载后人工检查一次。</p></div></div></div></section>
 
-  <section class="section" id="faq"><div class="shell"><div class="section-head reveal"><div class="section-title"><h2>常见问题</h2></div></div><div class="faq-grid"><article class="faq-item reveal"><h3>排版后是否还要人工检查？</h3><p>建议检查。系统能完成大部分格式统一，但复杂表格、图片和特殊格式仍建议人工复核。</p></article><article class="faq-item reveal d1"><h3>为什么上传后提示失败？</h3><p>常见原因是文件不是 .docx、文件超过 10MB、文档损坏，或包含无法解析的特殊对象。</p></article><article class="faq-item reveal d2"><h3>上传文件会保存多久？</h3><p>上传原文件处理完成后应尽快清理，输出文件建议限时保留，请及时下载。</p></article><article class="faq-item reveal d3"><h3>能不能调整默认格式？</h3><p>可以。点击“排版设置”后可调整常用字体、字号、页边距、行距，也可以展开完整设置。</p></article></div></div></section>
+  <section class="section" id="faq"><div class="shell"><div class="section-head reveal"><div class="section-title"><h2>常见问题</h2></div></div><div class="faq-grid"><article class="faq-item reveal"><h3>排版后是否还要人工检查？</h3><p>建议检查。系统能完成大部分格式统一，但复杂表格、图片和特殊格式仍建议人工复核。</p></article><article class="faq-item reveal d1"><h3>为什么上传后提示失败？</h3><p>常见原因是文件不是 .docx、文件超过 10MB、文档损坏，或包含无法解析的特殊对象。</p></article><article class="faq-item reveal d2"><h3>上传文件会保存多久？</h3><p>上传原件、排版结果和任务记录会永久保留。请勿上传涉密材料，并由服务器管理员定期做好存储备份。</p></article><article class="faq-item reveal d3"><h3>能不能调整默认格式？</h3><p>可以。点击“排版设置”后可调整常用字体、字号、页边距、行距，也可以展开完整设置。</p></article></div></div></section>
 </main>
 
 <div class="modal auth-screen" id="authModal" role="dialog" aria-modal="true" aria-labelledby="authTitle" onclick="closeAuth(event)">
@@ -327,9 +327,9 @@ h1{font-size:clamp(38px,5.4vw,64px);letter-spacing:0;line-height:1.08;margin-bot
       <div class="auth-kicker">DOCXTOOL ACCOUNT</div>
       <h2 id="authTitle">登录账户</h2>
       <p class="auth-subtitle" id="authSubtitle">登录后继续使用你的模板和排版任务</p>
-      <form class="auth-form" id="authForm" autocomplete="off" onsubmit="submitAuth(event)">
+      <form class="auth-form" id="authForm" autocomplete="on" onsubmit="submitAuth(event)">
         <div class="auth-field"><label for="authUsername">用户名<span class="auth-required">*</span></label><div class="auth-control"><span class="auth-icon" aria-hidden="true">✉</span><input id="authUsername" name="username" autocomplete="username" minlength="3" maxlength="32" placeholder="请输入用户名" required></div></div>
-        <div class="auth-field"><label for="authPassword">密码<span class="auth-required">*</span></label><div class="auth-control"><span class="auth-icon" aria-hidden="true">▣</span><input id="authPassword" name="password" type="password" autocomplete="new-password" minlength="8" maxlength="128" placeholder="请输入密码" required><button class="auth-toggle" id="authPasswordToggle" type="button" onclick="toggleAuthPassword('authPassword',this)" aria-label="显示密码">◉</button></div></div>
+        <div class="auth-field"><label for="authPassword">密码<span class="auth-required">*</span></label><div class="auth-control"><span class="auth-icon" aria-hidden="true">▣</span><input id="authPassword" name="password" type="password" autocomplete="current-password" minlength="8" maxlength="128" placeholder="请输入密码" required><button class="auth-toggle" id="authPasswordToggle" type="button" onclick="toggleAuthPassword('authPassword',this)" aria-label="显示密码">◉</button></div></div>
         <div class="auth-field" id="authConfirmField" hidden><label for="authConfirmPassword">确认密码<span class="auth-required">*</span></label><div class="auth-control"><span class="auth-icon" aria-hidden="true">▣</span><input id="authConfirmPassword" type="password" autocomplete="new-password" minlength="8" maxlength="128" placeholder="请再次输入密码"><button class="auth-toggle" type="button" onclick="toggleAuthPassword('authConfirmPassword',this)" aria-label="显示确认密码">◉</button></div></div>
         <label class="auth-remember" id="authRememberField"><input id="authRemember" name="remember" type="checkbox" checked><span>保持登录状态<small>服务器保存加密会话，30 天内再次访问时自动登录</small></span></label>
         <div class="auth-error" id="authError" role="alert"></div>
@@ -993,8 +993,8 @@ function collectConfig(){
       space_after_line:Number(lineValue(get('spaceAfter')))||0,
       grid_alignment:get('gridAlign')||'文字对齐字符网络'
     },
-    mode:'smart',
-    processing_mode:'smart',
+    mode:get('settingMode')||'smart',
+    processing_mode:get('settingMode')||'smart',
     features:{
       numbered_bold_enabled:checked('specialBold'),
       punctuation_enabled:checked('punctuationEnabled')
@@ -1088,7 +1088,6 @@ function renderAuth(){
 function openAuth(){
   document.getElementById('authModal').classList.add('open');
   document.body.style.overflow='hidden';
-  document.getElementById('authPassword').value='';
   document.getElementById('authConfirmPassword').value='';
   setAuthMode('login');
   requestAnimationFrame(()=>document.getElementById('authUsername').focus());
@@ -1112,7 +1111,7 @@ function setAuthMode(mode){
   document.getElementById('authConfirmField').hidden=!registering;
   document.getElementById('authRememberField').hidden=registering;
   document.getElementById('authConfirmPassword').required=registering;
-  document.getElementById('authPassword').autocomplete='new-password';
+  document.getElementById('authPassword').autocomplete=registering?'new-password':'current-password';
   document.getElementById('authError').textContent='';
 }
 function toggleAuthMode(){setAuthMode(authMode==='login'?'register':'login');document.getElementById('authUsername').focus()}
@@ -1364,7 +1363,9 @@ function configErrorMessage(text,detail={}){
 }
 function friendlyError(text,code,detail={}){if(code==='PROXY_REQUIRED')return'当前请求缺少前端代理校验，请通过 Cloudflare Pages 前端页面或同源 /api 代理访问。';if(code==='UNAUTHORIZED'||code==='CSRF_INVALID')return'管理员会话已失效，请重新登录后再试。';if(code==='FORMAT_CONFIG_INVALID')return configErrorMessage(text,detail);if(code==='FORMAT_CONFIG_TOO_LARGE')return'排版设置内容过大，请减少自定义规则后再上传。';if(!text)return'处理失败，请检查文档是否损坏或包含特殊对象。';if(text.includes('too large')||text.includes('过大'))return'文件过大，请压缩到 10MB 以内后重试。';if(text.includes('format')||text.includes('docx'))return'文件格式不支持，请上传 .docx 文件。';if(text.includes('network')||text.includes('网络'))return'网络异常，请检查网络后重新上传。';return text}
 function warnSuffix(task){const list=Array.isArray(task?.compatibility_warnings)?task.compatibility_warnings.filter(Boolean):[];return list.length?'；'+list.join('；'):''}
-function renderRecognitionSummary(summary){const panel=document.getElementById('recognitionSummary'),title=document.getElementById('recognitionSummaryTitle'),list=document.getElementById('recognitionReviewItems');list.replaceChildren();if(!summary||typeof summary!=='object'){panel.style.display='none';return}const count=Number(summary.needs_review_count||0),mode=String(summary.recognition_mode||'authoritative');title.textContent=(mode==='shadow'?'诊断结果未应用 · ':'识别结果已应用 · ')+`需要人工复核 ${count} 段`;const items=Array.isArray(summary.review_items)?summary.review_items.slice(0,50):[];for(const item of items){const li=document.createElement('li'),reasons=Array.isArray(item.reason_codes)?item.reason_codes.join('、'):'';li.textContent=`第 ${Number(item.paragraph_index)+1} 段：${String(item.legacy_type||'')} → ${String(item.final_type||'')}，置信度 ${Number(item.confidence||0).toFixed(2)}${reasons?'，'+reasons:''}`;list.appendChild(li)}panel.style.display='block'}
+  function recognitionReasonLabel(code){const labels={TYPE_MAPPING_FAILED:'类型映射失败',LEGACY_TYPE_CONFLICT:'与原始分类不一致',STRUCTURE_SENSITIVE_CHANGE:'可能影响版头、落款或附件结构',SMALL_CANDIDATE_MARGIN:'候选类型接近',WEAK_EVIDENCE:'可用结构证据不足'};return labels[String(code||'')]||String(code||'')}
+  function recognitionContextLabel(context){if(!context||typeof context!=='object')return'';const parts=[];const front=Number(context.front_matter_count||0);if(front)parts.push(`文首信息区 ${front} 段`);if(Number.isInteger(context.body_start)&&context.body_start>=0)parts.push(`正文从第 ${context.body_start+1} 段开始`);const families=Array.isArray(context.heading_families)?context.heading_families.filter(item=>Number(item?.count||0)>=2):[];if(families.length)parts.push(`发现 ${families.length} 组同级标题`);return parts.join('；')}
+  function renderRecognitionSummary(summary){const panel=document.getElementById('recognitionSummary'),title=document.getElementById('recognitionSummaryTitle'),list=document.getElementById('recognitionReviewItems');list.replaceChildren();if(!summary||typeof summary!=='object'){panel.style.display='none';return}const count=Number(summary.needs_review_count||0),critical=Number(summary.critical_review_count||0),mode=String(summary.recognition_mode||'authoritative'),prefix=mode==='shadow'?'诊断结果未应用 · ':'识别结果已应用 · ';title.textContent=count?prefix+`需要人工复核 ${count} 段${critical?`（其中 ${critical} 段影响关键结构）`:''}`:prefix+'未发现需要人工复核的段落';const contextLabel=recognitionContextLabel(summary.document_context);if(count&&contextLabel){const li=document.createElement('li');li.textContent='结构依据：'+contextLabel;list.appendChild(li)}const items=Array.isArray(summary.review_items)?summary.review_items.slice(0,50):[];for(const item of items){const li=document.createElement('li'),reasons=Array.isArray(item.reason_codes)?item.reason_codes.map(recognitionReasonLabel).filter(Boolean).join('；'):'';const level=String(item.review_level||'review')==='critical_review'?'关键结构复核':'需确认';li.textContent=`${level}：第 ${Number(item.paragraph_index)+1} 段 ${String(item.legacy_type||'')} → ${String(item.final_type||'')}，确认度 ${Number(item.confidence||0).toFixed(2)}${reasons?'，'+reasons:''}`;list.appendChild(li)}panel.style.display='block'}
 function safeCollectConfig(){try{return collectConfig()}catch(e){const err=new Error(e?.message||'配置生成失败');err.code='FORMAT_CONFIG_INVALID';err.reason=err.message;throw err}}
 async function upload(f){
   if(!f)return;

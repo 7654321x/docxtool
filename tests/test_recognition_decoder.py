@@ -98,6 +98,16 @@ def test_shared_features_preserve_raw_text_and_extract_numbered_key_value():
     assert features.key_value_label == "缺席"
 
 
+def test_multiline_date_and_attachment_is_not_a_fabricated_key_value():
+    paragraph = _paragraph("2026年7月21日\n附件：1.材料", "body", 0)
+    block = extract_blocks(_document(paragraph))[0]
+
+    features = extract_features(block)
+
+    assert features.key_value_label is None
+    assert features.key_value_value is None
+
+
 def test_non_text_blocks_remain_in_original_sequence():
     table = _paragraph("", "__table__", 1)
     image = _paragraph("", "__image__", 2)
@@ -172,6 +182,102 @@ def test_previous_title_changes_ambiguous_centered_line_decision():
 
     assert after_title.paragraphs[1].meta["recognition_type"] == "title_continuation"
     assert after_body.paragraphs[1].meta["recognition_type"] == "body"
+
+
+def test_front_matter_context_overrides_misused_heading_style_without_keywords():
+    data = _document(
+        _paragraph("关于推进基层治理重点工作的通知", "heading1", 0, alignment="CENTER", style_name="Heading 1"),
+        _paragraph("区政协办公室主任  张三", "role_name", 1),
+        _paragraph("2026年7月27日", "date_line", 2),
+        _paragraph("各有关单位：", "addressing", 3),
+        _paragraph("现将有关事项通知如下。", "body", 4),
+    )
+
+    apply_recognition(data)
+
+    assert [item.type_id for item in data.paragraphs[:4]] == [
+        "title", "role_name", "date_line", "addressing",
+    ]
+    context = data.recognition_diagnostics["document_context"]
+    assert context["front_matter_positions"] == [0, 1, 2, 3]
+    assert context["body_start"] == 4
+    assert context["body_start_reason"] == "recipient-following-body"
+
+
+def test_title_formatting_cannot_override_front_role_and_placeholder_date():
+    data = _document(
+        _paragraph("在区政协第九届委员会第一次会议", "title", 0, alignment="CENTER"),
+        _paragraph("召集人会议上的讲话", "title_cont", 1, alignment="CENTER"),
+        _paragraph("区委副书记  XXX", "role_name", 2, alignment="CENTER"),
+        _paragraph("2026年8月X日", "date_line", 3, alignment="CENTER"),
+        _paragraph("同志们：", "addressing", 4),
+        _paragraph("现将会议有关事项说明如下，确保各项工作衔接有序。", "body", 5),
+    )
+
+    apply_recognition(data)
+
+    assert [item.type_id for item in data.paragraphs[:5]] == [
+        "title", "title_cont", "role_name", "date_line", "addressing",
+    ]
+    assert data.recognition_diagnostics["paragraphs"][2]["review_level"] != "critical_review"
+    assert data.recognition_diagnostics["paragraphs"][3]["review_level"] != "critical_review"
+
+
+def test_front_metadata_shape_recognizes_unseen_role_and_placeholder_date_without_legacy_type():
+    data = _document(
+        _paragraph("在推进重点项目专题会议上的讲话", "body", 0, alignment="CENTER"),
+        _paragraph("某区总工程师张某", "body", 1, alignment="CENTER"),
+        _paragraph("2026年8月X日", "body", 2, alignment="CENTER"),
+        _paragraph("同志们：", "body", 3),
+        _paragraph("现将会议有关事项说明如下，确保各项工作衔接有序。", "body", 4),
+    )
+
+    apply_recognition(data)
+
+    assert [item.type_id for item in data.paragraphs[:5]] == [
+        "title", "role_name", "date_line", "addressing", "body",
+    ]
+    diagnostics = data.recognition_diagnostics["paragraphs"]
+    assert diagnostics[1]["provider"].startswith("front-metadata:")
+    assert diagnostics[2]["provider"].startswith("front-metadata:")
+    assert diagnostics[1]["review_level"] in {"confirmed", "info"}
+    assert diagnostics[2]["review_level"] in {"confirmed", "info"}
+
+
+def test_numbered_heading_family_confirms_parallel_body_headings():
+    data = _document(
+        _paragraph("工作情况", "title", 0, alignment="CENTER"),
+        _paragraph("现将有关情况报告如下，供审阅。", "body", 1),
+        _paragraph("一、持续夯实基层基础", "body", 2),
+        _paragraph("持续完善责任体系，确保各项部署落实到位，并将责任细化到岗、任务落实到人、过程监督到位。", "body", 3),
+        _paragraph("二、稳步提升服务质效", "body", 4),
+        _paragraph("围绕群众需求优化流程，持续提升服务效率和群众办事体验，确保事项办理规范有序。", "body", 5),
+    )
+
+    apply_recognition(data)
+
+    assert [data.paragraphs[index].type_id for index in (2, 4)] == ["heading1", "heading1"]
+    context = data.recognition_diagnostics["document_context"]
+    assert context["heading_families"] == [
+        {"level": 1, "count": 2, "positions": [2, 4], "supported_count": 2},
+    ]
+    assert "parallel-heading-family" in data.recognition_diagnostics["paragraphs"][2]["heading_context_evidence"]
+
+
+def test_single_numbered_heading_is_applied_but_marked_for_review():
+    data = _document(
+        _paragraph("工作情况", "title", 0, alignment="CENTER"),
+        _paragraph("一、持续夯实基层基础", "body", 1),
+        _paragraph("持续完善责任体系，确保各项部署落实到位，并将责任细化到岗、任务落实到人、过程监督到位。", "body", 2),
+    )
+
+    apply_recognition(data)
+
+    heading = data.recognition_diagnostics["paragraphs"][1]
+    assert data.paragraphs[1].type_id == "heading1"
+    assert heading["review_level"] == "review"
+    assert "LEGACY_TYPE_CONFLICT" in heading["review_reasons"]
+    assert data.paragraphs[1].original_text == "一、持续夯实基层基础"
 
 
 def test_table_boundary_blocks_title_continuation():
@@ -341,14 +447,32 @@ def test_review_flags_and_safe_summary_do_not_change_final_types():
 
     clear_diagnostic = clear.recognition_diagnostics["paragraphs"][0]
     ambiguous_diagnostic = ambiguous.recognition_diagnostics["paragraphs"][0]
-    assert clear_diagnostic["needs_review"] is True
-    assert "LEGACY_TYPE_CONFLICT" in clear_diagnostic["review_reasons"]
+    assert clear_diagnostic["needs_review"] is False
+    assert clear_diagnostic["review_level"] == "info"
+    assert "STRUCTURE_CONFIRMED_RECLASSIFICATION" in clear_diagnostic["review_reasons"]
     assert ambiguous_diagnostic["needs_review"] is True
     assert ambiguous_diagnostic["review_reasons"]
     assert clear.paragraphs[0].type_id == "dispatch_number"
     summary = ambiguous.recognition_diagnostics["summary"]
     assert summary["needs_review_count"] == 1
     assert "补充说明" not in diagnostics_to_json(ambiguous.recognition_diagnostics)
+
+
+def test_explicit_numbering_is_confirmed_even_when_raw_candidate_softmax_is_low():
+    data = _document(
+        _paragraph("一、工作开展情况", "heading1", 0),
+        _paragraph("（一）落实重点任务", "heading2", 1),
+        _paragraph("1. 压实责任", "heading3", 2),
+        _paragraph("（1）明确时限", "heading4", 3),
+    )
+
+    apply_recognition(data)
+
+    diagnostics = data.recognition_diagnostics["paragraphs"]
+    assert [item["final_type"] for item in diagnostics] == ["heading1", "heading2", "heading3", "heading4"]
+    assert all(item["review_level"] == "confirmed" for item in diagnostics)
+    assert not any(item["needs_review"] for item in diagnostics)
+    assert all("explicit-numbering" in item["evidence_summary"] for item in diagnostics)
 
 
 def test_same_input_is_thread_safe_across_twenty_independent_documents():

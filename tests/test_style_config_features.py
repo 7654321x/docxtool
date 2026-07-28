@@ -72,6 +72,28 @@ def test_missing_signature_block_preserves_legacy_layout() -> None:
     assert load_rules_and_settings({})[2]["signature_block"] == {"mode": "preserve"}
 
 
+@pytest.mark.parametrize(
+    ("config", "expected"),
+    [
+        ({}, "structural"),
+        ({"mode": "smart"}, "structural"),
+        ({"processing_mode": "strict"}, "strict"),
+        ({"processing": {"strategy": "normalize"}}, "normalize"),
+    ],
+)
+def test_processing_mode_is_normalized_to_an_explicit_strategy(
+    config: dict, expected: str
+) -> None:
+    assert load_rules_and_settings(config)[2]["processing"] == {"strategy": expected}
+
+
+def test_invalid_processing_mode_is_rejected() -> None:
+    with pytest.raises(ConfigValidationError) as error:
+        validate_format_config({"processing_mode": "rewrite-everything"})
+
+    assert error.value.field == "processing.mode"
+
+
 def test_default_format_uses_without_seal_signature_layout() -> None:
     config = json.loads(default_format_config_path().read_text(encoding="utf-8"))
 

@@ -51,8 +51,12 @@ class EngineHeadingSpacingTest(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def _export(self, paragraphs):
-        doc_data = DocumentData(paragraphs=paragraphs, filepath="input.docx")
+    def _export(self, paragraphs, *, processing_strategy="normalize"):
+        doc_data = DocumentData(
+            paragraphs=paragraphs,
+            filepath="input.docx",
+            processing_strategy=processing_strategy,
+        )
         export_doc(doc_data, _rules(), PageSettings(), self.out)
         return Document(self.out)
 
@@ -75,6 +79,29 @@ class EngineHeadingSpacingTest(unittest.TestCase):
         self.assertEqual(body.text, "这里是正文内容这里是正文内容")
         self.assertFalse(body.runs[-1].bold)
         self.assertEqual(_body_font(body.runs[-1]), "仿宋_GB2312")
+
+    def test_terminal_body_uses_widow_control_without_changing_earlier_body(self):
+        doc = self._export([
+            ParagraphData("第一段正文内容。", "body", "第一段正文内容。", ParagraphFeatures()),
+            ParagraphData("最后一段正文内容。", "body", "最后一段正文内容。", ParagraphFeatures()),
+        ])
+
+        first = doc.paragraphs[0]._p.get_or_add_pPr().find(qn("w:widowControl"))
+        last = doc.paragraphs[1]._p.get_or_add_pPr().find(qn("w:widowControl"))
+        self.assertEqual(first.get(qn("w:val")), "0")
+        self.assertEqual(last.get(qn("w:val")), "1")
+
+    def test_standalone_heading1_terminal_period_is_removed(self):
+        doc = self._export([
+            ParagraphData(
+                text="一、一级标题。",
+                type_id="heading1",
+                original_text="一、一级标题。",
+                features=ParagraphFeatures(),
+            )
+        ], processing_strategy="structural")
+
+        self.assertEqual(doc.paragraphs[0].text, "一、一级标题")
 
     def test_head_area_inserts_blank_line_before_body_or_heading1(self):
         cases = [

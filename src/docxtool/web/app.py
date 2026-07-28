@@ -53,8 +53,10 @@ _DB_PATH = default_database_path()
 LOG_DIR = str(runtime_dir("logs", "LOG_DIR"))
 RUNTIME_DIR = str(runtime_dir("runtime", "RUNTIME_DIR"))
 RUNTIME_TMP_DIR = os.path.join(RUNTIME_DIR, "tmp")
+UPLOAD_DIR = str(runtime_dir("uploads", "UPLOAD_DIR"))
 os.makedirs(LOG_DIR, exist_ok=True)
 os.makedirs(RUNTIME_TMP_DIR, exist_ok=True)
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 DEFAULT_ADMIN_TOKEN = "7654321xxx"
 DEFAULT_PROXY_SECRET = "docxtool-proxy-20260601-9ec0d6e2443a4f5f9784f0f04bb62917"
 ADMIN_SESSION_COOKIE = "docxtool_admin_session"
@@ -685,14 +687,12 @@ MAX_WORKERS = 4
 MAX_QUEUE = MAX_WORKERS * 2
 PROCESS_TIMEOUT = _parse_int_env("PROCESS_TIMEOUT_SECONDS", 60)
 RATE_WINDOW = 2
-FILE_RETENTION_HOURS = max(1, _parse_int_env("FILE_RETENTION_HOURS", 24))
-FILE_TTL = FILE_RETENTION_HOURS * 60 * 60
-KEEP_FAILED_INPUTS = _parse_bool(os.environ.get("DOCXTOOL_KEEP_FAILED_INPUTS", "false"), False)
+# Accepted originals, generated files, task records, and task logs are
+# permanent user records. Only incomplete uploads may be discarded.
+FILE_RETENTION_POLICY = "permanent"
+FILE_TTL = None
 MAX_TASKS = _parse_int_env("MAX_TASKS", 200)
-TASK_RETENTION_HOURS = max(
-    FILE_RETENTION_HOURS,
-    _parse_int_env("TASK_RETENTION_HOURS", FILE_RETENTION_HOURS),
-)
+TASK_RETENTION_HOURS = None
 MAX_CACHED_TASKS = _parse_int_env("MAX_CACHED_TASKS", 500)
 CLEANUP_INTERVAL_MINUTES = _parse_int_env("CLEANUP_INTERVAL_MINUTES", 30)
 DEFAULT_UPLOAD_LIMIT_WINDOW_SECONDS = 3600
@@ -738,25 +738,30 @@ OUTPUT_DIR = str(runtime_dir("outputs", "OUTPUT_DIR"))
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 def _startup_cleanup():
-    result = _cleanup_expired_tmp()
-    if result["removed"]:
-        logger.info(f"[Startup] cleaned {result['removed']} expired project input files")
+    # Accepted user records are permanent. Do not scan or remove files merely
+    # because the service restarted or a document is old.
+    return {"removed": 0, "errors": 0}
 
 def _task_tmp_dir(task_id: str) -> str:
     return os.path.join(RUNTIME_TMP_DIR, task_id)
 
-def _task_tmp_input_path(task_id: str, orig_name: str = "") -> str:
+def _task_upload_dir(task_id: str) -> str:
+    return os.path.join(UPLOAD_DIR, task_id)
+
+
+def _task_upload_input_path(task_id: str, orig_name: str = "") -> str:
     safe = _sanitize_filename(orig_name) or "upload.docx"
     stem, ext = os.path.splitext(safe)
     if not ext:
         ext = ".docx"
-    return os.path.join(_task_tmp_dir(task_id), f"input{ext}")
+    return os.path.join(_task_upload_dir(task_id), f"input{ext}")
 
-def _cleanup_task_tmp(task_id: str, extra_path: str = "") -> None:
+def _cleanup_incomplete_upload(task_id: str, extra_path: str = "") -> None:
+    """Remove only a partial upload that never became an accepted document."""
     paths = []
     if extra_path:
         paths.append(extra_path)
-    task_dir = _task_tmp_dir(task_id)
+    task_dir = _task_upload_dir(task_id)
     if task_dir not in paths:
         paths.append(task_dir)
     for path in paths:
@@ -769,28 +774,8 @@ def _cleanup_task_tmp(task_id: str, extra_path: str = "") -> None:
             pass
 
 def _cleanup_expired_tmp(now: float = None) -> dict:
-    now = now or time.time()
-    removed = 0
-    errors = 0
-    if not os.path.isdir(RUNTIME_TMP_DIR):
-        return {"removed": 0, "errors": 0}
-    for root, dirs, files in os.walk(RUNTIME_TMP_DIR, topdown=False):
-        for name in files:
-            path = os.path.join(root, name)
-            try:
-                if now - os.path.getmtime(path) > FILE_TTL:
-                    os.unlink(path)
-                    removed += 1
-            except Exception:
-                errors += 1
-        for name in dirs:
-            path = os.path.join(root, name)
-            try:
-                if os.path.isdir(path) and not os.listdir(path):
-                    os.rmdir(path)
-            except Exception:
-                errors += 1
-    return {"removed": removed, "errors": errors}
+    """Compatibility no-op: automatic expiry is disabled permanently."""
+    return {"removed": 0, "errors": 0}
 
 def _prune_task_cache() -> None:
     with TASKS_LOCK:
@@ -1083,26 +1068,54 @@ def _public_recognition_summary(doc_data) -> dict:
     diagnostics = getattr(doc_data, "recognition_diagnostics", {}) or {}
     paragraphs = [item for item in diagnostics.get("paragraphs", []) if isinstance(item, dict)]
     type_counts = Counter(str(item.get("final_type", "") or "unknown") for item in paragraphs)
+    level_counts = Counter(str(item.get("review_level", "confirmed") or "confirmed") for item in paragraphs)
     review_items = []
     for item in paragraphs:
-        if not item.get("needs_review"):
+        review_level = str(item.get("review_level", "review" if item.get("needs_review") else "confirmed"))
+        if review_level not in {"review", "critical_review"}:
             continue
         review_items.append({
             "paragraph_index": int(item.get("paragraph_index", -1)),
             "legacy_type": str(item.get("legacy_type", "")),
             "recognized_type": str(item.get("recognized_type", "")),
             "final_type": str(item.get("final_type", "")),
-            "confidence": float(item.get("recognition_confidence", 0.0) or 0.0),
+            # Keep the historical key for compatible clients; it now exposes
+            # the user-facing review certainty instead of the raw softmax.
+            "confidence": float(item.get("review_confidence", item.get("recognition_confidence", 0.0)) or 0.0),
+            "review_level": review_level,
             "candidate_margin": item.get("candidate_margin"),
             "reason_codes": [str(value) for value in item.get("review_reasons", [])],
+            "evidence_summary": [str(value) for value in item.get("evidence_summary", [])],
         })
+    context = diagnostics.get("document_context", {})
+    if not isinstance(context, dict):
+        context = {}
+    public_context = {
+        "front_matter_count": len(context.get("front_matter_positions", []) or []),
+        "body_start": context.get("body_start"),
+        "body_start_reason": str(context.get("body_start_reason", "") or ""),
+        "heading_families": [
+            {
+                "level": int(item.get("level", 0) or 0),
+                "count": int(item.get("count", 0) or 0),
+                "supported_count": int(item.get("supported_count", 0) or 0),
+            }
+            for item in context.get("heading_families", [])
+            if isinstance(item, dict)
+        ],
+    }
     return {
         "recognition_mode": str(diagnostics.get("recognition_mode", "authoritative")),
         "result_applied": bool(diagnostics.get("result_applied", True)),
         "paragraph_count": len(paragraphs),
         "needs_review_count": len(review_items),
+        "critical_review_count": level_counts.get("critical_review", 0),
+        "review_count": level_counts.get("review", 0),
+        "confirmed_count": level_counts.get("confirmed", 0),
+        "info_count": level_counts.get("info", 0),
         "type_counts": dict(sorted(type_counts.items())),
         "review_items": review_items,
+        "document_context": public_context,
     }
 
 def _task_output_dir(task_id: str) -> str:
@@ -1228,7 +1241,13 @@ def _task_process_body(task_id: str, input_path: str, orig_name: str, ip: str, u
         if not isinstance(processing_options, dict):
             processing_options = {}
             features["processing"] = processing_options
-        processing_options.setdefault("strict_preservation", True)
+        # Browser smart mode is structural preservation: split only reliable
+        # visual structure, then recognize and style it without rewriting the
+        # source text.  Strict mode remains available to explicit callers.
+        processing_options.setdefault(
+            "strategy",
+            str(request_meta.get("processing_strategy", "") or "structural"),
+        )
         recognition_options = features.setdefault("recognition", {})
         if not isinstance(recognition_options, dict):
             recognition_options = {}
@@ -1241,7 +1260,7 @@ def _task_process_body(task_id: str, input_path: str, orig_name: str, ip: str, u
         letterhead_agencies = letterhead_summary.get("agencies", [])
         logger.info(
             f"[Task] {task_id[:8]} start file_id={file_id} log={log_filename} "
-            f"preset={request_meta.get('preset_name','')} mode={request_meta.get('processing_mode','smart')} "
+            f"preset={request_meta.get('preset_name','')} mode={processing_options.get('strategy', 'structural')} "
             f"frontend_config={bool(format_config)} body={body_rule.font}/{body_rule.font_size_label} "
             f"margins=top{settings.margin_top_cm} bottom{settings.margin_bottom_cm} "
             f"left{settings.margin_left_cm} right{settings.margin_right_cm} "
@@ -1256,8 +1275,7 @@ def _task_process_body(task_id: str, input_path: str, orig_name: str, ip: str, u
             input_path,
             rules,
             features=features,
-            strict_preservation=True,
-            recognition_mode="authoritative",
+            recognition_mode=str(recognition_options.get("mode", "authoritative")),
         )
         output_dir = _ensure_path_within(OUTPUT_DIR, _task_output_dir(task_id))
         os.makedirs(output_dir, exist_ok=True)
@@ -1576,82 +1594,23 @@ def _process_task(task_id: str, input_path: str, orig_name: str = "upload.docx",
     else:
         result = _task_process_subprocess(task_id, input_path, orig_name, ip, ua, format_config, request_meta)
     _record_task_result(task_id, input_path, orig_name, ip, ua, result)
-    if result.get("status") == "done" or not KEEP_FAILED_INPUTS:
-        _cleanup_task_tmp(task_id, input_path)
+    # A valid upload remains available even when formatting fails, so users
+    # and administrators can inspect the original document later.
 
 def _cleanup_expired_outputs(now: float = None) -> dict:
-    now = now or time.time()
-    removed = 0
-    errors = 0
-    if not os.path.isdir(OUTPUT_DIR):
-        return {"removed": 0, "errors": 0}
-    for root, dirs, files in os.walk(OUTPUT_DIR, topdown=False):
-        for name in files:
-            path = os.path.join(root, name)
-            try:
-                if now - os.path.getmtime(path) > FILE_TTL:
-                    os.unlink(path)
-                    removed += 1
-            except Exception:
-                errors += 1
-        for name in dirs:
-            path = os.path.join(root, name)
-            try:
-                if os.path.isdir(path) and not os.listdir(path):
-                    os.rmdir(path)
-            except Exception:
-                errors += 1
-    return {"removed": removed, "errors": errors}
+    """Compatibility no-op: generated user files are retained permanently."""
+    return {"removed": 0, "errors": 0}
 
 def _cleanup_expired_task_records(now: float = None) -> dict:
-    now = now or time.time()
-    threshold = time.strftime(
-        "%Y-%m-%d %H:%M:%S",
-        time.localtime(now - max(1, TASK_RETENTION_HOURS) * 3600),
-    )
-    removed = 0
-    errors = 0
-    with _SQL_LOCK:
-        conn = _sql()
-        rows = conn.execute(
-            """
-            SELECT id, output_path, output_dir, log_path
-            FROM tasks
-            WHERE created_at <= ?
-              AND status IN ('done', 'error', 'timeout', 'failed', 'interrupted', 'expired')
-            ORDER BY created_at ASC
-            """,
-            (threshold,),
-        ).fetchall()
-        for row in rows:
-            try:
-                output_path = row["output_path"] or ""
-                output_dir = row["output_dir"] or ""
-                log_path = row["log_path"] or ""
-                if output_path:
-                    _cleanup_output_path(output_path)
-                if output_dir and output_dir != output_path:
-                    _cleanup_output_path(output_dir)
-                if log_path:
-                    _cleanup_output_path(log_path)
-                conn.execute("DELETE FROM tasks WHERE id=?", (row["id"],))
-                removed += 1
-            except Exception:
-                errors += 1
-        conn.commit()
-        conn.close()
-    return {"removed": removed, "errors": errors}
+    """Compatibility no-op: task history and its file references are permanent."""
+    return {"removed": 0, "errors": 0}
 
 def _cleaner_loop():
     while True:
         time.sleep(max(60, CLEANUP_INTERVAL_MINUTES * 60))
-        tmp_result = _cleanup_expired_tmp()
-        file_result = _cleanup_expired_outputs()
-        db_result = _cleanup_expired_task_records()
-        if tmp_result["removed"] or file_result["removed"] or db_result["removed"]:
-            logger.info(
-                f"[Cleaner] removed inputs={tmp_result['removed']} files={file_result['removed']} tasks={db_result['removed']}"
-            )
+        # Retention is permanent. Keep the thread as a compatibility hook for
+        # deployments that already configure a maintenance interval, but never
+        # delete user originals, outputs, logs, or task records here.
 
 threading.Thread(target=_cleaner_loop, daemon=True).start()
 
@@ -2069,6 +2028,43 @@ def _upload_request_meta(headers) -> dict:
         "template_type": headers.get("X-Template-Type", "") if headers else "",
     }
 
+
+def _processing_strategy_from_mode(value: object) -> str:
+    mode = str(value or "").strip().lower()
+    if not mode:
+        return ""
+    strategy = {
+        "smart": "structural",
+        "structural": "structural",
+        "strict": "strict",
+        "normalize": "normalize",
+    }.get(mode)
+    if not strategy:
+        raise _format_config_error(
+            "PROCESSING_MODE_INVALID",
+            "处理模式仅支持 smart、structural、strict 或 normalize",
+            field="X-Processing-Mode",
+            reason="处理模式无效",
+        )
+    return strategy
+
+
+def _validate_requested_processing_mode(format_config: dict | None, request_meta: dict) -> None:
+    """Validate the documented mode header and prevent silent config conflicts."""
+    requested = _processing_strategy_from_mode(request_meta.get("processing_mode", ""))
+    request_meta["processing_strategy"] = requested or "structural"
+    if not isinstance(format_config, dict):
+        return
+    processing = format_config.get("processing", {})
+    configured = str(processing.get("strategy", "") if isinstance(processing, dict) else "")
+    if configured and requested and configured != requested:
+        raise _format_config_error(
+            "PROCESSING_MODE_CONFLICT",
+            "X-Processing-Mode 与排版配置中的处理模式不一致",
+            field="X-Processing-Mode",
+            reason="处理模式冲突",
+        )
+
 def _admin_token_from(parsed) -> str:
     return (parse_qs(parsed.query).get("token") or [""])[0]
 
@@ -2390,6 +2386,7 @@ def _version_payload() -> dict:
         "version": APP_VERSION,
         "started_at": STARTED_AT,
         "bind_host": BIND_HOST,
+        "file_retention_policy": FILE_RETENTION_POLICY,
         "file_ttl_seconds": FILE_TTL,
         "max_tasks": MAX_TASKS,
         "task_retention_hours": TASK_RETENTION_HOURS,
@@ -2577,7 +2574,7 @@ a{{color:inherit;text-decoration:none}}button,input{{font:inherit}}
 <section class="section"><div class="work-grid"><div class="panel"><div class="panel-head"><div><h3>任务趋势</h3><p>按日期统计成功与失败任务</p></div><span class="section-meta">最近 {len(trend[-14:])} 个记录日</span></div><div class="panel-body"><div class="trend">{trend_bars}</div><div class="legend"><span><i class="done"></i>成功</span><span><i class="error"></i>失败</span></div></div></div><div class="panel"><div class="panel-head"><div><h3>运行状态</h3><p>服务依赖和处理队列</p></div><span class="service-pill {ready_class}">{ready_state}</span></div><div class="panel-body"><ul class="health-list">{check_items}</ul><div class="runtime-grid"><div class="runtime-item"><b>{version.get('max_workers',0)}</b><span>工作线程</span></div><div class="runtime-item"><b>{version.get('max_queue',0)}</b><span>队列上限</span></div><div class="runtime-item"><b>{version.get('max_upload_mb',0)} MB</b><span>单文件上限</span></div><div class="runtime-item"><b>{version.get('process_timeout_seconds',0)}s</b><span>处理超时</span></div></div></div></div></div></section>
 <section id="tasks" class="section"><div class="section-heading"><div><h2>任务中心</h2><p>优先处理失败任务，点击日志查看完整排版过程</p></div><span class="section-meta">{len(stats.get('recent',[]))} / {stats.get('recent_total',0)} 条</span></div><div class="panel"><div class="table-wrap"><table><thead><tr><th>时间</th><th>文件名</th><th>来源 IP</th><th>大小</th><th>类型</th><th>段数</th><th>耗时</th><th>状态</th><th>操作</th></tr></thead><tbody>{"".join(rows) or '<tr><td colspan="9"><div class="empty-state">暂无任务，用户上传 DOCX 后将在此显示。</div></td></tr>'}</tbody></table></div>{recent_pager}</div></section>
 <section id="security" class="section"><div class="section-heading"><div><h2>安全与访问</h2><p>查看访问活跃度并处理异常来源</p></div><span class="section-meta">{stats.get('ip_total',0)} 个活跃 IP · {len(stats.get('banned_ips',[]))} 个封禁</span></div><div class="work-grid"><div class="panel"><div class="panel-head"><div><h3>活跃 IP</h3><p>按最近访问时间排序</p></div></div><div class="table-wrap"><table><thead><tr><th>IP</th><th>上传</th><th>成功</th><th>失败</th><th>最近活跃</th><th>最近文件</th><th>操作</th></tr></thead><tbody>{ips or '<tr><td colspan="7"><div class="empty-state">暂无访问记录。</div></td></tr>'}</tbody></table></div>{ip_pager}</div><div class="panel"><div class="panel-head"><div><h3>封禁 IP</h3><p>危险操作需要管理员确认</p></div></div><div class="table-wrap"><table><thead><tr><th>IP</th><th>原因</th><th>时间</th><th>操作</th></tr></thead><tbody>{banned_rows or '<tr><td colspan="4"><div class="empty-state">暂无封禁 IP。</div></td></tr>'}</tbody></table></div></div></div></section>
-<section id="runtime" class="section"><div class="section-heading"><div><h2>运行设置</h2><p>调整访问限额、列表密度和过期文件清理</p></div><span class="section-meta">限额{limit_state}</span></div><div class="control-grid"><div class="panel"><div class="panel-head"><div><h3>上传限额</h3><p>同一 IP 在指定时间窗口内的排版次数限制</p></div></div><div class="panel-body"><form class="control-form" method="post" action="/limit">{csrf_input}<label><span>状态</span><span><input type="checkbox" name="enabled" value="1"{limit_checked}> 启用</span></label><label><span>时间窗口（秒）</span><input type="number" min="1" name="window_seconds" value="{limit['window_seconds']}"></label><label><span>允许次数</span><input type="number" min="1" name="count" value="{limit['count']}"></label><button class="primary-btn" type="submit">保存设置</button></form></div></div><div class="panel"><div class="panel-head"><div><h3>文件维护</h3><p>清理超过 TTL 的临时输入和输出文件</p></div></div><div class="panel-body"><p class="hint">文件保留时间：{version.get('file_ttl_seconds', FILE_TTL)} 秒。清理操作不会删除数据库任务记录。</p><form method="post" action="/cleanup" style="margin-top:13px">{csrf_input}<button class="danger-btn" type="submit">清理过期文件</button></form></div></div></div><div class="panel" style="margin-top:14px"><div class="panel-head"><div><h3>显示设置</h3><p>控制任务中心和活跃 IP 每页显示数量</p></div></div><div class="panel-body"><form class="control-form" method="get" action="/monitor"><label><span>最近任务/页</span><input type="number" min="1" max="{MAX_MONITOR_PAGE_SIZE}" name="recent_size" value="{query['recent_size']}"></label><label><span>活跃 IP/页</span><input type="number" min="1" max="{MAX_MONITOR_PAGE_SIZE}" name="ip_size" value="{query['ip_size']}"></label><button class="primary-btn" type="submit">应用</button><a class="top-link" href="/monitor">恢复默认</a><span class="hint">默认每页 50 条，最多 {MAX_MONITOR_PAGE_SIZE} 条。</span></form></div></div></section>
+<section id="runtime" class="section"><div class="section-heading"><div><h2>运行设置</h2><p>调整访问限额、列表密度和永久保存策略</p></div><span class="section-meta">限额{limit_state}</span></div><div class="control-grid"><div class="panel"><div class="panel-head"><div><h3>上传限额</h3><p>同一 IP 在指定时间窗口内的排版次数限制</p></div></div><div class="panel-body"><form class="control-form" method="post" action="/limit">{csrf_input}<label><span>状态</span><span><input type="checkbox" name="enabled" value="1"{limit_checked}> 启用</span></label><label><span>时间窗口（秒）</span><input type="number" min="1" name="window_seconds" value="{limit['window_seconds']}"></label><label><span>允许次数</span><input type="number" min="1" name="count" value="{limit['count']}"></label><button class="primary-btn" type="submit">保存设置</button></form></div></div><div class="panel"><div class="panel-head"><div><h3>文件保存</h3><p>已接收原件、排版结果、任务日志和任务记录永久保留</p></div></div><div class="panel-body"><p class="hint">系统不按时间自动删除用户文件。请结合服务器磁盘空间自行制定归档与备份策略。</p></div></div></div><div class="panel" style="margin-top:14px"><div class="panel-head"><div><h3>显示设置</h3><p>控制任务中心和活跃 IP 每页显示数量</p></div></div><div class="panel-body"><form class="control-form" method="get" action="/monitor"><label><span>最近任务/页</span><input type="number" min="1" max="{MAX_MONITOR_PAGE_SIZE}" name="recent_size" value="{query['recent_size']}"></label><label><span>活跃 IP/页</span><input type="number" min="1" max="{MAX_MONITOR_PAGE_SIZE}" name="ip_size" value="{query['ip_size']}"></label><button class="primary-btn" type="submit">应用</button><a class="top-link" href="/monitor">恢复默认</a><span class="hint">默认每页 50 条，最多 {MAX_MONITOR_PAGE_SIZE} 条。</span></form></div></div></section>
 <section id="logs" class="section"><div class="panel"><div class="panel-head"><div><h3>日志查询</h3><p>从任务中心的“查看日志”进入具体任务日志</p></div><a class="top-link" href="/stats" target="_blank">打开 JSON API</a></div><div class="panel-body"><p class="hint">日志仅保存在服务端运行目录，页面不会显示 Cookie、管理员密钥或代理密钥。失败任务优先从任务中心进入排查。</p></div></div></section>
 <footer class="side-footer" style="margin-top:24px">最后生成：{_html_escape(_now_local()[:19])} · 页面每 15 秒自动刷新</footer>
 </main></div>
@@ -3152,6 +3149,17 @@ class Handler(BaseHTTPRequestHandler):
                 return
             request_meta = _upload_request_meta(self.headers)
             try:
+                _validate_requested_processing_mode(format_config, request_meta)
+            except FormatConfigRequestError as cfg_error:
+                self._json_error(
+                    cfg_error.code,
+                    cfg_error.message,
+                    cfg_error.status,
+                    field=cfg_error.field,
+                    reason=cfg_error.reason,
+                )
+                return
+            try:
                 length = int(self.headers.get("Content-Length", 0))
             except ValueError:
                 length = 0
@@ -3160,9 +3168,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             task_id = str(uuid.uuid4())
             raw_name = unquote(self.headers.get("X-Filename", "upload.docx"))
-            task_tmp_dir = _task_tmp_dir(task_id)
-            os.makedirs(task_tmp_dir, exist_ok=True)
-            input_path = _task_tmp_input_path(task_id, raw_name)
+            task_upload_dir = _task_upload_dir(task_id)
+            os.makedirs(task_upload_dir, exist_ok=True)
+            input_path = _task_upload_input_path(task_id, raw_name)
             old_timeout = None
             try:
                 old_timeout = self.connection.gettimeout()
@@ -3172,11 +3180,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.connection.settimeout(UPLOAD_READ_TIMEOUT_SECONDS)
                 written = _read_exact_to_file(self.rfile, input_path, length, timeout=UPLOAD_READ_TIMEOUT_SECONDS)
             except (TimeoutError, socket.timeout):
-                _cleanup_task_tmp(task_id, input_path)
+                _cleanup_incomplete_upload(task_id, input_path)
                 self._json_error("UPLOAD_TIMEOUT", "文件上传超时", 408)
                 return
             except Exception:
-                _cleanup_task_tmp(task_id, input_path)
+                _cleanup_incomplete_upload(task_id, input_path)
                 self._json_error("UPLOAD_FAILED", "文件上传失败，请重试", 400)
                 return
             finally:
@@ -3186,7 +3194,7 @@ class Handler(BaseHTTPRequestHandler):
                     except Exception:
                         pass
             if written != length:
-                _cleanup_task_tmp(task_id, input_path)
+                _cleanup_incomplete_upload(task_id, input_path)
                 self._json_error("INCOMPLETE_UPLOAD", "读取不完整", 400)
                 return
             try:
@@ -3200,7 +3208,7 @@ class Handler(BaseHTTPRequestHandler):
                     max_compression_ratio=MAX_DOCX_COMPRESSION_RATIO,
                 )
             except DocxValidationError as exc:
-                _cleanup_task_tmp(task_id, input_path)
+                _cleanup_incomplete_upload(task_id, input_path)
                 self._json_error(exc.code, exc.message, exc.status)
                 return
             compatibility_warnings = detect_docx_complexity(input_path)
@@ -3224,7 +3232,7 @@ class Handler(BaseHTTPRequestHandler):
                                      compatibility_warnings=compatibility_warnings,
                                      owner_id=principal["owner_id"])
             except OverflowError as exc:
-                _cleanup_task_tmp(task_id, input_path)
+                _cleanup_incomplete_upload(task_id, input_path)
                 message = str(exc)
                 text = message.split(":", 1)[1].strip() if ":" in message else "服务器繁忙，请稍后再试"
                 self._json_error("QUEUE_FULL", text, 503)
@@ -3236,7 +3244,7 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             try:
                 if 'task_id' in locals():
-                    _cleanup_task_tmp(task_id, locals().get("input_path", ""))
+                    _cleanup_incomplete_upload(task_id, locals().get("input_path", ""))
             except Exception:
                 pass
             self._json_error("INTERNAL_ERROR", "服务器处理失败，请稍后重试", 500)
@@ -3389,13 +3397,9 @@ class Handler(BaseHTTPRequestHandler):
         self._redirect("/monitor")
 
     def _handle_cleanup(self, parsed):
-        tmp_result = _cleanup_expired_tmp()
-        file_result = _cleanup_expired_outputs()
-        db_result = _cleanup_expired_task_records()
-        logger.warning(
-            f"[Cleaner] manual cleanup inputs={tmp_result['removed']} files={file_result['removed']} tasks={db_result['removed']} "
-            f"errors={tmp_result['errors'] + file_result['errors'] + db_result['errors']}"
-        )
+        # Retain the route for older administrator bookmarks. It deliberately
+        # performs no deletion under the permanent retention policy.
+        logger.info("[Cleaner] manual cleanup skipped: permanent file retention is enabled")
         self._redirect("/monitor")
 
     def _handle_presets_list(self):
@@ -3587,7 +3591,7 @@ def main():
     print(f"监控面板:   登录后访问 {urls['monitor']}")
     print("鉴权配置:   ADMIN_TOKEN 已设置 | PROXY_SECRET 已设置")
     print(f"线程池: {MAX_WORKERS} | 队列: {MAX_QUEUE} | 上限: {MAX_SIZE//1048576}MB")
-    print(f"限流: {RATE_WINDOW}s/IP | 文件TTL: {FILE_TTL}s")
+    print(f"限流: {RATE_WINDOW}s/IP | 文件保留: 永久")
     for line in _startup_time_check_lines():
         print(line)
     print("外网访问:   Cloudflare Pages /api/* -> Nginx 80 -> 127.0.0.1:9527")

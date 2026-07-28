@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Protocol
 
 from .features import DocumentBlock, ParagraphFeatures
+from .global_context import DocumentContext
 from .model import DocumentMode, ParagraphType, SectionKind
+
+
+_OPENING_SPEECH_TITLE_RE = re.compile(r"^(?:[一二三四五六七八九十]+、)?在[\u4e00-\u9fffA-Za-z0-9（）()、，,.·\-]{3,70}(?:上)?的?讲话$")
 
 
 @dataclass(frozen=True)
@@ -26,12 +31,33 @@ class CandidateContext(Protocol):
     previous_type: ParagraphType | None
     index: int
     boundary_before: bool
+    document_context: DocumentContext
 
 
 class CandidateProvider(Protocol):
     name: str
 
     def propose(self, block: DocumentBlock, features: ParagraphFeatures, context: CandidateContext) -> list[Candidate]: ...
+
+
+def _section_hint_for_type(paragraph_type: ParagraphType) -> SectionKind:
+    if paragraph_type in {ParagraphType.MAIN_TITLE, ParagraphType.TITLE_CONTINUATION}:
+        return SectionKind.HEADER
+    if paragraph_type == ParagraphType.DISPATCH_NUMBER:
+        return SectionKind.DISPATCH_META
+    if paragraph_type in {ParagraphType.RECIPIENT, ParagraphType.ADDRESSING}:
+        return SectionKind.RECIPIENT
+    if paragraph_type in {ParagraphType.SIGNATURE_ORG, ParagraphType.SIGNATURE_DATE}:
+        return SectionKind.SIGNATURE
+    if paragraph_type in {ParagraphType.ATTACHMENT_NOTE, ParagraphType.ATTACHMENT_NOTE_ITEM}:
+        return SectionKind.ATTACHMENT_NOTE
+    if paragraph_type in {
+        ParagraphType.ATTACHMENT_TITLE,
+        ParagraphType.ATTACHMENT_BODY,
+        ParagraphType.ATTACHMENT_PAGE_MARK,
+    }:
+        return SectionKind.ATTACHMENT_BODY
+    return SectionKind.BODY
 
 
 class StructuralCandidateProvider:
@@ -67,10 +93,20 @@ class KeyValueCandidateProvider:
     name = "key-value"
 
     def propose(self, block, features, context):
-        if not features.key_value_label:
+        label = features.key_value_label or ""
+        if not label:
             return []
-        if features.key_value_label in {"时间", "地点", "主持", "记录", "出席", "缺席", "列席", "参会", "参加", "议题", "议定事项", "会议名称", "会议时间", "会议地点"}:
+        if label in {"时间", "地点", "主持", "记录", "出席", "缺席", "列席", "参会", "参加", "议题", "议定事项", "会议名称", "会议时间", "会议地点"}:
             return [Candidate(ParagraphType.MEETING_META, 0.99, self.name, ("meeting-label",), hard=True, section_hint=SectionKind.MEETING_META)]
+        # Normal key-value content is a short field label such as “责任单位”
+        # or “联系人”.  Date/attachment tails and sentence-like prose must not
+        # be elevated merely because they contain a colon.
+        if (
+            any(char.isdigit() for char in label)
+            or any(mark in label for mark in "。！？；;（）()[]〔〕")
+            or "附件" in label
+        ):
+            return []
         return [Candidate(ParagraphType.KEY_VALUE, 0.92, self.name, ("explicit-label",), section_hint=SectionKind.BODY)]
 
 
@@ -84,11 +120,27 @@ class NumberingCandidateProvider:
         kind = mapping.get(features.heading_shape_level)
         if kind is None:
             return []
+        position = context.index
+        global_context = context.document_context
+        family = global_context.heading_family(position)
+        score = 0.72
+        evidence = list(global_context.heading_reasons(position) or (f"heading-level-{features.heading_shape_level}",))
+        if family and family.count >= 2:
+            score += 0.18
+        if family and position in family.supported_positions:
+            score += 0.06
+        if not global_context.before_body(position):
+            score += 0.18
+        if global_context.before_body(position) and not (family and family.count >= 2):
+            # A solitary numbered first line competes with a document title;
+            # it is no longer promoted solely because Word called it Heading 1.
+            score -= 0.22
+            evidence.append("pre-body-heading-penalty")
         return [Candidate(
             kind,
-            0.93,
+            max(0.35, min(0.96, score)),
             self.name,
-            (f"heading-level-{features.heading_shape_level}",),
+            tuple(dict.fromkeys(evidence)),
             heading_level=features.heading_shape_level,
         )]
 
@@ -98,11 +150,58 @@ class SemanticCandidateProvider:
 
     def propose(self, block, features, context):
         result = []
-        if context.index == 0 and features.title_shape_score >= 0.5:
-            result.append(Candidate(ParagraphType.MAIN_TITLE, 0.82, self.name, ("title-shape",), section_hint=SectionKind.HEADER))
-        if not context.boundary_before and context.previous_type in {ParagraphType.MAIN_TITLE, ParagraphType.TITLE_CONTINUATION} and features.title_shape_score >= 0.5:
-            result.append(Candidate(ParagraphType.TITLE_CONTINUATION, 0.94, self.name, ("title-continuation",), section_hint=SectionKind.HEADER))
+        is_opening_speech = bool(_OPENING_SPEECH_TITLE_RE.fullmatch(features.compact_text))
+        global_context = context.document_context
+        score = global_context.title_score(context.index)
+        reasons = global_context.title_reasons(context.index)
+        # Existing documents commonly place a dispatch number immediately
+        # before a title-continuation block.  Preserve that stable contract;
+        # the front analysis still contributes metadata and body-boundary
+        # evidence without changing the renderer's title-continuation style.
+        follows_dispatch_continuation = (
+            context.previous_type == ParagraphType.DISPATCH_NUMBER
+            and str(features.legacy_type_id or "") == "title_cont"
+        )
+        if (score >= 0.44 or is_opening_speech) and not follows_dispatch_continuation:
+            score = max(score, 0.98 if is_opening_speech else 0.0)
+            result.append(Candidate(ParagraphType.MAIN_TITLE, score, self.name, reasons or ("opening-speech-title",), section_hint=SectionKind.HEADER))
+        if (
+            not context.boundary_before
+            and context.previous_type in {ParagraphType.MAIN_TITLE, ParagraphType.TITLE_CONTINUATION}
+            and context.index in global_context.front_positions
+            and score >= 0.48
+        ):
+            result.append(Candidate(ParagraphType.TITLE_CONTINUATION, max(0.86, min(0.95, score + 0.20)), self.name, ("front-title-continuation",), section_hint=SectionKind.HEADER))
         return result
+
+
+class FrontMatterMetadataCandidateProvider:
+    """Promote structurally supported role/name and date lines in the document head."""
+
+    name = "front-metadata"
+
+    def propose(self, block, features, context):
+        global_context = context.document_context
+        if global_context is None or not global_context.before_body(context.index):
+            return []
+        kind = global_context.front_metadata_kind(context.index)
+        if kind == "role_name":
+            return [Candidate(
+                ParagraphType.ROLE_NAME,
+                0.97,
+                self.name,
+                ("front-role-name-shape",),
+                section_hint=SectionKind.HEADER,
+            )]
+        if kind == "date_line":
+            return [Candidate(
+                ParagraphType.DATE_LINE,
+                0.97,
+                self.name,
+                ("front-date-shape",),
+                section_hint=SectionKind.HEADER,
+            )]
+        return []
 
 
 class CoreCandidateProvider:
@@ -145,7 +244,13 @@ class CoreCandidateProvider:
             score = float(meta.get("classification_confidence", 0.6))
         except (TypeError, ValueError):
             score = 0.6
-        return [Candidate(kind, max(0.0, min(score, 0.95)), self.name, ("core-classifier",))]
+        return [Candidate(
+            kind,
+            max(0.0, min(score, 0.95)),
+            self.name,
+            ("core-classifier",),
+            section_hint=_section_hint_for_type(kind),
+        )]
 
 
 class StyleCandidateProvider:
@@ -157,33 +262,59 @@ class StyleCandidateProvider:
         style = " ".join(features.style_name.strip().casefold().split())
         compact = style.replace(" ", "")
         mapping = {
-            "title": (ParagraphType.MAIN_TITLE, 0.9, "word-style-title"),
-            "标题": (ParagraphType.MAIN_TITLE, 0.9, "word-style-title-zh"),
-            "subtitle": (ParagraphType.TITLE_CONTINUATION, 0.86, "word-style-subtitle"),
-            "副标题": (ParagraphType.TITLE_CONTINUATION, 0.86, "word-style-subtitle-zh"),
-            "heading1": (ParagraphType.HEADING_1, 0.9, "word-style-heading1"),
-            "标题1": (ParagraphType.HEADING_1, 0.9, "word-style-heading1-zh"),
-            "heading2": (ParagraphType.HEADING_2, 0.9, "word-style-heading2"),
-            "标题2": (ParagraphType.HEADING_2, 0.9, "word-style-heading2-zh"),
-            "heading3": (ParagraphType.HEADING_3, 0.9, "word-style-heading3"),
-            "标题3": (ParagraphType.HEADING_3, 0.9, "word-style-heading3-zh"),
-            "heading4": (ParagraphType.HEADING_4, 0.9, "word-style-heading4"),
-            "标题4": (ParagraphType.HEADING_4, 0.9, "word-style-heading4-zh"),
-            "normal": (ParagraphType.BODY, 0.62, "word-style-normal"),
-            "正文": (ParagraphType.BODY, 0.62, "word-style-body-zh"),
+            "title": (ParagraphType.MAIN_TITLE, 0.44, "word-style-title-weak"),
+            "标题": (ParagraphType.MAIN_TITLE, 0.44, "word-style-title-zh-weak"),
+            "subtitle": (ParagraphType.TITLE_CONTINUATION, 0.42, "word-style-subtitle-weak"),
+            "副标题": (ParagraphType.TITLE_CONTINUATION, 0.42, "word-style-subtitle-zh-weak"),
+            "heading1": (ParagraphType.HEADING_1, 0.40, "word-style-heading1-weak"),
+            "标题1": (ParagraphType.HEADING_1, 0.40, "word-style-heading1-zh-weak"),
+            "heading2": (ParagraphType.HEADING_2, 0.40, "word-style-heading2-weak"),
+            "标题2": (ParagraphType.HEADING_2, 0.40, "word-style-heading2-zh-weak"),
+            "heading3": (ParagraphType.HEADING_3, 0.40, "word-style-heading3-weak"),
+            "标题3": (ParagraphType.HEADING_3, 0.40, "word-style-heading3-zh-weak"),
+            "heading4": (ParagraphType.HEADING_4, 0.40, "word-style-heading4-weak"),
+            "标题4": (ParagraphType.HEADING_4, 0.40, "word-style-heading4-zh-weak"),
+            "normal": (ParagraphType.BODY, 0.30, "word-style-normal-weak"),
+            "正文": (ParagraphType.BODY, 0.30, "word-style-body-zh-weak"),
         }
         mapped = mapping.get(compact)
         if mapped is None:
             return []
         paragraph_type, score, evidence = mapped
-        return [Candidate(paragraph_type, score, self.name, (evidence,), section_hint=SectionKind.HEADER if paragraph_type in {ParagraphType.MAIN_TITLE, ParagraphType.TITLE_CONTINUATION} else SectionKind.BODY)]
+        return [Candidate(paragraph_type, score, self.name, (evidence,), section_hint=_section_hint_for_type(paragraph_type))]
 
 
 class LegacyCandidateProvider:
     name = "legacy"
 
     def propose(self, block, features, context):
-        return [Candidate(_legacy_type(block.raw_reference), 0.88, self.name, ("legacy-importer",))]
+        paragraph_type = _legacy_type(block.raw_reference)
+        # Imported heading/title classifications can originate entirely from
+        # a pasted Word style.  Other established structural facts (date,
+        # role line, attachment, signature, etc.) remain useful evidence.
+        weak = {
+            ParagraphType.MAIN_TITLE,
+            ParagraphType.TITLE_CONTINUATION,
+            ParagraphType.HEADING_1,
+            ParagraphType.HEADING_2,
+            ParagraphType.HEADING_3,
+            ParagraphType.HEADING_4,
+            ParagraphType.HEADING_1_REPORT,
+        }
+        score = 0.55 if paragraph_type in weak else 0.88
+        evidence = "legacy-importer-weak" if paragraph_type in weak else "legacy-importer"
+        if (
+            paragraph_type == ParagraphType.TITLE_CONTINUATION
+            and context.previous_type == ParagraphType.DISPATCH_NUMBER
+        ):
+            score, evidence = 0.88, "legacy-dispatch-title-continuation"
+        return [Candidate(
+            paragraph_type,
+            score,
+            self.name,
+            (evidence,),
+            section_hint=_section_hint_for_type(paragraph_type),
+        )]
 
 
 def _legacy_type(paragraph) -> ParagraphType:
@@ -226,4 +357,4 @@ def _legacy_type(paragraph) -> ParagraphType:
     return aliases.get(value, ParagraphType.BODY)
 
 
-DEFAULT_PROVIDERS = (StructuralCandidateProvider(), KeyValueCandidateProvider(), NumberingCandidateProvider(), SemanticCandidateProvider(), CoreCandidateProvider(), LegacyCandidateProvider(), StyleCandidateProvider())
+DEFAULT_PROVIDERS = (StructuralCandidateProvider(), KeyValueCandidateProvider(), NumberingCandidateProvider(), SemanticCandidateProvider(), FrontMatterMetadataCandidateProvider(), CoreCandidateProvider(), LegacyCandidateProvider(), StyleCandidateProvider())

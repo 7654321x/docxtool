@@ -147,6 +147,7 @@ $requiredFiles = @(
     "src/docxtool/document/recognition/decoder.py",
     "src/docxtool/document/recognition/diagnostics.py",
     "src/docxtool/document/recognition/features.py",
+    "src/docxtool/document/recognition/global_context.py",
     "src/docxtool/document/recognition/model.py",
     "src/docxtool/document/recognition/validators.py",
     "src/docxtool/document/recognition/version.py",

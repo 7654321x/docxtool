@@ -367,9 +367,12 @@ def test_public_recognition_summary_contains_no_paragraph_text() -> None:
             "recognized_type": "heading2",
             "final_type": "body",
             "recognition_confidence": 0.51,
+            "review_confidence": 0.62,
+            "review_level": "review",
             "candidate_margin": 0.02,
             "needs_review": True,
             "review_reasons": ["SMALL_CANDIDATE_MARGIN"],
+            "evidence_summary": ["legacy-agreement"],
             "text_preview": "sensitive-text",
         }],
     }
@@ -378,6 +381,10 @@ def test_public_recognition_summary_contains_no_paragraph_text() -> None:
     assert summary["recognition_mode"] == "shadow"
     assert summary["result_applied"] is False
     assert summary["needs_review_count"] == 1
+    assert summary["review_count"] == 1
+    assert summary["review_items"][0]["confidence"] == 0.62
+    assert summary["review_items"][0]["review_level"] == "review"
+    assert summary["review_items"][0]["evidence_summary"] == ["legacy-agreement"]
     assert summary["review_items"][0]["final_type"] == "body"
     assert "sensitive-text" not in repr(summary)
 
