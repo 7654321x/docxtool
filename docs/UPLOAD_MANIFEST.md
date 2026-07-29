@@ -19,6 +19,7 @@ https://github.com/7654321x/docxtool.git
 | 文件路径 | 作用 | 说明 |
 | --- | --- | --- |
 | `README.md` | 项目说明和本地运行方式 | GitHub 首页会使用 |
+| `CHANGELOG.md` | 发布版本与变更记录 | 与 `pyproject.toml` 版本同步维护 |
 | `docs/DEPLOY.md` | 生产部署说明 | Cloudflare Pages + Python 后端 |
 | `docs/API.md` | HTTP 接口、鉴权、错误码 | 前后端联调和排错 |
 | `docs/RECOGNITION_ARCHITECTURE.md` | 识别架构和稳定边界 | 识别层维护依据 |

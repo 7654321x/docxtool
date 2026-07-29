@@ -106,6 +106,7 @@ $requiredFiles = @(
     ".gitattributes",
     ".gitignore",
     "AGENTS.md",
+    "CHANGELOG.md",
     "docs/API.md",
     "CONVENTIONS.md",
     "docs/DEPLOY.md",

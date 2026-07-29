@@ -27,7 +27,7 @@ function Assert-Administrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = [Security.Principal.WindowsPrincipal]::new($identity)
     if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-        throw "Installing the Windows scheduled task requires an administrator PowerShell 7 session."
+        throw "Installing the Windows scheduled task requires an administrator PowerShell session."
     }
 }
 
@@ -99,20 +99,50 @@ function Invoke-BackendPython {
     & $pythonRuntime.Executable @allArguments
 }
 
-function Get-CurrentPowerShellExecutable {
-    $hostProcess = Get-Process -Id $PID -ErrorAction Stop
-    if (-not $hostProcess.Path) {
-        throw "Unable to locate the current PowerShell executable."
+function Resolve-ServicePythonExecutable {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Runtime
+    )
+
+    # SYSTEM has a different Python launcher registry view from the interactive
+    # user. Resolve py.exe once during installation, then schedule the absolute
+    # interpreter path so the task does not depend on that per-user state.
+    $override = [string]$env:DOCXTOOL_PYTHON_EXE
+    if ($override) {
+        if (-not (Test-Path -LiteralPath $override -PathType Leaf)) {
+            throw "DOCXTOOL_PYTHON_EXE does not exist: $override"
+        }
+        return (Resolve-Path -LiteralPath $override).Path
     }
-    return $hostProcess.Path
+
+    $runtimeName = [IO.Path]::GetFileName([string]$Runtime.Executable)
+    if ($runtimeName -ine "py.exe" -and @($Runtime.Prefix).Count -eq 0) {
+        return (Resolve-Path -LiteralPath $Runtime.Executable).Path
+    }
+
+    $previousErrorAction = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $resolved = & $Runtime.Executable @($Runtime.Prefix) -c "import sys; print(sys.executable)" 2>$null
+        $resolvedOk = $LASTEXITCODE -eq 0
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorAction
+    }
+    $servicePython = (@($resolved) | Select-Object -Last 1).ToString().Trim()
+    if (-not $resolvedOk -or -not $servicePython -or -not (Test-Path -LiteralPath $servicePython -PathType Leaf)) {
+        throw "Unable to resolve an absolute Python executable for the scheduled task. Set DOCXTOOL_PYTHON_EXE if needed."
+    }
+    return (Resolve-Path -LiteralPath $servicePython).Path
 }
 
 function Register-BackendTask {
     Assert-Administrator
     Assert-BackendPrerequisites
-    $powershell = Get-CurrentPowerShellExecutable
-    $arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$PSCommandPath`" -ServiceRun"
-    $action = New-ScheduledTaskAction -Execute $powershell -Argument $arguments -WorkingDirectory $root
+    $servicePython = Resolve-ServicePythonExecutable -Runtime $pythonRuntime
+    $arguments = "-X utf8 `"$(Join-Path $root 'server.py')`""
+    $action = New-ScheduledTaskAction -Execute $servicePython -Argument $arguments -WorkingDirectory $root
     $trigger = New-ScheduledTaskTrigger -AtStartup
     $settings = New-ScheduledTaskSettingsSet `
         -RestartCount 999 `
@@ -131,6 +161,7 @@ function Register-BackendTask {
         -Force | Out-Null
     Start-ScheduledTask -TaskName $taskName
     Write-Host "Installed and started Windows scheduled task: $taskName"
+    Write-Host "Service Python: $servicePython"
     Write-Host "Backend health check: http://127.0.0.1:9527/health"
 }
 
