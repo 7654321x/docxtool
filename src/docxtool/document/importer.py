@@ -10,6 +10,8 @@
   - 不负责排版渲染（由 engine.py 负责）
 """
 
+from __future__ import annotations
+
 import copy
 from difflib import SequenceMatcher
 import hashlib
@@ -2182,10 +2184,26 @@ class DocxImporter:
                 # a trailing signature organization.  A following date is a
                 # stronger structural boundary, so page-break presence must not
                 # suppress the split.
-                if (has_line_break
-                        and _should_split_structural_line_breaks(split_lines, following_text)):
+                # A manual page break can be embedded in a malformed physical
+                # paragraph such as "一、标题。正文".  Structural mode must
+                # still split the reliable heading/body boundary first; keeping
+                # that page break would otherwise make the body inherit the
+                # heading paragraph and its formatting.
+                inline_heading_parts = (
+                    _split_inline_heading_body(line)
+                    if structural_preservation else [line]
+                )
+                should_split_inline_heading = len(inline_heading_parts) > 1
+                if (
+                    should_split_inline_heading
+                    or (
+                        has_line_break
+                        and _should_split_structural_line_breaks(split_lines, following_text)
+                    )
+                ):
                     logical_lines = []
-                    for split_line in split_lines:
+                    source_lines = split_lines if has_line_break else [line]
+                    for split_line in source_lines:
                         if split_line:
                             logical_lines.extend(
                                 _split_inline_heading_body(split_line)

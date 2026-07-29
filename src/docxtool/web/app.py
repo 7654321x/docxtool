@@ -8,6 +8,8 @@
 访问：http://localhost:9527
 """
 
+from __future__ import annotations
+
 import os
 import sys
 import json

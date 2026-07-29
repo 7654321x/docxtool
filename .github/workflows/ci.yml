@@ -10,7 +10,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10"]
+        python-version: ["3.8", "3.10"]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -42,3 +42,25 @@ jobs:
 
       - name: Verify package build
         run: python -m build
+
+  windows-startup:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.8", "3.10"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Create project virtual environment
+        run: python -m venv .venv
+
+      - name: Check Windows startup entry point
+        shell: pwsh
+        run: pwsh -NoProfile -File .\run.ps1 -CheckOnly

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import json
-from importlib import resources
 
 import pytest
 
@@ -21,7 +20,7 @@ def _format_config_headers(config: dict) -> dict[str, str]:
 
 
 def test_default_format_config_is_packaged_resource() -> None:
-    config = resources.files("docxtool.resources").joinpath("config/default-format.json")
+    config = default_format_config_path()
 
     assert config.is_file()
     data = json.loads(config.read_text(encoding="utf-8"))
@@ -44,7 +43,7 @@ def test_default_format_config_loads_without_current_working_directory(monkeypat
 
 
 def test_default_format_config_is_valid_x_format_config() -> None:
-    config = resources.files("docxtool.resources").joinpath("config/default-format.json")
+    config = default_format_config_path()
     data = json.loads(config.read_text(encoding="utf-8"))
 
     rules, settings, features = load_rules_and_settings(data)

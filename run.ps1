@@ -16,6 +16,36 @@ $envFile = Join-Path $root ".env"
 $taskName = "DocxtoolBackend"
 $srcDirectory = Join-Path $root "src"
 $pythonRuntime = $null
+$supportedPythonMessage = "Python 3.8, 3.9, or 3.10"
+
+function Test-SupportedPython {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Executable,
+        [string[]]$Prefix = @()
+    )
+
+    $previousErrorAction = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        & $Executable @Prefix -c "import sys; raise SystemExit(0 if (3, 8) <= sys.version_info[:2] < (3, 11) else 1)" *> $null
+        return $LASTEXITCODE -eq 0
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorAction
+    }
+}
+
+function Get-PythonVersion {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Executable,
+        [string[]]$Prefix = @()
+    )
+
+    $version = & $Executable @Prefix -c "import sys; print('.'.join(map(str, sys.version_info[:3])))" 2>$null
+    return (@($version) | Select-Object -Last 1).ToString().Trim()
+}
 
 function Assert-BackendPrerequisites {
     if (-not (Test-Path -LiteralPath $envFile -PathType Leaf)) {
@@ -42,11 +72,28 @@ function Install-BackendDependencies {
 }
 
 function Resolve-BackendPython {
+    $override = [string]$env:DOCXTOOL_PYTHON_EXE
+    if ($override) {
+        if (-not (Test-Path -LiteralPath $override -PathType Leaf)) {
+            throw "DOCXTOOL_PYTHON_EXE does not exist: $override"
+        }
+        $resolvedOverride = (Resolve-Path -LiteralPath $override).Path
+        if (-not (Test-SupportedPython -Executable $resolvedOverride)) {
+            $actualVersion = Get-PythonVersion -Executable $resolvedOverride
+            throw "DOCXTOOL_PYTHON_EXE uses Python $actualVersion. Supported versions are $supportedPythonMessage."
+        }
+        return [pscustomobject]@{
+            Executable = $resolvedOverride
+            Prefix = @()
+            Display = $resolvedOverride
+        }
+    }
+
     $venvPython = Join-Path $root ".venv\Scripts\python.exe"
     if (Test-Path -LiteralPath $venvPython -PathType Leaf) {
-        & $venvPython -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 10) else 1)"
-        if ($LASTEXITCODE -ne 0) {
-            throw "The project virtual environment must use Python 3.10. Recreate .venv with Python 3.10 before starting the backend."
+        if (-not (Test-SupportedPython -Executable $venvPython)) {
+            $actualVersion = Get-PythonVersion -Executable $venvPython
+            throw "The project virtual environment uses Python $actualVersion. Supported versions are $supportedPythonMessage."
         }
         return [pscustomobject]@{
             Executable = $venvPython
@@ -58,7 +105,7 @@ function Resolve-BackendPython {
     $pyLauncher = Get-Command py.exe -ErrorAction SilentlyContinue
 
     if ($pyLauncher) {
-        foreach ($selector in @("-3.10")) {
+        foreach ($selector in @("-3.8", "-3.9", "-3.10")) {
             $previousErrorAction = $ErrorActionPreference
             try {
                 # Windows PowerShell 5.1 turns py.exe's missing-version stderr into
@@ -83,6 +130,10 @@ function Resolve-BackendPython {
 
     $python = Get-Command python.exe -ErrorAction SilentlyContinue
     if ($python) {
+        if (-not (Test-SupportedPython -Executable $python.Source)) {
+            $actualVersion = Get-PythonVersion -Executable $python.Source
+            throw "python.exe resolves to Python $actualVersion. Supported versions are $supportedPythonMessage."
+        }
         return [pscustomobject]@{
             Executable = $python.Source
             Prefix = @()
@@ -90,7 +141,7 @@ function Resolve-BackendPython {
         }
     }
 
-    throw "Python 3.10 was not found. Install Python 3.10 and ensure py.exe or python.exe is available."
+    throw "$supportedPythonMessage was not found. Install a supported runtime and ensure py.exe or python.exe is available."
 }
 
 function Invoke-BackendPython {
@@ -137,29 +188,78 @@ function Resolve-ServicePythonExecutable {
     return (Resolve-Path -LiteralPath $servicePython).Path
 }
 
+function Test-ModernScheduledTaskSupport {
+    return (
+        $null -ne (Get-Command New-ScheduledTaskAction -ErrorAction SilentlyContinue) -and
+        $null -ne (Get-Command Register-ScheduledTask -ErrorAction SilentlyContinue) -and
+        $null -ne (Get-Command Start-ScheduledTask -ErrorAction SilentlyContinue)
+    )
+}
+
+function Unregister-BackendTask {
+    if (Test-ModernScheduledTaskSupport) {
+        $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+        if (-not $existingTask) {
+            Write-Host "Scheduled task is not installed: $taskName"
+            return
+        }
+        Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+        Write-Host "Uninstalled Windows scheduled task: $taskName"
+        return
+    }
+
+    & schtasks.exe /Query /TN $taskName *> $null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Scheduled task is not installed: $taskName"
+        return
+    }
+    & schtasks.exe /End /TN $taskName *> $null
+    & schtasks.exe /Delete /TN $taskName /F | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to remove Windows scheduled task: $taskName"
+    }
+    Write-Host "Uninstalled Windows scheduled task: $taskName"
+}
+
 function Register-BackendTask {
     Assert-Administrator
     Assert-BackendPrerequisites
     $servicePython = Resolve-ServicePythonExecutable -Runtime $pythonRuntime
-    $arguments = "-X utf8 `"$(Join-Path $root 'server.py')`""
-    $action = New-ScheduledTaskAction -Execute $servicePython -Argument $arguments -WorkingDirectory $root
-    $trigger = New-ScheduledTaskTrigger -AtStartup
-    $settings = New-ScheduledTaskSettingsSet `
-        -RestartCount 999 `
-        -RestartInterval (New-TimeSpan -Minutes 1) `
-        -ExecutionTimeLimit ([TimeSpan]::Zero) `
-        -MultipleInstances IgnoreNew `
-        -StartWhenAvailable
-    $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-    Register-ScheduledTask `
-        -TaskName $taskName `
-        -Action $action `
-        -Trigger $trigger `
-        -Settings $settings `
-        -Principal $principal `
-        -Description "Docxtool Python backend service" `
-        -Force | Out-Null
-    Start-ScheduledTask -TaskName $taskName
+    $serverPath = Join-Path $root "server.py"
+
+    if (Test-ModernScheduledTaskSupport) {
+        $arguments = "-X utf8 `"$serverPath`""
+        $action = New-ScheduledTaskAction -Execute $servicePython -Argument $arguments -WorkingDirectory $root
+        $trigger = New-ScheduledTaskTrigger -AtStartup
+        $settings = New-ScheduledTaskSettingsSet `
+            -RestartCount 999 `
+            -RestartInterval (New-TimeSpan -Minutes 1) `
+            -ExecutionTimeLimit ([TimeSpan]::Zero) `
+            -MultipleInstances IgnoreNew `
+            -StartWhenAvailable
+        $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+        Register-ScheduledTask `
+            -TaskName $taskName `
+            -Action $action `
+            -Trigger $trigger `
+            -Settings $settings `
+            -Principal $principal `
+            -Description "Docxtool Python backend service" `
+            -Force | Out-Null
+        Start-ScheduledTask -TaskName $taskName
+    }
+    else {
+        $taskCommand = "`"$servicePython`" -X utf8 `"$serverPath`""
+        & schtasks.exe /Create /TN $taskName /SC ONSTART /RU SYSTEM /RL HIGHEST /TR $taskCommand /F | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to install the Windows 7 scheduled task: $taskName"
+        }
+        & schtasks.exe /Run /TN $taskName | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw "Installed the task but failed to start it: $taskName"
+        }
+    }
     Write-Host "Installed and started Windows scheduled task: $taskName"
     Write-Host "Service Python: $servicePython"
     Write-Host "Backend health check: http://127.0.0.1:9527/health"
@@ -169,14 +269,7 @@ Push-Location -LiteralPath $root
 try {
     if ($UninstallService) {
         Assert-Administrator
-        if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
-            Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-            Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
-            Write-Host "Uninstalled Windows scheduled task: $taskName"
-        }
-        else {
-            Write-Host "Scheduled task is not installed: $taskName"
-        }
+        Unregister-BackendTask
         return
     }
 

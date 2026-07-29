@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import copy
 import hashlib
 from pathlib import Path
@@ -209,9 +211,10 @@ def test_upward_multiple_signers_use_separate_runs_and_tabs(tmp_path):
     actual_positions = [
         stop.position for stop in signer_paragraphs[0].paragraph_format.tab_stops
     ]
+    assert len(actual_positions) == len(expected_positions)
     assert all(
         abs(actual - expected) <= 635
-        for actual, expected in zip(actual_positions, expected_positions, strict=True)
+        for actual, expected in zip(actual_positions, expected_positions)
     )
     assert all(
         stop.alignment == WD_TAB_ALIGNMENT.RIGHT

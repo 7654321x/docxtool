@@ -6,6 +6,8 @@
   - 所有 meta 映射在 export_doc 主循环中完成
 """
 
+from __future__ import annotations
+
 import copy
 import hashlib
 import io
@@ -657,7 +659,10 @@ _LEADING_NUM_RE = re.compile(
     r"^\s*(?:"
     r"[一二三四五六七八九十百千零〇]+、"
     r"|[（(][一二三四五六七八九十百千零〇0-9]+[）)]"
-    r"|\d+[、\.．]"
+    # A copied list number can carry duplicate punctuation (for example
+    # "3..标题").  Consume the whole punctuation run before inserting the
+    # canonical heading number, rather than leaving a second dot behind.
+    r"|\d+[、\.．]+"
     r")\s*"
 )
 
@@ -871,13 +876,25 @@ def _insert_paragraph_after(para) -> Paragraph:
     return Paragraph(new_p, para._parent)
 
 
-def _apply_heading1_report_split(para, text: str, rule, body_rule, line_twips: int):
-    """heading1_report 句号后内容换行：标题部分黑体，句号后另起一段 body。"""
+def _apply_heading1_report_split(
+    para,
+    text: str,
+    rule,
+    body_rule,
+    line_twips: int,
+    *,
+    remove_heading_period: bool = False,
+):
+    """Split a reliable heading1/body line into two differently styled paragraphs."""
     period = text.find('。')
     if period <= 0 or period >= len(text) - 1:
         return None
-    heading_text = text[:period + 1]  # 含句号
-    body_text = text[period + 1:].lstrip()
+    body_text = text[period + 1:].strip()
+    if len(body_text) < _INLINE_HEADING_BODY_MIN_CHARS:
+        return None
+    # A general independent heading1 drops its terminal full stop.  The legacy
+    # heading1_report type deliberately preserves it for existing templates.
+    heading_text = text[:period].rstrip() if remove_heading_period else text[:period + 1]
     # 截断当前段落为标题部分
     write = _segment_writer(para)
     write(heading_text)
@@ -2197,37 +2214,19 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
             if pd.type_id == "glossary_title":
                 _set_para_spacing(para, before_lines=1, after_lines=1, line_twips=line_twips)
 
-            # heading1/heading2 行内标题：句号分割，标题样式 + 正文仿宋
-            if normalization_processing and pd.type_id == "heading1" and "。" in para.text:
-                period_pos = para.text.find("。")  # 用 rendered text
-                full_text = para.text  # 保存全文
-                after = full_text[period_pos + 1:].strip()
-                if len(after) >= 5 and para.runs:
-                    heading_text = full_text[:period_pos + 1]
-                    body_text = full_text[period_pos + 1:]
-                    # 标题文字去掉句号
-                    para.runs[-1].text = heading_text.rstrip("。")
-                    # 正文另起一段
-                    body_para = doc.add_paragraph(body_text)
-                    _set_paragraph_style_id(body_para, "DCT-Body")
-                    # 预写入 spacing
-                    bpPr = body_para._element.get_or_add_pPr()
-                    spacing = OxmlElement('w:spacing')
-                    spacing.set(qn('w:line'), str(line_twips))
-                    spacing.set(qn('w:lineRule'), 'exact')
-                    bpPr.append(spacing)
-                    # 应用正文样式
-                    body_rule = rules[5] if len(rules) > 5 else StyleRule.default_for_row(5)
-                    apply_style(body_para, body_rule)
-                    _apply_rule_paragraph_format(body_para, body_rule, line_twips)
-                    # 关闭孤行控制
-                    wc = OxmlElement('w:widowControl')
-                    wc.set(qn('w:val'), '0')
-                    _set_unique(bpPr, qn('w:widowControl'), wc)
-                    ctxSpc = OxmlElement('w:contextualSpacing')
-                    ctxSpc.set(qn('w:val'), '0')
-                    _set_unique(bpPr, qn('w:contextualSpacing'), ctxSpc)
-                    # 编号 + 后续处理
+            # A numbered first-level heading followed by a real sentence is a
+            # malformed one-paragraph structure.  All editable modes repair
+            # that structural boundary; normalize mode is not required.
+            if not strict_preservation and pd.type_id == "heading1" and "。" in para.text:
+                full_text = para.text
+                body_rule = rules[5] if len(rules) > 5 else StyleRule.default_for_row(5)
+                body_para = _apply_heading1_report_split(
+                    para, full_text, resolved, body_rule, line_twips,
+                    remove_heading_period=True,
+                )
+                if body_para is not None:
+                    body_text = body_para.text
+                    stats["body"] += 1
                     apply_superscript_split(body_para)
                     if numbered_bold_enabled:
                         _apply_special_bold(body_para, body_text)
@@ -2266,8 +2265,14 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
             if (pd.type_id == "responsibility_line" or pd.meta.get("colon_bold")) and para.runs:
                 _apply_key_value_line_format(para)
 
-            # heading1_report 句号后换行
-            if normalization_processing and pd.meta.get("heading1_report_split") and para.runs:
+            # Legacy report metadata still reaches this compatibility branch
+            # when the generic structural split did not already consume it.
+            if (
+                normalization_processing
+                and pd.meta.get("heading1_report_split")
+                and para.runs
+                and "。" in para.text
+            ):
                 body_rule = rules[5] if len(rules) > 5 else StyleRule.default_for_row(5)
                 body_para = _apply_heading1_report_split(para, pd.text, resolved, body_rule, line_twips)
                 if body_para is not None:

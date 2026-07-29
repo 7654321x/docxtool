@@ -1,5 +1,7 @@
 """Validation and identity helpers shared by the HTTP layer."""
 
+from __future__ import annotations
+
 import unicodedata
 
 

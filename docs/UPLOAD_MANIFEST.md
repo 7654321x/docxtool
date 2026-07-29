@@ -33,7 +33,7 @@ https://github.com/7654321x/docxtool.git
 | `requirements-dev.lock` | 带哈希的开发与 CI 依赖锁 | 固定 pytest、ruff、build 和 pip-tools |
 | `pyproject.toml` | Python 包配置 | `src` 布局和 wheel 资源打包 |
 | `run.sh` | Linux 启动脚本 | 调用 `server.py` |
-| `run.ps1` | Windows 启动脚本 | 优先使用项目 Python 3.10 虚拟环境并启动后端 |
+| `run.ps1` | Windows 启动脚本 | 支持 Python 3.8—3.10，并为 Windows 7 回退到 `schtasks.exe` |
 | `deploy/nginx-docxtool.conf` | Nginx代理模板 | 不包含服务器IP或磁盘绝对路径 |
 | `.env.example` | 环境变量示例 | 不含真实密钥 |
 | `.gitignore` | Git 忽略规则 | 不会自动移除已跟踪文件 |
@@ -90,7 +90,7 @@ https://github.com/7654321x/docxtool.git
 | `scripts/compare_recognition_runs.py` | 安全识别差分和确定性检查 |
 | `scripts/analyze_end_format.py` | 排版结果与正确模板的无正文格式差异分析 |
 | `scripts/analyze_letterhead_batch.py` | 批量版头状态与问题归类 |
-| `scripts/batch_test_docx.py` | 编号测试文档批处理与安全报告 |
+| `scripts/batch_test_docx.py` | 编号测试文档批处理、结构对齐模板比较与可选视觉渲染抽查 |
 | `scripts/generate_005_format_fixtures.py` | 可复现的本地乱格式测试文档生成 |
 | `scripts/normalize_correct_template_role_spacing.py` | 正确模板职务姓名空段归一化 |
 | `scripts/migrate_legacy_database.ps1` | 旧数据库复制迁移辅助脚本，默认 dry run |

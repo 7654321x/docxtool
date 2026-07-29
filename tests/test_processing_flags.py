@@ -142,6 +142,29 @@ class ProcessingFlagsTest(unittest.TestCase):
                 ],
             )
 
+    def test_smart_mode_splits_heading_body_despite_inline_page_break(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "inline-page-break.docx"
+            document = Document()
+            paragraph = document.add_paragraph()
+            paragraph.add_run("一、一级标题。这里是应当独立排版的正文前半部分，")
+            paragraph.add_run().add_break(WD_BREAK.PAGE)
+            paragraph.add_run("后半部分仍应识别为同一段正文内容。")
+            document.save(src)
+
+            rules, _, features = load_rules_and_settings({"mode": "smart"})
+            data = DocxImporter().load(str(src), rules, features=features)
+
+            self.assertEqual(
+                [(item.type_id, item.text) for item in data.paragraphs],
+                [
+                    ("heading1", "一、一级标题。"),
+                    ("body", "这里是应当独立排版的正文前半部分，后半部分仍应识别为同一段正文内容。"),
+                ],
+            )
+            self.assertFalse(any(token.kind == "page_break" for token in data.paragraphs[0].inline_tokens))
+            self.assertFalse(any(token.kind == "page_break" for token in data.paragraphs[1].inline_tokens))
+
     def test_smart_mode_recovers_speech_title_and_soft_line_body_from_heading_style(self):
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "speech.docx"
@@ -198,7 +221,7 @@ class ProcessingFlagsTest(unittest.TestCase):
                 "测试材料",
                 "一、第一部分",
                 "（六）第二层",
-                "5.第三层",
+                "5..第三层",
                 "（6）第四层",
                 "正文内容正文内容正文内容。",
             ):

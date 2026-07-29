@@ -38,6 +38,10 @@
 
 ## 本地运行
 
+支持的 Python 版本为 3.8、3.9 和 3.10。Windows 7 SP1 固定使用 Python 3.8，
+Windows 8.1 及以上可使用 Python 3.8 至 3.10。面向最终用户的商业安装包应内置
+Python 运行时，不要求用户自行安装或配置 Python。
+
 Windows PowerShell 7：
 
 ```pwsh
@@ -48,6 +52,15 @@ pwsh -NoProfile -File .\run.ps1 -InstallDependencies
 pwsh -NoProfile -File .\run.ps1
 # 注册为Windows计划任务，退出远程桌面后仍运行：
 pwsh -NoProfile -File .\run.ps1 -InstallService
+```
+
+Windows 7 SP1 需要安装 Windows Management Framework 5.1，并使用系统自带的
+Windows PowerShell 5.1 执行同一脚本；脚本会在缺少新式计划任务命令时自动改用
+`schtasks.exe`：
+
+```pwsh
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\run.ps1 -CheckOnly
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\run.ps1 -InstallService
 ```
 
 `run.ps1`每次启动前都会核对`requirements.lock`，缺少依赖时自动下载并安装；
@@ -70,7 +83,8 @@ export PROXY_SECRET='换成你的长随机代理密钥'
 python -m pip install --require-hashes -r requirements.lock
 ```
 
-`requirements.lock` 由 `pyproject.toml` 生成，不手工维护哈希：
+`requirements.lock` 由 Python 3.8 环境根据 `pyproject.toml` 生成，不手工维护哈希；
+同一锁文件必须同时通过 Python 3.8 和 3.10 安装验证：
 
 ```bash
 python -m piptools compile pyproject.toml --generate-hashes --no-emit-index-url --no-emit-trusted-host --output-file requirements.lock

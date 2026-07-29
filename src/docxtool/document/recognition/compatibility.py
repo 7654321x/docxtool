@@ -1,5 +1,7 @@
 """Single compatibility boundary between recognition and legacy rendering."""
 
+from __future__ import annotations
+
 from .model import ParagraphType
 
 

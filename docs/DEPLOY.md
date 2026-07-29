@@ -36,6 +36,10 @@ resources/frontend/pages/_worker.js
 把整个项目目录复制到服务器任意位置。启动脚本始终以自身所在目录作为项目根，
 不依赖盘符、当前工作目录或固定部署路径：
 
+- Windows 7 SP1 使用 Python 3.8，并安装 Windows Management Framework 5.1；
+- Windows 8.1 及以上支持 Python 3.8、3.9、3.10；
+- 面向最终用户的安装包应内置 Python 运行时，不要求用户手工安装依赖。
+
 ```pwsh
 Copy-Item .env.example .env
 # 编辑 .env，设置生产密钥、FRONTEND_ORIGIN 和 PRODUCTION_MODE=true
@@ -58,8 +62,15 @@ pwsh -NoProfile -File .\run.ps1
 pwsh -NoProfile -File .\run.ps1 -InstallService
 ```
 
-该任务使用`SYSTEM`账户启动，异常退出后自动重启。服务输出追加到
-`var/logs/service-console.log`，排版日志仍写入`var/logs`。
+新式计划任务使用`SYSTEM`账户启动并配置异常重启。排版日志写入`var/logs`。
+
+Windows 7 缺少新式计划任务 PowerShell 命令时，`run.ps1`自动使用系统
+`schtasks.exe`完成安装、启动和卸载，并保证开机重新启动后端；该回退任务不提供
+新式任务的分钟级异常重启策略。Windows 7 上可使用：
+
+```pwsh
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\run.ps1 -InstallService
+```
 
 卸载计划任务：
 
@@ -85,7 +96,8 @@ pip install --require-hashes -r requirements.lock
 ```
 
 开发环境可继续使用 `requirements.txt`。生产环境固定使用 `requirements.lock`；该文件由
-`pyproject.toml` 通过以下命令生成，禁止手工编造或修改包哈希：
+Python 3.8 根据`pyproject.toml`通过以下命令生成，禁止手工编造或修改包哈希，且发布前
+必须在 Python 3.8 和 3.10 中分别验证安装：
 
 ```bash
 python -m piptools compile pyproject.toml --generate-hashes --no-emit-index-url --no-emit-trusted-host --output-file requirements.lock

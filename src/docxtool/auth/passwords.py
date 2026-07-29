@@ -1,5 +1,7 @@
 """Argon2id password hashing. Plain passwords never leave this module."""
 
+from __future__ import annotations
+
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
 

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import base64
 import posixpath
 import tempfile
@@ -205,7 +207,8 @@ class SectionHeaderFooterTest(unittest.TestCase):
                 self.assertIsNotNone(settings_root.find(".//" + qn("w:evenAndOddHeaders")))
 
                 labels_by_section = ["S1", "S2", "S3"]
-                for section, label in zip(sections[:3], labels_by_section, strict=True):
+                self.assertEqual(len(sections[:3]), len(labels_by_section))
+                for section, label in zip(sections[:3], labels_by_section):
                     refs = _refs_for_section(section)
                     header_types = {ref["type"] for ref in refs if ref["kind"] == "header"}
                     footer_types = {ref["type"] for ref in refs if ref["kind"] == "footer"}

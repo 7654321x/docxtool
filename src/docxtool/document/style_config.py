@@ -7,6 +7,8 @@
   - PyQt5 可选依赖（桌面端），Web 端通过 from_config() 替代
 """
 
+from __future__ import annotations
+
 import logging
 import math
 import os as _os
@@ -153,7 +155,9 @@ def _font_size_from_config(field_path: str, value) -> tuple[str, float]:
     if label in FONT_SIZE_MAP:
         return label, FONT_SIZE_MAP[label]
     try:
-        size_pt = finite_float(field_path, label.removesuffix("pt").removesuffix("磅"), 1.0, 72.0)
+        numeric_label = label[:-2] if label.endswith("pt") else label
+        numeric_label = numeric_label[:-1] if numeric_label.endswith("磅") else numeric_label
+        size_pt = finite_float(field_path, numeric_label, 1.0, 72.0)
     except ConfigValidationError as exc:
         raise ConfigValidationError(field_path, f"未知字号 {label}") from exc
     return f"{size_pt:g}pt", size_pt

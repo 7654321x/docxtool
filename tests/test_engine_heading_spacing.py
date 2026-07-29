@@ -80,6 +80,22 @@ class EngineHeadingSpacingTest(unittest.TestCase):
         self.assertFalse(body.runs[-1].bold)
         self.assertEqual(_body_font(body.runs[-1]), "仿宋_GB2312")
 
+    def test_structural_heading1_period_splits_body_to_next_paragraph(self):
+        doc = self._export([
+            ParagraphData(
+                text="一级标题。这里是正文内容这里是正文内容",
+                type_id="heading1",
+                original_text="一、一级标题。这里是正文内容这里是正文内容",
+                features=ParagraphFeatures(),
+                meta={"numbering": "一、", "heading_inline_body": True},
+            )
+        ], processing_strategy="structural")
+
+        self.assertEqual(doc.paragraphs[0].text, "一、一级标题")
+        self.assertEqual(doc.paragraphs[1].text, "这里是正文内容这里是正文内容")
+        self.assertEqual(doc.paragraphs[1].style.style_id, "DCT-Body")
+        self.assertFalse(doc.paragraphs[1].runs[-1].bold)
+
     def test_terminal_body_uses_widow_control_without_changing_earlier_body(self):
         doc = self._export([
             ParagraphData("第一段正文内容。", "body", "第一段正文内容。", ParagraphFeatures()),
