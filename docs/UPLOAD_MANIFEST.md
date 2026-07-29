@@ -24,6 +24,7 @@ https://github.com/7654321x/docxtool.git
 | `docs/API.md` | HTTP 接口、鉴权、错误码 | 前后端联调和排错 |
 | `docs/RECOGNITION_ARCHITECTURE.md` | 识别架构和稳定边界 | 识别层维护依据 |
 | `docs/RECOGNITION_RELEASE.md` | 识别发布门禁和回滚 | 发布验收依据 |
+| `docs/SDK.md` | 本地识别 SDK 接口和集成边界 | WPS/第三方软件调用依据 |
 | `docs/UPLOAD_MANIFEST.md` | 本清单 | 上传范围依据 |
 | `docs/GITHUB_UPLOAD_GUIDE.md` | GitHub 发布说明 | 不包含私钥 |
 | `AGENTS.md` | 本地协作规则 | Codex/AI 工作规则 |
@@ -56,6 +57,7 @@ https://github.com/7654321x/docxtool.git
 | `src/docxtool/auth/service.py` | 用户名和密码输入归一化及验证 |
 | `src/docxtool/web/__init__.py` | Web 包入口 |
 | `src/docxtool/web/app.py` | Web 服务入口、上传下载、任务队列、管理后台、健康检查 |
+| `src/docxtool/sdk/` | 面向第三方的只读识别 SDK | 返回脱敏结构计划，不操作宿主文档 |
 | `src/docxtool/document/__init__.py` | 文档处理包入口 |
 | `src/docxtool/document/importer.py` | DOCX 结构识别、段落分类、元数据生成 |
 | `src/docxtool/document/classifier.py` | 文档模式和段落结构分类 |

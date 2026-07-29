@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3 - 2026-07-29
+
+- Added a stable, local-only `docxtool.sdk` recognition API for third-party integrations.
+- Added the `docxtool-recognize` command for writing redacted JSON recognition plans from DOCX snapshots.
+- Kept the existing web service, recognition rules, formatting engine, and DOCX export flow unchanged.
+
 ## 1.2 - 2026-07-29
 
 - Added Python 3.8 compatibility for Windows 7 while retaining Python 3.10 support.
