@@ -25,6 +25,7 @@ https://github.com/7654321x/docxtool.git
 | `docs/RECOGNITION_ARCHITECTURE.md` | 识别架构和稳定边界 | 识别层维护依据 |
 | `docs/RECOGNITION_RELEASE.md` | 识别发布门禁和回滚 | 发布验收依据 |
 | `docs/SDK.md` | 本地识别 SDK 接口和集成边界 | WPS/第三方软件调用依据 |
+| `wps/公文格式规范.md` | 当前公文格式与识别边界说明 | 可交给 WPS 项目或其他 AI 使用 |
 | `docs/UPLOAD_MANIFEST.md` | 本清单 | 上传范围依据 |
 | `docs/GITHUB_UPLOAD_GUIDE.md` | GitHub 发布说明 | 不包含私钥 |
 | `AGENTS.md` | 本地协作规则 | Codex/AI 工作规则 |

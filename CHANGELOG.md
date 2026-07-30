@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.4 - 2026-07-30
+
+- Added a reusable Chinese official-document formatting and recognition specification for WPS and third-party AI integrations.
+
 ## 1.3 - 2026-07-29
 
 - Added a stable, local-only `docxtool.sdk` recognition API for third-party integrations.

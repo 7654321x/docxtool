@@ -46,7 +46,7 @@ pwsh -NoProfile -Command "git ls-remote https://github.com/7654321x/docxtool.git
 
 默认发布以下类型文件：
 
-- 项目文档：`README.md`、`CHANGELOG.md`、`docs/DEPLOY.md`、`docs/API.md`、`docs/SDK.md`、`docs/RECOGNITION_ARCHITECTURE.md`、`docs/RECOGNITION_RELEASE.md`、`docs/UPLOAD_MANIFEST.md`、`docs/GITHUB_UPLOAD_GUIDE.md`、`AGENTS.md`、`CONVENTIONS.md`
+- 项目文档：`README.md`、`CHANGELOG.md`、`docs/DEPLOY.md`、`docs/API.md`、`docs/SDK.md`、`docs/RECOGNITION_ARCHITECTURE.md`、`docs/RECOGNITION_RELEASE.md`、`docs/UPLOAD_MANIFEST.md`、`docs/GITHUB_UPLOAD_GUIDE.md`、`wps/公文格式规范.md`、`AGENTS.md`、`CONVENTIONS.md`
 - 依赖和启动：`requirements.txt`、`requirements.lock`、`requirements-dev.lock`、`run.sh`、`run.ps1`
 - 服务器代理模板：`deploy/nginx-docxtool.conf`
 - 配置：`.env.example`、`.gitignore`、`.gitattributes`、`pytest.ini`、`ruff.toml`、`pyproject.toml`、`.github/workflows/ci.yml`
@@ -72,6 +72,7 @@ pwsh -NoProfile -Command "git ls-remote https://github.com/7654321x/docxtool.git
 - `.venv/`、缓存、构建产物、临时依赖包
 - 根目录用户 `.docx`
 - 未脱敏的测试 Word、用户 Word、日志正文
+- `wps/` 下的 wheel、Python 运行时、构建产物和插件私有文件；当前仅允许 `wps/公文格式规范.md`
 
 `.gitignore` 只影响未跟踪文件。已经被 Git 跟踪或已经进入历史的文件，不会因为写入 `.gitignore` 自动消失。
 

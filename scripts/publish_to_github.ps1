@@ -109,6 +109,7 @@ $requiredFiles = @(
     "CHANGELOG.md",
     "docs/API.md",
     "docs/SDK.md",
+    "wps/公文格式规范.md",
     "CONVENTIONS.md",
     "docs/DEPLOY.md",
     "docs/RECOGNITION_ARCHITECTURE.md",
