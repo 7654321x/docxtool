@@ -25,6 +25,7 @@ from typing import Dict, List, Optional, Tuple
 from docxtool.document.classifier import ClassificationOptions, classify_paragraphs
 from docxtool.document.recognition import apply_recognition
 from docxtool.document.recognition.version import RECOGNITION_VERSION_TAG
+from docxtool.document.source_tape import SourceTape, canonicalize_text, utf16_length
 from docxtool.document.style_config import (
     NB_FIXED, NB_SUFFIXES,
     logger, ImportError,
@@ -54,6 +55,16 @@ class ParagraphFeatures:
     source_physical_text: str = ""
     source_start_utf16: Optional[int] = None
     source_end_utf16: Optional[int] = None
+    # Source coordinates always describe the original physical paragraph, not
+    # a WPS/Word Range.  Logical blocks retain both raw and canonical spans.
+    source_canonical_text: str = ""
+    source_canonical_start_utf16: Optional[int] = None
+    source_canonical_end_utf16: Optional[int] = None
+    source_fragment_text: str = ""
+    source_canonical_fragment_text: str = ""
+    source_locator_status: str = "unresolved"
+    source_locator_evidence: Tuple[str, ...] = ()
+    source_locator_warnings: Tuple[str, ...] = ()
     is_in_table: bool = False
     contains_image: bool = False
     is_new_line: bool = False     # 是否由 \n 拆分出的新行
@@ -88,8 +99,96 @@ class ParagraphData:
 
 
 def _utf16_length(value: str) -> int:
-    """Return the offset unit used by the WPS/Word Range API."""
-    return len((value or "").encode("utf-16-le")) // 2
+    """Return a string length in UTF-16 code units.
+
+    This is a source-text coordinate only.  A host editor must translate it
+    after verifying the corresponding source text; it is not a WPS Range.
+    """
+    return utf16_length(value)
+
+
+def _trim_source_span(source: str, start: int, end: int) -> Tuple[int, int]:
+    """Trim a source span without losing the original coordinate system."""
+    while start < end and source[start].isspace():
+        start += 1
+    while end > start and source[end - 1].isspace():
+        end -= 1
+    return start, end
+
+
+def _source_line_spans(source: str) -> List[Tuple[int, int]]:
+    """Return non-empty raw line spans without reverse text lookup."""
+    spans: List[Tuple[int, int]] = []
+    line_start = 0
+    index = 0
+    while index <= len(source):
+        if index == len(source) or source[index] in "\r\n":
+            start, end = _trim_source_span(source, line_start, index)
+            if start < end:
+                spans.append((start, end))
+            if index < len(source) and source[index] == "\r" and index + 1 < len(source) and source[index + 1] == "\n":
+                index += 1
+            line_start = index + 1
+        index += 1
+    return spans
+
+
+def _split_inline_heading_body_spans(source: str, start: int, end: int) -> List[Tuple[int, int]]:
+    """Split a reliable inline heading/body boundary as source spans."""
+    start, end = _trim_source_span(source, start, end)
+    text = source[start:end]
+    if not _detect_numbering_prefix(text):
+        return [(start, end)] if start < end else []
+    period_index = text.find("。")
+    if period_index < 0:
+        return [(start, end)]
+    body_start, body_end = _trim_source_span(source, start + period_index + 1, end)
+    if len(source[body_start:body_end]) < 5:
+        return [(start, end)]
+    return [(start, start + period_index + 1), (body_start, body_end)]
+
+
+def _set_source_locator(
+    child: ParagraphFeatures,
+    parent: ParagraphFeatures,
+    start: int,
+    end: int,
+) -> None:
+    """Attach a logical block to an exact raw source range.
+
+    Splitting code calls this with positions from the original physical text.
+    No normalized fragment is searched back into the source paragraph.
+    """
+    child.source_physical_paragraph_index = parent.source_physical_paragraph_index
+    child.source_physical_text = parent.source_physical_text
+    tape = SourceTape.from_text(parent.source_physical_text)
+    child.source_canonical_text = tape.canonical_text
+    if parent.source_physical_paragraph_index is None:
+        child.source_locator_status = "unresolved"
+        child.source_locator_warnings = ("SOURCE_PHYSICAL_PARAGRAPH_MISSING",)
+        return
+    if not 0 <= start < end <= len(tape.raw_text):
+        child.source_locator_status = "unresolved"
+        child.source_locator_warnings = ("SOURCE_RANGE_OUT_OF_BOUNDS",)
+        return
+    canonical_range = tape.canonical_range_for_raw_span(start, end)
+    raw_start = tape.raw_offset_utf16(start)
+    raw_end = tape.raw_offset_utf16(end)
+    if canonical_range is None or raw_start is None or raw_end is None:
+        child.source_locator_status = "unresolved"
+        child.source_locator_warnings = ("SOURCE_RANGE_UNRESOLVED",)
+        return
+    raw_fragment = tape.raw_text[start:end]
+    canonical_fragment = canonicalize_text(raw_fragment)
+    child.source_start_utf16 = raw_start
+    child.source_end_utf16 = raw_end
+    child.source_canonical_start_utf16 = canonical_range[0]
+    child.source_canonical_end_utf16 = canonical_range[1]
+    child.source_fragment_text = raw_fragment
+    child.source_canonical_fragment_text = canonical_fragment
+    child.source_locator_status = "confirmed"
+    child.source_locator_evidence = ("RAW_RANGE_READBACK_MATCH", "CANONICAL_RANGE_MAPPED")
+    child.source_locator_warnings = ()
 
 
 def _inherit_source_locator(
@@ -98,14 +197,18 @@ def _inherit_source_locator(
     fragment: str,
     search_from: int = 0,
 ) -> int:
-    """Attach one logical fragment to its exact original physical paragraph.
+    """Legacy fallback for third-party callers of the old private helper.
 
-    A failed exact lookup deliberately leaves the locator unset.  Callers must
-    surface review instead of guessing with a logical paragraph index.
+    Importer paths use :func:`_set_source_locator` with source spans.  This
+    compatibility fallback is deliberately never marked confirmed because a
+    reverse lookup cannot prove repeated-text occurrence binding.
     """
     child.source_physical_paragraph_index = parent.source_physical_paragraph_index
     child.source_physical_text = parent.source_physical_text
+    child.source_canonical_text = canonicalize_text(child.source_physical_text)
     if parent.source_physical_paragraph_index is None:
+        child.source_locator_status = "unresolved"
+        child.source_locator_warnings = ("SOURCE_PHYSICAL_PARAGRAPH_MISSING",)
         return search_from
     source = parent.source_physical_text or ""
     value = fragment or ""
@@ -116,10 +219,21 @@ def _inherit_source_locator(
     if start < 0:
         child.source_start_utf16 = None
         child.source_end_utf16 = None
+        child.source_locator_status = "unresolved"
+        child.source_locator_warnings = ("SOURCE_RANGE_UNRESOLVED",)
         return search_from
     end = start + len(value)
     child.source_start_utf16 = _utf16_length(source[:start])
     child.source_end_utf16 = _utf16_length(source[:end])
+    tape = SourceTape.from_text(source)
+    canonical_range = tape.canonical_range_for_raw_span(start, end)
+    child.source_canonical_start_utf16 = canonical_range[0] if canonical_range else None
+    child.source_canonical_end_utf16 = canonical_range[1] if canonical_range else None
+    child.source_fragment_text = source[start:end]
+    child.source_canonical_fragment_text = canonicalize_text(child.source_fragment_text)
+    child.source_locator_status = "review"
+    child.source_locator_evidence = ("LEGACY_TEXT_SEARCH",)
+    child.source_locator_warnings = ("SOURCE_OCCURRENCE_AMBIGUOUS",)
     return end
 
 
@@ -185,6 +299,7 @@ def _is_standalone_image_paragraph(paragraph) -> bool:
 def extract_features(paragraph, index: int) -> ParagraphFeatures:
     """从 python-docx Paragraph 提取物理特征。"""
     text = paragraph.text.strip()
+    source_tape = SourceTape.from_text(paragraph.text)
     pf = ParagraphFeatures(
         text=text,
         paragraph_index=index,
@@ -192,6 +307,14 @@ def extract_features(paragraph, index: int) -> ParagraphFeatures:
         source_physical_text=paragraph.text,
         source_start_utf16=0,
         source_end_utf16=_utf16_length(paragraph.text),
+        source_canonical_text=source_tape.canonical_text,
+        source_canonical_start_utf16=0,
+        source_canonical_end_utf16=_utf16_length(source_tape.canonical_text),
+        source_fragment_text=paragraph.text,
+        source_canonical_fragment_text=source_tape.canonical_text,
+        source_locator_status="confirmed" if paragraph.text else "unresolved",
+        source_locator_evidence=("PHYSICAL_PARAGRAPH_EXTRACTED",) if paragraph.text else (),
+        source_locator_warnings=() if paragraph.text else ("SOURCE_RANGE_UNRESOLVED",),
     )
 
     # 样式名
@@ -2186,132 +2309,103 @@ class DocxImporter:
             ):
                 raw_blocks[block_index] = ("protected_paragraph_xml", block[1], block[2])
 
-        # 第二步：按换行符拆分段落（解决 3/4 级标题合并在同一段的问题）
-
-        # ── 扁平化 + 单次分类（单 pass，传真实 next_line）──
+        # 第二步：从原始物理段落范围拆分逻辑行。这里不能把已规范化的
+        # 字符串再 find() 回原文，否则重复文字会被绑定到错误 occurrence。
         flat_lines = []  # text / table / image paragraph XML / protected caption XML
+
+        def source_features(parent, start, end, *, is_new_line=False):
+            child = ParagraphFeatures(
+                font_name=parent.font_name, font_size_pt=parent.font_size_pt,
+                bold=parent.bold, alignment=parent.alignment,
+                style_name=parent.style_name,
+                numbering_prefix=parent.numbering_prefix,
+                paragraph_index=len(flat_lines),
+                is_new_line=is_new_line,
+                dominant_font_name=parent.dominant_font_name,
+                weighted_font_size=parent.weighted_font_size,
+                max_font_size=parent.max_font_size,
+                min_font_size=parent.min_font_size,
+                bold_char_ratio=parent.bold_char_ratio,
+                italic_char_ratio=parent.italic_char_ratio,
+                explicitly_formatted_char_ratio=parent.explicitly_formatted_char_ratio,
+            )
+            _set_source_locator(child, parent, start, end)
+            return child
+
         for block_index, block in enumerate(raw_blocks):
             if block[0] != "paragraph":
                 flat_lines.append(block)
                 continue
             _, para, pf, inline_tokens, sectPr = block
+            source = pf.source_physical_text
+            source_spans = _source_line_spans(source)
+            has_structural_inline = any(
+                token.kind in {"tab", "line_break", "page_break"} for token in inline_tokens
+            )
+            has_page_break = any(token.kind == "page_break" for token in inline_tokens)
+
             if strict_preservation:
-                raw_text = inline_tokens_text(inline_tokens) if inline_tokens else para.text
+                raw_text = inline_tokens_text(inline_tokens) if inline_tokens else source
                 flat_lines.append(("text", raw_text, pf, list(inline_tokens), sectPr))
                 continue
-            text = para.text.strip()
-            text = normalize_text(text)
-            if not text and sectPr is not None:
-                sub_pf = ParagraphFeatures(
-                    font_name=pf.font_name, font_size_pt=pf.font_size_pt,
-                    bold=pf.bold, alignment=pf.alignment,
-                    style_name=pf.style_name,
-                    numbering_prefix=pf.numbering_prefix,
-                    paragraph_index=len(flat_lines),
-                    is_new_line=False,
-                )
-                _inherit_source_locator(sub_pf, pf, "")
-                flat_lines.append(("text", "", sub_pf, [], sectPr))
-                continue
-            has_structural_inline = any(token.kind in {"tab", "line_break", "page_break"} for token in inline_tokens)
-            if has_structural_inline:
-                normalized_tokens = normalize_tokens(inline_tokens)
-                raw_inline_text = inline_tokens_text(normalized_tokens)
-                line = raw_inline_text.strip()
-                boundary_whitespace_trimmed = raw_inline_text != line
-                has_page_break = any(token.kind == "page_break" for token in normalized_tokens)
-                has_line_break = any(token.kind == "line_break" for token in normalized_tokens)
-                split_lines = [part.strip() for part in line.split("\n")]
-                following_text = ""
-                for following in raw_blocks[block_index + 1:]:
-                    if following[0] == "paragraph":
-                        following_text = normalize_text(following[1].text).strip()
-                        if following_text:
-                            break
-                # Manual page breaks are often mixed with blank soft breaks before
-                # a trailing signature organization.  A following date is a
-                # stronger structural boundary, so page-break presence must not
-                # suppress the split.
-                # A manual page break can be embedded in a malformed physical
-                # paragraph such as "一、标题。正文".  Structural mode must
-                # still split the reliable heading/body boundary first; keeping
-                # that page break would otherwise make the body inherit the
-                # heading paragraph and its formatting.
-                inline_heading_parts = (
-                    _split_inline_heading_body(line)
-                    if structural_preservation else [line]
-                )
-                should_split_inline_heading = len(inline_heading_parts) > 1
-                if (
-                    should_split_inline_heading
-                    or (
-                        has_line_break
-                        and _should_split_structural_line_breaks(split_lines, following_text)
+
+            if not source_spans:
+                if sectPr is not None or has_page_break:
+                    sub_pf = ParagraphFeatures(
+                        font_name=pf.font_name, font_size_pt=pf.font_size_pt,
+                        bold=pf.bold, alignment=pf.alignment, style_name=pf.style_name,
+                        numbering_prefix=pf.numbering_prefix, paragraph_index=len(flat_lines),
                     )
-                ):
-                    logical_lines = []
-                    source_lines = split_lines if has_line_break else [line]
-                    for split_line in source_lines:
-                        if split_line:
-                            logical_lines.extend(
-                                _split_inline_heading_body(split_line)
-                                if structural_preservation else [split_line]
-                            )
-                    source_cursor = 0
-                    for li, split_line in enumerate(logical_lines):
-                        if not split_line:
-                            continue
-                        line_numbering = pf.numbering_prefix if li == 0 else _detect_numbering_prefix(split_line)
-                        sub_pf = ParagraphFeatures(
-                            font_name=pf.font_name, font_size_pt=pf.font_size_pt,
-                            bold=pf.bold, alignment=pf.alignment,
-                            style_name=pf.style_name,
-                            numbering_prefix=line_numbering,
-                            paragraph_index=len(flat_lines),
-                            is_new_line=(li > 0),
-                        )
-                        source_cursor = _inherit_source_locator(sub_pf, pf, split_line, source_cursor)
-                        flat_lines.append(("text", split_line, sub_pf, [], sectPr if li == len(logical_lines) - 1 else None))
-                    continue
-                if not line and has_page_break:
-                    line = text
-                if not line and not has_page_break:
-                    continue
-                sub_pf = ParagraphFeatures(
-                    font_name=pf.font_name, font_size_pt=pf.font_size_pt,
-                    bold=pf.bold, alignment=pf.alignment,
-                    style_name=pf.style_name,
-                    numbering_prefix=pf.numbering_prefix,
-                    paragraph_index=len(flat_lines),
-                    is_new_line=False,
-                )
-                _inherit_source_locator(sub_pf, pf, line)
-                preserved_tokens = [] if boundary_whitespace_trimmed else normalized_tokens
-                flat_lines.append(("text", line, sub_pf, preserved_tokens, sectPr))
+                    sub_pf.source_physical_paragraph_index = pf.source_physical_paragraph_index
+                    sub_pf.source_physical_text = source
+                    sub_pf.source_canonical_text = canonicalize_text(source)
+                    sub_pf.source_locator_warnings = ("SOURCE_RANGE_UNRESOLVED",)
+                    flat_lines.append(("text", "", sub_pf, [], sectPr))
                 continue
-            logical_lines = []
-            for source_line in text.split('\n'):
-                logical_lines.extend(
-                    _split_inline_heading_body(source_line)
-                    if structural_preservation else [source_line]
-                )
-            source_cursor = 0
-            for li, line in enumerate(logical_lines):
-                line = line.strip()
-                line = normalize_text(line)
+
+            following_text = ""
+            for following in raw_blocks[block_index + 1:]:
+                if following[0] == "paragraph":
+                    following_text = normalize_text(following[1].text).strip()
+                    if following_text:
+                        break
+
+            source_lines = [source[start:end] for start, end in source_spans]
+            whole_start, whole_end = _trim_source_span(source, 0, len(source))
+            whole_heading_spans = (
+                _split_inline_heading_body_spans(source, whole_start, whole_end)
+                if structural_preservation else [(whole_start, whole_end)]
+            )
+            split_soft_lines = (
+                len(source_spans) > 1
+                and _should_split_structural_line_breaks(source_lines, following_text)
+            )
+            split_inline_heading = len(whole_heading_spans) > 1
+
+            if has_structural_inline and not (split_soft_lines or split_inline_heading):
+                spans = [(whole_start, whole_end)]
+                preserve_tokens = list(inline_tokens) if source[whole_start:whole_end] == source else []
+            else:
+                spans = []
+                for start, end in source_spans:
+                    if structural_preservation:
+                        spans.extend(_split_inline_heading_body_spans(source, start, end))
+                    else:
+                        spans.append((start, end))
+                preserve_tokens = []
+
+            for li, (start, end) in enumerate(spans):
+                raw_fragment = source[start:end]
+                line = normalize_text(raw_fragment)
                 if not line:
                     continue
-                line_numbering = pf.numbering_prefix if li == 0 else _detect_numbering_prefix(line)
-                sub_pf = ParagraphFeatures(
-                    font_name=pf.font_name, font_size_pt=pf.font_size_pt,
-                    bold=pf.bold, alignment=pf.alignment,
-                    style_name=pf.style_name,
-                    numbering_prefix=line_numbering,
-                    paragraph_index=len(flat_lines),
-                    is_new_line=(li > 0),
-                )
-                source_cursor = _inherit_source_locator(sub_pf, pf, line, source_cursor)
-                flat_lines.append(("text", line, sub_pf, [], sectPr if li == len(logical_lines) - 1 else None))
+                sub_pf = source_features(pf, start, end, is_new_line=li > 0)
+                sub_pf.numbering_prefix = pf.numbering_prefix if li == 0 else _detect_numbering_prefix(line)
+                flat_lines.append((
+                    "text", line, sub_pf,
+                    preserve_tokens if len(spans) == 1 else [],
+                    sectPr if li == len(spans) - 1 else None,
+                ))
 
         ctx = DetectionContext()
         # 预扫描：找到最后一个正文/标题行的位置，之后的区域视为文档尾部

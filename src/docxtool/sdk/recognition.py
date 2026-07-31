@@ -14,6 +14,7 @@ from docxtool.document.recognition.version import (
     RECOGNITION_ENGINE_VERSION,
 )
 from docxtool.document.style_config import load_rules_and_settings
+from docxtool.document.source_tape import SourceTape, canonicalize_text, utf16_length
 from docxtool.paths import default_format_config_path
 
 from .models import RecognitionBlock, RecognitionPlan, ReviewItem
@@ -63,35 +64,67 @@ def _source_paragraph_index(paragraph: ParagraphData) -> Optional[int]:
     return value if isinstance(value, int) and value >= 0 else None
 
 
-def _source_locator(paragraph: ParagraphData) -> tuple[Optional[int], str, int, Optional[int], Optional[int], bool]:
+def _source_locator(paragraph: ParagraphData) -> dict:
+    """Return a verified v2 source locator without exposing text by default."""
     features = getattr(paragraph, "features", None)
     physical_index = _source_paragraph_index(paragraph)
     physical_text = str(getattr(features, "source_physical_text", "") or "")
+    tape = SourceTape.from_text(physical_text)
     start = getattr(features, "source_start_utf16", None)
     end = getattr(features, "source_end_utf16", None)
-    physical_length = len(physical_text.encode("utf-16-le")) // 2
+    canonical_start = getattr(features, "source_canonical_start_utf16", None)
+    canonical_end = getattr(features, "source_canonical_end_utf16", None)
+    physical_length = utf16_length(physical_text)
+    canonical_length = utf16_length(tape.canonical_text)
     valid_offsets = (
         physical_index is not None
         and isinstance(start, int)
         and isinstance(end, int)
         and 0 <= start <= end <= physical_length
     )
+    raw_fragment = ""
+    canonical_fragment = ""
+    evidence = list(getattr(features, "source_locator_evidence", ()) or ())
+    warnings = list(getattr(features, "source_locator_warnings", ()) or ())
+    status = str(getattr(features, "source_locator_status", "unresolved") or "unresolved")
     verified = False
     if valid_offsets:
-        try:
-            encoded = physical_text.encode("utf-16-le")
-            selected = encoded[start * 2:end * 2].decode("utf-16-le")
-            verified = selected == _visible_text(paragraph)
-        except UnicodeError:
-            verified = False
-    return (
-        physical_index,
-        _sha256_text(physical_text) if physical_index is not None else "",
-        physical_length,
-        start if valid_offsets else None,
-        end if valid_offsets else None,
-        verified,
-    )
+        raw_fragment = tape.raw_slice_utf16(start, end) or ""
+        canonical_fragment = canonicalize_text(raw_fragment)
+        expected_raw = str(getattr(features, "source_fragment_text", "") or "")
+        expected_canonical = str(getattr(features, "source_canonical_fragment_text", "") or "")
+        canonical_valid = (
+            isinstance(canonical_start, int)
+            and isinstance(canonical_end, int)
+            and 0 <= canonical_start <= canonical_end <= canonical_length
+            and tape.raw_span_for_canonical_range(canonical_start, canonical_end) is not None
+        )
+        if raw_fragment == expected_raw and canonical_fragment == expected_canonical and canonical_valid:
+            evidence.append("RAW_RANGE_READBACK_MATCH")
+            verified = status == "confirmed"
+        else:
+            status = "unresolved"
+            warnings.append("SOURCE_TEXT_HASH_MISMATCH")
+    else:
+        status = "unresolved"
+        warnings.append("SOURCE_RANGE_UNRESOLVED")
+    return {
+        "physical_index": physical_index,
+        "physical_hash": _sha256_text(physical_text) if physical_index is not None else "",
+        "physical_canonical_hash": _sha256_text(tape.canonical_text) if physical_index is not None else "",
+        "physical_length": physical_length,
+        "physical_canonical_length": canonical_length,
+        "raw_start": start if valid_offsets else None,
+        "raw_end": end if valid_offsets else None,
+        "canonical_start": canonical_start if valid_offsets else None,
+        "canonical_end": canonical_end if valid_offsets else None,
+        "raw_fragment": raw_fragment,
+        "canonical_fragment": canonical_fragment,
+        "status": status,
+        "verified": verified,
+        "evidence": tuple(dict.fromkeys(evidence)),
+        "warnings": tuple(dict.fromkeys(warnings)),
+    }
 
 
 def _safe_strings(value: Any) -> tuple[str, ...]:
@@ -131,35 +164,85 @@ def _load_rules_and_features(
     return rules, resolved_features
 
 
-def _build_plan(data, source_sha256: str, include_text: bool = False) -> RecognitionPlan:
+def _build_plan(
+    data,
+    source_sha256: str,
+    include_text: bool = False,
+    include_raw_text: bool = False,
+) -> RecognitionPlan:
     paragraphs = list(getattr(data, "paragraphs", ()) or ())
     visible_hashes = [_sha256_text(_visible_text(item)) if _visible_text(item) else "" for item in paragraphs]
     report = getattr(data, "recognition_diagnostics", {}) or {}
     blocks = []
     review_items = []
+    locators = [_source_locator(paragraph) for paragraph in paragraphs]
     physical_occurrences = {}
     occurrence_by_physical_index = {}
-    for paragraph in paragraphs:
-        physical_index, physical_hash, _length, _start, _end, _verified = _source_locator(paragraph)
+    segments_by_physical = {}
+    for index, locator in enumerate(locators):
+        physical_index = locator["physical_index"]
+        physical_hash = locator["physical_hash"]
         if physical_index is None or not physical_hash or physical_index in occurrence_by_physical_index:
             continue
         occurrence_by_physical_index[physical_index] = physical_occurrences.get(physical_hash, 0)
         physical_occurrences[physical_hash] = occurrence_by_physical_index[physical_index] + 1
+        segments_by_physical[physical_index] = []
+    for index, locator in enumerate(locators):
+        physical_index = locator["physical_index"]
+        if (
+            physical_index is not None
+            and locator["status"] == "confirmed"
+            and locator["raw_start"] is not None
+            and locator["raw_end"] is not None
+        ):
+            segments_by_physical.setdefault(physical_index, []).append(index)
+    segment_meta = {}
+    for physical_index, indexes in segments_by_physical.items():
+        ordered = sorted(indexes, key=lambda value: (locators[value]["raw_start"], value))
+        previous_end = -1
+        for segment_index, index in enumerate(ordered):
+            locator = locators[index]
+            if locator["raw_start"] < previous_end:
+                locator["status"] = "unresolved"
+                locator["verified"] = False
+                locator["warnings"] = tuple(dict.fromkeys(locator["warnings"] + ("SOURCE_RANGE_OVERLAP",)))
+            previous_end = max(previous_end, locator["raw_end"])
+            segment_meta[index] = (segment_index, len(ordered))
     for index, paragraph in enumerate(paragraphs):
         meta = dict(getattr(paragraph, "meta", {}) or {})
         type_id = str(getattr(paragraph, "type_id", "unknown") or "unknown")
         review_level = str(meta.get("review_level", "confirmed") or "confirmed")
-        physical_index, physical_hash, physical_length, range_start, range_end, locator_verified = _source_locator(paragraph)
+        locator = locators[index]
+        physical_index = locator["physical_index"]
+        segment_index, segment_count = segment_meta.get(index, (0, 0))
+        prefix = ""
+        suffix = ""
+        if locator["raw_start"] is not None and locator["raw_end"] is not None:
+            tape = SourceTape.from_text(str(getattr(getattr(paragraph, "features", None), "source_physical_text", "") or ""))
+            prefix = tape.raw_slice_utf16(0, locator["raw_start"]) or ""
+            suffix = tape.raw_slice_utf16(locator["raw_end"], locator["physical_length"]) or ""
         blocks.append(RecognitionBlock(
             block_index=index,
             source_paragraph_index=physical_index,
             physical_paragraph_index=physical_index,
             physical_occurrence_index=occurrence_by_physical_index.get(physical_index, 0),
-            physical_text_sha256=physical_hash,
-            physical_text_length_utf16=physical_length,
-            range_start_utf16=range_start,
-            range_end_utf16=range_end,
-            locator_verified=locator_verified,
+            physical_text_sha256=locator["physical_hash"],
+            physical_canonical_text_sha256=locator["physical_canonical_hash"],
+            physical_text_length_utf16=locator["physical_length"],
+            physical_canonical_text_length_utf16=locator["physical_canonical_length"],
+            locator_version="2.0",
+            segment_index=segment_index,
+            segment_count=segment_count,
+            raw_start_utf16=locator["raw_start"],
+            raw_end_utf16=locator["raw_end"],
+            canonical_start_utf16=locator["canonical_start"],
+            canonical_end_utf16=locator["canonical_end"],
+            range_start_utf16=locator["raw_start"],
+            range_end_utf16=locator["raw_end"],
+            locator_verified=locator["verified"],
+            source_locator_status=locator["status"],
+            source_locator_evidence=locator["evidence"],
+            source_locator_warnings=locator["warnings"],
             kind=_SPECIAL_KIND_BY_TYPE.get(type_id, "paragraph"),
             type_id=type_id,
             section=str(meta.get("recognition_section", "body") or "body"),
@@ -168,7 +251,16 @@ def _build_plan(data, source_sha256: str, include_text: bool = False) -> Recogni
             next_text_sha256=next((value for value in visible_hashes[index + 1:] if value), ""),
             format_role=type_id,
             review_level=review_level,
+            classification_confidence=float(meta.get("review_confidence", 0.0) or 0.0),
+            classification_evidence=_safe_strings(meta.get("recognition_evidence")),
+            review_reasons=_safe_strings(meta.get("review_reasons")),
+            raw_fragment_sha256=_sha256_text(locator["raw_fragment"]) if locator["raw_fragment"] else "",
+            canonical_fragment_sha256=_sha256_text(locator["canonical_fragment"]) if locator["canonical_fragment"] else "",
+            prefix_context_sha256=_sha256_text(prefix) if prefix else "",
+            suffix_context_sha256=_sha256_text(suffix) if suffix else "",
             recognized_text=_visible_text(paragraph) if include_text else None,
+            raw_fragment_text=locator["raw_fragment"] if include_raw_text else None,
+            canonical_fragment_text=locator["canonical_fragment"] if include_text else None,
         ))
         if review_level in {"review", "critical_review"}:
             review_items.append(ReviewItem(
@@ -201,6 +293,7 @@ def recognize_docx(
     format_config: Optional[Mapping[str, Any]] = None,
     features: Optional[Mapping[str, Any]] = None,
     include_text: bool = False,
+    include_raw_text: bool = False,
 ) -> RecognitionPlan:
     """Recognize a local DOCX snapshot without starting the web service.
 
@@ -213,8 +306,8 @@ def recognize_docx(
         raise RecognitionInputError("processing_mode 必须为 strict、structural 或 normalize")
     if recognition_mode not in _RECOGNITION_MODES:
         raise RecognitionInputError("recognition_mode 必须为 legacy、shadow 或 authoritative")
-    if not isinstance(include_text, bool):
-        raise RecognitionInputError("include_text 必须为布尔值")
+    if not isinstance(include_text, bool) or not isinstance(include_raw_text, bool):
+        raise RecognitionInputError("include_text 和 include_raw_text 必须为布尔值")
     if path.suffix.lower() != ".docx" or not path.is_file():
         raise RecognitionInputError("source 必须是可读取的 .docx 文件")
 
@@ -230,4 +323,9 @@ def recognize_docx(
         raise
     except Exception as exc:
         raise RecognitionSdkError(f"无法识别 DOCX：{type(exc).__name__}") from exc
-    return _build_plan(data, _sha256_file(path), include_text=include_text)
+    return _build_plan(
+        data,
+        _sha256_file(path),
+        include_text=include_text,
+        include_raw_text=include_raw_text,
+    )

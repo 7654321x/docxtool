@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.5 - 2026-07-31
+
+- Added source-range based logical fragment locators, including raw and canonical UTF-16 coordinate definitions.
+- Added SDK v2 locator fields, explicit text opt-ins, and a host-neutral recognition-plan binding API with ambiguity rejection.
+- Added regression coverage for mixed physical paragraphs, duplicate text, host paragraph shifts, canonical normalization, Unicode surrogate pairs, and CLI binding output.
+
 ## 1.4 - 2026-07-30
 
 - Added a reusable Chinese official-document formatting and recognition specification for WPS and third-party AI integrations.

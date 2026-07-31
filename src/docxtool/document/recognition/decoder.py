@@ -448,6 +448,7 @@ def apply_recognition(data: Any, config: RecognitionConfig | None = None) -> Non
                 "review_confidence": review_confidence,
                 "review_level": review_level,
                 "recognition_evidence": evidence_summary,
+                "review_reasons": review_reasons,
                 "mapping_applied": mapping_applied,
                 "mapping_failed": mapping_failed,
                 "final_type": final_type_id,

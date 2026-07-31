@@ -39,10 +39,22 @@ class RecognitionBlock:
     physical_paragraph_index: Optional[int]
     physical_occurrence_index: int
     physical_text_sha256: str
+    physical_canonical_text_sha256: str
     physical_text_length_utf16: int
+    physical_canonical_text_length_utf16: int
+    locator_version: str
+    segment_index: int
+    segment_count: int
+    raw_start_utf16: Optional[int]
+    raw_end_utf16: Optional[int]
+    canonical_start_utf16: Optional[int]
+    canonical_end_utf16: Optional[int]
     range_start_utf16: Optional[int]
     range_end_utf16: Optional[int]
     locator_verified: bool
+    source_locator_status: str
+    source_locator_evidence: Tuple[str, ...]
+    source_locator_warnings: Tuple[str, ...]
     kind: str
     type_id: str
     section: str
@@ -51,7 +63,16 @@ class RecognitionBlock:
     next_text_sha256: str
     format_role: str
     review_level: str
+    classification_confidence: float
+    classification_evidence: Tuple[str, ...]
+    review_reasons: Tuple[str, ...]
+    raw_fragment_sha256: str
+    canonical_fragment_sha256: str
+    prefix_context_sha256: str
+    suffix_context_sha256: str
     recognized_text: Optional[str] = None
+    raw_fragment_text: Optional[str] = None
+    canonical_fragment_text: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         value = {
@@ -60,11 +81,26 @@ class RecognitionBlock:
             "physical_paragraph_index": self.physical_paragraph_index,
             "physical_occurrence_index": self.physical_occurrence_index,
             "physical_text_sha256": self.physical_text_sha256,
+            "physical_canonical_text_sha256": self.physical_canonical_text_sha256,
             "physical_text_length_utf16": self.physical_text_length_utf16,
+            "physical_canonical_text_length_utf16": self.physical_canonical_text_length_utf16,
+            "locator_version": self.locator_version,
+            "segment_index": self.segment_index,
+            "segment_count": self.segment_count,
+            "raw_start_utf16": self.raw_start_utf16,
+            "raw_end_utf16": self.raw_end_utf16,
+            "canonical_start_utf16": self.canonical_start_utf16,
+            "canonical_end_utf16": self.canonical_end_utf16,
+            # Compatibility aliases.  These have always been source-text
+            # UTF-16 offsets and remain raw offsets in locator v2.
             "range_start_utf16": self.range_start_utf16,
             "range_end_utf16": self.range_end_utf16,
+            "range_coordinate_system": "source_raw_text_utf16",
             "offset_encoding": "utf16_code_unit",
             "locator_verified": self.locator_verified,
+            "source_locator_status": self.source_locator_status,
+            "source_locator_evidence": list(self.source_locator_evidence),
+            "source_locator_warnings": list(self.source_locator_warnings),
             "kind": self.kind,
             "type_id": self.type_id,
             "section": self.section,
@@ -73,9 +109,20 @@ class RecognitionBlock:
             "next_text_sha256": self.next_text_sha256,
             "format_role": self.format_role,
             "review_level": self.review_level,
+            "classification_confidence": self.classification_confidence,
+            "classification_evidence": list(self.classification_evidence),
+            "review_reasons": list(self.review_reasons),
+            "raw_fragment_sha256": self.raw_fragment_sha256,
+            "canonical_fragment_sha256": self.canonical_fragment_sha256,
+            "prefix_context_sha256": self.prefix_context_sha256,
+            "suffix_context_sha256": self.suffix_context_sha256,
         }
         if self.recognized_text is not None:
             value["recognized_text"] = self.recognized_text
+        if self.raw_fragment_text is not None:
+            value["raw_fragment_text"] = self.raw_fragment_text
+        if self.canonical_fragment_text is not None:
+            value["canonical_fragment_text"] = self.canonical_fragment_text
         return value
 
 
@@ -104,4 +151,73 @@ class RecognitionPlan:
             "document_mode_confidence": self.document_mode_confidence,
             "blocks": [block.to_dict() for block in self.blocks],
             "review_items": [item.to_dict() for item in self.review_items],
+        }
+
+
+@dataclass(frozen=True)
+class HostParagraph:
+    """A host-neutral physical paragraph snapshot supplied by an editor."""
+
+    host_paragraph_index: int
+    raw_text: str
+    story_type: str = "main"
+    is_in_table: bool = False
+
+
+@dataclass(frozen=True)
+class HostSnapshot:
+    """A local editor snapshot used only to bind an existing recognition plan."""
+
+    host_type: str
+    paragraphs: Tuple[HostParagraph, ...]
+    document_identity: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class BoundRecognitionBlock:
+    """Verified host-text binding for one block; no editor range is implied."""
+
+    block_index: int
+    physical_paragraph_index: Optional[int]
+    host_paragraph_index: Optional[int]
+    binding_status: str
+    binding_confidence: float
+    binding_evidence: Tuple[str, ...]
+    binding_warnings: Tuple[str, ...]
+    host_raw_start_utf16: Optional[int]
+    host_raw_end_utf16: Optional[int]
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "block_index": self.block_index,
+            "physical_paragraph_index": self.physical_paragraph_index,
+            "host_paragraph_index": self.host_paragraph_index,
+            "binding_status": self.binding_status,
+            "binding_confidence": self.binding_confidence,
+            "binding_evidence": list(self.binding_evidence),
+            "binding_warnings": list(self.binding_warnings),
+            # These offsets are in host snapshot raw text, not WPS Range.
+            "host_raw_start_utf16": self.host_raw_start_utf16,
+            "host_raw_end_utf16": self.host_raw_end_utf16,
+            "host_coordinate_system": "host_snapshot_raw_text_utf16",
+        }
+
+
+@dataclass(frozen=True)
+class RecognitionBinding:
+    """Result of binding a text-free recognition plan to a local snapshot."""
+
+    locator_version: str
+    source_sha256: str
+    host_type: str
+    document_identity: Optional[str]
+    blocks: Tuple[BoundRecognitionBlock, ...]
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "locator_version": self.locator_version,
+            "source_sha256": self.source_sha256,
+            "host_type": self.host_type,
+            "document_identity": self.document_identity,
+            "blocks": [block.to_dict() for block in self.blocks],
         }
