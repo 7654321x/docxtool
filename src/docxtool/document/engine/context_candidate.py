@@ -297,10 +297,12 @@ def _heading_level(kind):
 
 def _letterhead_kind(style):
     return {
+        "DCT-LetterheadSpacer": ElementKind.LETTERHEAD_MARK,
         "DCT-LetterheadMark": ElementKind.LETTERHEAD_MARK,
         "DCT-DocumentNumber": ElementKind.DOCUMENT_NUMBER,
         "DCT-SignerLine": ElementKind.SIGNER,
         "DCT-LetterheadSeparator": ElementKind.LETTERHEAD_SEPARATOR,
+        "Docxtool Letterhead Spacer": ElementKind.LETTERHEAD_MARK,
         "Docxtool Letterhead Mark": ElementKind.LETTERHEAD_MARK,
         "Docxtool Document Number": ElementKind.DOCUMENT_NUMBER,
         "Docxtool Signer Line": ElementKind.SIGNER,

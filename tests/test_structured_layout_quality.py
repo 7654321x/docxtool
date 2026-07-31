@@ -139,12 +139,28 @@ def test_heading_body_responsibility_and_attachment_styles_are_applied(tmp_path:
     assert _text(responsibility).startswith("责任单位：区政府")
     assert responsibility.find("w:pPr/w:jc", NS).get(qn("w:val")) == "left"
     assert responsibility.find("w:pPr/w:jc", NS).get(qn("w:val")) not in {"both", "distribute"}
+    responsibility_indent = responsibility.find("w:pPr/w:ind", NS)
+    assert responsibility_indent.get(qn("w:leftChars")) == "200"
+    assert responsibility_indent.get(qn("w:firstLineChars")) == "0"
     assert responsibility.findall(".//w:br", NS)
 
     style_by_text = {_text(paragraph): _pstyle(paragraph) for paragraph in _paragraphs(doc_root)}
     assert style_by_text["附件 1"] == "DCT-AttachmentMark"
     assert style_by_text["附件标题"] == "DCT-AttachmentTitle"
     assert style_by_text["附件正文"] == "DCT-AttachmentBody"
+    attachment_title = next(
+        paragraph for paragraph in _paragraphs(doc_root) if _text(paragraph) == "附件标题"
+    )
+    title_spacing = attachment_title.find("w:pPr/w:spacing", NS)
+    assert title_spacing.get(qn("w:beforeLines")) == "100"
+    assert title_spacing.get(qn("w:afterLines")) == "100"
+    attachment_title_style = _style(style_root, "DCT-AttachmentTitle")
+    style_spacing = attachment_title_style.find("w:pPr/w:spacing", NS)
+    assert style_spacing.get(qn("w:beforeLines")) == "100"
+    assert style_spacing.get(qn("w:afterLines")) == "100"
+    paragraph_texts = [_text(paragraph) for paragraph in _paragraphs(doc_root)]
+    title_index = paragraph_texts.index("附件标题")
+    assert paragraph_texts[title_index + 1] == "附件正文"
     for text in ("附件 1", "附件标题"):
         paragraph = next(paragraph for paragraph in _paragraphs(doc_root) if _text(paragraph) == text)
         assert paragraph.find("w:pPr/w:keepNext", NS) is not None
@@ -202,7 +218,7 @@ def test_import_export_keeps_input_sha256_unchanged(tmp_path: Path) -> None:
     document.save(source)
     before = hashlib.sha256(source.read_bytes()).hexdigest()
 
-    data = DocxImporter().load(str(source), _rules())
+    data = DocxImporter().load(str(source), _rules(), strict_preservation=False)
     export_doc(data, _rules(), PageSettings(), str(output))
 
     assert hashlib.sha256(source.read_bytes()).hexdigest() == before
@@ -223,7 +239,7 @@ def test_responsibility_line_normalizes_quotes_and_repeated_labels(tmp_path: Pat
     document.add_paragraph("“责任单位：区政府责任单位：商务局”")
     document.save(source)
 
-    data = DocxImporter().load(str(source), _rules())
+    data = DocxImporter().load(str(source), _rules(), strict_preservation=False)
     responsibility = next(paragraph for paragraph in data.paragraphs if paragraph.type_id == "responsibility_line")
     assert responsibility.text == "责任单位：区政府\n责任单位：商务局"
 
@@ -398,7 +414,7 @@ def test_imported_heading3_heading4_and_responsibility_are_exported_without_blan
         document.add_paragraph(text)
     document.save(source)
 
-    data = DocxImporter().load(str(source), _rules())
+    data = DocxImporter().load(str(source), _rules(), strict_preservation=False)
     type_by_original = {paragraph.original_text: paragraph.type_id for paragraph in data.paragraphs}
 
     assert type_by_original["1.测试"] == "heading3"

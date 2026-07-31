@@ -10,13 +10,21 @@
   - 不负责排版渲染（由 engine.py 负责）
 """
 
+from __future__ import annotations
+
 import copy
+from difflib import SequenceMatcher
+import hashlib
+import os
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Dict, List, Optional, Tuple
 
 from docxtool.document.classifier import ClassificationOptions, classify_paragraphs
+from docxtool.document.recognition import apply_recognition
+from docxtool.document.recognition.version import RECOGNITION_VERSION_TAG
 from docxtool.document.style_config import (
     NB_FIXED, NB_SUFFIXES,
     logger, ImportError,
@@ -39,9 +47,26 @@ class ParagraphFeatures:
     first_line_indent: float = 0.0
     numbering_prefix: str = ""    # 检测到的编号前缀
     paragraph_index: int = 0
+    # Stable locator back to the original main-story Word paragraph.  The
+    # classifier may split one physical paragraph into several logical blocks;
+    # paragraph_index continues to describe that logical stream only.
+    source_physical_paragraph_index: Optional[int] = None
+    source_physical_text: str = ""
+    source_start_utf16: Optional[int] = None
+    source_end_utf16: Optional[int] = None
     is_in_table: bool = False
     contains_image: bool = False
     is_new_line: bool = False     # 是否由 \n 拆分出的新行
+    first_run_font_name: str = ""
+    first_run_font_size_pt: Optional[float] = None
+    first_run_bold: bool = False
+    dominant_font_name: str = ""
+    weighted_font_size: Optional[float] = None
+    max_font_size: Optional[float] = None
+    min_font_size: Optional[float] = None
+    bold_char_ratio: float = 0.0
+    italic_char_ratio: float = 0.0
+    explicitly_formatted_char_ratio: float = 0.0
 
 
 @dataclass
@@ -60,6 +85,42 @@ class ParagraphData:
     features: ParagraphFeatures
     meta: dict = field(default_factory=dict)  # {"is_title": True, …}
     inline_tokens: List[InlineToken] = field(default_factory=list)
+
+
+def _utf16_length(value: str) -> int:
+    """Return the offset unit used by the WPS/Word Range API."""
+    return len((value or "").encode("utf-16-le")) // 2
+
+
+def _inherit_source_locator(
+    child: ParagraphFeatures,
+    parent: ParagraphFeatures,
+    fragment: str,
+    search_from: int = 0,
+) -> int:
+    """Attach one logical fragment to its exact original physical paragraph.
+
+    A failed exact lookup deliberately leaves the locator unset.  Callers must
+    surface review instead of guessing with a logical paragraph index.
+    """
+    child.source_physical_paragraph_index = parent.source_physical_paragraph_index
+    child.source_physical_text = parent.source_physical_text
+    if parent.source_physical_paragraph_index is None:
+        return search_from
+    source = parent.source_physical_text or ""
+    value = fragment or ""
+    start = source.find(value, max(0, search_from))
+    if start < 0 and value.strip() != value:
+        value = value.strip()
+        start = source.find(value, max(0, search_from))
+    if start < 0:
+        child.source_start_utf16 = None
+        child.source_end_utf16 = None
+        return search_from
+    end = start + len(value)
+    child.source_start_utf16 = _utf16_length(source[:start])
+    child.source_end_utf16 = _utf16_length(source[:end])
+    return end
 
 
 @dataclass
@@ -82,6 +143,22 @@ class DocumentData:
     section_relationship_parts: Dict[str, object] = field(default_factory=dict)
     even_and_odd_headers: object = None
     letterhead_detection: object = None
+    strict_preservation: bool = False
+    processing_strategy: str = "normalize"
+    recognition_mode: str = "authoritative"
+    normalization_changes: list = field(default_factory=list)
+    recognition_diagnostics: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class NormalizationChange:
+    paragraph_index: int
+    action: str
+    before: str
+    after: str
+    reason_code: str
+    confidence: float
+    applied: bool
 
 
 _OBJECT_CAPTION_RE = re.compile(
@@ -96,6 +173,11 @@ def _is_object_caption(paragraph) -> bool:
     return bool(text and (_OBJECT_CAPTION_RE.match(text) or style_name.lower() == "caption" or "题注" in style_name))
 
 
+def _is_standalone_image_paragraph(paragraph) -> bool:
+    """Return whether an image paragraph contains no surrounding body text."""
+    return not paragraph.text.strip()
+
+
 # ═══════════════════════════════════════════════════════════════
 # 特征提取
 # ═══════════════════════════════════════════════════════════════
@@ -106,25 +188,79 @@ def extract_features(paragraph, index: int) -> ParagraphFeatures:
     pf = ParagraphFeatures(
         text=text,
         paragraph_index=index,
+        source_physical_paragraph_index=index,
+        source_physical_text=paragraph.text,
+        source_start_utf16=0,
+        source_end_utf16=_utf16_length(paragraph.text),
     )
 
     # 样式名
     if paragraph.style:
         pf.style_name = paragraph.style.name or ""
 
-    # 字体属性（选取第一个有内容的 run）
+    # 保留首个有效 run 供兼容诊断，同时用全部 run 的非空白字符数汇总特征。
+    font_weights: Counter[str] = Counter()
+    size_weights: Counter[float] = Counter()
+    total_chars = 0
+    bold_chars = 0
+    italic_chars = 0
+    explicit_chars = 0
+    explicit_sizes: list[float] = []
+    style_font = getattr(getattr(paragraph, "style", None), "font", None)
+    style_font_name = getattr(style_font, "name", None) or ""
+    style_font_size = getattr(style_font, "size", None)
+    style_font_size_pt = style_font_size.pt if style_font_size is not None else None
+    first_run_seen = False
     if paragraph.runs:
         for run in paragraph.runs:
-            if run.text.strip():
-                try:
-                    if run.font.name:
-                        pf.font_name = run.font.name
-                    if run.font.size:
-                        pf.font_size_pt = run.font.size / 12700
-                    pf.bold = bool(run.font.bold)
-                except Exception:
-                    pass
-                break
+            char_count = len(re.sub(r"\s+", "", run.text or ""))
+            if not char_count:
+                continue
+            try:
+                run_font = run.font.name or style_font_name
+                run_size = run.font.size.pt if run.font.size is not None else style_font_size_pt
+                if not first_run_seen:
+                    pf.first_run_font_name = run.font.name or ""
+                    pf.first_run_font_size_pt = run.font.size.pt if run.font.size is not None else None
+                    pf.first_run_bold = bool(run.font.bold)
+                    first_run_seen = True
+                total_chars += char_count
+                if run_font:
+                    font_weights[run_font] += char_count
+                if run_size is not None:
+                    size_weights[float(run_size)] += char_count
+                if run.font.size is not None:
+                    explicit_sizes.append(float(run.font.size.pt))
+                if bool(run.font.bold):
+                    bold_chars += char_count
+                if bool(run.font.italic):
+                    italic_chars += char_count
+                if any(value is not None for value in (run.font.name, run.font.size, run.font.bold, run.font.italic)):
+                    explicit_chars += char_count
+            except (AttributeError, TypeError, ValueError):
+                continue
+
+    pf.dominant_font_name = font_weights.most_common(1)[0][0] if font_weights else style_font_name
+    if size_weights:
+        weighted_total = sum(size * weight for size, weight in size_weights.items())
+        weight_total = sum(size_weights.values())
+        pf.weighted_font_size = weighted_total / weight_total
+        pf.max_font_size = max(size_weights)
+        pf.min_font_size = min(size_weights)
+    elif style_font_size_pt is not None:
+        pf.weighted_font_size = float(style_font_size_pt)
+        pf.max_font_size = float(style_font_size_pt)
+        pf.min_font_size = float(style_font_size_pt)
+    if explicit_sizes:
+        pf.max_font_size = max(explicit_sizes)
+        pf.min_font_size = min(explicit_sizes)
+    if total_chars:
+        pf.bold_char_ratio = bold_chars / total_chars
+        pf.italic_char_ratio = italic_chars / total_chars
+        pf.explicitly_formatted_char_ratio = explicit_chars / total_chars
+    pf.font_name = pf.dominant_font_name or pf.first_run_font_name
+    pf.font_size_pt = pf.weighted_font_size or pf.first_run_font_size_pt
+    pf.bold = pf.bold_char_ratio >= 0.5
 
     # 对齐（统一小写 + 处理 None）
     try:
@@ -160,7 +296,7 @@ def extract_features(paragraph, index: int) -> ParagraphFeatures:
                 has_literal = bool(re.match(r'^[（\(]?\d+[）\)\.．]', text.strip()))
                 if not pf.numbering_prefix and not has_literal:
                     pf.numbering_prefix = f"@lvl_{lvl}"
-                    logger.debug(f"[多级列表] ilvl={lvl} → heading{lvl+2} text={text[:30]}")
+                    logger.debug("[多级列表] ilvl=%s → heading%s chars=%s", lvl, lvl + 2, len(text))
     except Exception as e:
         logger.debug(f"[多级列表] 提取失败: {e}")
 
@@ -365,7 +501,7 @@ class ScoreBoard:
 
     def debug_log(self, para_index: int, text: str) -> None:
         """输出完整评分明细到 DEBUG 日志。"""
-        logger.debug(f"[评分] para={para_index} text={text[:30]}")
+        logger.debug("[评分] para=%s chars=%s", para_index, len(text))
         for item in self.explain():
             parts = " + ".join(f"{s}={v:.0f}" for s, v in item["reasons"])
             logger.debug(f"  {item['type']:15} = {item['score']:5.0f}  ({parts})")
@@ -406,12 +542,12 @@ class DetectionContext:
 
 # ── 附件 / 落款 结构正则 + 中文数字 ──
 _CN_NUM2 = {"零":0,"〇":0,"○":0,"一":1,"二":2,"两":2,"三":3,"四":4,
-            "五":5,"六":6,"七":7,"八":8,"九":9,"十":10}
+            "五":5,"六":6,"七":7,"八":8,"九":9}
 _CN_YEAR_DIGITS = {"零":"0", "〇":"0", "○":"0", "一":"1", "二":"2", "两":"2",
                    "三":"3", "四":"4", "五":"5", "六":"6", "七":"7", "八":"8", "九":"9"}
 _ATT_NOTE_RE = re.compile(r'^\s*附件\s*[:：]\s*(.*)$')
 _ATT_ITEM_RE = re.compile(r'^\s*\d+[.．、]\s*\S+')
-_ATT_PAGE_RE = re.compile(r'^\s*附件\s*([0-9一二三四五六七八九十]*)\s*$')
+_ATT_PAGE_RE = re.compile(r'^\s*附件\s*([0-9一二三四五六七八九十百千]*)\s*$')
 _SIGN_DATE_RE2 = re.compile(
     r'^\s*((?:19|20)\d{2}|[零〇○一二两三四五六七八九]{4})\s*年\s*'
     r'([0-9]{1,2}|[零〇一二两三四五六七八九十]{1,3})\s*月\s*'
@@ -419,6 +555,22 @@ _SIGN_DATE_RE2 = re.compile(
 )
 _REPORT_HEADING_STARTS = ("一年来", "五年来")
 _SIGN_ORG_NEGATIVE_STARTS = ("以上", "请", "现将", "特此", "有关", "此")
+_SIGN_ORG_SUFFIX_RE = re.compile(
+    r"(?:委员会|工作委员会|人民政府|人民法院|人民检察院|代表大会|"
+    r"办公室|街道办事处|领导小组|工作组|党组|党委|政府|政协|人大|"
+    r"总工会|局|厅|部|院|处|科|办|镇|乡)$"
+)
+_COMMON_SIGNATURE_ORG_NAMES = frozenset({
+    "党委办公室", "党政办公室", "区委办", "县委办", "市委办", "省政府办公厅",
+    "政府办公室", "区政府办", "县政府办", "市政府办", "政协办公室", "政协办",
+    "人大常委会办公室", "人大办", "组织部", "宣传部", "统战部", "政法委",
+    "纪委监委", "发展和改革局", "发改局", "财政局", "教育局", "公安局",
+    "民政局", "司法局", "人力资源和社会保障局", "人社局", "自然资源局",
+    "生态环境局", "住房和城乡建设局", "住建局", "交通运输局", "农业农村局",
+    "商务局", "文化广电旅游局", "卫生健康局", "卫健局", "应急管理局", "应急局",
+    "审计局", "市场监督管理局", "市场监管局", "统计局", "机关事务管理局",
+    "人民法院", "人民检察院", "总工会", "团委", "妇联", "残联",
+})
 
 def _is_body_context(ctx) -> bool:
     return ctx.last_structural_type in ("body", "addressing",
@@ -432,12 +584,20 @@ def _cn2int(s: str):
         return int(s)
     if s in _CN_NUM2:
         return _CN_NUM2[s]
-    if "十" in s:
-        left, _, right = s.partition("十")
-        return (_CN_NUM2.get(left, 1) if left else 1) * 10 + (
-            _CN_NUM2.get(right, 0) if right else 0
-        )
-    return None
+    total = 0
+    current = 0
+    used_unit = False
+    for character in s:
+        if character in _CN_NUM2:
+            current = _CN_NUM2[character]
+            continue
+        unit = {"十": 10, "百": 100, "千": 1000}.get(character)
+        if unit is None:
+            return None
+        used_unit = True
+        total += (current or 1) * unit
+        current = 0
+    return total + current if used_unit else None
 
 def _cn_year2int(s: str):
     if not s:
@@ -473,6 +633,30 @@ def _is_attachment_boundary(text: str) -> bool:
 def _norm_sign_org(text: str) -> str:
     return re.sub(r'^\s*[一二三四五六七八九十百]+、\s*', '', text or "", count=1).strip()
 
+
+def _looks_like_common_signature_org(text: str) -> bool:
+    """Recognize common agency names and small copy/paste variations safely.
+
+    This is recognition evidence only.  A matched abbreviation such as
+    ``区政协办`` is never expanded in the generated document because the full
+    issuing authority cannot be inferred safely from a local abbreviation.
+    """
+    value = re.sub(r"\s+", "", text or "")
+    if not value:
+        return False
+    if any(value.endswith(name) for name in _COMMON_SIGNATURE_ORG_NAMES):
+        return True
+    for name in _COMMON_SIGNATURE_ORG_NAMES:
+        max_size = min(len(value), len(name), 8)
+        for size in range(max_size, 2, -1):
+            suffix = value[-size:]
+            if (
+                SequenceMatcher(None, suffix, name[:size]).ratio() >= 0.86
+                or SequenceMatcher(None, suffix, name[-size:]).ratio() >= 0.86
+            ):
+                return True
+    return False
+
 def _record_structural(ctx, type_id: str, text: str) -> None:
     ctx.last_structural_type = type_id
     ctx.last_structural_text = (text or "").strip()
@@ -501,7 +685,7 @@ def _looks_like_sign_org(text: str, next_text: str, ctx) -> bool:
         return False
     if not _SIGN_DATE_RE2.match(next_text or ""):
         return False
-    return True
+    return bool(_SIGN_ORG_SUFFIX_RE.search(t) or _looks_like_common_signature_org(t))
 
 def _heading_has_inline_body(text: str) -> bool:
     period_pos = (text or "").find("。")
@@ -535,6 +719,33 @@ def _is_auto_numbered_item(feats: Optional[ParagraphFeatures]) -> bool:
 _RESPONSIBILITY_LINE_RE = re.compile(r"^\s*[“”\"'‘’「『]?\s*责\s*任\s*单\s*位\s*[:：]")
 _RESPONSIBILITY_LABEL_RE = re.compile(r"\s*责\s*任\s*单\s*位\s*[:：]\s*")
 _RESPONSIBILITY_WRAPPER_RE = re.compile(r"^\s*[“”\"'‘’「『]\s*(.*?)\s*[”\"'’」』]?\s*$")
+_HEADER_ROLE_KEYWORD_RE = re.compile(
+    r"主任|书记|主席|部长|局长|处长|科长|司长|厅长|市长|县长|区长|镇长|乡长|院长|校长|政委|组长|队长|秘书长|委员|常委|负责人"
+)
+_HEADER_DATE_LINE_RE = re.compile(r"^[（(]\s*(?:19|20)\d{2}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日")
+_OPENING_SPEECH_TITLE_RE = re.compile(r"^在[\u4e00-\u9fffA-Za-z0-9（）()、，,.·\-\s]{3,70}(?:上)?的?讲话$")
+
+
+def _opening_speech_title_text(text: str, ctx) -> str | None:
+    """Return a first-line speech title, ignoring one inferred erroneous H1 prefix."""
+    value = (text or "").strip()
+    if ctx.has_seen_body or ctx.prev_type_id or _contains_colon(value):
+        return None
+    numbered, prefix = _match_numbering(value)
+    if numbered == "heading1" and prefix:
+        candidate = value[len(prefix):].strip()
+        return candidate if _OPENING_SPEECH_TITLE_RE.fullmatch(candidate) else None
+    if numbered:
+        return None
+    return value if _OPENING_SPEECH_TITLE_RE.fullmatch(value) else None
+
+
+def _strip_inferred_speech_numbering(text: str) -> str:
+    value = (text or "").strip()
+    numbered, prefix = _match_numbering(value)
+    if numbered == "heading1" and prefix:
+        return value[len(prefix):].strip()
+    return value
 
 
 def _should_split_structural_line_breaks(parts: list[str], next_text: str) -> bool:
@@ -544,12 +755,53 @@ def _should_split_structural_line_breaks(parts: list[str], next_text: str) -> bo
         return False
     if any(_detect_numbering_prefix(part) for part in nonempty[1:]):
         return True
+    # A numbered heading followed by a manually wrapped body paragraph is a
+    # common copy/paste artefact.  Keep the heading and the real body as two
+    # paragraphs instead of exporting the body with heading formatting.
+    if _detect_numbering_prefix(nonempty[0]) and len(nonempty) >= 2:
+        return True
+    # A leading dispatch number followed by title-area content is an
+    # incomplete letterhead, not a single body paragraph.  Keep each visible
+    # line independent so later letterhead detection can reason over it.
+    if _is_dispatch_number_line(nonempty[0]) and len(nonempty) >= 2:
+        return True
+    key_value_lines = sum(
+        1
+        for part in nonempty
+        if _RESPONSIBILITY_LINE_RE.match(part) or _colon_bold_match(part) >= 0
+    )
+    if key_value_lines >= 2:
+        return True
+    if (any(_SIGN_DATE_RE2.match(part) for part in nonempty[:2])
+            and any(_is_attachment_boundary(part) for part in nonempty[1:])):
+        return True
+
+    # A common manually edited tail keeps the issuing organization and date
+    # in one physical paragraph separated only by a soft line break.  Split
+    # that pair before classification; otherwise the whole paragraph falls
+    # through as body text and inherits justified body formatting.
+    if (
+        len(nonempty) == 2
+        and _is_tail_signature_org_text(nonempty[0])
+        and _SIGN_DATE_RE2.match(nonempty[1])
+    ):
+        return True
 
     # A title block often uses soft line breaks and ends in "职务  姓名".
     role_line = nonempty[-1]
     if (re.fullmatch(r"[\u4e00-\u9fff、，,·]{2,28}\s{2,}[\u4e00-\u9fff·]{2,6}", role_line)
             or (re.search(r"主任|书记|主席|部长|局长|处长|科长|市长|县长|区长|镇长|乡长|院长|校长|政委|组长|队长|秘书长|委员|常委|负责人", role_line)
                 and re.search(r"\s{2,}", role_line))):
+        return True
+
+    # Speech manuscripts commonly put “职务姓名” and a parenthesized meeting
+    # date/place on separate soft lines.  Split this reliable title-block pair
+    # before classification so it cannot inherit the body style.
+    if (
+        len(nonempty) >= 2
+        and _HEADER_ROLE_KEYWORD_RE.search(nonempty[0])
+        and _HEADER_DATE_LINE_RE.match(nonempty[1])
+    ):
         return True
 
     # A signature organization may be separated from the final body paragraph
@@ -561,6 +813,32 @@ def _should_split_structural_line_breaks(parts: list[str], next_text: str) -> bo
     return bool(_SIGN_DATE_RE2.match(next_visible_line)
                 and len(role_line) <= 30
                 and not any(mark in role_line for mark in "。；;：:"))
+
+
+_DISPATCH_NUMBER_LINE_RE = re.compile(
+    r"^(?:[\u4e00-\u9fffA-Za-z0-9]{0,20})[〔\[]\d{4}[〕\]]\s*\d+\s*号$"
+)
+
+
+def _is_dispatch_number_line(text: str) -> bool:
+    return bool(_DISPATCH_NUMBER_LINE_RE.fullmatch(re.sub(r"\s+", "", text or "")))
+
+
+def _split_inline_heading_body(line: str) -> list[str]:
+    """Split a numbered title followed by a real body sentence without editing text.
+
+    This is intentionally narrower than punctuation normalization: only a
+    numbered heading whose first sentence is followed by at least five visible
+    characters becomes two structural paragraphs.  The full source text is
+    retained across the two results.
+    """
+    text = (line or "").strip()
+    if not _detect_numbering_prefix(text):
+        return [text]
+    period_index = text.find("。")
+    if period_index < 0 or len(text[period_index + 1:].strip()) < 5:
+        return [text]
+    return [text[:period_index + 1], text[period_index + 1:].strip()]
 
 
 def _normalize_responsibility_line(text: str) -> str:
@@ -695,6 +973,249 @@ def detect_structural_type(line: str, next_line: str, ctx,
     return None, {}, "", text
 
 
+def _tail_source_text(paragraph: ParagraphData) -> str:
+    return (paragraph.original_text or paragraph.text or "").strip()
+
+
+def _is_tail_signature_org_text(text: str) -> bool:
+    value = (text or "").strip()
+    return bool(
+        2 <= len(value) <= 40
+        and not value.startswith(_SIGN_ORG_NEGATIVE_STARTS)
+        and not any(mark in value for mark in "。；;：:")
+        and (_SIGN_ORG_SUFFIX_RE.search(value) or _looks_like_common_signature_org(value))
+    )
+
+
+def _is_tail_structural_text(text: str) -> bool:
+    value = (text or "").strip()
+    return bool(
+        _ATT_NOTE_RE.match(value)
+        or _ATT_ITEM_RE.match(value)
+        or _SIGN_DATE_RE2.match(value)
+        or _is_attachment_page_mark(value)
+        or _is_tail_signature_org_text(value)
+    )
+
+
+def _allows_standalone_tail_date(paragraphs: list[ParagraphData], index: int) -> bool:
+    previous = next(
+        (
+            _tail_source_text(paragraphs[position])
+            for position in range(index - 1, -1, -1)
+            if _tail_source_text(paragraphs[position])
+        ),
+        "",
+    )
+    if not previous or previous.startswith(_SIGN_ORG_NEGATIVE_STARTS):
+        return False
+    return not _contains_colon(previous)
+
+
+def _retag_tail_paragraph(
+    paragraph: ParagraphData,
+    type_id: str,
+    text: str,
+    meta: Optional[dict] = None,
+) -> None:
+    preserved = {}
+    if paragraph.meta and paragraph.meta.get("sectPr") is not None:
+        preserved["sectPr"] = paragraph.meta["sectPr"]
+    preserved.update(meta or {})
+    paragraph.type_id = type_id
+    paragraph.text = text
+    paragraph.meta = preserved
+    paragraph.inline_tokens = []
+
+
+def _normalize_attachment_note_block(
+    note: ParagraphData,
+    items: list[ParagraphData],
+    *,
+    normalize_text: bool,
+) -> None:
+    match = _ATT_NOTE_RE.match(_tail_source_text(note))
+    if match is None:
+        return
+    body = match.group(1).strip()
+    first_number = re.match(r"^(\d+)[.．、]\s*(.*)$", body)
+    if items:
+        if first_number:
+            start = int(first_number.group(1))
+            first_body = first_number.group(2).strip()
+        else:
+            start = 1
+            first_body = body
+        _retag_tail_paragraph(
+            note,
+            "attachment_note",
+            f"附件：{start}. {first_body}".rstrip() if normalize_text else _tail_source_text(note),
+            {"attachment_single": False, "attachment_multi": True},
+        )
+        for offset, item in enumerate(items, start=1):
+            item_body = re.sub(r"^\s*\d+[.．、]\s*", "", _tail_source_text(item), count=1).strip()
+            _retag_tail_paragraph(
+                item,
+                "attachment_note_item",
+                f"{start + offset}. {item_body}".rstrip() if normalize_text else _tail_source_text(item),
+            )
+        return
+
+    if first_number:
+        body = first_number.group(2).strip()
+    _retag_tail_paragraph(
+        note,
+        "attachment_note",
+        f"附件：{body}".rstrip() if normalize_text else _tail_source_text(note),
+        {"attachment_single": True, "attachment_multi": False},
+    )
+
+
+def _normalize_tail_structures(
+    paragraphs: list[ParagraphData],
+    *,
+    normalize_text: bool = True,
+) -> None:
+    """Reclassify and order a reliable document tail independent of source order.
+
+    Structural processing may retag and reorder a fully bounded tail region,
+    but must not rewrite its visible text.  Full normalization keeps the legacy
+    behavior of standardizing attachment numbering and dates.
+    """
+
+    plain_indexes = [
+        index
+        for index, paragraph in enumerate(paragraphs)
+        if not paragraph.type_id.startswith("__") and _tail_source_text(paragraph)
+    ]
+    if not plain_indexes:
+        return
+
+    raw_markers = [
+        index for index in plain_indexes
+        if _is_attachment_page_mark(_tail_source_text(paragraphs[index]))
+    ]
+    raw_notes = [
+        index for index in plain_indexes
+        if _ATT_NOTE_RE.match(_tail_source_text(paragraphs[index]))
+    ]
+    raw_dates = [
+        index for index in plain_indexes
+        if _SIGN_DATE_RE2.match(_tail_source_text(paragraphs[index]))
+    ]
+    first_marker = raw_markers[0] if raw_markers else len(paragraphs)
+
+    tail_date = None
+    for index in reversed([value for value in raw_dates if value < first_marker]):
+        following = [
+            _tail_source_text(paragraphs[position])
+            for position in plain_indexes
+            if index < position < first_marker
+        ]
+        has_later_anchor = any(value > index for value in raw_notes + raw_markers)
+        if (index == plain_indexes[-1] and _allows_standalone_tail_date(paragraphs, index)) or (
+            has_later_anchor and all(_is_tail_structural_text(text) for text in following)
+        ):
+            tail_date = index
+            break
+
+    note_index = next(
+        (index for index in raw_notes if index < first_marker and (
+            tail_date is None or abs(index - tail_date) <= 12
+        )),
+        None,
+    )
+    item_indexes = []
+    if note_index is not None:
+        item_indexes = [
+            index
+            for index in plain_indexes
+            if note_index < index < first_marker
+            and _ATT_ITEM_RE.match(_tail_source_text(paragraphs[index]))
+        ]
+
+    sign_index = None
+    if tail_date is not None:
+        sign_candidates = [
+            index
+            for index in plain_indexes
+            if max(0, min(note_index if note_index is not None else tail_date, tail_date) - 4)
+            <= index < first_marker
+            and index != tail_date
+            and _is_tail_signature_org_text(_tail_source_text(paragraphs[index]))
+        ]
+        if sign_candidates:
+            sign_index = min(sign_candidates, key=lambda index: abs(index - tail_date))
+
+    if note_index is not None:
+        _normalize_attachment_note_block(
+            paragraphs[note_index],
+            [paragraphs[index] for index in item_indexes],
+            normalize_text=normalize_text,
+        )
+    if sign_index is not None:
+        _retag_tail_paragraph(
+            paragraphs[sign_index],
+            "sign_org",
+            _norm_sign_org(_tail_source_text(paragraphs[sign_index])) if normalize_text else _tail_source_text(paragraphs[sign_index]),
+        )
+    if tail_date is not None:
+        _retag_tail_paragraph(
+            paragraphs[tail_date],
+            "sign_date",
+            _norm_sign_date(_tail_source_text(paragraphs[tail_date])),
+        )
+
+    ordered_indexes = [index for index in [note_index, *item_indexes, sign_index, tail_date] if index is not None]
+    if len(ordered_indexes) >= 2:
+        region_start = min(ordered_indexes)
+        region_end = max(ordered_indexes)
+        region_plain = [
+            index for index in plain_indexes if region_start <= index <= region_end
+        ]
+        if set(region_plain) == set(ordered_indexes):
+            canonical = []
+            if note_index is not None:
+                canonical.append(paragraphs[note_index])
+                canonical.extend(paragraphs[index] for index in item_indexes)
+            if sign_index is not None:
+                canonical.append(paragraphs[sign_index])
+            if tail_date is not None:
+                canonical.append(paragraphs[tail_date])
+            paragraphs[region_start:region_end + 1] = canonical
+
+    # Re-evaluate indexes after the optional move, then classify each attachment
+    # page without moving protected tables, images, captions, or section breaks.
+    anchor_seen = False
+    attachment_mode = False
+    expect_title = False
+    for paragraph in paragraphs:
+        source_text = _tail_source_text(paragraph)
+        if paragraph.type_id in {"attachment_note", "attachment_note_item", "sign_org", "sign_date"}:
+            anchor_seen = True
+        if paragraph.type_id.startswith("__") or not source_text:
+            continue
+        if anchor_seen and _is_attachment_page_mark(source_text):
+            _retag_tail_paragraph(
+                paragraph,
+                "attachment_page_mark",
+                _norm_attach_mark(source_text) if normalize_text else source_text,
+            )
+            attachment_mode = True
+            expect_title = True
+            continue
+        if not attachment_mode:
+            continue
+        if expect_title and len(source_text) <= 28 and not _contains_colon(source_text):
+            type_id, _ = _match_numbering(source_text)
+            if not type_id:
+                _retag_tail_paragraph(paragraph, "attachment_title", source_text)
+                expect_title = False
+                continue
+        _retag_tail_paragraph(paragraph, "attachment_body", source_text)
+        expect_title = False
+
+
 # ── 编号正则（仅匹配，不决策）──
 
 _HEADING_RE = [
@@ -764,8 +1285,8 @@ def _contains_colon(text: str) -> bool:
 
 
 def _colon_bold_match(text: str):
-    """冒号关键词加粗：含冒号+不在段末+前缀≤10字无标点+整段≤28字。返回冒号位置或 -1。"""
-    if not text or len(text) > 28 or text.rstrip().endswith(('：', ':')):
+    """冒号关键词加粗：含冒号+不在段末+前缀≤10字无标点。返回冒号位置或 -1。"""
+    if not text or text.rstrip().endswith(('：', ':')):
         return -1
     for colon in ('：', ':'):
         pos = text.find(colon)
@@ -840,15 +1361,17 @@ def _match_style_or_lvl(text: str, feats):
 # ═══════════════════════════════════════════════════════════════
 
 def _score_01_title(text: str, feats, ctx) -> Tuple[int, dict, str]:
-    """① title（方正小标宋 二号 居中）：文档第一段 + <60字 + 无编号无冒号。"""
+    """① title（方正小标宋 二号 居中）：首个可分类正文段 + 无编号无冒号。"""
     if ctx.has_seen_body:
         return 0, {}, ""
-    if ctx.para_index != 0:  # 仅第一段
+    # 已识别版头、前导空段和受保护对象不属于正文分类序列。版头后的
+    # 首个可分类文本仍应作为公文标题候选。
+    if ctx.prev_type_id:
         return 0, {}, ""
     # 含文种关键词放宽到 60 字
     _TITLE_KW = '对照检查|述职报告|工作总结|工作计划|实施方案|提纲|发言稿|主持词|致辞|讲话稿|汇报材料|调研报告'
     max_len = 60 if re.search(_TITLE_KW, text) else 40
-    if len(text) >= max_len:
+    if len(text) >= max_len and (len(text) > 100 or re.search(r'[。！？；]', text)):
         return 0, {}, ""
     if _contains_colon(text):
         return 0, {}, ""
@@ -869,6 +1392,8 @@ def _score_02_title_cont(text: str, feats, ctx) -> Tuple[int, dict, str]:
         return 0, {}, ""
     if len(text) >= 40:
         return 0, {}, ""
+    if re.search(r'[。！？；]$', text):
+        return 0, {}, ""
     if _contains_colon(text):
         return 0, {}, ""
     tid, _ = _match_numbering(text)
@@ -883,6 +1408,8 @@ def _score_02_title_cont(text: str, feats, ctx) -> Tuple[int, dict, str]:
     if re.search(_TITLE_KW, text):
         return 90, {}, ""
     # 含年份或日期特征 → 留给 date_line（但以上文种关键词优先）
+    if re.search(r'\d{4}年度', text):
+        return 90, {}, ""
     if re.search(r'\d{4}年', text):
         return 0, {}, ""
     return 90, {}, ""
@@ -936,6 +1463,10 @@ def _score_05_role_name(text: str, feats, ctx) -> Tuple[int, dict, str]:
     if ctx.prev_type_id not in ("title", "title_cont", "date_line", "author_line"):
         return 0, {}, ""
     role_name_match = re.fullmatch(r"[\u4e00-\u9fff、，,·]{2,28}\s{2,}[\u4e00-\u9fff·]{2,6}", text)
+    role_keyword_match = re.fullmatch(
+        r"[\u4e00-\u9fff、，,·]{2,28}\s+[\u4e00-\u9fff·]{2,6}",
+        text,
+    )
     if len(text) >= 20 and not role_name_match:
         return 0, {}, ""
     if _contains_colon(text):
@@ -947,7 +1478,12 @@ def _score_05_role_name(text: str, feats, ctx) -> Tuple[int, dict, str]:
     _ROLE_KW = ('局长|主任|书记|主席|部长|处长|科长|司长|厅长|市长|县长'
                 '|区长|镇长|乡长|院长|校长|政委|总工|组长|队长|秘书长'
                 '|委员|常委|召集人|负责人|联系人|审定人|审核人|签发人')
-    if re.search(_ROLE_KW, text):
+    if re.search(_ROLE_KW, text) and role_keyword_match:
+        return 110, {}, ""
+    if re.search(_ROLE_KW, text) and not re.search(r"\s", text):
+        prev_title = ctx.title_texts[-1] if ctx.title_texts else ""
+        if re.search(r"发言|讲话|致辞|主持词", prev_title):
+            return 95, {}, ""
         return 80, {}, ""
     # 上段标题含文种关键词（汇报/总结/方案/报告）→ 当前短行大概率是署名
     _DOC_TYPE_KW = ('对照检查|述职报告|工作总结|工作计划|实施方案|提纲|发言稿'
@@ -959,6 +1495,9 @@ def _score_05_role_name(text: str, feats, ctx) -> Tuple[int, dict, str]:
     if (re.search(r'发言|讲话|致辞|主持词', prev_title)
             and re.fullmatch(r'[\u4e00-\u9fff]{2,6}', text)):
         return 92, {}, ""
+    # Some meeting manuscripts use a combined “职务、职务姓名” line rather
+    # than a bare name.  It must outrank title continuation before the next
+    # parenthesized meeting date is classified.
     if re.search(_DOC_TYPE_KW, prev_title) and len(text) < 20 and not _contains_colon(text):
         return 75, {}, ""
     return 0, {}, ""
@@ -1216,7 +1755,7 @@ def _repair_level(type_id: str, feats, ctx) -> str:
 def _repair_heading4_colon(type_id: str, text: str, feats, ctx) -> str:
     """heading4 + 含冒号 → 回退为 body。"""
     if type_id == "heading4" and _contains_colon(text):
-        logger.debug(f"[修复] heading4 含冒号→body: '{text[:30]}'")
+        logger.debug("[修复] heading4 含冒号→body chars=%s", len(text))
         return "body"
     return type_id
 
@@ -1237,40 +1776,56 @@ def detect_paragraph_type(text: str, feats: ParagraphFeatures,
     prefix: str = ""
     from_word_structure = False
     score_log = []  # 收集各 scorer 得分
+    unbound_object_label = bool(_OBJECT_CAPTION_RE.match(text.strip()))
 
-    # ── 先检查 Word 样式/多级列表 ──
-    style_tid, style_prefix = _match_style_or_lvl(text, feats)
-    if style_tid:
-        type_id = style_tid
-        prefix = style_prefix
-        from_word_structure = True
-    else:
-        # ── ① 骨架层 → ② 文种覆盖层 → ③ 兜底层 ──
+    # 未紧邻对象的“表1/图2...”不再具备题注语义，应作为正文清理
+    # 直接格式；真正题注已在 raw_blocks 阶段转换为受保护对象。
+    if unbound_object_label:
         type_id = "body"
-        best_score = -1
+        score_log.append("unbound_object_label:100")
+    elif opening_speech_title := _opening_speech_title_text(text, ctx):
+        # Word's built-in Heading 1 is often pasted onto the first line of a
+        # speech manuscript.  A first-line “在……上的讲话” is a main title,
+        # not the first numbered section.
+        type_id = "title"
+        meta["is_title"] = True
+        if opening_speech_title != text.strip():
+            meta["strip_inferred_speech_numbering"] = True
+        score_log.append("opening_speech_title:100")
+    else:
+        # ── 先检查 Word 样式/多级列表 ──
+        style_tid, style_prefix = _match_style_or_lvl(text, feats)
+        if style_tid:
+            type_id = style_tid
+            prefix = style_prefix
+            from_word_structure = True
+        else:
+            # ── ① 骨架层 → ② 文种覆盖层 → ③ 兜底层 ──
+            type_id = "body"
+            best_score = -1
 
-        # 第一遍：骨架层 scorer
-        for tid, scorer in _STRUCTURE_SCORERS:
-            score, m, p = scorer(text, feats, ctx)
-            if score > 0:
-                score_log.append(f"{tid}:{score}")
-            if score > best_score and score > 0 and _flow_allows(tid, ctx):
-                best_score, type_id, meta, prefix = score, tid, m, p
-
-        # 第二遍：文种覆盖层（提前检测 mode，确保首段也生效）
-        mode = ctx.doc_mode or _detect_doc_type(ctx)
-        if mode:
-            for tid, scorer in _MODE_SCORERS.get(mode, []):
+            # 第一遍：骨架层 scorer
+            for tid, scorer in _STRUCTURE_SCORERS:
                 score, m, p = scorer(text, feats, ctx)
+                if score > 0:
+                    score_log.append(f"{tid}:{score}")
                 if score > best_score and score > 0 and _flow_allows(tid, ctx):
                     best_score, type_id, meta, prefix = score, tid, m, p
 
-        # 第三遍：兜底层
-        if best_score < 0:
-            for tid, scorer in _FALLBACK_SCORERS:
-                score, m, p = scorer(text, feats, ctx)
-                if score > best_score and _flow_allows(tid, ctx):
-                    best_score, type_id, meta, prefix = score, tid, m, p
+            # 第二遍：文种覆盖层（提前检测 mode，确保首段也生效）
+            mode = ctx.doc_mode or _detect_doc_type(ctx)
+            if mode:
+                for tid, scorer in _MODE_SCORERS.get(mode, []):
+                    score, m, p = scorer(text, feats, ctx)
+                    if score > best_score and score > 0 and _flow_allows(tid, ctx):
+                        best_score, type_id, meta, prefix = score, tid, m, p
+
+            # 第三遍：兜底层
+            if best_score < 0:
+                for tid, scorer in _FALLBACK_SCORERS:
+                    score, m, p = scorer(text, feats, ctx)
+                    if score > best_score and _flow_allows(tid, ctx):
+                        best_score, type_id, meta, prefix = score, tid, m, p
 
     # ── Repair ──
     type_id = _repair_heading4_colon(type_id, text, feats, ctx)
@@ -1278,19 +1833,24 @@ def detect_paragraph_type(text: str, feats: ParagraphFeatures,
         type_id = _repair_level(type_id, feats, ctx)
 
     # ── OCR 标题容错 ──
-    if type_id == "body" and _looks_like_heading(text) and not ctx.has_seen_body:
+    if (
+        type_id == "body"
+        and not unbound_object_label
+        and _looks_like_heading(text)
+        and not ctx.has_seen_body
+    ):
         type_id = "heading1"
-        logger.debug(f"[修复] OCR 标题升级: '{text[:30]}'")
+        logger.debug("[修复] OCR 标题升级 chars=%s", len(text))
 
     # ── 打分日志 ──
     scores_str = ' → '.join(score_log) if score_log else 'by_style'
-    logger.info(f"[打分] \"{text[:28]}\" | {scores_str} → {type_id}")
+    logger.info("[打分] chars=%s text_sha256=%s | %s → %s", len(text), hashlib.sha256(text.encode("utf-8")).hexdigest()[:12], scores_str, type_id)
 
     # ── heading2 续行修复：前段 heading2 + 短句含句号 → 缺编号的 heading2 ──
     if type_id == "body" and ctx.prev_type_id == "heading2" and len(text) <= 30 and text.endswith('。'):
         type_id = "heading2"
         meta["heading2_cont"] = True  # 不自动编号
-        logger.debug(f"[修复] heading2 续行: '{text[:30]}'")
+        logger.debug("[修复] heading2 续行 chars=%s", len(text))
 
     # ── Meta 补充：body 内部加粗标记 ──
     if type_id in ("heading1", "heading2") and _heading_has_inline_body(text):
@@ -1306,7 +1866,7 @@ def detect_paragraph_type(text: str, feats: ParagraphFeatures,
             meta["colon_bold"] = True
         # 报告首句加粗（current_level==1 + 首句≤30字 + 非报告回顾/称呼）。
         # 一是/二是/三是类段落已有 numbered_bold，避免两套 run 重写规则叠加。
-        if (ctx.current_level == 1 and not meta.get("numbered_bold")
+        if (ctx.doc_mode == "REPORT" and ctx.current_level == 1 and not meta.get("numbered_bold")
                 and not text.startswith((*_REPORT_HEADING_STARTS, '各位委员', '各位同志'))):
             period = text.find('。')
             if 0 < period <= 26:  # 首句≤26字加粗
@@ -1400,17 +1960,32 @@ def _repair_broken_rels(filepath: str) -> str:
     常见于 WPS / 在线工具生成的文档。返回修复后的临时文件路径。
     """
     import zipfile as _zipfile
-    import re as _re
     import tempfile as _tempfile
+    import os as _os
+    from xml.etree import ElementTree as _ET
+
+    def remove_null_relationships(data: bytes) -> tuple[bytes, bool]:
+        root = _ET.fromstring(data)
+        removed = False
+        for relationship in list(root):
+            target = (relationship.get("Target") or "").replace("\\", "/")
+            if target == "../NULL":
+                root.remove(relationship)
+                removed = True
+        if not removed:
+            return data, False
+        return _ET.tostring(root, encoding="utf-8", xml_declaration=True), True
 
     # 检查是否需要修复
     need_fix = False
     try:
         with _zipfile.ZipFile(filepath, 'r') as z:
-            if 'word/_rels/document.xml.rels' in z.namelist():
-                content = z.read('word/_rels/document.xml.rels').decode('utf-8')
-                if _re.search(r'Target="\.\./NULL"', content):
-                    need_fix = True
+            rels_items = [
+                item for item in z.infolist()
+                if item.filename.replace('\\', '/') == 'word/_rels/document.xml.rels'
+            ]
+            if len(rels_items) == 1:
+                _, need_fix = remove_null_relationships(z.read(rels_items[0]))
     except Exception:
         return filepath
 
@@ -1418,33 +1993,44 @@ def _repair_broken_rels(filepath: str) -> str:
         return filepath
 
     logger.info("[修复] 检测到损坏引用 Target=\"../NULL\"，自动修复…")
-    tmp = _tempfile.NamedTemporaryFile(delete=False, suffix='.docx')
+    tmp = _tempfile.NamedTemporaryFile(
+        delete=False,
+        suffix='.docx',
+        dir=_os.path.dirname(_os.path.abspath(filepath)),
+    )
     tmp.close()
 
     try:
         with _zipfile.ZipFile(filepath, 'r') as zin:
             with _zipfile.ZipFile(tmp.name, 'w', _zipfile.ZIP_DEFLATED) as zout:
                 for item in zin.infolist():
-                    data = zin.read(item.filename)
+                    data = zin.read(item)
                     if item.filename == 'word/_rels/document.xml.rels':
-                        content = data.decode('utf-8')
-                        fixed = _re.sub(
-                            r'<Relationship[^>]*Target="\.\./NULL"[^>]*/>',
-                            '', content
-                        )
-                        data = fixed.encode('utf-8')
+                        data, _ = remove_null_relationships(data)
                     zout.writestr(item, data)
-        logger.info(f"[修复] 完成 → {tmp.name}")
+        logger.info("[修复] 损坏关系已写入任务临时副本")
         return tmp.name
     except Exception as e:
-        logger.warning(f"[修复] 失败: {e}")
+        try:
+            _os.unlink(tmp.name)
+        except OSError:
+            logger.warning("[修复] 临时文件清理失败")
+        logger.warning("[修复] 失败: %s", type(e).__name__)
         return filepath
 
 
 class DocxImporter:
     """.docx 文件导入器。"""
 
-    def load(self, filepath: str, rules: List[StyleRule], features: dict = None) -> DocumentData:
+    def load(
+        self,
+        filepath: str,
+        rules: List[StyleRule],
+        features: dict = None,
+        *,
+        strict_preservation: bool = True,
+        recognition_mode: str = "authoritative",
+    ) -> DocumentData:
         """加载 .docx，识别段落类型，返回 DocumentData。"""
         try:
             from docx import Document as DocxDocument
@@ -1452,40 +2038,93 @@ class DocxImporter:
             raise ImportError("请安装 python-docx: pip install python-docx")
 
         features = features or {}
+        processing_options = features.get("processing", {}) if isinstance(features.get("processing", {}), dict) else {}
+        requested_strategy = str(
+            processing_options.get("strategy")
+            or processing_options.get("mode")
+            or ""
+        ).strip().lower()
+        requested_strategy = {"smart": "structural"}.get(requested_strategy, requested_strategy)
+        if requested_strategy:
+            if requested_strategy not in {"strict", "structural", "normalize"}:
+                raise ImportError("处理模式必须为 strict、smart、structural 或 normalize")
+            processing_strategy = requested_strategy
+        elif "strict_preservation" in processing_options:
+            processing_strategy = "strict" if _feature_bool(
+                processing_options.get("strict_preservation"), strict_preservation
+            ) else "normalize"
+        else:
+            # Preserve the public importer default for library callers.  The
+            # web configuration explicitly selects smart/structural mode.
+            processing_strategy = "strict" if strict_preservation else "normalize"
+        strict_preservation = processing_strategy == "strict"
+        structural_preservation = processing_strategy == "structural"
+        recognition_options = features.get("recognition", {}) if isinstance(features.get("recognition", {}), dict) else {}
+        recognition_mode = str(recognition_options.get("mode", recognition_mode) or recognition_mode).lower()
+        if recognition_mode not in {"legacy", "shadow", "authoritative"}:
+            raise ImportError("识别模式必须为 legacy、shadow 或 authoritative")
         punctuation_options = features.get("punctuation", {}) if isinstance(features.get("punctuation", {}), dict) else {}
+        numbering_options = features.get("numbering", {}) if isinstance(features.get("numbering", {}), dict) else {}
+        numbering_enabled = _feature_bool(numbering_options.get("enabled", False), False)
         new_punctuation_enabled = _feature_bool(punctuation_options.get("enabled", False), False)
         punctuation_mode = str(punctuation_options.get("mode", "safe") or "safe")
         punctuation_enabled = _feature_bool(features.get("punctuation_enabled", True), True)
+        punctuation_requested = new_punctuation_enabled or punctuation_enabled
 
         def normalize_text(text: str) -> str:
             if not text:
                 return text
+            if strict_preservation:
+                return text
+            if structural_preservation and not punctuation_requested:
+                return text
             if new_punctuation_enabled:
                 from docxtool.document.engine.punctuation import normalize_punctuation_text
 
-                return normalize_punctuation_text(text, mode=punctuation_mode)
+                return normalize_punctuation_text(_normalize_text(text), mode=punctuation_mode)
             if punctuation_enabled:
-                return _to_chinese_punctuation(_normalize_quotes(text))
+                return _to_chinese_punctuation(_normalize_quotes(_normalize_text(text)))
             return text
 
         def normalize_tokens(tokens: List[InlineToken]) -> List[InlineToken]:
+            if strict_preservation:
+                return list(tokens or [])
+            if structural_preservation and not punctuation_requested:
+                return list(tokens or [])
             normalized = _normalize_inline_tokens(tokens, punctuation_enabled and not new_punctuation_enabled)
             if not new_punctuation_enabled:
-                return normalized
+                if not punctuation_enabled:
+                    return normalized
+                return [
+                    InlineToken(token.kind, _normalize_text(token.text)) if token.kind == "text" else token
+                    for token in normalized
+                ]
             return [
                 InlineToken(token.kind, normalize_text(token.text)) if token.kind == "text" else token
                 for token in normalized
             ]
 
-        # 自动修复损坏的 .rels 引用
-        filepath = _repair_broken_rels(filepath)
-
+        # 自动修复损坏的 .rels 引用；修复副本只由本次导入持有。
+        original_filepath = filepath
+        repaired_filepath = _repair_broken_rels(filepath)
         try:
-            doc = DocxDocument(filepath)
+            doc = DocxDocument(repaired_filepath)
         except Exception as e:
-            raise ImportError(f"无法打开文件 {filepath}: {e}")
+            raise ImportError(f"无法打开文件: {type(e).__name__}") from e
+        finally:
+            if repaired_filepath != original_filepath:
+                try:
+                    os.unlink(repaired_filepath)
+                except OSError:
+                    logger.warning("[修复] 临时 DOCX 清理失败")
 
-        data = DocumentData(filepath=filepath)
+        data = DocumentData(
+            filepath=original_filepath,
+            strict_preservation=strict_preservation,
+            processing_strategy=processing_strategy,
+            recognition_mode=recognition_mode,
+        )
+        source_visible_texts = [paragraph.text for paragraph in doc.paragraphs if paragraph.text]
         from docxtool.document.engine.letterhead import detect_letterhead
 
         data.letterhead_detection = detect_letterhead(doc)
@@ -1515,7 +2154,7 @@ class DocxImporter:
                     raw_blocks.append(("letterhead_paragraph_xml", para))
                 elif pf.contains_image:
                     raw_blocks.append(("paragraph_xml", para))
-                elif para.text.strip() or sectPr is not None or any(token.kind == "page_break" for token in inline_tokens):
+                elif strict_preservation or para.text.strip() or sectPr is not None or any(token.kind == "page_break" for token in inline_tokens):
                     raw_blocks.append(("paragraph", para, pf, inline_tokens, sectPr))
             elif child.tag == _qn_body('w:tbl'):
                 table = DocxTable(child, doc._body)
@@ -1527,15 +2166,25 @@ class DocxImporter:
                 continue
             body_index += 1
 
-        # Captions immediately below a table/image belong to that object block.
-        # Preserve their complete paragraph XML instead of classifying/reformatting them.
+        # Preserve at most one caption immediately below a table or a standalone
+        # image paragraph.  A caption cannot anchor another caption, and an
+        # inline image surrounded by body text must not protect the next line.
         for block_index in range(1, len(raw_blocks)):
             block = raw_blocks[block_index]
             previous = raw_blocks[block_index - 1]
-            if (block[0] == "paragraph"
-                    and previous[0] in {"table", "paragraph_xml", "protected_paragraph_xml"}
-                    and _is_object_caption(block[1])):
-                raw_blocks[block_index] = ("protected_paragraph_xml", block[1])
+            previous_is_caption_anchor = (
+                previous[0] == "table"
+                or (
+                    previous[0] == "paragraph_xml"
+                    and _is_standalone_image_paragraph(previous[1])
+                )
+            )
+            if (
+                block[0] == "paragraph"
+                and previous_is_caption_anchor
+                and _is_object_caption(block[1])
+            ):
+                raw_blocks[block_index] = ("protected_paragraph_xml", block[1], block[2])
 
         # 第二步：按换行符拆分段落（解决 3/4 级标题合并在同一段的问题）
 
@@ -1546,6 +2195,10 @@ class DocxImporter:
                 flat_lines.append(block)
                 continue
             _, para, pf, inline_tokens, sectPr = block
+            if strict_preservation:
+                raw_text = inline_tokens_text(inline_tokens) if inline_tokens else para.text
+                flat_lines.append(("text", raw_text, pf, list(inline_tokens), sectPr))
+                continue
             text = para.text.strip()
             text = normalize_text(text)
             if not text and sectPr is not None:
@@ -1557,6 +2210,7 @@ class DocxImporter:
                     paragraph_index=len(flat_lines),
                     is_new_line=False,
                 )
+                _inherit_source_locator(sub_pf, pf, "")
                 flat_lines.append(("text", "", sub_pf, [], sectPr))
                 continue
             has_structural_inline = any(token.kind in {"tab", "line_break", "page_break"} for token in inline_tokens)
@@ -1578,9 +2232,33 @@ class DocxImporter:
                 # a trailing signature organization.  A following date is a
                 # stronger structural boundary, so page-break presence must not
                 # suppress the split.
-                if (has_line_break
-                        and _should_split_structural_line_breaks(split_lines, following_text)):
-                    for li, split_line in enumerate(split_lines):
+                # A manual page break can be embedded in a malformed physical
+                # paragraph such as "一、标题。正文".  Structural mode must
+                # still split the reliable heading/body boundary first; keeping
+                # that page break would otherwise make the body inherit the
+                # heading paragraph and its formatting.
+                inline_heading_parts = (
+                    _split_inline_heading_body(line)
+                    if structural_preservation else [line]
+                )
+                should_split_inline_heading = len(inline_heading_parts) > 1
+                if (
+                    should_split_inline_heading
+                    or (
+                        has_line_break
+                        and _should_split_structural_line_breaks(split_lines, following_text)
+                    )
+                ):
+                    logical_lines = []
+                    source_lines = split_lines if has_line_break else [line]
+                    for split_line in source_lines:
+                        if split_line:
+                            logical_lines.extend(
+                                _split_inline_heading_body(split_line)
+                                if structural_preservation else [split_line]
+                            )
+                    source_cursor = 0
+                    for li, split_line in enumerate(logical_lines):
                         if not split_line:
                             continue
                         line_numbering = pf.numbering_prefix if li == 0 else _detect_numbering_prefix(split_line)
@@ -1592,7 +2270,8 @@ class DocxImporter:
                             paragraph_index=len(flat_lines),
                             is_new_line=(li > 0),
                         )
-                        flat_lines.append(("text", split_line, sub_pf, [], sectPr if li == len(split_lines) - 1 else None))
+                        source_cursor = _inherit_source_locator(sub_pf, pf, split_line, source_cursor)
+                        flat_lines.append(("text", split_line, sub_pf, [], sectPr if li == len(logical_lines) - 1 else None))
                     continue
                 if not line and has_page_break:
                     line = text
@@ -1606,10 +2285,18 @@ class DocxImporter:
                     paragraph_index=len(flat_lines),
                     is_new_line=False,
                 )
+                _inherit_source_locator(sub_pf, pf, line)
                 preserved_tokens = [] if boundary_whitespace_trimmed else normalized_tokens
                 flat_lines.append(("text", line, sub_pf, preserved_tokens, sectPr))
                 continue
-            for li, line in enumerate(text.split('\n')):
+            logical_lines = []
+            for source_line in text.split('\n'):
+                logical_lines.extend(
+                    _split_inline_heading_body(source_line)
+                    if structural_preservation else [source_line]
+                )
+            source_cursor = 0
+            for li, line in enumerate(logical_lines):
                 line = line.strip()
                 line = normalize_text(line)
                 if not line:
@@ -1623,7 +2310,8 @@ class DocxImporter:
                     paragraph_index=len(flat_lines),
                     is_new_line=(li > 0),
                 )
-                flat_lines.append(("text", line, sub_pf, [], sectPr if li == len(text.split('\n')) - 1 else None))
+                source_cursor = _inherit_source_locator(sub_pf, pf, line, source_cursor)
+                flat_lines.append(("text", line, sub_pf, [], sectPr if li == len(logical_lines) - 1 else None))
 
         ctx = DetectionContext()
         # 预扫描：找到最后一个正文/标题行的位置，之后的区域视为文档尾部
@@ -1657,8 +2345,9 @@ class DocxImporter:
                 data.paragraphs.append(pd)
                 continue
             if item[0] == "protected_paragraph_xml":
-                pd = ParagraphData(text="", type_id="__object_caption__",
-                                   original_text="", features=None,
+                caption_text = item[1].text
+                pd = ParagraphData(text=caption_text, type_id="__object_caption__",
+                                   original_text=caption_text, features=item[2],
                                    meta={"paragraph_xml": item[1]})
                 data.paragraphs.append(pd)
                 continue
@@ -1707,6 +2396,13 @@ class DocxImporter:
                     type_id, meta_patch, prefix = detect_paragraph_type(line, sub_pf, ctx, rules)
                     clean_text = strip_numbering(line, prefix)
 
+            if strict_preservation or structural_preservation:
+                clean_text = line
+                meta_patch = dict(meta_patch or {})
+                meta_patch.pop("numbering", None)
+                if meta_patch.get("strip_inferred_speech_numbering"):
+                    clean_text = _strip_inferred_speech_numbering(line)
+
             if ctx.attachment_page_mode and type_id == "body":
                 type_id = "attachment_body"
 
@@ -1745,33 +2441,161 @@ class DocxImporter:
             if sectPr is not None:
                 meta_patch = dict(meta_patch or {})
                 meta_patch["sectPr"] = sectPr
+            meta_patch = dict(meta_patch or {})
+            meta_patch["legacy_type_id"] = {
+                "value": type_id,
+                "source": "legacy_importer",
+                "recognition_version": RECOGNITION_VERSION_TAG,
+            }
             pd = ParagraphData(
                 text=clean_text, type_id=type_id,
                 original_text=line, features=sub_pf, meta=meta_patch,
-                inline_tokens=inline_tokens if clean_text == line else [],
+                inline_tokens=inline_tokens if strict_preservation or clean_text == line else [],
             )
             data.paragraphs.append(pd)
-            # 分类日志
-            preview = clean_text[:28].replace('\n', ' ')
-            logger.info(f"[识别] #{len(data.paragraphs)-1} {type_id} | \"{preview}\"{' meta='+str(meta_patch) if meta_patch else ''}")
+            text_hash = hashlib.sha256(clean_text.encode("utf-8")).hexdigest()[:12]
+            logger.info(
+                "[识别] #%s type=%s chars=%s text_sha256=%s",
+                len(data.paragraphs) - 1,
+                type_id,
+                len(clean_text),
+                text_hash,
+            )
             # (body_blocks removed — tables/images now use paragraph stream placeholders)
 
         data.doc_mode = ctx.doc_mode
-        self._reorder_attachment_note_before_signature(data.paragraphs)
-        self._assign_numbering(data.paragraphs, rules)
-        self._merge_siblings(data.paragraphs)
+        visible_paragraphs = [
+            paragraph for paragraph in data.paragraphs
+            if not paragraph.type_id.startswith("__")
+        ]
+        before_normalization = [
+            (
+                source_text,
+                source_text,
+                visible_paragraphs[index].type_id if index < len(visible_paragraphs) else "",
+            )
+            for index, source_text in enumerate(source_visible_texts)
+        ]
+        if strict_preservation:
+            self._record_strict_normalization_suggestions(data)
+        elif structural_preservation:
+            _normalize_tail_structures(data.paragraphs, normalize_text=False)
+        else:
+            _normalize_tail_structures(data.paragraphs)
+            self._reorder_attachment_note_before_signature(data.paragraphs)
+            self._assign_numbering(data.paragraphs, rules)
+            self._merge_siblings(data.paragraphs)
+            self._record_applied_normalization_changes(data, before_normalization)
         self._apply_core_classification(data, features)
+        from dataclasses import replace
+        from docxtool.document.recognition.config import DEFAULT_CONFIG
+
+        apply_recognition(data, replace(DEFAULT_CONFIG, mode=recognition_mode))
         # (old classification loop removed — replaced by flat_lines single pass above)
 
+        if structural_preservation and numbering_enabled:
+            # Smart mode keeps all non-numbering source text intact.  The user
+            # may still explicitly request canonical heading sequences through
+            # the numbering switch; compute those only after final recognition
+            # has settled every heading level.
+            self._assign_numbering(data.paragraphs, rules)
+            for paragraph in data.paragraphs:
+                if paragraph.type_id.startswith("heading"):
+                    paragraph.meta["numbering_correction"] = True
+
         # 第三半：编号连续性检查（需在编号赋值之后）
-        self._fix_numbering_gaps(data.paragraphs)
+        if processing_strategy == "normalize":
+            self._fix_numbering_gaps(data.paragraphs)
 
         # 第三步：剥离 Word 自动编号
-        for para in doc.paragraphs:
-            self._strip_auto_numbering(para)
+        if processing_strategy == "normalize":
+            for para in doc.paragraphs:
+                self._strip_auto_numbering(para)
 
-        logger.info(f"[导入] {filepath}: {len(data.paragraphs)} 段, {len(data.tables)} 表格")
+        logger.info(
+            "[导入] file_sha256=%s paragraphs=%s tables=%s strategy=%s recognition=%s",
+            hashlib.sha256(str(original_filepath).encode("utf-8")).hexdigest()[:12],
+            len(data.paragraphs),
+            len(data.tables),
+            processing_strategy,
+            recognition_mode,
+        )
         return data
+
+    def _record_strict_normalization_suggestions(self, data: DocumentData) -> None:
+        from docxtool.document.engine.punctuation import normalize_punctuation_text
+
+        for index, paragraph in enumerate(data.paragraphs):
+            if paragraph.type_id.startswith("__"):
+                continue
+            proposed = normalize_punctuation_text(paragraph.original_text, mode="safe")
+            if proposed != paragraph.original_text:
+                data.normalization_changes.append(NormalizationChange(
+                    paragraph_index=index,
+                    action="normalize_punctuation",
+                    before=paragraph.original_text,
+                    after=proposed,
+                    reason_code="PUNCTUATION_NORMALIZATION_SUGGESTED",
+                    confidence=0.9,
+                    applied=False,
+                ))
+        for index in range(len(data.paragraphs) - 2):
+            current = data.paragraphs[index]
+            following = data.paragraphs[index + 1]
+            trailing = data.paragraphs[index + 2]
+            if (
+                current.type_id == "sign_org"
+                and following.type_id == "sign_date"
+                and trailing.type_id == "attachment_note"
+            ):
+                data.normalization_changes.append(NormalizationChange(
+                    paragraph_index=index,
+                    action="reorder_tail_structure",
+                    before="sign_org,sign_date,attachment_note",
+                    after="attachment_note,sign_org,sign_date",
+                    reason_code="TAIL_STRUCTURE_REORDER_SUGGESTED",
+                    confidence=0.85,
+                    applied=False,
+                ))
+        for index in range(len(data.paragraphs) - 1):
+            current = data.paragraphs[index]
+            following = data.paragraphs[index + 1]
+            if current.type_id.startswith("heading") and current.type_id == following.type_id:
+                data.normalization_changes.append(NormalizationChange(
+                    paragraph_index=index,
+                    action="merge_sibling_heading",
+                    before=current.original_text,
+                    after=f"{current.original_text}{following.original_text}",
+                    reason_code="SIBLING_HEADING_MERGE_SUGGESTED",
+                    confidence=0.7,
+                    applied=False,
+                ))
+
+    def _record_applied_normalization_changes(
+        self,
+        data: DocumentData,
+        before: list[tuple[str, str, str]],
+    ) -> None:
+        after = [
+            (paragraph.original_text, paragraph.text, paragraph.type_id)
+            for paragraph in data.paragraphs
+            if not paragraph.type_id.startswith("__")
+        ]
+        max_length = max(len(before), len(after))
+        for index in range(max_length):
+            old = before[index] if index < len(before) else ("", "", "")
+            new = after[index] if index < len(after) else ("", "", "")
+            if old == new:
+                continue
+            data.normalization_changes.append(NormalizationChange(
+                paragraph_index=index,
+                action="normalize_structure",
+                before=old[1] or old[0],
+                after=new[1] or new[0],
+                reason_code="LEGACY_NORMALIZATION_APPLIED",
+                confidence=0.8,
+                applied=True,
+            ))
 
     def _apply_core_classification(self, data: DocumentData, features: dict) -> None:
         classification_options = features.get("classification", {}) if isinstance(features.get("classification", {}), dict) else {}
@@ -1835,13 +2659,10 @@ class DocxImporter:
 
         四级计数器 a/b/c/d，级联清零。Renderer 只负责显示，不计算。
         """
-        # 内联中文数字（绕过模块缓存问题）
-        _CN = ["零","一","二","三","四","五","六","七","八","九","十",
-               "十一","十二","十三","十四","十五","十六","十七","十八","十九","二十"]
+        from docxtool.document.engine.numbering import chinese_integer
+
         def _cn(n):
-            r = _CN[n] if 0 <= n <= 20 else (_CN[n//10] + "十" + (_CN[n%10] if n%10 else ""))
-            logger.debug(f"[CN] _cn({n}) = {r!r}")
-            return r
+            return chinese_integer(n)
         def _ar(n): return str(n)
 
         counters = {"a": 0, "b": 0, "c": 0, "d": 0}
@@ -1901,7 +2722,7 @@ class DocxImporter:
                 numPr = pPr.find(qn('w:numPr'))
                 if numPr is not None:
                     pPr.remove(numPr)
-                    logger.debug(f"[导入] 剥离自动编号: '{paragraph.text[:30]}'")
+                    logger.debug("[导入] 剥离自动编号 chars=%s", len(paragraph.text))
         except Exception:
             pass
 

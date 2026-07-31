@@ -119,7 +119,26 @@ def _section_summary(path):
             "type": section_type.get(qn("w:val")) if section_type is not None else "",
             "width": page_size.get(qn("w:w")) if page_size is not None else "",
             "height": page_size.get(qn("w:h")) if page_size is not None else "",
+            "margin_top": margins.get(qn("w:top")) if margins is not None else "",
+            "margin_bottom": margins.get(qn("w:bottom")) if margins is not None else "",
             "margin_left": margins.get(qn("w:left")) if margins is not None else "",
+            "margin_right": margins.get(qn("w:right")) if margins is not None else "",
+            "footer": margins.get(qn("w:footer")) if margins is not None else "",
+            "grid_char_space": (
+                sect.find(qn("w:docGrid")).get(qn("w:charSpace"))
+                if sect.find(qn("w:docGrid")) is not None
+                else ""
+            ),
+            "grid_chars": (
+                sect.find(qn("w:docGrid")).get(qn("w:charsPerLine"))
+                if sect.find(qn("w:docGrid")) is not None
+                else ""
+            ),
+            "grid_lines": (
+                sect.find(qn("w:docGrid")).get(qn("w:linesPerPage"))
+                if sect.find(qn("w:docGrid")) is not None
+                else ""
+            ),
         })
     return summary
 
@@ -141,7 +160,7 @@ class BodyOrderExportTest(unittest.TestCase):
             doc.add_paragraph("after")
             doc.save(source)
 
-            data = DocxImporter().load(str(source), _rules())
+            data = DocxImporter().load(str(source), _rules(), strict_preservation=False)
             export_doc(data, _rules(), PageSettings(), str(output))
 
             self.assertEqual(
@@ -177,6 +196,35 @@ class BodyOrderExportTest(unittest.TestCase):
             exported_rel = exported.part.rels[link.get(qn("r:id"))]
             self.assertTrue(exported_rel.is_external)
             self.assertEqual(exported_rel.target_ref, "https://example.com/table")
+
+    def test_removes_unsafe_external_table_relationship_without_dangling_reference(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            source = tmp / "source.docx"
+            output = tmp / "output.docx"
+
+            doc = Document()
+            cell_para = doc.add_table(rows=1, cols=1).cell(0, 0).paragraphs[0]
+            rid = cell_para.part.relate_to("file:///C:/private/document.docx", RT.HYPERLINK, is_external=True)
+            hyperlink = OxmlElement("w:hyperlink")
+            hyperlink.set(qn("r:id"), rid)
+            run = OxmlElement("w:r")
+            text = OxmlElement("w:t")
+            text.text = "unsafe link"
+            run.append(text)
+            hyperlink.append(run)
+            cell_para._p.append(hyperlink)
+            doc.save(source)
+
+            data = DocxImporter().load(str(source), _rules())
+            stats = export_doc(data, _rules(), PageSettings(), str(output))
+
+            exported = Document(output)
+            link = exported.tables[0]._tbl.find(".//" + qn("w:hyperlink"))
+            self.assertIsNotNone(link)
+            self.assertIsNone(link.get(qn("r:id")))
+            self.assertFalse(any(rel.is_external and rel.target_ref.startswith("file:") for rel in exported.part.rels.values()))
+            self.assertTrue(stats["removed_external_relationships"])
 
     def test_preserves_table_and_following_caption_xml_unchanged(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -218,6 +266,13 @@ class BodyOrderExportTest(unittest.TestCase):
             source_default = next(style for style in source_doc.styles if style.element.get(qn("w:default")) == "1" and style.type == 1)
             output_cell_style = output_doc.tables[0].cell(0, 0).paragraphs[0].style
             self.assertNotEqual(output_cell_style.style_id, "DCT-Body")
+            self.assertTrue(output_cell_style.style_id.startswith("DCT-Preserved-"))
+            self.assertNotEqual(output_cell_style.name, "Normal")
+            self.assertEqual(
+                [style.style_id for style in output_doc.styles if style.name == "Normal"],
+                ["Normal"],
+            )
+            self.assertEqual(output_doc.styles["Normal"].font.size.pt, 16.0)
             self.assertEqual(
                 output_cell_style.element.rPr.xml if output_cell_style.element.rPr is not None else None,
                 source_default.element.rPr.xml if source_default.element.rPr is not None else None,
@@ -270,6 +325,69 @@ class BodyOrderExportTest(unittest.TestCase):
                 _paragraph_xml_without_spacing(output, "图2结构示意图"),
                 source_caption_xml,
             )
+
+    def test_only_one_table_caption_is_protected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            source = tmp / "source.docx"
+            output = tmp / "output.docx"
+
+            doc = Document()
+            doc.add_table(rows=1, cols=1).cell(0, 0).text = "数据"
+            table_caption = doc.add_paragraph("表1 测试表")
+            table_caption.runs[0].font.color.rgb = RGBColor(255, 0, 0)
+            following = doc.add_paragraph("图2 这是普通正文")
+            following.runs[0].font.color.rgb = RGBColor(0, 128, 0)
+            doc.save(source)
+
+            data = DocxImporter().load(str(source), _rules())
+            captions = [item for item in data.paragraphs if item.type_id == "__object_caption__"]
+
+            self.assertEqual(len(captions), 1)
+            self.assertEqual(captions[0].meta["paragraph_xml"].text, "表1 测试表")
+            following_data = next(item for item in data.paragraphs if item.text == "图2 这是普通正文")
+            self.assertEqual(following_data.type_id, "body")
+
+            export_doc(data, _rules(), PageSettings(), str(output))
+            exported = Document(output)
+            exported_caption = next(p for p in exported.paragraphs if p.text == "表1 测试表")
+            exported_body = next(p for p in exported.paragraphs if p.text == "图2 这是普通正文")
+            self.assertEqual(str(exported_caption.runs[0].font.color.rgb), "FF0000")
+            self.assertEqual(exported_body.style.style_id, "DCT-Body")
+            self.assertTrue(all(run.font.color.rgb is None for run in exported_body.runs))
+            self.assertTrue(all(run.font.size.pt == 16 for run in exported_body.runs if run.text))
+
+    def test_inline_image_with_text_does_not_protect_following_body(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            source = tmp / "source.docx"
+            output = tmp / "output.docx"
+            image = tmp / "tiny.png"
+            image.write_bytes(base64.b64decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+            ))
+
+            doc = Document()
+            mixed = doc.add_paragraph("图片前文字")
+            mixed.add_run().add_picture(str(image), width=Cm(1))
+            mixed.add_run("图片后文字")
+            following = doc.add_paragraph("图2 这是普通正文")
+            following.runs[0].font.size = Pt(48)
+            following.runs[0].font.color.rgb = RGBColor(255, 0, 0)
+            doc.save(source)
+
+            data = DocxImporter().load(str(source), _rules(), strict_preservation=False)
+
+            self.assertEqual(data.paragraphs[0].type_id, "__image__")
+            following_data = next(item for item in data.paragraphs if item.text == "图2 这是普通正文")
+            self.assertEqual(following_data.type_id, "body")
+
+            export_doc(data, _rules(), PageSettings(), str(output))
+            exported = Document(output)
+            exported_body = next(p for p in exported.paragraphs if p.text == "图2 这是普通正文")
+            self.assertEqual(exported_body.style.style_id, "DCT-Body")
+            self.assertTrue(all(run.font.color.rgb is None for run in exported_body.runs))
+            self.assertTrue(all(run.font.size.pt == 16 for run in exported_body.runs if run.text))
 
     def test_keeps_image_at_original_body_position(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -329,6 +447,42 @@ class BodyOrderExportTest(unittest.TestCase):
             self.assertEqual(counts["line_breaks"], 1)
             self.assertEqual(counts["tabs"], 1)
 
+    def test_removes_only_redundant_trailing_page_break_from_body_text(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            source = tmp / "source.docx"
+            output = tmp / "output.docx"
+
+            doc = Document()
+            doc.add_paragraph("测试材料")
+            body = doc.add_paragraph()
+            body.add_run("正文内容。")
+            body.runs[0].add_break(WD_BREAK.PAGE)
+            interrupted = doc.add_paragraph()
+            interrupted.add_run("正文前半句，")
+            interrupted.runs[0].add_break(WD_BREAK.PAGE)
+            interrupted.add_run("正文后半句。")
+            embedded = doc.add_paragraph()
+            embedded.add_run("段内前")
+            embedded.runs[0].add_break(WD_BREAK.PAGE)
+            embedded.add_run("段内后")
+            doc.add_paragraph("后续正文。")
+            doc.save(source)
+
+            data = DocxImporter().load(str(source), _rules(), strict_preservation=False)
+            export_doc(data, _rules(), PageSettings(), str(output))
+
+            rendered = Document(output)
+            first = next(paragraph for paragraph in rendered.paragraphs if paragraph.text == "正文内容。")
+            interrupted = next(paragraph for paragraph in rendered.paragraphs if paragraph.text == "正文前半句，正文后半句。")
+            second = next(paragraph for paragraph in rendered.paragraphs if paragraph.text == "段内前段内后")
+            first_breaks = first._p.findall(".//" + qn("w:br"))
+            interrupted_breaks = interrupted._p.findall(".//" + qn("w:br"))
+            second_breaks = second._p.findall(".//" + qn("w:br"))
+            self.assertEqual(first_breaks, [])
+            self.assertEqual(interrupted_breaks, [])
+            self.assertEqual(len(second_breaks), 1)
+
     def test_last_rendered_page_break_is_not_rewritten_as_manual_break(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
@@ -382,6 +536,38 @@ class BodyOrderExportTest(unittest.TestCase):
             self.assertGreaterEqual(len(sections), 3)
             self.assertTrue(any(section["orient"] == "landscape" for section in sections), sections)
             self.assertGreaterEqual(len({(section["width"], section["height"]) for section in sections}), 2)
+            portrait_sections = [section for section in sections if section["orient"] != "landscape"]
+            landscape_sections = [section for section in sections if section["orient"] == "landscape"]
+            for section in portrait_sections:
+                self.assertEqual(
+                    (
+                        section["margin_top"],
+                        section["margin_bottom"],
+                        section["margin_left"],
+                        section["margin_right"],
+                        section["footer"],
+                    ),
+                    ("2098", "1984", "1588", "1474", "1587"),
+                )
+                self.assertEqual(section["grid_char_space"], "-842")
+            for section in landscape_sections:
+                self.assertEqual(
+                    (
+                        section["margin_top"],
+                        section["margin_bottom"],
+                        section["margin_left"],
+                        section["margin_right"],
+                        section["footer"],
+                    ),
+                    ("1588", "1474", "1984", "2098", "1077"),
+                )
+                self.assertEqual(section["grid_char_space"], "27765")
+            self.assertTrue(
+                all(section["grid_chars"] == "28" for section in sections), sections
+            )
+            self.assertTrue(
+                all(section["grid_lines"] == "22" for section in sections), sections
+            )
 
 
 if __name__ == "__main__":

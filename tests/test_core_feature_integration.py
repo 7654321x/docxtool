@@ -98,6 +98,7 @@ def test_importer_uses_safe_punctuation_engine_and_records_classification(tmp_pa
             "punctuation": {"enabled": True, "mode": "safe"},
             "classification": {"enabled": True, "minimum_auto_format_confidence": 0.85},
         },
+        strict_preservation=False,
     )
 
     paragraph = data.paragraphs[0]

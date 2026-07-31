@@ -7,6 +7,8 @@
   - PyQt5 可选依赖（桌面端），Web 端通过 from_config() 替代
 """
 
+from __future__ import annotations
+
 import logging
 import math
 import os as _os
@@ -69,17 +71,11 @@ ROW_NAMES: List[str] = [
 # 工具函数
 # ═══════════════════════════════════════════════════════════════
 
-_CHINESE_DIGITS = ["零", "一", "二", "三", "四", "五", "六", "七", "八", "九", "十",
-                   "十一", "十二", "十三", "十四", "十五", "十六", "十七", "十八", "十九", "二十"]
-
-
 def chinese_number(n: int) -> str:
-    """阿拉伯数字 → 中文数字。1→"一", 12→"十二", 20→"二十", 21→"二十一"。"""
-    if 0 <= n <= 20:
-        return _CHINESE_DIGITS[n]
-    tens = n // 10
-    ones = n % 10
-    return _CHINESE_DIGITS[tens] + "十" + (_CHINESE_DIGITS[ones] if ones else "")
+    """Compatibility wrapper for the single Chinese integer converter."""
+    from docxtool.document.engine.numbering import chinese_integer
+
+    return chinese_integer(n)
 
 
 def arabic_number(n: int) -> str:
@@ -159,7 +155,9 @@ def _font_size_from_config(field_path: str, value) -> tuple[str, float]:
     if label in FONT_SIZE_MAP:
         return label, FONT_SIZE_MAP[label]
     try:
-        size_pt = finite_float(field_path, label.removesuffix("pt").removesuffix("磅"), 1.0, 72.0)
+        numeric_label = label[:-2] if label.endswith("pt") else label
+        numeric_label = numeric_label[:-1] if numeric_label.endswith("磅") else numeric_label
+        size_pt = finite_float(field_path, numeric_label, 1.0, 72.0)
     except ConfigValidationError as exc:
         raise ConfigValidationError(field_path, f"未知字号 {label}") from exc
     return f"{size_pt:g}pt", size_pt
@@ -471,7 +469,7 @@ class StyleRule:
             StyleRule(17, "附件说明", "仿宋_GB2312", "三号", 16.0, False, "", "", 0.0, "左对齐", 1.0, 0.0, 2.0),
             StyleRule(18, "附件说明续项", "仿宋_GB2312", "三号", 16.0, False, "", "", 0.0, "左对齐", 0.0, 0.0, 5.0),
             StyleRule(19, "附件正文标记", "黑体", "三号", 16.0, False, "", "", 0.0, "左对齐", 0.0, 1.0, 0.0, 0.0, True),
-            StyleRule(20, "附件正文标题", "方正小标宋简体", "二号", 22.0, False, "", "", 0.0, "居中"),
+            StyleRule(20, "附件正文标题", "方正小标宋简体", "二号", 22.0, False, "", "", 0.0, "居中", 1.0, 1.0),
             StyleRule(21, "附件正文", "仿宋_GB2312", "三号", 16.0, False, "", "", 2.0, "两端对齐"),
             StyleRule(22, "落款署名", "仿宋_GB2312", "三号", 16.0, False, "", "", 0.0, "右对齐", 1.0, 0.0),
             StyleRule(23, "落款日期", "仿宋_GB2312", "三号", 16.0, False, "", "", 0.0, "右对齐", 0.0, 0.0, 0.0, 2.0),
@@ -698,6 +696,7 @@ def _parse_core_feature_options(config_dict: dict) -> dict:
     signature_block = _dict_field(config_dict, "signature_block")
     table_format = _dict_field(config_dict, "table_format")
     cleanup = _dict_field(config_dict, "cleanup")
+    processing = _dict_field(config_dict, "processing")
     raw_features = config_dict.get("features", {})
     legacy_page_number_enabled = None
     if isinstance(raw_features, dict) and "page_number_enabled" in raw_features:
@@ -708,7 +707,31 @@ def _parse_core_feature_options(config_dict: dict) -> dict:
         page_number_enabled = legacy_page_number_enabled
     else:
         page_number_enabled = True
+    raw_processing_mode = (
+        processing.get("strategy")
+        or processing.get("mode")
+        or config_dict.get("processing_mode")
+        or config_dict.get("mode")
+        or "smart"
+    )
+    if not isinstance(raw_processing_mode, str):
+        raise ConfigValidationError("processing.mode", "必须是字符串")
+    processing_mode = raw_processing_mode.strip().lower()
+    processing_strategy = {
+        "smart": "structural",
+        "structural": "structural",
+        "strict": "strict",
+        "normalize": "normalize",
+    }.get(processing_mode)
+    if processing_strategy is None:
+        raise ConfigValidationError(
+            "processing.mode",
+            "仅支持 smart、strict、normalize 或 structural",
+        )
     return {
+        "processing": {
+            "strategy": processing_strategy,
+        },
         "punctuation": {
             "enabled": _safe_bool(punctuation.get("enabled", False), False),
             "mode": _safe_mode("punctuation.mode", punctuation.get("mode", "safe"), {"off", "safe", "standard"}, "safe"),
@@ -1028,9 +1051,9 @@ if __name__ == "__main__":
     assert _sanitize_log_stem("新建 DOCX 文档 (2).docx") == "新建 DOCX 文档 (2)"
     assert _sanitize_log_stem('a<b>:c?.docx') == "a_b_c"
     assert _build_document_log_path(
-        r"C:\Users\94575\Desktop\新建 DOCX 文档 (2).docx",
-        r"D:\logs",
+        "新建 DOCX 文档 (2).docx",
+        "logs",
         timestamp="20260531_160000",
-    ).endswith(r"D:\logs\20260531_160000_新建 DOCX 文档 (2).log")
+    ).endswith(_os.path.join("logs", "20260531_160000_新建 DOCX 文档 (2).log"))
 
     print("✅ 样式配置纯函数验证全部通过")

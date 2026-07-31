@@ -130,7 +130,8 @@ def validate_docx_upload(
                 _reject("INVALID_DOCX", "DOCX 文件内成员过多，疑似压缩炸弹")
 
             required = {"[Content_Types].xml", "word/document.xml", "_rels/.rels"}
-            seen = set()
+            seen_exact = set()
+            seen_casefold = set()
             total_uncompressed = 0
             total_compressed = 0
 
@@ -139,7 +140,11 @@ def validate_docx_upload(
                 if info.is_dir():
                     continue
 
-                seen.add(name)
+                folded = name.casefold()
+                if name in seen_exact or folded in seen_casefold:
+                    _reject("DUPLICATE_ZIP_MEMBER", "DOCX 包含重复或有歧义的 ZIP 成员")
+                seen_exact.add(name)
+                seen_casefold.add(folded)
                 total_uncompressed += int(info.file_size or 0)
                 total_compressed += max(int(info.compress_size or 0), 0)
                 if total_uncompressed > max_uncompressed_bytes:
@@ -157,8 +162,8 @@ def validate_docx_upload(
                 if _is_media_member(name) and info.file_size > max_media_bytes:
                     _reject("INVALID_DOCX", f"媒体文件过大: {name}")
 
-            if not required.issubset(seen):
-                missing = ", ".join(sorted(required - seen))
+            if not required.issubset(seen_exact):
+                missing = ", ".join(sorted(required - seen_exact))
                 _reject("INVALID_DOCX", f"DOCX 缺少必要文件: {missing}")
 
             bad_member = zf.testzip()

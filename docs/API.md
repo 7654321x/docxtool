@@ -73,6 +73,29 @@ HTTP 状态码为 `403`。
 
 `OPTIONS` 预检请求固定返回 `204`。
 
+## 1.4 普通用户账号
+
+普通用户与管理员会话相互独立。用户登录成功后，服务设置 `docxtool_user_session` HttpOnly Cookie；数据库只保存 Session Token 的 SHA-256 摘要。密码使用 Argon2id 保存。
+
+```http
+GET  /api/auth/me
+POST /api/auth/register
+POST /api/auth/login
+POST /api/auth/logout
+```
+
+注册和登录请求必须使用 `application/json`，并通过配置的 `FRONTEND_ORIGIN` 来源校验。退出以及已登录用户的模板写操作还必须携带 `/api/auth/me` 返回的 `X-CSRF-Token`。CSRF Token 仅保存在页面内存中。
+
+用户登录后，个人模板、任务状态和下载文件按账号隔离；未登录用户继续使用签名匿名 Cookie。公共模板和系统模板仍可被所有用户读取。
+
+生产环境建议配置：
+
+```text
+DOCXTOOL_USER_SESSION_DAYS=30
+COOKIE_SECURE=1
+FRONTEND_ORIGIN=https://docxtool.pages.dev
+```
+
 ## 2. 健康检查与页面接口
 
 ### 2.1 首页
@@ -135,7 +158,8 @@ GET /version
 - `version`: 应用版本号。
 - `started_at`: 服务启动时间。
 - `bind_host`: 当前绑定地址。
-- `file_ttl_seconds`: 输出文件保留时间，默认 86400 秒。
+- `file_retention_policy`: 用户文件保留策略，当前固定为 `permanent`。
+- `file_ttl_seconds`: 兼容字段；永久保留时为 `null`。
 - `max_upload_mb`: 单文件最大上传大小，默认 10 MB。
 - `max_workers`: 后台处理线程数。
 - `max_queue`: 最大排队容量。
@@ -164,7 +188,7 @@ PUT /api/upload
 - `X-Preset-Id: 可选，当前模板 ID`
 - `X-Preset-Name: 可选，URL 编码后的当前模板名称`
 - `X-Template-Type: 可选，`builtin` 或 `custom`
-- `X-Processing-Mode: 可选，处理模式，例如 `smart`
+- `X-Processing-Mode: 可选，处理模式：`smart`、`structural`、`strict` 或 `normalize`。若同时提供配置中的处理模式，二者必须一致。
 - `X-Format-Config-Encoding: 可选；传入前端设置时必须为 `base64url-json`
 - `X-Format-Config: 可选，base64url 编码后的 JSON 配置`
 
@@ -381,9 +405,9 @@ curl "http://127.0.0.1:9527/download/b3e4d8a8-0f3a-4f1b-b8c3-5f8b35d02c11" \
 | 400 | `INVALID_TASK_ID` | 任务 ID 格式错误 |
 | 400 | `FILE_NOT_READY` | 文件尚未生成 |
 | 403 | `PROXY_REQUIRED` | 缺少或错误的 `X-Proxy-Secret` |
-| 410 | `FILE_EXPIRED` | 输出文件已过期或被清理 |
+| 410 | `FILE_EXPIRED` | 文件路径不可用或被服务器管理员手动移除 |
 
-输出文件默认保留 86400 秒，后台清理线程每 60 秒检查一次过期文件。
+上传原件、输出文件、任务日志和任务记录永久保留；后台不会按时间自动清理。下载不会删除文件。
 
 ## 4. 管理与监控接口
 
@@ -507,13 +531,13 @@ GET /limit?enabled=1&window_seconds=3600&count=10&token={ADMIN_TOKEN}
 
 成功后 `303` 重定向回监控面板。
 
-### 4.7 清理过期输出文件
+### 4.7 历史清理入口
 
 ```http
-GET /cleanup?token={ADMIN_TOKEN}
+POST /cleanup
 ```
 
-手动清理超过保留时间的输出文件。成功后 `303` 重定向回监控面板。
+为兼容已有管理员书签保留该入口，但永久保留策略下不会删除任何用户文件。成功后 `303` 重定向回监控面板。
 
 ### 4.8 查看任务日志
 
@@ -566,6 +590,20 @@ Worker 还会代理管理页面直接使用的后端路径：
 - `/presets`
 
 相似但不匹配的路径不会代理，例如 `/apiary`、`/monitor-evil`、`/unknown` 会按静态资源处理。
+
+### 匿名用户模板
+
+- 首次访问 `GET /api/presets` 时，后端通过 `Set-Cookie` 下发签名的
+  `docxtool_anon_user` 匿名用户 Cookie。
+- Cookie 使用 `HttpOnly`、`SameSite=Lax` 和长期 `Max-Age`；HTTPS 部署时同时使用
+  `Secure`。客户端不需要、也不能读取匿名用户 ID。
+- `GET /api/presets` 返回系统模板、公共模板和当前匿名用户的个人模板。
+- 普通用户通过 `POST /api/presets` 创建个人模板，只能修改或删除自己的模板。
+- 匿名模板的 `POST`、`PUT`、`DELETE` 必须来自 `FRONTEND_ORIGIN`；本地开发允许同源
+  `localhost`、`127.0.0.1` 或 `::1`。
+- 管理员会话继续创建和维护公共模板。旧数据库模板迁移后保持公共可见。
+- Cloudflare Worker 只转发 `docxtool_admin_session` 和 `docxtool_anon_user` 两种 Cookie，
+  其他 Cookie 和敏感认证请求头会被过滤。
 
 ## 6. 统一错误格式
 

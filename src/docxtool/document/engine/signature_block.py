@@ -93,10 +93,8 @@ def _element_style_id(element) -> str:
 
 
 def _apply_without_seal(signature_paragraph, date_paragraph) -> None:
-    signature_width = _display_width(signature_paragraph.text)
-    date_width = _display_width(date_paragraph.text)
     _set_right_indent(signature_paragraph, 2.0)
-    _set_right_indent(date_paragraph, max(2.0, signature_width - date_width))
+    _set_right_indent(date_paragraph, 4.0)
 
 
 def _apply_with_seal(signature_paragraph, date_paragraph) -> None:

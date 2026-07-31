@@ -71,6 +71,10 @@ class PagesProxyPackagingTest(unittest.TestCase):
         self.assertIn('(^|/)\\.env(\\.|$)', script)
         self.assertIn('\\.(pem|key|db|sqlite|sqlite3|log|zip)$', script)
         self.assertIn('\\.docx$', script)
+        self.assertIn("https://github.com/7654321x/docxtool.git", script)
+        self.assertIn('"requirements.lock"', script)
+        self.assertIn('"requirements-dev.lock"', script)
+        self.assertIn('"src/docxtool/security/external_relationships.py"', script)
 
     def test_ci_builds_python_package(self):
         workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
@@ -78,7 +82,7 @@ class PagesProxyPackagingTest(unittest.TestCase):
         self.assertIn("python -m pytest", workflow)
         self.assertIn("python -m ruff check src tests scripts", workflow)
         self.assertIn("node --test tests/worker-routing.test.mjs", workflow)
-        self.assertIn("python -m pip install -r requirements.txt pytest ruff build", workflow)
+        self.assertIn("python -m pip install --require-hashes -r requirements-dev.lock", workflow)
         self.assertIn("python -m build", workflow)
 
 

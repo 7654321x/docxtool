@@ -51,8 +51,12 @@ class EngineHeadingSpacingTest(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def _export(self, paragraphs):
-        doc_data = DocumentData(paragraphs=paragraphs, filepath="input.docx")
+    def _export(self, paragraphs, *, processing_strategy="normalize"):
+        doc_data = DocumentData(
+            paragraphs=paragraphs,
+            filepath="input.docx",
+            processing_strategy=processing_strategy,
+        )
         export_doc(doc_data, _rules(), PageSettings(), self.out)
         return Document(self.out)
 
@@ -75,6 +79,45 @@ class EngineHeadingSpacingTest(unittest.TestCase):
         self.assertEqual(body.text, "这里是正文内容这里是正文内容")
         self.assertFalse(body.runs[-1].bold)
         self.assertEqual(_body_font(body.runs[-1]), "仿宋_GB2312")
+
+    def test_structural_heading1_period_splits_body_to_next_paragraph(self):
+        doc = self._export([
+            ParagraphData(
+                text="一级标题。这里是正文内容这里是正文内容",
+                type_id="heading1",
+                original_text="一、一级标题。这里是正文内容这里是正文内容",
+                features=ParagraphFeatures(),
+                meta={"numbering": "一、", "heading_inline_body": True},
+            )
+        ], processing_strategy="structural")
+
+        self.assertEqual(doc.paragraphs[0].text, "一、一级标题")
+        self.assertEqual(doc.paragraphs[1].text, "这里是正文内容这里是正文内容")
+        self.assertEqual(doc.paragraphs[1].style.style_id, "DCT-Body")
+        self.assertFalse(doc.paragraphs[1].runs[-1].bold)
+
+    def test_terminal_body_uses_widow_control_without_changing_earlier_body(self):
+        doc = self._export([
+            ParagraphData("第一段正文内容。", "body", "第一段正文内容。", ParagraphFeatures()),
+            ParagraphData("最后一段正文内容。", "body", "最后一段正文内容。", ParagraphFeatures()),
+        ])
+
+        first = doc.paragraphs[0]._p.get_or_add_pPr().find(qn("w:widowControl"))
+        last = doc.paragraphs[1]._p.get_or_add_pPr().find(qn("w:widowControl"))
+        self.assertEqual(first.get(qn("w:val")), "0")
+        self.assertEqual(last.get(qn("w:val")), "1")
+
+    def test_standalone_heading1_terminal_period_is_removed(self):
+        doc = self._export([
+            ParagraphData(
+                text="一、一级标题。",
+                type_id="heading1",
+                original_text="一、一级标题。",
+                features=ParagraphFeatures(),
+            )
+        ], processing_strategy="structural")
+
+        self.assertEqual(doc.paragraphs[0].text, "一、一级标题")
 
     def test_head_area_inserts_blank_line_before_body_or_heading1(self):
         cases = [
@@ -216,15 +259,23 @@ class EngineHeadingSpacingTest(unittest.TestCase):
         self.assertIn(_spacing_before_lines(doc.paragraphs[2]), (None, "0"))
         self.assertEqual(doc.paragraphs[1].style.style_id, "DCT-AttachmentNote")
         self.assertEqual(doc.paragraphs[2].style.style_id, "DCT-AttachmentNoteItem")
-        self.assertEqual(_spacing_before_lines(doc.paragraphs[3]), "100")
+        self.assertEqual(_spacing_before_lines(doc.paragraphs[3]), "300")
         self.assertIn(_spacing_before_lines(doc.paragraphs[4]), (None, "0"))
+        note_indent = doc.paragraphs[1]._p.get_or_add_pPr().find(qn("w:ind"))
+        item_indent = doc.paragraphs[2]._p.get_or_add_pPr().find(qn("w:ind"))
+        signature_indent = doc.paragraphs[3]._p.get_or_add_pPr().find(qn("w:ind"))
+        date_indent = doc.paragraphs[4]._p.get_or_add_pPr().find(qn("w:ind"))
+        self.assertEqual(note_indent.get(qn("w:leftChars")), "200")
+        self.assertEqual(item_indent.get(qn("w:leftChars")), "500")
+        self.assertEqual(signature_indent.get(qn("w:rightChars")), "200")
+        self.assertEqual(date_indent.get(qn("w:rightChars")), "400")
 
     def test_export_normalizes_attachment_note_before_signature_block(self):
         doc = self._export([
             ParagraphData("正文内容。", "body", "正文内容。", ParagraphFeatures()),
             ParagraphData("区政协办", "sign_org", "区政协办", ParagraphFeatures()),
-            ParagraphData("2025年10月15日", "sign_date", "2025年10月15日", ParagraphFeatures()),
             ParagraphData("附件：1. 基本情况", "attachment_note", "附件：1. 基本情况", ParagraphFeatures()),
+            ParagraphData("2025年10月15日", "sign_date", "2025年10月15日", ParagraphFeatures()),
             ParagraphData("2. 具体情况", "attachment_note_item", "2. 具体情况", ParagraphFeatures()),
             ParagraphData("3. 超级情况", "attachment_note_item", "3. 超级情况", ParagraphFeatures()),
         ])

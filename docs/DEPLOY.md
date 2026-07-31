@@ -31,11 +31,83 @@ resources/frontend/pages/_worker.js
 
 ## 安装依赖
 
+### Windows 服务器
+
+把整个项目目录复制到服务器任意位置。启动脚本始终以自身所在目录作为项目根，
+不依赖盘符、当前工作目录或固定部署路径：
+
+- Windows 7 SP1 使用 Python 3.8，并安装 Windows Management Framework 5.1；
+- Windows 8.1 及以上支持 Python 3.8、3.9、3.10；
+- 面向最终用户的安装包应内置 Python 运行时，不要求用户手工安装依赖。
+
+```pwsh
+Copy-Item .env.example .env
+# 编辑 .env，设置生产密钥、FRONTEND_ORIGIN 和 PRODUCTION_MODE=true
+pwsh -NoProfile -File .\run.ps1 -InstallDependencies
+```
+
+后续启动：
+
+```pwsh
+pwsh -NoProfile -File .\run.ps1
+```
+
+脚本每次启动前都会通过项目虚拟环境核对`requirements.lock`。已满足的依赖会被
+直接复用，缺失或版本不满足的依赖会自动下载安装；因此服务器首次启动和依赖补齐时
+需要能够访问Python软件包源。
+
+将后端注册为开机启动、退出远程桌面后仍保持运行的Windows计划任务：
+
+```pwsh
+pwsh -NoProfile -File .\run.ps1 -InstallService
+```
+
+新式计划任务使用`SYSTEM`账户启动并配置异常重启。排版日志写入`var/logs`。
+
+Windows 7 缺少新式计划任务 PowerShell 命令时，`run.ps1`自动使用系统
+`schtasks.exe`完成安装、启动和卸载，并保证开机重新启动后端；该回退任务不提供
+新式任务的分钟级异常重启策略。Windows 7 上可使用：
+
+```pwsh
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\run.ps1 -InstallService
+```
+
+卸载计划任务：
+
+```pwsh
+pwsh -NoProfile -File .\run.ps1 -UninstallService
+```
+
+仅检查入口和虚拟环境，不启动服务：
+
+```pwsh
+pwsh -NoProfile -File .\run.ps1 -CheckOnly
+```
+
+`.env`中的相对路径统一相对于项目根目录解析，移动整个项目目录后仍然有效。
+
+### Linux 服务器
+
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
 pip install --upgrade pip
-pip install -r requirements.txt
+pip install --require-hashes -r requirements.lock
+```
+
+开发环境可继续使用 `requirements.txt`。生产环境固定使用 `requirements.lock`；该文件由
+Python 3.8 根据`pyproject.toml`通过以下命令生成，禁止手工编造或修改包哈希，且发布前
+必须在 Python 3.8 和 3.10 中分别验证安装：
+
+```bash
+python -m piptools compile pyproject.toml --generate-hashes --no-emit-index-url --no-emit-trusted-host --output-file requirements.lock
+```
+
+本地测试和 CI 使用 `requirements-dev.lock`，其中固定了 `pytest`、`ruff`、`build` 与
+`pip-tools` 的版本。需要更新开发依赖时使用：
+
+```bash
+python -m piptools compile --extra dev pyproject.toml --generate-hashes --no-emit-index-url --no-emit-trusted-host --output-file requirements-dev.lock
 ```
 
 ## Python 后端环境变量
@@ -47,7 +119,6 @@ export BIND_HOST=127.0.0.1
 export PORT=9527
 export ADMIN_TOKEN="替换为长随机管理密钥"
 export PROXY_SECRET="替换为和 Cloudflare Pages 一致的长随机代理密钥"
-export TASK_RETENTION_HOURS=24
 export MAX_CACHED_TASKS=500
 export CLEANUP_INTERVAL_MINUTES=30
 export TRUST_PROXY_HEADERS=true
@@ -57,6 +128,8 @@ export PRODUCTION_MODE=true
 export DATABASE_PATH=var/data/stats.db
 ./run.sh
 ```
+
+上传原件、排版结果、任务日志和任务记录永久保留。服务不会按时间自动删除这些文件；请自行监控磁盘空间并安排服务器级备份或归档。旧版 `FILE_RETENTION_HOURS`、`TASK_RETENTION_HOURS` 和 `DOCXTOOL_KEEP_FAILED_INPUTS` 配置已不再参与清理策略。
 
 说明：
 
@@ -84,6 +157,14 @@ PROXY_SECRET=替换为和服务器一致的长随机代理密钥
 - `PROXY_SECRET` 必须与服务器环境变量完全一致。
 
 ## Nginx 示例配置
+
+仓库提供不包含服务器IP或磁盘路径的模板：
+
+```text
+deploy/nginx-docxtool.conf
+```
+
+模板只代理到服务器本机`127.0.0.1:9527`，不要将9527开放到公网。
 
 ```nginx
 server {

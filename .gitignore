@@ -22,6 +22,8 @@ var/logs/*
 !var/logs/.gitkeep
 var/outputs/*
 !var/outputs/.gitkeep
+var/uploads/*
+!var/uploads/.gitkeep
 var/runtime/*
 !var/runtime/.gitkeep
 /logs/
@@ -58,6 +60,14 @@ id_ed25519
 # Root-level user DOCX samples. Keep explicit test fixtures under tests/ only when reviewed.
 /*.docx
 ~$*.docx
+/test_docx/
+
+# Generated portable deployment copy; canonical source remains at repository root.
+/docx/
+
+# WPS integration keeps its reusable format specification in source control,
+# but locally copied SDK wheels must not be published with the plugin source.
+/wps/*.whl
 
 # IDE and OS files
 .idea/

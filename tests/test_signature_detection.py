@@ -30,7 +30,7 @@ class SignatureDetectionTest(unittest.TestCase):
             doc.add_paragraph(line)
         path = self.root / "input.docx"
         doc.save(path)
-        return DocxImporter().load(str(path), _rules())
+        return DocxImporter().load(str(path), _rules(), strict_preservation=False)
 
     def test_normal_document_signature_after_body(self):
         data = self._load_lines([
@@ -99,6 +99,22 @@ class SignatureDetectionTest(unittest.TestCase):
         self.assertEqual(data.paragraphs[-2].text, "区政协")
         self.assertEqual(data.paragraphs[-1].text, "2025年10月15日")
 
+    def test_common_abbreviated_agencies_are_recognized_before_signature_date(self):
+        for agency in ("区委办", "区政府办", "区政协办", "区委组织部", "区财政局"):
+            with self.subTest(agency=agency):
+                data = self._load_lines([
+                    "总题目",
+                    "一、一级标题",
+                    "这里是正文内容这里是正文内容这里是正文内容。",
+                    agency,
+                    "2025年十月15日",
+                ])
+
+                self.assertEqual(data.paragraphs[-2].type_id, "sign_org")
+                self.assertEqual(data.paragraphs[-2].text, agency)
+                self.assertEqual(data.paragraphs[-1].type_id, "sign_date")
+                self.assertEqual(data.paragraphs[-1].text, "2025年10月15日")
+
     def test_long_role_and_name_line_is_detected_in_head_area(self):
         data = self._load_lines([
             "2026年度测试材料",
@@ -135,7 +151,7 @@ class SignatureDetectionTest(unittest.TestCase):
         path = self.root / "soft-broken-title.docx"
         doc.save(path)
 
-        data = DocxImporter().load(str(path), _rules())
+        data = DocxImporter().load(str(path), _rules(), strict_preservation=False)
 
         self.assertEqual(data.paragraphs[2].type_id, "role_name")
         self.assertEqual(data.paragraphs[2].text, "区政协办公室主任  李某某")
@@ -159,13 +175,83 @@ class SignatureDetectionTest(unittest.TestCase):
         path = self.root / "soft-broken-signature.docx"
         doc.save(path)
 
-        data = DocxImporter().load(str(path), _rules())
+        data = DocxImporter().load(str(path), _rules(), strict_preservation=False)
         tail = [(item.type_id, item.text) for item in data.paragraphs[-4:]]
 
         self.assertEqual(tail[0], ("attachment_note", "附件：1. 基本情况"))
         self.assertEqual(tail[1], ("attachment_note_item", "2. 具体情况"))
         self.assertEqual(tail[2], ("sign_org", "区政协办"))
         self.assertEqual(tail[3], ("sign_date", "2025年10月15日"))
+
+    def test_signature_org_and_date_in_same_soft_broken_paragraph_are_split(self):
+        doc = Document()
+        doc.add_paragraph("总题目")
+        doc.add_paragraph("一、一级标题")
+        doc.add_paragraph("这里是正文内容这里是正文内容这里是正文内容。")
+        tail = doc.add_paragraph("园区人才保障工作组")
+        tail.add_run().add_break()
+        tail.add_run("2026年5月29日")
+        path = self.root / "soft-broken-signature-pair.docx"
+        doc.save(path)
+
+        data = DocxImporter().load(str(path), _rules(), strict_preservation=False)
+
+        self.assertEqual(
+            [(item.type_id, item.text) for item in data.paragraphs[-2:]],
+            [("sign_org", "园区人才保障工作组"), ("sign_date", "2026年5月29日")],
+        )
+
+    def test_soft_broken_tail_splits_signature_note_and_attachment_pages(self):
+        doc = Document()
+        doc.add_paragraph("总题目")
+        doc.add_paragraph("一、一级标题")
+        body = doc.add_paragraph("这里是正文内容这里是正文内容这里是正文内容。")
+        body.add_run().add_break()
+        body.add_run().add_break()
+        body.add_run("区政协办")
+        tail = doc.add_paragraph("2025年十月15日")
+        for text in (
+            "附件：1.基本情况",
+            "2.具体情况",
+            "3.超级情况",
+            "附件1",
+            "宣传材料",
+            "第一份附件正文。",
+            "附件2",
+            "具体情况",
+            "第二份附件正文。",
+        ):
+            tail.add_run().add_break()
+            tail.add_run(text)
+        path = self.root / "soft-broken-tail-with-attachments.docx"
+        doc.save(path)
+
+        data = DocxImporter().load(
+            str(path),
+            _rules(),
+            strict_preservation=False,
+            features={"punctuation": {"enabled": True, "mode": "safe"}},
+        )
+
+        self.assertEqual(
+            [item.type_id for item in data.paragraphs[-11:]],
+            [
+                "attachment_note",
+                "attachment_note_item",
+                "attachment_note_item",
+                "sign_org",
+                "sign_date",
+                "attachment_page_mark",
+                "attachment_title",
+                "attachment_body",
+                "attachment_page_mark",
+                "attachment_title",
+                "attachment_body",
+            ],
+        )
+        self.assertEqual(data.paragraphs[-11].text, "附件：1. 基本情况")
+        self.assertEqual(data.paragraphs[-10].text, "2. 具体情况")
+        self.assertEqual(data.paragraphs[-8].text, "区政协办")
 
     def test_body_styled_numbered_paragraph_still_detects_inline_heading2(self):
         doc = Document()
@@ -177,7 +263,7 @@ class SignatureDetectionTest(unittest.TestCase):
         path = self.root / "body-styled-heading2.docx"
         doc.save(path)
 
-        data = DocxImporter().load(str(path), _rules())
+        data = DocxImporter().load(str(path), _rules(), strict_preservation=False)
 
         self.assertEqual(data.paragraphs[1].type_id, "heading2")
         self.assertTrue(data.paragraphs[1].meta.get("heading_inline_body"))
@@ -196,7 +282,7 @@ class SignatureDetectionTest(unittest.TestCase):
         path = self.root / "zero-height-drawing.docx"
         doc.save(path)
 
-        data = DocxImporter().load(str(path), _rules())
+        data = DocxImporter().load(str(path), _rules(), strict_preservation=False)
 
         self.assertEqual(data.paragraphs[1].type_id, "heading2")
         self.assertIn("宗旨意识有所不足", data.paragraphs[1].text)
@@ -213,7 +299,7 @@ class SignatureDetectionTest(unittest.TestCase):
         path = self.root / "leading-soft-break.docx"
         doc.save(path)
 
-        data = DocxImporter().load(str(path), _rules())
+        data = DocxImporter().load(str(path), _rules(), strict_preservation=False)
         body = data.paragraphs[-1]
 
         self.assertEqual(body.type_id, "body")
@@ -276,6 +362,59 @@ class SignatureDetectionTest(unittest.TestCase):
         )
         self.assertEqual(data.paragraphs[-5].text, "区政协办")
         self.assertEqual(data.paragraphs[-4].text, "2025年10月15日")
+
+    def test_interleaved_attachment_signature_tail_is_canonicalized(self):
+        variants = [
+            [
+                "测试市人民政府办公室", "附件：1.第一项", "2026年7月19日",
+                "2.第二项", "3.第三项",
+            ],
+            [
+                "附件：1.第一项", "测试市人民政府办公室", "2.第二项",
+                "3.第三项", "2026年7月19日",
+            ],
+            [
+                "附件：1.第一项", "2026年7月19日", "2.第二项",
+                "测试市人民政府办公室", "3.第三项",
+            ],
+            [
+                "测试市人民政府办公室", "2026年7月19日", "附件：1.第一项",
+                "2.第二项", "3.第三项",
+            ],
+        ]
+        expected_types = [
+            "attachment_note", "attachment_note_item", "attachment_note_item",
+            "sign_org", "sign_date", "attachment_page_mark",
+            "attachment_title", "attachment_body",
+        ]
+        for tail in variants:
+            with self.subTest(tail=tail):
+                data = self._load_lines([
+                    "总题目",
+                    "一、一级标题",
+                    "这里是正文内容这里是正文内容这里是正文内容。",
+                    *tail,
+                    "附件一百",
+                    "第一百份附件标题",
+                    "第一百份附件正文。",
+                ])
+                self.assertEqual([item.type_id for item in data.paragraphs[-8:]], expected_types)
+                self.assertEqual(data.paragraphs[-8].text, "附件：1. 第一项")
+                self.assertEqual(data.paragraphs[-7].text, "2. 第二项")
+                self.assertEqual(data.paragraphs[-3].text, "附件 100")
+
+    def test_role_name_accepts_single_space_and_tab_after_role_keyword(self):
+        for role_line in ("测试办公室主任 张测试", "测试办公室主任\t张测试"):
+            with self.subTest(role_line=role_line):
+                data = self._load_lines([
+                    "测试单位领导班子",
+                    "2026年度民主生活会对照检查材料",
+                    role_line,
+                    "一、一级标题",
+                    "这里是正文内容这里是正文内容这里是正文内容。",
+                ])
+                role = next(item for item in data.paragraphs if "张测试" in item.text)
+                self.assertEqual(role.type_id, "role_name")
 
 
 if __name__ == "__main__":

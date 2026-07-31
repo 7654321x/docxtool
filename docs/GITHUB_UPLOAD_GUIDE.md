@@ -5,7 +5,7 @@
 ## 1. 目标仓库
 
 ```text
-git@github.com:7654321x/docxtool.git
+https://github.com/7654321x/docxtool.git
 ```
 
 默认分支：
@@ -37,7 +37,7 @@ Hi 7654321x! You've successfully authenticated, but GitHub does not provide shel
 检查目标仓库：
 
 ```pwsh
-pwsh -NoProfile -Command "git ls-remote git@github.com:7654321x/docxtool.git refs/heads/main"
+pwsh -NoProfile -Command "git ls-remote https://github.com/7654321x/docxtool.git refs/heads/main"
 ```
 
 只允许把 `.pub` 公钥配置到 GitHub。不要把无扩展名私钥、`.pem`、`.key`、`ADMIN_TOKEN`、`PROXY_SECRET` 或 Cookie 写进仓库。
@@ -46,11 +46,12 @@ pwsh -NoProfile -Command "git ls-remote git@github.com:7654321x/docxtool.git ref
 
 默认发布以下类型文件：
 
-- 项目文档：`README.md`、`docs/DEPLOY.md`、`docs/API.md`、`docs/UPLOAD_MANIFEST.md`、`docs/GITHUB_UPLOAD_GUIDE.md`、`AGENTS.md`、`CONVENTIONS.md`
-- 依赖和启动：`requirements.txt`、`run.sh`
+- 项目文档：`README.md`、`CHANGELOG.md`、`docs/DEPLOY.md`、`docs/API.md`、`docs/SDK.md`、`docs/RECOGNITION_ARCHITECTURE.md`、`docs/RECOGNITION_RELEASE.md`、`docs/UPLOAD_MANIFEST.md`、`docs/GITHUB_UPLOAD_GUIDE.md`、`wps/公文格式规范.md`、`AGENTS.md`、`CONVENTIONS.md`
+- 依赖和启动：`requirements.txt`、`requirements.lock`、`requirements-dev.lock`、`run.sh`、`run.ps1`
+- 服务器代理模板：`deploy/nginx-docxtool.conf`
 - 配置：`.env.example`、`.gitignore`、`.gitattributes`、`pytest.ini`、`ruff.toml`、`pyproject.toml`、`.github/workflows/ci.yml`
-- 后端和排版核心：`server.py`、`src/docxtool/**/*.py`、`src/docxtool/resources/config/default-format.json`
-- 脚本：`scripts/generate_secrets.py`、`scripts/migrate_legacy_database.ps1`、`scripts/publish_to_github.ps1`
+- 后端、排版核心和 SDK：`server.py`、`src/docxtool/**/*.py`、`src/docxtool/resources/config/default-format.json`
+- 脚本：`scripts/generate_secrets.py`、`scripts/benchmark_recognition.py`、`scripts/compare_recognition_runs.py`、`scripts/analyze_end_format.py`、`scripts/analyze_letterhead_batch.py`、`scripts/batch_test_docx.py`、`scripts/generate_005_format_fixtures.py`、`scripts/normalize_correct_template_role_spacing.py`、`scripts/migrate_legacy_database.ps1`、`scripts/publish_to_github.ps1`
 - 前端和 Cloudflare Pages：`resources/frontend/pages/index.html`、`resources/frontend/pages/_worker.js`
 - 运行目录占位：`var/data/.gitkeep`、`var/logs/.gitkeep`、`var/outputs/.gitkeep`、`var/runtime/.gitkeep`
 - 测试：`tests/test_*.py`、`tests/*.test.mjs`
@@ -71,6 +72,7 @@ pwsh -NoProfile -Command "git ls-remote git@github.com:7654321x/docxtool.git ref
 - `.venv/`、缓存、构建产物、临时依赖包
 - 根目录用户 `.docx`
 - 未脱敏的测试 Word、用户 Word、日志正文
+- `wps/` 下的 wheel、Python 运行时、构建产物和插件私有文件；当前仅允许 `wps/公文格式规范.md`
 
 `.gitignore` 只影响未跟踪文件。已经被 Git 跟踪或已经进入历史的文件，不会因为写入 `.gitignore` 自动消失。
 
@@ -84,7 +86,7 @@ pwsh -NoProfile -File .\scripts\publish_to_github.ps1
 
 演练会：
 
-- 临时克隆 `git@github.com:7654321x/docxtool.git`
+- 临时克隆 `https://github.com/7654321x/docxtool.git`
 - 清空临时克隆工作区，但保留 `.git`
 - 复制允许发布的真实项目文件
 - 运行 `pytest`、Ruff、Node Worker 测试

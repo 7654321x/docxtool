@@ -11,6 +11,8 @@ from typing import BinaryIO
 from urllib.parse import unquote, urldefrag, urlsplit
 from xml.etree import ElementTree
 
+from .external_relationships import external_relationship_policy
+
 PACKAGE_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 CONTENT_TYPES_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
 OFFICE_REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
@@ -187,7 +189,17 @@ def _validate_relationship_parts(
                 raise _error("DUPLICATE_REL_ID", f"Duplicate relationship Id {rel_id} in package part: {rels_name}")
 
             target_part = None
-            if target_mode != "External":
+            if target_mode == "External":
+                allowed, reason_code, scheme = external_relationship_policy(
+                    element.attrib.get("Type", ""),
+                    target,
+                )
+                if not allowed:
+                    raise _error(
+                        "UNSAFE_EXTERNAL_RELATIONSHIP",
+                        f"External relationship is not allowed: {reason_code} scheme={scheme}",
+                    )
+            else:
                 target_part = _resolve_internal_target(rels_name, target)
                 if target_part not in members:
                     raise _error("MISSING_REL_TARGET", f"Relationship target is missing package part: {target_part}")

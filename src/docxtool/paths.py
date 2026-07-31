@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import os
-from importlib import resources
 from pathlib import Path
+
+try:
+    from importlib.resources import files as resource_files
+except ImportError:  # Python 3.8
+    from importlib_resources import files as resource_files
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
@@ -48,11 +52,12 @@ def default_format_config_path() -> Path:
     override = os.environ.get("DOCXTOOL_CONFIG_PATH") or os.environ.get("FORMAT_CONFIG_PATH")
     if override:
         return Path(override)
-    return Path(resources.files("docxtool.resources").joinpath("config/default-format.json"))
+    return Path(resource_files("docxtool.resources").joinpath("config/default-format.json"))
 
 
 def runtime_dir(kind: str, env_name: str) -> Path:
     override = os.environ.get(env_name)
     if override:
-        return Path(override)
+        path = Path(override)
+        return path if path.is_absolute() else project_path(str(path))
     return var_path(kind)

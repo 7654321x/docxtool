@@ -44,6 +44,7 @@ _STYLE_SPECS: tuple[_ParagraphStyleSpec, ...] = (
 )
 
 _LETTERHEAD_STYLE_SPECS: tuple[_ParagraphStyleSpec, ...] = (
+    _ParagraphStyleSpec("DCT-LetterheadSpacer", "Docxtool Letterhead Spacer", 5, "左对齐", 0.0),
     _ParagraphStyleSpec("DCT-LetterheadMark", "Docxtool Letterhead Mark", 0, "居中", 0.0),
     _ParagraphStyleSpec("DCT-DocumentNumber", "Docxtool Document Number", 5, "居中", 0.0),
     _ParagraphStyleSpec("DCT-SignerLine", "Docxtool Signer Line", 5, "左对齐", 0.0),

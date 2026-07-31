@@ -176,9 +176,9 @@ def analyze_numbering_sequence(texts: list[str]) -> list[NumberingIssue]:
 
 def render_numbering_token(value: int, style: NumberingStyle) -> str:
     if style == NumberingStyle.CHINESE_DUN:
-        return f"{_int_to_cn(value)}、"
+        return f"{chinese_integer(value)}、"
     if style == NumberingStyle.CHINESE_PAREN:
-        return f"（{_int_to_cn(value)}）"
+        return f"（{chinese_integer(value)}）"
     if style == NumberingStyle.DIGIT_DOT:
         return f"{value}."
     if style == NumberingStyle.DIGIT_DUN:
@@ -257,15 +257,37 @@ def _cn_to_int(value: str) -> int | None:
     return total + current if total else None
 
 
-def _int_to_cn(value: int) -> str:
-    if value <= 0 or value > 99:
-        return str(value)
-    ones = ["零", "一", "二", "三", "四", "五", "六", "七", "八", "九"]
+def chinese_integer(value: int) -> str:
+    """Convert an integer in the supported public range 0..9999 to Chinese."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError("Chinese numbering value must be an integer")
+    if value < 0 or value > 9999:
+        raise ValueError("Chinese numbering value must be between 0 and 9999")
+    digits = "零一二三四五六七八九"
     if value < 10:
-        return ones[value]
-    if value == 10:
-        return "十"
-    if value < 20:
-        return "十" + ones[value % 10]
-    tens, rest = divmod(value, 10)
-    return ones[tens] + "十" + (ones[rest] if rest else "")
+        return digits[value]
+    units = ((1000, "千"), (100, "百"), (10, "十"))
+    remaining = value
+    pieces: list[str] = []
+    zero_pending = False
+    for unit_value, unit_name in units:
+        digit, remaining = divmod(remaining, unit_value)
+        if digit:
+            if zero_pending and pieces:
+                pieces.append("零")
+            if not (unit_value == 10 and digit == 1 and not pieces):
+                pieces.append(digits[digit])
+            pieces.append(unit_name)
+            zero_pending = False
+        elif pieces and remaining:
+            zero_pending = True
+    if remaining:
+        if zero_pending and pieces:
+            pieces.append("零")
+        pieces.append(digits[remaining])
+    return "".join(pieces)
+
+
+def _int_to_cn(value: int) -> str:
+    """Compatibility alias; all conversion now uses ``chinese_integer``."""
+    return chinese_integer(value)

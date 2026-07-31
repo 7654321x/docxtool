@@ -27,6 +27,8 @@
 - 可选 `letterhead` 配置用于在首页正文流生成机关标志、结构化发文字号、上行文签发人和红色段落边框；默认关闭，外部或无法可靠识别的已有版头保持原样。
 - `requirements.txt`：Python 运行依赖。
 - `run.sh`：Linux 启动脚本。
+- `run.ps1`：Windows可移动部署启动脚本，所有相对路径以项目根目录解析。
+- `deploy/nginx-docxtool.conf`：服务器Nginx反向代理模板。
 - `.env.example`：环境变量示例，不包含真实密钥。
 - `docs/API.md`：HTTP 接口、鉴权、错误码说明。
 - `docs/DEPLOY.md`：生产部署说明。
@@ -36,14 +38,33 @@
 
 ## 本地运行
 
+支持的 Python 版本为 3.8、3.9 和 3.10。Windows 7 SP1 固定使用 Python 3.8，
+Windows 8.1 及以上可使用 Python 3.8 至 3.10。面向最终用户的商业安装包应内置
+Python 运行时，不要求用户自行安装或配置 Python。
+
 Windows PowerShell 7：
 
 ```pwsh
-pwsh -NoProfile -Command "python -m venv .venv"
-pwsh -NoProfile -Command ".\.venv\Scripts\python -m pip install --upgrade pip"
-pwsh -NoProfile -Command ".\.venv\Scripts\python -m pip install -r requirements.txt"
-pwsh -NoProfile -Command "$env:ADMIN_TOKEN='换成你的长随机管理密钥'; $env:PROXY_SECRET='换成你的长随机代理密钥'; python server.py"
+Copy-Item .env.example .env
+# 编辑 .env 后首次运行：
+pwsh -NoProfile -File .\run.ps1 -InstallDependencies
+# 后续运行：
+pwsh -NoProfile -File .\run.ps1
+# 注册为Windows计划任务，退出远程桌面后仍运行：
+pwsh -NoProfile -File .\run.ps1 -InstallService
 ```
+
+Windows 7 SP1 需要安装 Windows Management Framework 5.1，并使用系统自带的
+Windows PowerShell 5.1 执行同一脚本；脚本会在缺少新式计划任务命令时自动改用
+`schtasks.exe`：
+
+```pwsh
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\run.ps1 -CheckOnly
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\run.ps1 -InstallService
+```
+
+`run.ps1`每次启动前都会核对`requirements.lock`，缺少依赖时自动下载并安装；
+已满足的依赖不会重复下载。
 
 Linux：
 
@@ -56,7 +77,29 @@ export PROXY_SECRET='换成你的长随机代理密钥'
 ./run.sh
 ```
 
-默认监听 `127.0.0.1:9527`。如需直接监听公网网卡：
+生产部署应使用带哈希的锁文件：
+
+```bash
+python -m pip install --require-hashes -r requirements.lock
+```
+
+`requirements.lock` 由 Python 3.8 环境根据 `pyproject.toml` 生成，不手工维护哈希；
+同一锁文件必须同时通过 Python 3.8 和 3.10 安装验证：
+
+```bash
+python -m piptools compile pyproject.toml --generate-hashes --no-emit-index-url --no-emit-trusted-host --output-file requirements.lock
+```
+
+开发、测试和打包使用同一套锁定工具版本：
+
+```bash
+python -m pip install --require-hashes -r requirements-dev.lock
+python -m piptools compile --extra dev pyproject.toml --generate-hashes --no-emit-index-url --no-emit-trusted-host --output-file requirements-dev.lock
+```
+
+默认监听 `127.0.0.1:9527`。生产环境通过Nginx反向代理访问，不要将9527开放到公网。
+
+仅在明确需要直接调试网络监听时使用：
 
 ```bash
 BIND_HOST=0.0.0.0 PORT=9527 ./run.sh
@@ -98,6 +141,18 @@ pwsh -NoProfile -Command "python -m ruff check src tests scripts"
 pwsh -NoProfile -Command "node --test tests/worker-routing.test.mjs"
 pwsh -NoProfile -Command "python -m build"
 ```
+
+## 本地识别 SDK
+
+`1.3` 起，项目提供只读识别 SDK，供 WPS/Word 加载项或其他本地软件调用。SDK 不启动 Web 服务，也不生成结果 DOCX：
+
+```python
+from docxtool.sdk import recognize_docx
+
+plan = recognize_docx("input.docx", processing_mode="structural")
+```
+
+构建 wheel 后可使用 `docxtool-recognize input.docx --output plan.json` 导出脱敏识别计划。详细接口、数据边界和 WPS 集成方式见 [docs/SDK.md](docs/SDK.md)。
 
 ## GitHub 发布
 

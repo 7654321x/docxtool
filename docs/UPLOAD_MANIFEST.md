@@ -11,7 +11,7 @@ D:\PycharmProjects\docxtool
 目标 GitHub 仓库：
 
 ```text
-git@github.com:7654321x/docxtool.git
+https://github.com/7654321x/docxtool.git
 ```
 
 ## 1. 每次都应上传或保留的项目文件
@@ -19,15 +19,24 @@ git@github.com:7654321x/docxtool.git
 | 文件路径 | 作用 | 说明 |
 | --- | --- | --- |
 | `README.md` | 项目说明和本地运行方式 | GitHub 首页会使用 |
+| `CHANGELOG.md` | 发布版本与变更记录 | 与 `pyproject.toml` 版本同步维护 |
 | `docs/DEPLOY.md` | 生产部署说明 | Cloudflare Pages + Python 后端 |
 | `docs/API.md` | HTTP 接口、鉴权、错误码 | 前后端联调和排错 |
+| `docs/RECOGNITION_ARCHITECTURE.md` | 识别架构和稳定边界 | 识别层维护依据 |
+| `docs/RECOGNITION_RELEASE.md` | 识别发布门禁和回滚 | 发布验收依据 |
+| `docs/SDK.md` | 本地识别 SDK 接口和集成边界 | WPS/第三方软件调用依据 |
+| `wps/公文格式规范.md` | 当前公文格式与识别边界说明 | 可交给 WPS 项目或其他 AI 使用 |
 | `docs/UPLOAD_MANIFEST.md` | 本清单 | 上传范围依据 |
 | `docs/GITHUB_UPLOAD_GUIDE.md` | GitHub 发布说明 | 不包含私钥 |
 | `AGENTS.md` | 本地协作规则 | Codex/AI 工作规则 |
 | `CONVENTIONS.md` | 开发约定 | 排版边界和人工验证说明 |
 | `requirements.txt` | Python 依赖 | 当前位于仓库根目录 |
+| `requirements.lock` | 带哈希的生产依赖锁 | 使用 `pip install --require-hashes -r requirements.lock` |
+| `requirements-dev.lock` | 带哈希的开发与 CI 依赖锁 | 固定 pytest、ruff、build 和 pip-tools |
 | `pyproject.toml` | Python 包配置 | `src` 布局和 wheel 资源打包 |
 | `run.sh` | Linux 启动脚本 | 调用 `server.py` |
+| `run.ps1` | Windows 启动脚本 | 支持 Python 3.8—3.10，并为 Windows 7 回退到 `schtasks.exe` |
+| `deploy/nginx-docxtool.conf` | Nginx代理模板 | 不包含服务器IP或磁盘绝对路径 |
 | `.env.example` | 环境变量示例 | 不含真实密钥 |
 | `.gitignore` | Git 忽略规则 | 不会自动移除已跟踪文件 |
 | `.gitattributes` | Git 文本/二进制规则 | 控制换行和二进制文件处理 |
@@ -44,12 +53,18 @@ git@github.com:7654321x/docxtool.git
 | `src/docxtool/__main__.py` | `python -m docxtool` 入口 |
 | `src/docxtool/paths.py` | 项目路径、运行目录和默认资源定位 |
 | `src/docxtool/env.py` | 环境变量加载和本地启动配置 |
+| `src/docxtool/auth/__init__.py` | 普通用户认证包入口 |
+| `src/docxtool/auth/passwords.py` | Argon2id 密码哈希与校验 |
+| `src/docxtool/auth/service.py` | 用户名和密码输入归一化及验证 |
 | `src/docxtool/web/__init__.py` | Web 包入口 |
 | `src/docxtool/web/app.py` | Web 服务入口、上传下载、任务队列、管理后台、健康检查 |
+| `src/docxtool/sdk/` | 面向第三方的只读识别 SDK | 返回脱敏结构计划，不操作宿主文档 |
 | `src/docxtool/document/__init__.py` | 文档处理包入口 |
 | `src/docxtool/document/importer.py` | DOCX 结构识别、段落分类、元数据生成 |
 | `src/docxtool/document/classifier.py` | 文档模式和段落结构分类 |
 | `src/docxtool/document/letterhead_config.py` | 版头配置归一化和安全校验 |
+| `src/docxtool/document/recognition/` | 候选、Beam 解码、诊断、验证和兼容映射 |
+| `src/docxtool/document/recognition/global_context.py` | 文首结构、正文边界和同级标题族的全文只读分析 |
 | `src/docxtool/document/style_config.py` | 样式规则、页面设置、日志配置、默认配置读取 |
 | `src/docxtool/resources/__init__.py` | 打包资源包入口 |
 | `src/docxtool/resources/config/default-format.json` | 默认公文格式配置，随 wheel 安装 |
@@ -74,6 +89,13 @@ git@github.com:7654321x/docxtool.git
 | `src/docxtool/storage/__init__.py` | 存储包入口 |
 | `src/docxtool/storage/database.py` | SQLite 路径和连接辅助 |
 | `scripts/generate_secrets.py` | 生成随机密钥辅助脚本 |
+| `scripts/benchmark_recognition.py` | 无正文识别性能基准 |
+| `scripts/compare_recognition_runs.py` | 安全识别差分和确定性检查 |
+| `scripts/analyze_end_format.py` | 排版结果与正确模板的无正文格式差异分析 |
+| `scripts/analyze_letterhead_batch.py` | 批量版头状态与问题归类 |
+| `scripts/batch_test_docx.py` | 编号测试文档批处理、结构对齐模板比较与可选视觉渲染抽查 |
+| `scripts/generate_005_format_fixtures.py` | 可复现的本地乱格式测试文档生成 |
+| `scripts/normalize_correct_template_role_spacing.py` | 正确模板职务姓名空段归一化 |
 | `scripts/migrate_legacy_database.ps1` | 旧数据库复制迁移辅助脚本，默认 dry run |
 | `scripts/publish_to_github.ps1` | 安全发布到 GitHub 的脚本 |
 

@@ -3,7 +3,7 @@
 [CmdletBinding()]
 param(
     [switch]$Push,
-    [string]$Repository = "git@github.com:7654321x/docxtool.git",
+    [string]$Repository = "https://github.com/7654321x/docxtool.git",
     [string]$Branch = "main",
     [string]$SourceRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path,
     [string]$CommitMessage = "Sync project files",
@@ -11,6 +11,13 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$sourceVenvPython = Join-Path $SourceRoot ".venv\Scripts\python.exe"
+$testPython = if (Test-Path -LiteralPath $sourceVenvPython -PathType Leaf) {
+    $sourceVenvPython
+}
+else {
+    (Get-Command python -ErrorAction Stop).Source
+}
 
 function Invoke-Checked {
     param(
@@ -99,14 +106,23 @@ $requiredFiles = @(
     ".gitattributes",
     ".gitignore",
     "AGENTS.md",
+    "CHANGELOG.md",
     "docs/API.md",
+    "docs/SDK.md",
+    "wps/公文格式规范.md",
     "CONVENTIONS.md",
     "docs/DEPLOY.md",
+    "docs/RECOGNITION_ARCHITECTURE.md",
+    "docs/RECOGNITION_RELEASE.md",
     "docs/GITHUB_UPLOAD_GUIDE.md",
     "README.md",
     "docs/UPLOAD_MANIFEST.md",
     "requirements.txt",
+    "requirements.lock",
+    "requirements-dev.lock",
     "run.sh",
+    "run.ps1",
+    "deploy/nginx-docxtool.conf",
     "pyproject.toml",
     "src/docxtool/resources/__init__.py",
     "src/docxtool/resources/config/default-format.json",
@@ -118,12 +134,30 @@ $requiredFiles = @(
     "src/docxtool/__main__.py",
     "src/docxtool/env.py",
     "src/docxtool/paths.py",
+    "src/docxtool/auth/__init__.py",
+    "src/docxtool/auth/passwords.py",
+    "src/docxtool/auth/service.py",
+    "src/docxtool/sdk/__init__.py",
+    "src/docxtool/sdk/cli.py",
+    "src/docxtool/sdk/models.py",
+    "src/docxtool/sdk/recognition.py",
     "src/docxtool/web/__init__.py",
     "src/docxtool/web/app.py",
     "src/docxtool/document/__init__.py",
     "src/docxtool/document/classifier.py",
     "src/docxtool/document/importer.py",
     "src/docxtool/document/letterhead_config.py",
+    "src/docxtool/document/recognition/__init__.py",
+    "src/docxtool/document/recognition/candidates.py",
+    "src/docxtool/document/recognition/compatibility.py",
+    "src/docxtool/document/recognition/config.py",
+    "src/docxtool/document/recognition/decoder.py",
+    "src/docxtool/document/recognition/diagnostics.py",
+    "src/docxtool/document/recognition/features.py",
+    "src/docxtool/document/recognition/global_context.py",
+    "src/docxtool/document/recognition/model.py",
+    "src/docxtool/document/recognition/validators.py",
+    "src/docxtool/document/recognition/version.py",
     "src/docxtool/document/style_config.py",
     "src/docxtool/document/engine/__init__.py",
     "src/docxtool/document/engine/cleanup.py",
@@ -143,9 +177,17 @@ $requiredFiles = @(
     "src/docxtool/security/__init__.py",
     "src/docxtool/security/docx_integrity.py",
     "src/docxtool/security/docx_validator.py",
+    "src/docxtool/security/external_relationships.py",
     "src/docxtool/storage/__init__.py",
     "src/docxtool/storage/database.py",
     "scripts/generate_secrets.py",
+    "scripts/analyze_end_format.py",
+    "scripts/analyze_letterhead_batch.py",
+    "scripts/batch_test_docx.py",
+    "scripts/benchmark_recognition.py",
+    "scripts/compare_recognition_runs.py",
+    "scripts/generate_005_format_fixtures.py",
+    "scripts/normalize_correct_template_role_spacing.py",
     "scripts/migrate_legacy_database.ps1",
     "scripts/publish_to_github.ps1",
     "resources/frontend/pages/index.html",
@@ -182,8 +224,8 @@ try {
 
         Assert-NoForbiddenFiles -CloneRoot $tempRoot
 
-        Invoke-Checked python @("-m", "pytest")
-        Invoke-Checked python @("-m", "ruff", "check", "src", "tests", "scripts")
+        Invoke-Checked $testPython @("-m", "pytest")
+        Invoke-Checked $testPython @("-m", "ruff", "check", "src", "tests", "scripts")
         if ($nodeTestFiles) {
             Invoke-Checked node (@("--test") + $nodeTestFiles)
         }
