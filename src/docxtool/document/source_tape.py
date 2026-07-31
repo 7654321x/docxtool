@@ -11,6 +11,15 @@ from dataclasses import dataclass
 import unicodedata
 from typing import Optional, Tuple
 
+HOST_TEXT_CONTRACT_VERSION = "host-text-v1"
+SOURCE_LOCATOR_VERSION = "source-locator-v2"
+
+
+class UnknownTextContractVersion(ValueError):
+    """Raised when a caller requests unsupported host text semantics."""
+
+    code = "UNSUPPORTED_HOST_TEXT_CONTRACT"
+
 
 def utf16_length(value: str) -> int:
     """Return a string length in UTF-16 code units."""
@@ -19,11 +28,23 @@ def utf16_length(value: str) -> int:
 
 def _canonical_piece(value: str) -> str:
     """Normalize only host-display differences with a stable source mapping."""
-    if value == "\r\n" or value in {"\r", "\n"}:
+    if value == "\r\n" or value in {"\r", "\n", "\v"}:
         return "\n"
     if value in {"\u00a0", "\u3000"}:
         return " "
     return unicodedata.normalize("NFKC", value)
+
+
+@dataclass(frozen=True)
+class CanonicalTextResult:
+    """Versioned canonicalization output for one host paragraph snapshot."""
+
+    contract_version: str
+    raw_text: str
+    canonical_text: str
+    raw_to_canonical_utf16: Tuple[int, ...]
+    canonical_to_raw_index: Tuple[int, ...]
+    warnings: Tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -41,10 +62,23 @@ class SourceTape:
     canonical_text: str
     raw_boundary_to_canonical_utf16: Tuple[int, ...]
     canonical_boundary_to_raw_index: Tuple[int, ...]
+    contract_version: str = HOST_TEXT_CONTRACT_VERSION
+    warnings: Tuple[str, ...] = ()
 
     @classmethod
-    def from_text(cls, raw_text: str) -> "SourceTape":
+    def from_text(
+        cls,
+        raw_text: str,
+        contract_version: str = HOST_TEXT_CONTRACT_VERSION,
+    ) -> "SourceTape":
+        if contract_version != HOST_TEXT_CONTRACT_VERSION:
+            raise UnknownTextContractVersion(
+                "不支持的宿主文本契约: {0}".format(contract_version)
+            )
         raw = raw_text or ""
+        warnings = []
+        if raw.endswith("\x07"):
+            warnings.append("TRAILING_TABLE_CELL_MARKER_PRESENT")
         pieces = []
         raw_boundaries = [0] * (len(raw) + 1)
         canonical_boundaries = [0]
@@ -59,7 +93,10 @@ class SourceTape:
             if value == "\r" and raw_index < len(raw) and raw[raw_index] == "\n":
                 value += raw[raw_index]
                 raw_index += 1
-            piece = _canonical_piece(value)
+            # A table-cell terminator is not paragraph text according to
+            # host-text-v1.  It remains in raw coordinates for diagnostics but
+            # has no canonical character.
+            piece = "" if value == "\x07" and raw_index == len(raw) else _canonical_piece(value)
             raw_boundaries[start] = canonical_utf16
             # A CRLF interior is not a legal fragment boundary, but mapping it
             # to the preceding canonical boundary keeps the conversion total.
@@ -76,6 +113,8 @@ class SourceTape:
             canonical_text="".join(pieces),
             raw_boundary_to_canonical_utf16=tuple(raw_boundaries),
             canonical_boundary_to_raw_index=tuple(canonical_boundaries),
+            contract_version=contract_version,
+            warnings=tuple(warnings),
         )
 
     def raw_offset_utf16(self, raw_index: int) -> Optional[int]:
@@ -134,3 +173,26 @@ class SourceTape:
 def canonicalize_text(value: str) -> str:
     """Return the shared canonical text used for host binding comparisons."""
     return SourceTape.from_text(value).canonical_text
+
+
+def canonicalize_host_paragraph_text(
+    raw_text: str,
+    contract_version: str = HOST_TEXT_CONTRACT_VERSION,
+) -> CanonicalTextResult:
+    """Apply the public host-text contract without using editor APIs.
+
+    ``raw_text`` is the host's visible paragraph text only: callers must not
+    include an editor's implicit paragraph terminator.  CR/LF/vertical-tab are
+    canonicalized to LF, tabs and form-feeds remain explicit controls, NBSP and
+    full-width spaces become a normal space, and a trailing table-cell marker
+    is excluded from canonical text with a warning.
+    """
+    tape = SourceTape.from_text(raw_text, contract_version=contract_version)
+    return CanonicalTextResult(
+        contract_version=tape.contract_version,
+        raw_text=tape.raw_text,
+        canonical_text=tape.canonical_text,
+        raw_to_canonical_utf16=tape.raw_boundary_to_canonical_utf16,
+        canonical_to_raw_index=tape.canonical_boundary_to_raw_index,
+        warnings=tape.warnings,
+    )

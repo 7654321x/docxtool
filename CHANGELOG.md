@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.6 - 2026-07-31
+
+- Made recognition-plan host binding locally ambiguity-aware so unresolved repeated text does not invalidate unrelated physical paragraphs.
+- Added run-intersection formatting facts for logical fragments, the `host-text-v1` canonical text contract, and complete logical-segment counts.
+
 ## 1.5 - 2026-07-31
 
 - Added source-range based logical fragment locators, including raw and canonical UTF-16 coordinate definitions.

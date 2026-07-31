@@ -3,11 +3,21 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from docx import Document
+from docx.shared import Pt
 
-from docxtool.document.source_tape import SourceTape, canonicalize_text
+from docxtool.document.importer import DocumentData, ParagraphData, ParagraphFeatures
+from docxtool.document.source_tape import (
+    HOST_TEXT_CONTRACT_VERSION,
+    SourceTape,
+    UnknownTextContractVersion,
+    canonicalize_text,
+    canonicalize_host_paragraph_text,
+)
 from docxtool.sdk import bind_recognition_plan, recognize_docx
 from docxtool.sdk.cli import main as sdk_main
+from docxtool.sdk.recognition import _build_plan
 
 
 def _write_document(path: Path, paragraphs: list[str]) -> None:
@@ -29,6 +39,49 @@ def test_source_tape_keeps_utf16_and_canonical_boundaries_reversible() -> None:
     assert canonical_range is not None
     assert tape.raw_span_for_canonical_range(*canonical_range) == (1, 3)
     assert tape.raw_slice_utf16(raw_start, raw_end) == "\u00a0😀"
+
+
+def test_host_text_contract_normalizes_controls_with_a_versioned_mapping() -> None:
+    result = canonicalize_host_paragraph_text("甲\r\n乙\r丙\n丁\v戊\f己\t庚\u00a0\u3000辛😀\x07")
+
+    assert result.contract_version == HOST_TEXT_CONTRACT_VERSION
+    assert result.canonical_text == "甲\n乙\n丙\n丁\n戊\f己\t庚  辛😀"
+    assert len(result.raw_to_canonical_utf16) == len(result.raw_text) + 1
+    assert "TRAILING_TABLE_CELL_MARKER_PRESENT" in result.warnings
+    with pytest.raises(UnknownTextContractVersion, match="不支持"):
+        canonicalize_host_paragraph_text("正文", contract_version="unknown-v9")
+
+
+def test_segment_counts_report_incomplete_source_locator_group() -> None:
+    source = "甲乙丙"
+
+    def feature(start: int | None, end: int | None, status: str) -> ParagraphFeatures:
+        raw = source[start:end] if start is not None and end is not None else ""
+        return ParagraphFeatures(
+            source_physical_paragraph_index=0,
+            source_physical_text=source,
+            source_start_utf16=start,
+            source_end_utf16=end,
+            source_canonical_text=source,
+            source_canonical_start_utf16=start,
+            source_canonical_end_utf16=end,
+            source_fragment_text=raw,
+            source_canonical_fragment_text=raw,
+            source_locator_status=status,
+        )
+
+    data = DocumentData(paragraphs=[
+        ParagraphData("甲", "body", "甲", feature(0, 1, "confirmed")),
+        ParagraphData("乙", "body", "乙", feature(None, None, "unresolved")),
+        ParagraphData("丙", "body", "丙", feature(2, 3, "confirmed")),
+    ])
+    plan = _build_plan(data, "source-hash", include_text=True)
+
+    assert [block.segment_index for block in plan.blocks] == [0, 1, 2]
+    assert {block.segment_count_total for block in plan.blocks} == {3}
+    assert {block.segment_count_located for block in plan.blocks} == {2}
+    assert {block.segment_count_confirmed for block in plan.blocks} == {2}
+    assert [block.source_locator_status for block in plan.blocks] == ["confirmed", "unresolved", "confirmed"]
 
 
 def test_sdk_splits_one_physical_paragraph_into_ordered_verified_segments(tmp_path: Path) -> None:
@@ -53,6 +106,33 @@ def test_sdk_splits_one_physical_paragraph_into_ordered_verified_segments(tmp_pa
         assert canonicalize_text(selected) == block.canonical_fragment_text
         assert block.raw_fragment_sha256
         assert block.canonical_fragment_sha256
+
+
+def test_mixed_physical_paragraph_uses_run_intersection_format_features(tmp_path: Path) -> None:
+    source = tmp_path / "mixed-format.docx"
+    document = Document()
+    paragraph = document.add_paragraph()
+    heading = paragraph.add_run("一、总体要求。")
+    heading.font.name = "SimHei"
+    heading.font.size = Pt(16)
+    heading.font.bold = True
+    body = paragraph.add_run("各单位要认真贯彻执行，形成长效机制。")
+    body.font.name = "FangSong"
+    body.font.size = Pt(12)
+    body.font.bold = False
+    document.save(source)
+
+    plan = recognize_docx(source, recognition_mode="legacy")
+    heading_block, body_block = [block for block in plan.blocks if block.physical_paragraph_index == 0]
+
+    assert [heading_block.type_id, body_block.type_id] == ["heading1", "body"]
+    assert heading_block.segment_format["run_count"] == 1
+    assert body_block.segment_format["run_count"] == 1
+    assert heading_block.segment_format["bold_char_ratio"] == 1.0
+    assert body_block.segment_format["bold_char_ratio"] == 0.0
+    assert heading_block.segment_format["weighted_font_size_pt"] == 16.0
+    assert body_block.segment_format["weighted_font_size_pt"] == 12.0
+    assert heading_block.segment_format != body_block.segment_format
 
 
 def test_host_binding_uses_monotonic_order_and_handles_shifted_paragraphs(tmp_path: Path) -> None:
@@ -87,9 +167,52 @@ def test_host_binding_maps_canonical_text_to_host_raw_text_without_reusing_offse
         "paragraphs": [{"raw_text": "正文 内容😀"}],
     })
 
-    assert binding.blocks[0].binding_status == "confirmed"
+    assert binding.blocks[0].binding_status == "review"
+    assert binding.host_text_contract_version == HOST_TEXT_CONTRACT_VERSION
     assert "PHYSICAL_CANONICAL_TEXT_MATCH" in binding.blocks[0].binding_evidence
     assert "RAW_TEXT_NORMALIZED" in binding.blocks[0].binding_warnings
+
+
+def test_ambiguous_repeat_only_blocks_its_own_physical_paragraph_group(tmp_path: Path) -> None:
+    source = tmp_path / "local-ambiguity.docx"
+    _write_document(source, ["唯一开头", "重复内容", "唯一结尾"])
+    plan = recognize_docx(source, recognition_mode="legacy")
+
+    binding = bind_recognition_plan(plan, {
+        "host_type": "test-host",
+        "paragraphs": [
+            {"host_paragraph_index": 10, "raw_text": "唯一开头"},
+            {"host_paragraph_index": 11, "raw_text": "重复内容"},
+            {"host_paragraph_index": 12, "raw_text": "重复内容"},
+            {"host_paragraph_index": 13, "raw_text": "唯一结尾"},
+        ],
+    })
+
+    assert [item.binding_status for item in binding.blocks] == ["confirmed", "unresolved", "confirmed"]
+    assert [item.host_paragraph_index for item in binding.blocks] == [10, None, 13]
+    assert [item.status for item in binding.physical_paragraphs] == [
+        "matched_unique", "ambiguous", "matched_unique",
+    ]
+    ambiguous = binding.physical_paragraphs[1]
+    assert ambiguous.candidate_host_paragraph_indexes == (11, 12)
+    assert "SOURCE_OCCURRENCE_AMBIGUOUS" in ambiguous.warnings
+
+
+def test_repeated_paragraphs_with_distinct_contexts_remain_confirmed(tmp_path: Path) -> None:
+    source = tmp_path / "context-repeat.docx"
+    _write_document(source, ["文首", "重复内容", "中间锚点", "重复内容", "文末"])
+    plan = recognize_docx(source, recognition_mode="legacy")
+
+    binding = bind_recognition_plan(plan, {
+        "host_type": "test-host",
+        "paragraphs": [
+            {"raw_text": "文首"}, {"raw_text": "重复内容"}, {"raw_text": "中间锚点"},
+            {"raw_text": "重复内容"}, {"raw_text": "文末"},
+        ],
+    })
+
+    assert all(item.binding_status == "confirmed" for item in binding.blocks)
+    assert all(item.status == "matched_unique" for item in binding.physical_paragraphs)
 
 
 def test_host_binding_refuses_ambiguous_duplicate_occurrences(tmp_path: Path) -> None:

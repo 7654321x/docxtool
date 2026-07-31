@@ -27,13 +27,18 @@ DOCX 的段落号推断。`raw_*_utf16` 和 `canonical_*_utf16` 仅属于各自�
 
 ## SDK 协议
 
-`locator_version="2.0"` 增加以下稳定字段：
+`locator_version="source-locator-v2"` 增加以下稳定字段：
 
 - `raw_start_utf16` / `raw_end_utf16`；
 - `canonical_start_utf16` / `canonical_end_utf16`；
 - `segment_index` / `segment_count`；
 - `source_locator_status`、`source_locator_evidence`、`source_locator_warnings`；
 - raw/canonical 片段、物理段落和上下文哈希。
+
+`RecognitionPlan` 还包含 `package_version` 和
+`host_text_contract_version=host-text-v1`。`segment_format` 从与 raw span
+相交的 DOCX run 按可见字符权重统计；一个 run 跨越标题和正文时，其格式
+权重分别归入两个逻辑片段。
 
 旧 `range_start_utf16` / `range_end_utf16` 保持存在，固定为 raw source
 offset 的兼容别名。分类证据使用 `classification_confidence`、
@@ -51,7 +56,7 @@ offset 的兼容别名。分类证据使用 `classification_confidence`、
 
 - raw 完全一致：输出 `confirmed`，并给出 host snapshot raw UTF-16 范围；
 - canonical 完全一致：通过 host 自身 `SourceTape` 重新映射 raw 范围，输出
-  `confirmed` 并标记 `RAW_TEXT_NORMALIZED`；
+  `review` 并标记 `RAW_TEXT_NORMALIZED`；
 - 重复文本无法由顺序消歧、范围/哈希不匹配或任一片段重叠：输出
   `unresolved`。
 
@@ -59,6 +64,24 @@ offset 的兼容别名。分类证据使用 `classification_confidence`、
 再按自身 API 生成 Range。同一物理段落有多个片段时，必须联合、保序验证；
 混合段无法安全拆分时，WPS 命令层应拒绝应用并返回
 `MIXED_PARAGRAPH_REQUIRES_SPLIT`。
+
+## HostParagraphTextContract V1
+
+宿主传入的 `raw_text` 只能表示可见段落内容。`host-text-v1` 将 CRLF、CR、
+LF 和垂直制表符统一为 LF，保留 Tab 与分页符，归一 NBSP、全角空格和 NFKC
+字符。末尾 `U+0007` 表格单元格标记不进入 canonical 文本并产生警告。
+`canonicalize_host_paragraph_text()` 返回 raw/canonical UTF-16 映射；未知
+版本返回 `UNSUPPORTED_HOST_TEXT_CONTRACT`。
+
+## 局部歧义与计数
+
+全文对齐仍是保序动态规划，但每个 source 物理段落独立输出
+`matched_unique`、`matched_review`、`ambiguous` 或 `unmatched`。重复文本只在
+本段落组出现多个最优候选时返回 `unresolved`，不污染其他唯一段落。
+
+`segment_count_total` 为全部逻辑片段数，`segment_count_located` 为拥有合法
+来源范围的数量，`segment_count_confirmed` 为确认可读回的数量。计数不完整时，
+WPS 端只能预览，不能自动应用格式。
 
 ## 回归与边界
 

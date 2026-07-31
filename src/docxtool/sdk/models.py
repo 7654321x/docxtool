@@ -45,6 +45,9 @@ class RecognitionBlock:
     locator_version: str
     segment_index: int
     segment_count: int
+    segment_count_total: int
+    segment_count_located: int
+    segment_count_confirmed: int
     raw_start_utf16: Optional[int]
     raw_end_utf16: Optional[int]
     canonical_start_utf16: Optional[int]
@@ -70,6 +73,7 @@ class RecognitionBlock:
     canonical_fragment_sha256: str
     prefix_context_sha256: str
     suffix_context_sha256: str
+    segment_format: Dict[str, Any]
     recognized_text: Optional[str] = None
     raw_fragment_text: Optional[str] = None
     canonical_fragment_text: Optional[str] = None
@@ -87,6 +91,9 @@ class RecognitionBlock:
             "locator_version": self.locator_version,
             "segment_index": self.segment_index,
             "segment_count": self.segment_count,
+            "segment_count_total": self.segment_count_total,
+            "segment_count_located": self.segment_count_located,
+            "segment_count_confirmed": self.segment_count_confirmed,
             "raw_start_utf16": self.raw_start_utf16,
             "raw_end_utf16": self.raw_end_utf16,
             "canonical_start_utf16": self.canonical_start_utf16,
@@ -116,6 +123,7 @@ class RecognitionBlock:
             "canonical_fragment_sha256": self.canonical_fragment_sha256,
             "prefix_context_sha256": self.prefix_context_sha256,
             "suffix_context_sha256": self.suffix_context_sha256,
+            "segment_format": dict(self.segment_format),
         }
         if self.recognized_text is not None:
             value["recognized_text"] = self.recognized_text
@@ -132,6 +140,9 @@ class RecognitionPlan:
 
     schema_version: str
     engine_version: str
+    package_version: str
+    locator_version: str
+    host_text_contract_version: str
     source_sha256: str
     processing_mode: str
     recognition_mode: str
@@ -144,6 +155,9 @@ class RecognitionPlan:
         return {
             "schema_version": self.schema_version,
             "engine_version": self.engine_version,
+            "package_version": self.package_version,
+            "locator_version": self.locator_version,
+            "host_text_contract_version": self.host_text_contract_version,
             "source_sha256": self.source_sha256,
             "processing_mode": self.processing_mode,
             "recognition_mode": self.recognition_mode,
@@ -171,6 +185,7 @@ class HostSnapshot:
     host_type: str
     paragraphs: Tuple[HostParagraph, ...]
     document_identity: Optional[str] = None
+    text_contract_version: str = "host-text-v1"
 
 
 @dataclass(frozen=True)
@@ -204,6 +219,30 @@ class BoundRecognitionBlock:
 
 
 @dataclass(frozen=True)
+class PhysicalParagraphBinding:
+    """Alignment state for one source physical paragraph group."""
+
+    source_physical_paragraph_index: int
+    host_paragraph_index: Optional[int]
+    status: str
+    score: int
+    candidate_host_paragraph_indexes: Tuple[int, ...]
+    evidence: Tuple[str, ...]
+    warnings: Tuple[str, ...]
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "source_physical_paragraph_index": self.source_physical_paragraph_index,
+            "host_paragraph_index": self.host_paragraph_index,
+            "status": self.status,
+            "score": self.score,
+            "candidate_host_paragraph_indexes": list(self.candidate_host_paragraph_indexes),
+            "evidence": list(self.evidence),
+            "warnings": list(self.warnings),
+        }
+
+
+@dataclass(frozen=True)
 class RecognitionBinding:
     """Result of binding a text-free recognition plan to a local snapshot."""
 
@@ -211,7 +250,9 @@ class RecognitionBinding:
     source_sha256: str
     host_type: str
     document_identity: Optional[str]
+    host_text_contract_version: str
     blocks: Tuple[BoundRecognitionBlock, ...]
+    physical_paragraphs: Tuple[PhysicalParagraphBinding, ...]
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -219,5 +260,7 @@ class RecognitionBinding:
             "source_sha256": self.source_sha256,
             "host_type": self.host_type,
             "document_identity": self.document_identity,
+            "host_text_contract_version": self.host_text_contract_version,
             "blocks": [block.to_dict() for block in self.blocks],
+            "physical_paragraphs": [item.to_dict() for item in self.physical_paragraphs],
         }

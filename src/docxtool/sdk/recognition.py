@@ -8,13 +8,20 @@ import json
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
+from docxtool import __version__ as PACKAGE_VERSION
 from docxtool.document.importer import DocxImporter, ParagraphData
 from docxtool.document.recognition.version import (
     RECOGNITION_DIAGNOSTIC_SCHEMA_VERSION,
     RECOGNITION_ENGINE_VERSION,
 )
 from docxtool.document.style_config import load_rules_and_settings
-from docxtool.document.source_tape import SourceTape, canonicalize_text, utf16_length
+from docxtool.document.source_tape import (
+    HOST_TEXT_CONTRACT_VERSION,
+    SOURCE_LOCATOR_VERSION,
+    SourceTape,
+    canonicalize_text,
+    utf16_length,
+)
 from docxtool.paths import default_format_config_path
 
 from .models import RecognitionBlock, RecognitionPlan, ReviewItem
@@ -133,6 +140,32 @@ def _safe_strings(value: Any) -> tuple[str, ...]:
     return tuple(str(item) for item in value if isinstance(item, (str, int, float)))
 
 
+def _segment_format_features(paragraph: ParagraphData) -> dict:
+    """Expose non-sensitive run-intersection features for one logical block."""
+    features = getattr(paragraph, "features", None)
+    if features is None:
+        return {}
+    return {
+        "font_name": str(getattr(features, "segment_font_name", "") or ""),
+        "dominant_font_name": str(getattr(features, "segment_dominant_font_name", "") or ""),
+        "font_size_pt": getattr(features, "segment_font_size_pt", None),
+        "weighted_font_size_pt": getattr(features, "segment_weighted_font_size_pt", None),
+        "bold_char_ratio": float(getattr(features, "segment_bold_char_ratio", 0.0) or 0.0),
+        "italic_char_ratio": float(getattr(features, "segment_italic_char_ratio", 0.0) or 0.0),
+        "underline_char_ratio": float(getattr(features, "segment_underline_char_ratio", 0.0) or 0.0),
+        "explicit_format_ratio": float(getattr(features, "segment_explicit_format_ratio", 0.0) or 0.0),
+        "run_count": int(getattr(features, "segment_run_count", 0) or 0),
+        "style_name": str(getattr(features, "segment_style_name", "") or ""),
+        "has_mixed_fonts": bool(getattr(features, "segment_has_mixed_fonts", False)),
+        "has_mixed_sizes": bool(getattr(features, "segment_has_mixed_sizes", False)),
+        "numbering_features": str(getattr(features, "segment_numbering_features", "") or ""),
+        "alignment": str(getattr(features, "segment_alignment", "") or ""),
+        "position_in_physical_paragraph": str(
+            getattr(features, "segment_position_in_physical_paragraph", "whole") or "whole"
+        ),
+    }
+
+
 def _request_features(
     processing_mode: str,
     recognition_mode: str,
@@ -189,32 +222,40 @@ def _build_plan(
         segments_by_physical[physical_index] = []
     for index, locator in enumerate(locators):
         physical_index = locator["physical_index"]
-        if (
-            physical_index is not None
-            and locator["status"] == "confirmed"
-            and locator["raw_start"] is not None
-            and locator["raw_end"] is not None
-        ):
+        if physical_index is not None:
             segments_by_physical.setdefault(physical_index, []).append(index)
     segment_meta = {}
     for physical_index, indexes in segments_by_physical.items():
-        ordered = sorted(indexes, key=lambda value: (locators[value]["raw_start"], value))
+        # Importer preserves logical source order.  Keep that full order even
+        # when one locator is unresolved, otherwise segment_count would lie.
+        ordered = list(indexes)
         previous_end = -1
         for segment_index, index in enumerate(ordered):
             locator = locators[index]
-            if locator["raw_start"] < previous_end:
+            raw_start = locator["raw_start"]
+            raw_end = locator["raw_end"]
+            if raw_start is not None and raw_end is not None and raw_start < previous_end:
                 locator["status"] = "unresolved"
                 locator["verified"] = False
                 locator["warnings"] = tuple(dict.fromkeys(locator["warnings"] + ("SOURCE_RANGE_OVERLAP",)))
-            previous_end = max(previous_end, locator["raw_end"])
+            if raw_end is not None:
+                previous_end = max(previous_end, raw_end)
             segment_meta[index] = (segment_index, len(ordered))
+        located_count = sum(
+            locators[index]["raw_start"] is not None and locators[index]["raw_end"] is not None
+            for index in ordered
+        )
+        confirmed_count = sum(locators[index]["status"] == "confirmed" for index in ordered)
+        for index in ordered:
+            segment_index, total = segment_meta[index]
+            segment_meta[index] = (segment_index, total, located_count, confirmed_count)
     for index, paragraph in enumerate(paragraphs):
         meta = dict(getattr(paragraph, "meta", {}) or {})
         type_id = str(getattr(paragraph, "type_id", "unknown") or "unknown")
         review_level = str(meta.get("review_level", "confirmed") or "confirmed")
         locator = locators[index]
         physical_index = locator["physical_index"]
-        segment_index, segment_count = segment_meta.get(index, (0, 0))
+        segment_index, segment_count, segment_located, segment_confirmed = segment_meta.get(index, (0, 0, 0, 0))
         prefix = ""
         suffix = ""
         if locator["raw_start"] is not None and locator["raw_end"] is not None:
@@ -230,9 +271,12 @@ def _build_plan(
             physical_canonical_text_sha256=locator["physical_canonical_hash"],
             physical_text_length_utf16=locator["physical_length"],
             physical_canonical_text_length_utf16=locator["physical_canonical_length"],
-            locator_version="2.0",
+            locator_version=SOURCE_LOCATOR_VERSION,
             segment_index=segment_index,
             segment_count=segment_count,
+            segment_count_total=segment_count,
+            segment_count_located=segment_located,
+            segment_count_confirmed=segment_confirmed,
             raw_start_utf16=locator["raw_start"],
             raw_end_utf16=locator["raw_end"],
             canonical_start_utf16=locator["canonical_start"],
@@ -258,6 +302,7 @@ def _build_plan(
             canonical_fragment_sha256=_sha256_text(locator["canonical_fragment"]) if locator["canonical_fragment"] else "",
             prefix_context_sha256=_sha256_text(prefix) if prefix else "",
             suffix_context_sha256=_sha256_text(suffix) if suffix else "",
+            segment_format=_segment_format_features(paragraph),
             recognized_text=_visible_text(paragraph) if include_text else None,
             raw_fragment_text=locator["raw_fragment"] if include_raw_text else None,
             canonical_fragment_text=locator["canonical_fragment"] if include_text else None,
@@ -275,6 +320,9 @@ def _build_plan(
     return RecognitionPlan(
         schema_version=str(report.get("schema_version", RECOGNITION_DIAGNOSTIC_SCHEMA_VERSION)),
         engine_version=str(report.get("engine_version", RECOGNITION_ENGINE_VERSION)),
+        package_version=PACKAGE_VERSION,
+        locator_version=SOURCE_LOCATOR_VERSION,
+        host_text_contract_version=HOST_TEXT_CONTRACT_VERSION,
         source_sha256=source_sha256,
         processing_mode=str(getattr(data, "processing_strategy", "")),
         recognition_mode=str(getattr(data, "recognition_mode", "")),

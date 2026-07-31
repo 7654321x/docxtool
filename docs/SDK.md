@@ -55,11 +55,17 @@ print(plan.to_dict())
 - `raw_start_utf16` / `raw_end_utf16`；
 - `canonical_start_utf16` / `canonical_end_utf16`；
 - `segment_index` / `segment_count`；
+- `segment_count_total` / `segment_count_located` / `segment_count_confirmed`；
 - `source_locator_status`、证据和警告；
+- `segment_format`，包含以 run 交集统计的字体、字号、粗体比例和混排标记；
 - raw/canonical 片段及前后上下文的哈希。
 
 `source_locator_status` 为 `confirmed` 时，raw 片段能够从原始物理段落
 范围读回；`review` 或 `unresolved` 均不得被宿主自动修改。
+
+`segment_count` 是完整逻辑片段组的兼容计数。新调用方应使用
+`segment_count_total`、`segment_count_located` 和 `segment_count_confirmed`
+确认片段组完整；任一片段未确认时不得直接一键写入。
 
 默认不返回文字。仅本机受控链路可使用 `include_text=True` 返回
 `recognized_text` 与 canonical 片段；`include_raw_text=True` 会额外返回
@@ -94,6 +100,28 @@ occurrence 及同段逻辑片段顺序交叉验证。结果为：
 同样不是 WPS Range 坐标。WPS 端必须再次验证当前段落文本后才能换算和
 应用格式。混合物理段落必须按所有 `segment_index` 联合验证；正式排版前如
 仍无法拆分，应返回 `MIXED_PARAGRAPH_REQUIRES_SPLIT`。
+
+### HostParagraphTextContract V1
+
+`RecognitionPlan.host_text_contract_version` 和绑定结果均声明
+`host-text-v1`。宿主 `raw_text` 是可见段落文字，不应包含编辑器隐式段落
+结束标记或表格单元格结束标记。canonical 规则为：
+
+- `\r\n`、`\r`、`\n` 和手动换行 `\v` 统一为 `\n`；
+- Tab `\t` 与分页符 `\f` 保留；
+- NBSP、全角空格统一为普通空格，并执行 Unicode NFKC；
+- 行尾 `U+0007` 表格单元格标记不参与 canonical 文本，并返回警告；
+- raw 与 canonical offset 均为 UTF-16 code unit，必须经契约映射转换。
+
+SDK 提供 `canonicalize_host_paragraph_text(raw_text)`。未知版本返回
+`UNSUPPORTED_HOST_TEXT_CONTRACT`。绑定状态含义如下：
+
+- `confirmed`：raw 文本、片段读回、哈希与顺序都精确匹配；
+- `review`：canonical 精确但 raw 表达不同，只能预览；
+- `unresolved`：歧义、缺失、越界或哈希不一致，必须跳过。
+
+重复文本歧义按物理段落组局部处理。`binding.physical_paragraphs` 会列出
+每组候选宿主段落、最终状态与证据，不会让一个歧义组污染其他唯一段落。
 
 ## 命令行
 

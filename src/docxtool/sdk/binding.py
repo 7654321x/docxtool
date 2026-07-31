@@ -6,12 +6,18 @@ from dataclasses import dataclass
 import hashlib
 from typing import Any, Mapping, Optional, Sequence, Tuple
 
-from docxtool.document.source_tape import SourceTape, canonicalize_text
+from docxtool.document.source_tape import (
+    HOST_TEXT_CONTRACT_VERSION,
+    SOURCE_LOCATOR_VERSION,
+    SourceTape,
+    canonicalize_text,
+)
 
 from .models import (
     BoundRecognitionBlock,
     HostParagraph,
     HostSnapshot,
+    PhysicalParagraphBinding,
     RecognitionBinding,
     RecognitionBlock,
     RecognitionPlan,
@@ -66,10 +72,14 @@ def _coerce_snapshot(value: HostSnapshot | Mapping[str, Any]) -> HostSnapshot:
     if not isinstance(host_type, str) or not host_type:
         raise ValueError("host_snapshot.host_type 必须为非空字符串")
     identity = value.get("document_identity")
+    contract_version = value.get("text_contract_version", HOST_TEXT_CONTRACT_VERSION)
+    if not isinstance(contract_version, str):
+        raise ValueError("host_snapshot.text_contract_version 必须为字符串")
     return HostSnapshot(
         host_type=host_type,
         paragraphs=tuple(paragraphs),
         document_identity=str(identity) if identity is not None else None,
+        text_contract_version=contract_version,
     )
 
 
@@ -99,50 +109,69 @@ def _alignment_score(group: _PhysicalGroup, host: _HostText) -> int:
     return 0
 
 
-def _align_groups(groups: Sequence[_PhysicalGroup], hosts: Sequence[_HostText]) -> tuple[dict[int, tuple[int, int]], bool]:
-    """Return a monotonic exact-text alignment and whether it is unique.
+def _align_groups(
+    groups: Sequence[_PhysicalGroup],
+    hosts: Sequence[_HostText],
+) -> dict[int, tuple[str, Optional[int], int, tuple[int, ...], tuple[str, ...], tuple[str, ...]]]:
+    """Return a local alignment state for every source physical paragraph.
 
-    The score only admits raw or canonical full-paragraph equality.  A fuzzy
-    result is intentionally not generated, because callers must not format an
-    ambiguous host document automatically.
+    A global dynamic-programming score is still required to preserve document
+    order.  Its ambiguity is not global, however: each source group receives
+    only the host positions that participate in an optimal monotonic path.
+    Therefore one repeated paragraph cannot make unrelated unique paragraphs
+    unsafe to bind.
     """
     rows, cols = len(groups), len(hosts)
-    scores = [[0] * (cols + 1) for _ in range(rows + 1)]
-    ways = [[0] * (cols + 1) for _ in range(rows + 1)]
-    previous = [[None] * (cols + 1) for _ in range(rows + 1)]
-    ways[0][0] = 1
-    for row in range(rows + 1):
-        for col in range(cols + 1):
-            if row == 0 and col == 0:
-                continue
-            options = []
-            if row:
-                options.append((scores[row - 1][col], ways[row - 1][col], (row - 1, col, "skip_source")))
-            if col:
-                options.append((scores[row][col - 1], ways[row][col - 1], (row, col - 1, "skip_host")))
-            if row and col:
-                match = _alignment_score(groups[row - 1], hosts[col - 1])
-                if match:
-                    options.append((scores[row - 1][col - 1] + match, ways[row - 1][col - 1], (row - 1, col - 1, "match")))
-            best = max(value[0] for value in options)
-            tied = [value for value in options if value[0] == best]
-            scores[row][col] = best
-            ways[row][col] = min(2, sum(value[1] for value in tied))
-            # Prefer a match for deterministic diagnostics, but only a unique
-            # path can ever be confirmed below.
-            previous[row][col] = next((value[2] for value in tied if value[2][2] == "match"), tied[0][2])
+    forward = [[0] * (cols + 1) for _ in range(rows + 1)]
+    for row in range(1, rows + 1):
+        for col in range(1, cols + 1):
+            match = _alignment_score(groups[row - 1], hosts[col - 1])
+            forward[row][col] = max(
+                forward[row - 1][col],
+                forward[row][col - 1],
+                forward[row - 1][col - 1] + match if match else -1,
+            )
 
-    matches = {}
-    row, col = rows, cols
-    while row or col:
-        item = previous[row][col]
-        if item is None:
-            break
-        prior_row, prior_col, action = item
-        if action == "match":
-            matches[groups[row - 1].physical_index] = (col - 1, _alignment_score(groups[row - 1], hosts[col - 1]))
-        row, col = prior_row, prior_col
-    return matches, ways[rows][cols] == 1
+    backward = [[0] * (cols + 1) for _ in range(rows + 1)]
+    for row in range(rows - 1, -1, -1):
+        for col in range(cols - 1, -1, -1):
+            match = _alignment_score(groups[row], hosts[col])
+            backward[row][col] = max(
+                backward[row + 1][col],
+                backward[row][col + 1],
+                backward[row + 1][col + 1] + match if match else -1,
+            )
+
+    optimum = forward[rows][cols]
+    result = {}
+    for row, group in enumerate(groups):
+        candidates = []
+        for col, host in enumerate(hosts):
+            score = _alignment_score(group, host)
+            if score and forward[row][col] + score + backward[row + 1][col + 1] == optimum:
+                candidates.append((col, score))
+        candidate_positions = tuple(position for position, _score in candidates)
+        if not candidates:
+            result[group.physical_index] = (
+                "unmatched", None, 0, (), (), ("PHYSICAL_PARAGRAPH_UNMATCHED",),
+            )
+            continue
+        if len(candidates) > 1:
+            result[group.physical_index] = (
+                "ambiguous", None, 0, candidate_positions,
+                ("PARAGRAPH_ORDER_MATCH",), ("SOURCE_OCCURRENCE_AMBIGUOUS",),
+            )
+            continue
+        position, score = candidates[0]
+        evidence = ["PARAGRAPH_ORDER_MATCH"]
+        if score == 100:
+            evidence.extend(("PHYSICAL_RAW_TEXT_MATCH", "PHYSICAL_HASH_MATCH"))
+            status = "matched_unique"
+        else:
+            evidence.append("PHYSICAL_CANONICAL_TEXT_MATCH")
+            status = "matched_review"
+        result[group.physical_index] = (status, position, score, candidate_positions, tuple(evidence), ())
+    return result
 
 
 def _bound(
@@ -181,16 +210,38 @@ def bind_recognition_plan(
     snapshot = _coerce_snapshot(host_snapshot)
     hosts = tuple(_HostText(
         paragraph=item,
-        tape=SourceTape.from_text(item.raw_text),
+        tape=SourceTape.from_text(item.raw_text, contract_version=snapshot.text_contract_version),
         raw_hash=_sha256(item.raw_text),
-        canonical_hash=_sha256(canonicalize_text(item.raw_text)),
+        canonical_hash=_sha256(
+            canonicalize_text(item.raw_text)
+            if snapshot.text_contract_version == HOST_TEXT_CONTRACT_VERSION
+            else SourceTape.from_text(item.raw_text, snapshot.text_contract_version).canonical_text
+        ),
     ) for item in snapshot.paragraphs if item.story_type == "main" and not item.is_in_table)
     groups = _physical_groups(plan)
-    matched, unique_alignment = _align_groups(groups, hosts)
+    alignments = _align_groups(groups, hosts)
     duplicates = {}
     for host in hosts:
         duplicates[host.raw_hash] = duplicates.get(host.raw_hash, 0) + 1
     host_by_position = {position: item for position, item in enumerate(hosts)}
+    group_by_index = {group.physical_index: group for group in groups}
+    physical_paragraphs = []
+    for physical_index in sorted(group_by_index):
+        status, host_position, score, candidates, evidence, warnings = alignments[physical_index]
+        physical_paragraphs.append(PhysicalParagraphBinding(
+            source_physical_paragraph_index=physical_index,
+            host_paragraph_index=(
+                host_by_position[host_position].paragraph.host_paragraph_index
+                if host_position is not None else None
+            ),
+            status=status,
+            score=score,
+            candidate_host_paragraph_indexes=tuple(
+                host_by_position[position].paragraph.host_paragraph_index for position in candidates
+            ),
+            evidence=evidence,
+            warnings=warnings,
+        ))
     result = []
 
     for block in plan.blocks:
@@ -203,24 +254,23 @@ def bind_recognition_plan(
                 tuple(block.source_locator_warnings) + ("SOURCE_LOCATOR_NOT_CONFIRMED",),
             ))
             continue
-        matched_item = matched.get(block.physical_paragraph_index)
-        if matched_item is None:
+        alignment = alignments.get(block.physical_paragraph_index)
+        if alignment is None:
             result.append(_bound(block, None, "unresolved", 0.0, (), ("PHYSICAL_PARAGRAPH_UNMATCHED",)))
             continue
-        host_position, score = matched_item
-        host = host_by_position[host_position]
-        if not unique_alignment:
+        alignment_status, host_position, score, _candidates, alignment_evidence, alignment_warnings = alignment
+        if alignment_status in {"ambiguous", "unmatched"} or host_position is None:
             result.append(_bound(
-                block, host.paragraph.host_paragraph_index, "unresolved", 0.0,
-                ("PHYSICAL_TEXT_MATCH",), ("SOURCE_OCCURRENCE_AMBIGUOUS",),
+                block, None, "unresolved", 0.0,
+                alignment_evidence, alignment_warnings,
             ))
             continue
-        evidence = ["PARAGRAPH_ORDER_MATCH"]
+        host = host_by_position[host_position]
+        evidence = list(alignment_evidence)
         warnings = []
         if duplicates.get(host.raw_hash, 0) > 1:
             evidence.append("DUPLICATE_TEXT_DISAMBIGUATED")
         if score == 100:
-            evidence.extend(("PHYSICAL_RAW_TEXT_MATCH", "PHYSICAL_HASH_MATCH"))
             start, end = block.raw_start_utf16, block.raw_end_utf16
             fragment = host.tape.raw_slice_utf16(start or 0, end or 0) if start is not None and end is not None else None
             if fragment is None or _sha256(fragment) != block.raw_fragment_sha256:
@@ -259,15 +309,17 @@ def bind_recognition_plan(
             ))
             continue
         result.append(_bound(
-            block, host.paragraph.host_paragraph_index, "confirmed", 0.93,
-            evidence + ["PHYSICAL_CANONICAL_TEXT_MATCH", "SEGMENT_TEXT_MATCH", "SEGMENT_ORDER_MATCH"],
+            block, host.paragraph.host_paragraph_index, "review", 0.93,
+            evidence + ["SEGMENT_TEXT_MATCH", "SEGMENT_ORDER_MATCH"],
             ("RAW_TEXT_NORMALIZED",), start, end,
         ))
 
     return RecognitionBinding(
-        locator_version="2.0",
+        locator_version=SOURCE_LOCATOR_VERSION,
         source_sha256=plan.source_sha256,
         host_type=snapshot.host_type,
         document_identity=snapshot.document_identity,
+        host_text_contract_version=snapshot.text_contract_version,
         blocks=tuple(result),
+        physical_paragraphs=tuple(physical_paragraphs),
     )

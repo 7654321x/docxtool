@@ -36,6 +36,20 @@ from docxtool.document.style_config import (
 # 数据模型
 # ═══════════════════════════════════════════════════════════════
 
+@dataclass(frozen=True)
+class SourceRun:
+    """Formatting facts for one source run in physical-text code-point spans."""
+
+    start: int
+    end: int
+    font_name: str
+    font_size_pt: Optional[float]
+    bold: bool
+    italic: bool
+    underline: bool
+    explicit: bool
+
+
 @dataclass
 class ParagraphFeatures:
     """段落的可观测物理特征。"""
@@ -65,6 +79,24 @@ class ParagraphFeatures:
     source_locator_status: str = "unresolved"
     source_locator_evidence: Tuple[str, ...] = ()
     source_locator_warnings: Tuple[str, ...] = ()
+    source_run_spans: Tuple[SourceRun, ...] = ()
+    segment_font_name: str = ""
+    segment_dominant_font_name: str = ""
+    segment_font_size_pt: Optional[float] = None
+    segment_weighted_font_size_pt: Optional[float] = None
+    segment_bold_char_ratio: float = 0.0
+    segment_italic_char_ratio: float = 0.0
+    segment_underline_char_ratio: float = 0.0
+    segment_explicit_format_ratio: float = 0.0
+    segment_run_count: int = 0
+    segment_style_name: str = ""
+    segment_has_mixed_fonts: bool = False
+    segment_has_mixed_sizes: bool = False
+    segment_numbering_features: str = ""
+    segment_alignment: str = ""
+    segment_position_in_physical_paragraph: str = "whole"
+    segment_index: int = 0
+    segment_count: int = 1
     is_in_table: bool = False
     contains_image: bool = False
     is_new_line: bool = False     # 是否由 \n 拆分出的新行
@@ -189,6 +221,98 @@ def _set_source_locator(
     child.source_locator_status = "confirmed"
     child.source_locator_evidence = ("RAW_RANGE_READBACK_MATCH", "CANONICAL_RANGE_MAPPED")
     child.source_locator_warnings = ()
+
+
+def _apply_segment_format_features(
+    child: ParagraphFeatures,
+    parent: ParagraphFeatures,
+    start: int,
+    end: int,
+) -> None:
+    """Compute formatting from run intersections with one raw logical span."""
+    source = parent.source_physical_text
+    font_weights: Counter[str] = Counter()
+    size_weights: Counter[float] = Counter()
+    characters = bold_characters = italic_characters = underline_characters = explicit_characters = 0
+    run_count = 0
+    for run in parent.source_run_spans:
+        overlap_start = max(start, run.start)
+        overlap_end = min(end, run.end)
+        if overlap_start >= overlap_end:
+            continue
+        visible = re.sub(r"\s+", "", source[overlap_start:overlap_end])
+        count = len(visible)
+        if not count:
+            continue
+        run_count += 1
+        characters += count
+        if run.font_name:
+            font_weights[run.font_name] += count
+        if run.font_size_pt is not None:
+            size_weights[float(run.font_size_pt)] += count
+        if run.bold:
+            bold_characters += count
+        if run.italic:
+            italic_characters += count
+        if run.underline:
+            underline_characters += count
+        if run.explicit:
+            explicit_characters += count
+
+    child.segment_style_name = parent.style_name
+    child.segment_alignment = parent.alignment
+    child.segment_numbering_features = child.numbering_prefix or parent.numbering_prefix
+    child.segment_run_count = run_count
+    if start == 0 and end == len(source):
+        child.segment_position_in_physical_paragraph = "whole"
+    elif start == 0:
+        child.segment_position_in_physical_paragraph = "start"
+    elif end == len(source):
+        child.segment_position_in_physical_paragraph = "end"
+    else:
+        child.segment_position_in_physical_paragraph = "middle"
+
+    if not characters:
+        # A paragraph with no textual run (or only controls) has no segment
+        # style evidence.  Keep the physical values solely as weak context.
+        child.segment_font_name = parent.font_name
+        child.segment_dominant_font_name = parent.dominant_font_name or parent.font_name
+        child.segment_font_size_pt = parent.font_size_pt
+        child.segment_weighted_font_size_pt = parent.weighted_font_size or parent.font_size_pt
+        child.segment_bold_char_ratio = parent.bold_char_ratio
+        child.segment_italic_char_ratio = parent.italic_char_ratio
+        child.segment_explicit_format_ratio = parent.explicitly_formatted_char_ratio
+        return
+
+    dominant_font = font_weights.most_common(1)[0][0] if font_weights else parent.font_name
+    weighted_size = (
+        sum(size * weight for size, weight in size_weights.items()) / sum(size_weights.values())
+        if size_weights else parent.font_size_pt
+    )
+    child.segment_font_name = dominant_font
+    child.segment_dominant_font_name = dominant_font
+    child.segment_font_size_pt = weighted_size
+    child.segment_weighted_font_size_pt = weighted_size
+    child.segment_bold_char_ratio = bold_characters / characters
+    child.segment_italic_char_ratio = italic_characters / characters
+    child.segment_underline_char_ratio = underline_characters / characters
+    child.segment_explicit_format_ratio = explicit_characters / characters
+    child.segment_has_mixed_fonts = len(font_weights) > 1
+    child.segment_has_mixed_sizes = len(size_weights) > 1
+
+    # Recognition providers consume these existing generic fields.  Replacing
+    # them with the segment facts makes mixed title/body paragraphs classify
+    # independently while the parent remains available as source context.
+    child.font_name = dominant_font
+    child.dominant_font_name = dominant_font
+    child.font_size_pt = weighted_size
+    child.weighted_font_size = weighted_size
+    child.max_font_size = max(size_weights) if size_weights else weighted_size
+    child.min_font_size = min(size_weights) if size_weights else weighted_size
+    child.bold_char_ratio = child.segment_bold_char_ratio
+    child.italic_char_ratio = child.segment_italic_char_ratio
+    child.explicitly_formatted_char_ratio = child.segment_explicit_format_ratio
+    child.bold = child.segment_bold_char_ratio >= 0.5
 
 
 def _inherit_source_locator(
@@ -329,6 +453,8 @@ def extract_features(paragraph, index: int) -> ParagraphFeatures:
     italic_chars = 0
     explicit_chars = 0
     explicit_sizes: list[float] = []
+    source_runs: list[SourceRun] = []
+    source_cursor = 0
     style_font = getattr(getattr(paragraph, "style", None), "font", None)
     style_font_name = getattr(style_font, "name", None) or ""
     style_font_size = getattr(style_font, "size", None)
@@ -336,12 +462,34 @@ def extract_features(paragraph, index: int) -> ParagraphFeatures:
     first_run_seen = False
     if paragraph.runs:
         for run in paragraph.runs:
+            run_text = run.text or ""
+            run_start = source_cursor
+            run_end = run_start + len(run_text)
+            source_cursor = run_end
             char_count = len(re.sub(r"\s+", "", run.text or ""))
             if not char_count:
                 continue
             try:
                 run_font = run.font.name or style_font_name
                 run_size = run.font.size.pt if run.font.size is not None else style_font_size_pt
+                source_matches_run = (
+                    run_end <= len(paragraph.text)
+                    and paragraph.text[run_start:run_end] == run_text
+                )
+                if source_matches_run:
+                    source_runs.append(SourceRun(
+                        start=run_start,
+                        end=run_end,
+                        font_name=run_font,
+                        font_size_pt=float(run_size) if run_size is not None else None,
+                        bold=bool(run.font.bold),
+                        italic=bool(run.font.italic),
+                        underline=bool(run.font.underline),
+                        explicit=any(value is not None for value in (
+                            run.font.name, run.font.size, run.font.bold,
+                            run.font.italic, run.font.underline,
+                        )),
+                    ))
                 if not first_run_seen:
                     pf.first_run_font_name = run.font.name or ""
                     pf.first_run_font_size_pt = run.font.size.pt if run.font.size is not None else None
@@ -384,6 +532,8 @@ def extract_features(paragraph, index: int) -> ParagraphFeatures:
     pf.font_name = pf.dominant_font_name or pf.first_run_font_name
     pf.font_size_pt = pf.weighted_font_size or pf.first_run_font_size_pt
     pf.bold = pf.bold_char_ratio >= 0.5
+    pf.source_run_spans = tuple(source_runs)
+    _apply_segment_format_features(pf, pf, 0, len(pf.source_physical_text))
 
     # 对齐（统一小写 + 处理 None）
     try:
@@ -2330,6 +2480,7 @@ class DocxImporter:
                 explicitly_formatted_char_ratio=parent.explicitly_formatted_char_ratio,
             )
             _set_source_locator(child, parent, start, end)
+            _apply_segment_format_features(child, parent, start, end)
             return child
 
         for block_index, block in enumerate(raw_blocks):
@@ -2401,11 +2552,29 @@ class DocxImporter:
                     continue
                 sub_pf = source_features(pf, start, end, is_new_line=li > 0)
                 sub_pf.numbering_prefix = pf.numbering_prefix if li == 0 else _detect_numbering_prefix(line)
+                sub_pf.segment_numbering_features = sub_pf.numbering_prefix
                 flat_lines.append((
                     "text", line, sub_pf,
                     preserve_tokens if len(spans) == 1 else [],
                     sectPr if li == len(spans) - 1 else None,
                 ))
+
+        # Segment numbering describes every logical block from the physical
+        # paragraph, including blocks whose source range later proves invalid.
+        # The SDK exposes separate total/located/confirmed counts.
+        physical_segments: Dict[int, List[ParagraphFeatures]] = {}
+        for item in flat_lines:
+            if item[0] != "text":
+                continue
+            feature = item[2]
+            physical_index = feature.source_physical_paragraph_index
+            if physical_index is not None:
+                physical_segments.setdefault(physical_index, []).append(feature)
+        for features_for_physical in physical_segments.values():
+            total = len(features_for_physical)
+            for segment_index, feature in enumerate(features_for_physical):
+                feature.segment_index = segment_index
+                feature.segment_count = total
 
         ctx = DetectionContext()
         # 预扫描：找到最后一个正文/标题行的位置，之后的区域视为文档尾部

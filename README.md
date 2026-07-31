@@ -147,9 +147,14 @@ pwsh -NoProfile -Command "python -m build"
 `1.3` 起，项目提供只读识别 SDK，供 WPS/Word 加载项或其他本地软件调用。SDK 不启动 Web 服务，也不生成结果 DOCX：
 
 ```python
-from docxtool.sdk import recognize_docx
+from docxtool.sdk import bind_recognition_plan, recognize_docx
 
 plan = recognize_docx("input.docx", processing_mode="structural")
+
+binding = bind_recognition_plan(plan, {
+    "host_type": "wps",
+    "paragraphs": [{"host_paragraph_index": 0, "raw_text": "当前段落文字"}],
+})
 ```
 
 构建 wheel 后可使用 `docxtool-recognize input.docx --output plan.json` 导出脱敏识别计划。详细接口、数据边界和 WPS 集成方式见 [docs/SDK.md](docs/SDK.md)。
