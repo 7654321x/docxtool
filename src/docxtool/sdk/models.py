@@ -62,6 +62,7 @@ class RecognitionBlock:
     type_id: str
     section: str
     text_sha256: str
+    text_length_utf16: int
     previous_text_sha256: str
     next_text_sha256: str
     format_role: str
@@ -112,6 +113,7 @@ class RecognitionBlock:
             "type_id": self.type_id,
             "section": self.section,
             "text_sha256": self.text_sha256,
+            "text_length_utf16": self.text_length_utf16,
             "previous_text_sha256": self.previous_text_sha256,
             "next_text_sha256": self.next_text_sha256,
             "format_role": self.format_role,
@@ -201,6 +203,8 @@ class BoundRecognitionBlock:
     binding_warnings: Tuple[str, ...]
     host_raw_start_utf16: Optional[int]
     host_raw_end_utf16: Optional[int]
+    host_canonical_start_utf16: Optional[int]
+    host_canonical_end_utf16: Optional[int]
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -214,7 +218,10 @@ class BoundRecognitionBlock:
             # These offsets are in host snapshot raw text, not WPS Range.
             "host_raw_start_utf16": self.host_raw_start_utf16,
             "host_raw_end_utf16": self.host_raw_end_utf16,
+            "host_canonical_start_utf16": self.host_canonical_start_utf16,
+            "host_canonical_end_utf16": self.host_canonical_end_utf16,
             "host_coordinate_system": "host_snapshot_raw_text_utf16",
+            "host_canonical_coordinate_system": "host_snapshot_canonical_text_utf16",
         }
 
 

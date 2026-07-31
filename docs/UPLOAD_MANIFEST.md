@@ -26,6 +26,9 @@ https://github.com/7654321x/docxtool.git
 | `docs/RECOGNITION_RELEASE.md` | 识别发布门禁和回滚 | 发布验收依据 |
 | `docs/SDK.md` | 本地识别 SDK 接口和集成边界 | WPS/第三方软件调用依据 |
 | `docs/RECOGNITION_SOURCE_LOCATORS.md` | 来源定位与宿主绑定协议 | WPS/第三方安全定位依据 |
+| `docs/HOST_TEXT_V1_GOLDEN.json` | 脱敏 host-text-v1 金标 | Python/WPS 统一文本契约依据 |
+| `docs/USER_WPS_VALIDATION.md` | WPS 用户验收步骤 | 仅操作脱敏 fixture |
+| `docs/USER_WPS_VALIDATION_RESULT.md` | WPS 用户验收记录模板 | 初始状态均为未测试 |
 | `公文格式规范.md` | 根目录公文格式规范副本 | 与 WPS 目录规范保持一致，兼容既有链接 |
 | `wps/公文格式规范.md` | 当前公文格式与识别边界说明 | 可交给 WPS 项目或其他 AI 使用 |
 | `docs/UPLOAD_MANIFEST.md` | 本清单 | 上传范围依据 |
@@ -64,6 +67,7 @@ https://github.com/7654321x/docxtool.git
 | `src/docxtool/sdk/binding.py` | 宿主无关的识别计划绑定 | 对本地段落快照保序验证，不调用 WPS API |
 | `src/docxtool/document/__init__.py` | 文档处理包入口 |
 | `src/docxtool/document/importer.py` | DOCX 结构识别、段落分类、元数据生成 |
+| `src/docxtool/document/effective_format.py` | run、样式继承、主题字体的有效格式解析 |
 | `src/docxtool/document/source_tape.py` | 物理段落来源范围与 raw/canonical 坐标映射 |
 | `src/docxtool/document/classifier.py` | 文档模式和段落结构分类 |
 | `src/docxtool/document/letterhead_config.py` | 版头配置归一化和安全校验 |
@@ -99,6 +103,7 @@ https://github.com/7654321x/docxtool.git
 | `scripts/analyze_letterhead_batch.py` | 批量版头状态与问题归类 |
 | `scripts/batch_test_docx.py` | 编号测试文档批处理、结构对齐模板比较与可选视觉渲染抽查 |
 | `scripts/generate_005_format_fixtures.py` | 可复现的本地乱格式测试文档生成 |
+| `scripts/generate_wps_validation_fixtures.py` | 生成脱敏 WPS 手工验收 DOCX |
 | `scripts/normalize_correct_template_role_spacing.py` | 正确模板职务姓名空段归一化 |
 | `scripts/migrate_legacy_database.ps1` | 旧数据库复制迁移辅助脚本，默认 dry run |
 | `scripts/publish_to_github.ps1` | 安全发布到 GitHub 的脚本 |

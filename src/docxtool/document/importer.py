@@ -26,6 +26,10 @@ from docxtool.document.classifier import ClassificationOptions, classify_paragra
 from docxtool.document.recognition import apply_recognition
 from docxtool.document.recognition.version import RECOGNITION_VERSION_TAG
 from docxtool.document.source_tape import SourceTape, canonicalize_text, utf16_length
+from docxtool.document.effective_format import (
+    FORMAT_COVERAGE_CONFIRMED,
+    resolve_effective_run_format,
+)
 from docxtool.document.style_config import (
     NB_FIXED, NB_SUFFIXES,
     logger, ImportError,
@@ -43,11 +47,35 @@ class SourceRun:
     start: int
     end: int
     font_name: str
+    east_asia_font_name: Optional[str]
+    ascii_font_name: Optional[str]
     font_size_pt: Optional[float]
-    bold: bool
-    italic: bool
-    underline: bool
+    bold: Optional[bool]
+    italic: Optional[bool]
+    underline: Optional[bool]
     explicit: bool
+    inherited: bool
+    known: bool
+    format_sources: Tuple[str, ...] = ()
+    format_warnings: Tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class SegmentBoundaryCandidate:
+    """A conservative source-text boundary between two logical segments.
+
+    Positions are Python code-point indexes in the original physical paragraph
+    and are converted to UTF-16 only by ``SourceTape``.  The candidate is an
+    internal recognition aid; it never modifies source text.
+    """
+
+    raw_start: int
+    raw_end: int
+    left_type_hint: str
+    right_type_hint: str
+    confidence: float
+    evidence: Tuple[str, ...]
+    warnings: Tuple[str, ...] = ()
 
 
 @dataclass
@@ -82,13 +110,22 @@ class ParagraphFeatures:
     source_run_spans: Tuple[SourceRun, ...] = ()
     segment_font_name: str = ""
     segment_dominant_font_name: str = ""
+    segment_font_name_east_asia: str = ""
+    segment_font_name_ascii: str = ""
     segment_font_size_pt: Optional[float] = None
     segment_weighted_font_size_pt: Optional[float] = None
     segment_bold_char_ratio: float = 0.0
     segment_italic_char_ratio: float = 0.0
     segment_underline_char_ratio: float = 0.0
     segment_explicit_format_ratio: float = 0.0
+    segment_inherited_format_ratio: float = 0.0
     segment_run_count: int = 0
+    segment_visible_char_count: int = 0
+    segment_mapped_format_char_count: int = 0
+    segment_format_coverage_ratio: float = 0.0
+    segment_format_status: str = "unknown"
+    segment_format_warnings: Tuple[str, ...] = ()
+    segment_format_sources: Tuple[str, ...] = ()
     segment_style_name: str = ""
     segment_has_mixed_fonts: bool = False
     segment_has_mixed_sizes: bool = False
@@ -165,19 +202,144 @@ def _source_line_spans(source: str) -> List[Tuple[int, int]]:
     return spans
 
 
-def _split_inline_heading_body_spans(source: str, start: int, end: int) -> List[Tuple[int, int]]:
-    """Split a reliable inline heading/body boundary as source spans."""
+def _visible_character_count(value: str) -> int:
+    return len(re.sub(r"\s+", "", value or ""))
+
+
+def _has_format_transition(
+    features: Optional[ParagraphFeatures],
+    start: int,
+    boundary: int,
+    end: int,
+) -> bool:
+    """Return true only for a material left/right source-run distinction."""
+    if features is None or not features.source_run_spans:
+        return False
+    left = []
+    right = []
+    for run in features.source_run_spans:
+        if min(boundary, run.end) > max(start, run.start):
+            left.append(run)
+        if min(end, run.end) > max(boundary, run.start):
+            right.append(run)
+    if not left or not right:
+        return False
+    left_bold = any(run.bold is True for run in left)
+    right_bold = any(run.bold is True for run in right)
+    if left_bold != right_bold:
+        return True
+    left_sizes = [run.font_size_pt for run in left if run.font_size_pt is not None]
+    right_sizes = [run.font_size_pt for run in right if run.font_size_pt is not None]
+    if left_sizes and right_sizes and max(left_sizes) >= max(right_sizes) + 1.0:
+        return True
+    left_fonts = {run.font_name for run in left if run.font_name}
+    right_fonts = {run.font_name for run in right if run.font_name}
+    return bool(left_fonts and right_fonts and left_fonts != right_fonts)
+
+
+_SHORT_LABEL_RE = re.compile(r"^[^。；;！？!?\r\n]{1,24}[：:]$")
+_LABEL_SUFFIX_RE = re.compile(r"(?:单位|人员|联系人|电话|地址|事项|时间|地点|主题|内容|要求|附件)$")
+
+
+def _segment_boundary_candidates(
+    source: str,
+    start: int,
+    end: int,
+    features: Optional[ParagraphFeatures] = None,
+) -> Tuple[SegmentBoundaryCandidate, ...]:
+    """Generate ordered, evidence-backed boundaries for one visible span.
+
+    The providers are intentionally few and composable.  They do not use
+    reverse ``find`` matching and do not split ordinary prose merely because
+    it contains a sentence terminator or colon.
+    """
     start, end = _trim_source_span(source, start, end)
+    if start >= end:
+        return ()
     text = source[start:end]
-    if not _detect_numbering_prefix(text):
-        return [(start, end)] if start < end else []
+    candidates = []
     period_index = text.find("。")
-    if period_index < 0:
-        return [(start, end)]
-    body_start, body_end = _trim_source_span(source, start + period_index + 1, end)
-    if len(source[body_start:body_end]) < 5:
-        return [(start, end)]
-    return [(start, start + period_index + 1), (body_start, body_end)]
+    if period_index >= 0:
+        boundary = start + period_index + 1
+        body_start, body_end = _trim_source_span(source, boundary, end)
+        left = source[start:boundary]
+        body_count = _visible_character_count(source[body_start:body_end])
+        numbered = bool(_detect_numbering_prefix(left))
+        visual_transition = _has_format_transition(features, start, boundary, end)
+        if body_count >= 5 and (numbered or visual_transition):
+            candidates.append(SegmentBoundaryCandidate(
+                raw_start=start,
+                raw_end=boundary,
+                left_type_hint="heading" if numbered else "title_or_heading",
+                right_type_hint="body",
+                confidence=0.99 if numbered else 0.84,
+                evidence=(
+                    "NUMBERED_HEADING_TERMINATOR" if numbered else "VISUAL_TITLE_TERMINATOR",
+                    "VISIBLE_BODY_AFTER_TERMINATOR",
+                ),
+            ))
+
+    colon_match = re.match(r"^([^：:]{1,24}[：:])", text)
+    # Attachment notes have their own tail-structure state machine.  Splitting
+    # ``附件：1.材料`` into a label and a numbered item loses that structural
+    # fact before the tail recognizer can bind the complete attachment block.
+    if colon_match and not _ATT_NOTE_RE.match(text):
+        boundary = start + colon_match.end()
+        body_start, body_end = _trim_source_span(source, boundary, end)
+        label = colon_match.group(1)[:-1].strip()
+        has_label_shape = bool(_LABEL_SUFFIX_RE.search(label))
+        visual_transition = _has_format_transition(features, start, boundary, end)
+        if _SHORT_LABEL_RE.fullmatch(colon_match.group(1)) and body_start < body_end and (
+            has_label_shape or visual_transition
+        ):
+            candidates.append(SegmentBoundaryCandidate(
+                raw_start=start,
+                raw_end=boundary,
+                left_type_hint="label",
+                right_type_hint="content",
+                confidence=0.88 if has_label_shape and visual_transition else 0.80,
+                evidence=(
+                    "SHORT_LABEL_COLON",
+                    "LABEL_SHAPE" if has_label_shape else "VISUAL_LABEL_TRANSITION",
+                ),
+            ))
+    return tuple(sorted(candidates, key=lambda item: (-item.confidence, item.raw_end)))
+
+
+def _split_inline_heading_body_spans(
+    source: str,
+    start: int,
+    end: int,
+    features: Optional[ParagraphFeatures] = None,
+) -> List[Tuple[int, int]]:
+    """Split selected logical segments using the shared boundary providers."""
+    start, end = _trim_source_span(source, start, end)
+    if start >= end:
+        return []
+    spans = [(start, end)]
+    # Multiple segments are allowed, but a physical line should not be
+    # repeatedly split without fresh strong evidence.  This supports a
+    # title/label plus two soft-line-derived content blocks while protecting
+    # normal prose from aggressive sentence splitting.
+    for _unused in range(2):
+        changed = False
+        next_spans = []
+        for current_start, current_end in spans:
+            candidates = _segment_boundary_candidates(source, current_start, current_end, features)
+            if not candidates:
+                next_spans.append((current_start, current_end))
+                continue
+            candidate = candidates[0]
+            right_start, right_end = _trim_source_span(source, candidate.raw_end, current_end)
+            if candidate.raw_start < candidate.raw_end and right_start < right_end:
+                next_spans.extend(((candidate.raw_start, candidate.raw_end), (right_start, right_end)))
+                changed = True
+            else:
+                next_spans.append((current_start, current_end))
+        spans = next_spans
+        if not changed:
+            break
+    return spans
 
 
 def _set_source_locator(
@@ -232,9 +394,14 @@ def _apply_segment_format_features(
     """Compute formatting from run intersections with one raw logical span."""
     source = parent.source_physical_text
     font_weights: Counter[str] = Counter()
+    east_asia_weights: Counter[str] = Counter()
+    ascii_weights: Counter[str] = Counter()
     size_weights: Counter[float] = Counter()
-    characters = bold_characters = italic_characters = underline_characters = explicit_characters = 0
+    characters = bold_characters = italic_characters = underline_characters = 0
+    explicit_characters = inherited_characters = mapped_format_characters = 0
     run_count = 0
+    format_sources = []
+    format_warnings = []
     for run in parent.source_run_spans:
         overlap_start = max(start, run.start)
         overlap_end = min(end, run.end)
@@ -248,21 +415,37 @@ def _apply_segment_format_features(
         characters += count
         if run.font_name:
             font_weights[run.font_name] += count
+        if run.east_asia_font_name:
+            east_asia_weights[run.east_asia_font_name] += count
+        if run.ascii_font_name:
+            ascii_weights[run.ascii_font_name] += count
         if run.font_size_pt is not None:
             size_weights[float(run.font_size_pt)] += count
-        if run.bold:
+        if run.bold is True:
             bold_characters += count
-        if run.italic:
+        if run.italic is True:
             italic_characters += count
-        if run.underline:
+        if run.underline is True:
             underline_characters += count
         if run.explicit:
             explicit_characters += count
+        if run.inherited:
+            inherited_characters += count
+        if run.known:
+            mapped_format_characters += count
+        format_sources.extend(run.format_sources)
+        format_warnings.extend(run.format_warnings)
 
     child.segment_style_name = parent.style_name
     child.segment_alignment = parent.alignment
     child.segment_numbering_features = child.numbering_prefix or parent.numbering_prefix
     child.segment_run_count = run_count
+    child.segment_visible_char_count = characters
+    child.segment_mapped_format_char_count = mapped_format_characters
+    child.segment_format_coverage_ratio = (
+        mapped_format_characters / characters if characters else 0.0
+    )
+    child.segment_format_sources = tuple(dict.fromkeys(format_sources))
     if start == 0 and end == len(source):
         child.segment_position_in_physical_paragraph = "whole"
     elif start == 0:
@@ -282,6 +465,11 @@ def _apply_segment_format_features(
         child.segment_bold_char_ratio = parent.bold_char_ratio
         child.segment_italic_char_ratio = parent.italic_char_ratio
         child.segment_explicit_format_ratio = parent.explicitly_formatted_char_ratio
+        child.segment_inherited_format_ratio = 0.0
+        child.segment_format_status = "unknown"
+        child.segment_format_warnings = tuple(dict.fromkeys(
+            list(format_warnings) + ["NO_VISIBLE_RUN_FORMAT_COVERAGE"]
+        ))
         return
 
     dominant_font = font_weights.most_common(1)[0][0] if font_weights else parent.font_name
@@ -291,14 +479,30 @@ def _apply_segment_format_features(
     )
     child.segment_font_name = dominant_font
     child.segment_dominant_font_name = dominant_font
+    child.segment_font_name_east_asia = (
+        east_asia_weights.most_common(1)[0][0] if east_asia_weights else ""
+    )
+    child.segment_font_name_ascii = (
+        ascii_weights.most_common(1)[0][0] if ascii_weights else ""
+    )
     child.segment_font_size_pt = weighted_size
     child.segment_weighted_font_size_pt = weighted_size
     child.segment_bold_char_ratio = bold_characters / characters
     child.segment_italic_char_ratio = italic_characters / characters
     child.segment_underline_char_ratio = underline_characters / characters
     child.segment_explicit_format_ratio = explicit_characters / characters
-    child.segment_has_mixed_fonts = len(font_weights) > 1
+    child.segment_inherited_format_ratio = inherited_characters / characters
+    child.segment_has_mixed_fonts = len(font_weights) > 1 or len(east_asia_weights) > 1 or len(ascii_weights) > 1
     child.segment_has_mixed_sizes = len(size_weights) > 1
+    if child.segment_format_coverage_ratio >= FORMAT_COVERAGE_CONFIRMED:
+        child.segment_format_status = "confirmed"
+    elif child.segment_format_coverage_ratio > 0:
+        child.segment_format_status = "review"
+        format_warnings.append("PARTIAL_RUN_FORMAT_COVERAGE")
+    else:
+        child.segment_format_status = "unknown"
+        format_warnings.append("NO_RUN_FORMAT_COVERAGE")
+    child.segment_format_warnings = tuple(dict.fromkeys(format_warnings))
 
     # Recognition providers consume these existing generic fields.  Replacing
     # them with the segment facts makes mixed title/body paragraphs classify
@@ -445,20 +649,12 @@ def extract_features(paragraph, index: int) -> ParagraphFeatures:
     if paragraph.style:
         pf.style_name = paragraph.style.name or ""
 
-    # 保留首个有效 run 供兼容诊断，同时用全部 run 的非空白字符数汇总特征。
-    font_weights: Counter[str] = Counter()
-    size_weights: Counter[float] = Counter()
-    total_chars = 0
-    bold_chars = 0
-    italic_chars = 0
-    explicit_chars = 0
-    explicit_sizes: list[float] = []
+    # Keep first-run fields only as compatibility diagnostics.  Effective
+    # properties come from the OOXML style cascade, not from ``bool(None)``.
+    # The full logical-segment statistics are populated below from exact run
+    # intersections with the original physical paragraph.
     source_runs: list[SourceRun] = []
     source_cursor = 0
-    style_font = getattr(getattr(paragraph, "style", None), "font", None)
-    style_font_name = getattr(style_font, "name", None) or ""
-    style_font_size = getattr(style_font, "size", None)
-    style_font_size_pt = style_font_size.pt if style_font_size is not None else None
     first_run_seen = False
     if paragraph.runs:
         for run in paragraph.runs:
@@ -470,8 +666,9 @@ def extract_features(paragraph, index: int) -> ParagraphFeatures:
             if not char_count:
                 continue
             try:
-                run_font = run.font.name or style_font_name
-                run_size = run.font.size.pt if run.font.size is not None else style_font_size_pt
+                effective = resolve_effective_run_format(run, paragraph)
+                run_font = effective.east_asia_font_name or effective.ascii_font_name or ""
+                run_size = effective.font_size_pt
                 source_matches_run = (
                     run_end <= len(paragraph.text)
                     and paragraph.text[run_start:run_end] == run_text
@@ -481,57 +678,25 @@ def extract_features(paragraph, index: int) -> ParagraphFeatures:
                         start=run_start,
                         end=run_end,
                         font_name=run_font,
+                        east_asia_font_name=effective.east_asia_font_name,
+                        ascii_font_name=effective.ascii_font_name,
                         font_size_pt=float(run_size) if run_size is not None else None,
-                        bold=bool(run.font.bold),
-                        italic=bool(run.font.italic),
-                        underline=bool(run.font.underline),
-                        explicit=any(value is not None for value in (
-                            run.font.name, run.font.size, run.font.bold,
-                            run.font.italic, run.font.underline,
-                        )),
+                        bold=effective.bold,
+                        italic=effective.italic,
+                        underline=effective.underline,
+                        explicit=effective.explicit,
+                        inherited=effective.inherited,
+                        known=effective.known,
+                        format_sources=effective.sources,
+                        format_warnings=effective.warnings,
                     ))
                 if not first_run_seen:
-                    pf.first_run_font_name = run.font.name or ""
-                    pf.first_run_font_size_pt = run.font.size.pt if run.font.size is not None else None
-                    pf.first_run_bold = bool(run.font.bold)
+                    pf.first_run_font_name = run_font
+                    pf.first_run_font_size_pt = run_size
+                    pf.first_run_bold = effective.bold is True
                     first_run_seen = True
-                total_chars += char_count
-                if run_font:
-                    font_weights[run_font] += char_count
-                if run_size is not None:
-                    size_weights[float(run_size)] += char_count
-                if run.font.size is not None:
-                    explicit_sizes.append(float(run.font.size.pt))
-                if bool(run.font.bold):
-                    bold_chars += char_count
-                if bool(run.font.italic):
-                    italic_chars += char_count
-                if any(value is not None for value in (run.font.name, run.font.size, run.font.bold, run.font.italic)):
-                    explicit_chars += char_count
             except (AttributeError, TypeError, ValueError):
                 continue
-
-    pf.dominant_font_name = font_weights.most_common(1)[0][0] if font_weights else style_font_name
-    if size_weights:
-        weighted_total = sum(size * weight for size, weight in size_weights.items())
-        weight_total = sum(size_weights.values())
-        pf.weighted_font_size = weighted_total / weight_total
-        pf.max_font_size = max(size_weights)
-        pf.min_font_size = min(size_weights)
-    elif style_font_size_pt is not None:
-        pf.weighted_font_size = float(style_font_size_pt)
-        pf.max_font_size = float(style_font_size_pt)
-        pf.min_font_size = float(style_font_size_pt)
-    if explicit_sizes:
-        pf.max_font_size = max(explicit_sizes)
-        pf.min_font_size = min(explicit_sizes)
-    if total_chars:
-        pf.bold_char_ratio = bold_chars / total_chars
-        pf.italic_char_ratio = italic_chars / total_chars
-        pf.explicitly_formatted_char_ratio = explicit_chars / total_chars
-    pf.font_name = pf.dominant_font_name or pf.first_run_font_name
-    pf.font_size_pt = pf.weighted_font_size or pf.first_run_font_size_pt
-    pf.bold = pf.bold_char_ratio >= 0.5
     pf.source_run_spans = tuple(source_runs)
     _apply_segment_format_features(pf, pf, 0, len(pf.source_physical_text))
 
@@ -2524,7 +2689,7 @@ class DocxImporter:
             source_lines = [source[start:end] for start, end in source_spans]
             whole_start, whole_end = _trim_source_span(source, 0, len(source))
             whole_heading_spans = (
-                _split_inline_heading_body_spans(source, whole_start, whole_end)
+                _split_inline_heading_body_spans(source, whole_start, whole_end, pf)
                 if structural_preservation else [(whole_start, whole_end)]
             )
             split_soft_lines = (
@@ -2540,7 +2705,7 @@ class DocxImporter:
                 spans = []
                 for start, end in source_spans:
                     if structural_preservation:
-                        spans.extend(_split_inline_heading_body_spans(source, start, end))
+                        spans.extend(_split_inline_heading_body_spans(source, start, end, pf))
                     else:
                         spans.append((start, end))
                 preserve_tokens = []

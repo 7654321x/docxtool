@@ -58,6 +58,11 @@ print(plan.to_dict())
 - `segment_count_total` / `segment_count_located` / `segment_count_confirmed`；
 - `source_locator_status`、证据和警告；
 - `segment_format`，包含以 run 交集统计的字体、字号、粗体比例和混排标记；
+- `segment_format.font_name_east_asia`、`font_name_ascii`、`font_size_pt`、
+  粗体/斜体/下划线字符比例、直接格式/继承格式比例、可见字符数、格式覆盖率、
+  来源层级及警告。有效格式依次解析 run 直接 `rPr`、字符样式、段落样式、
+  `basedOn`、`docDefaults` 和主题字体；未知格式不会被当作 `false`；
+- `text_length_utf16`，即识别文字片段的 UTF-16 code unit 长度；
 - raw/canonical 片段及前后上下文的哈希。
 
 `source_locator_status` 为 `confirmed` 时，raw 片段能够从原始物理段落
@@ -98,7 +103,9 @@ occurrence 及同段逻辑片段顺序交叉验证。结果为：
 
 `host_raw_start_utf16` / `host_raw_end_utf16` 只描述传入快照的 `raw_text`，
 同样不是 WPS Range 坐标。WPS 端必须再次验证当前段落文本后才能换算和
-应用格式。混合物理段落必须按所有 `segment_index` 联合验证；正式排版前如
+应用格式。绑定结果还提供 `host_canonical_start_utf16` /
+`host_canonical_end_utf16`，它们只属于 host canonical text，不能与 raw
+offset 互换。混合物理段落必须按所有 `segment_index` 联合验证；正式排版前如
 仍无法拆分，应返回 `MIXED_PARAGRAPH_REQUIRES_SPLIT`。
 
 ### HostParagraphTextContract V1
@@ -119,6 +126,11 @@ SDK 提供 `canonicalize_host_paragraph_text(raw_text)`。未知版本返回
 - `confirmed`：raw 文本、片段读回、哈希与顺序都精确匹配；
 - `review`：canonical 精确但 raw 表达不同，只能预览；
 - `unresolved`：歧义、缺失、越界或哈希不一致，必须跳过。
+
+Python 与 WPS TypeScript 端共用的脱敏金标为
+[`HOST_TEXT_V1_GOLDEN.json`](HOST_TEXT_V1_GOLDEN.json)。它覆盖 CRLF、手动
+换行、分页符、Tab、NBSP、全角空格、表格末尾标记、Emoji、已确认/复核/未定位
+绑定以及不完整片段组；集成方应使用同一文件验证 canonical 文本和边界映射。
 
 重复文本歧义按物理段落组局部处理。`binding.physical_paragraphs` 会列出
 每组候选宿主段落、最终状态与证据，不会让一个歧义组污染其他唯一段落。

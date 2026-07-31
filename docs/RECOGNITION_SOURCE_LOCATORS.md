@@ -38,7 +38,11 @@ DOCX 的段落号推断。`raw_*_utf16` 和 `canonical_*_utf16` 仅属于各自�
 `RecognitionPlan` 还包含 `package_version` 和
 `host_text_contract_version=host-text-v1`。`segment_format` 从与 raw span
 相交的 DOCX run 按可见字符权重统计；一个 run 跨越标题和正文时，其格式
-权重分别归入两个逻辑片段。
+权重分别归入两个逻辑片段。有效格式按 run `rPr`、字符样式、段落样式、
+`basedOn`、`docDefaults` 与主题字体解析；东亚和 ASCII/HAnsi 字体独立输出，
+布尔格式保持 true/false/unknown 三态。`visible_char_count`、
+`mapped_format_char_count`、`format_coverage_ratio`、`format_status` 和
+`format_warnings` 说明格式证据是否完整。
 
 旧 `range_start_utf16` / `range_end_utf16` 保持存在，固定为 raw source
 offset 的兼容别名。分类证据使用 `classification_confidence`、
@@ -64,6 +68,10 @@ offset 的兼容别名。分类证据使用 `classification_confidence`、
 再按自身 API 生成 Range。同一物理段落有多个片段时，必须联合、保序验证；
 混合段无法安全拆分时，WPS 命令层应拒绝应用并返回
 `MIXED_PARAGRAPH_REQUIRES_SPLIT`。
+
+绑定还输出 `host_canonical_start_utf16` / `host_canonical_end_utf16`。source raw、
+source canonical、host raw、host canonical 与 WPS Range 是不同坐标系；任何一项
+读回或哈希不一致时，宿主不得回退到裸段落序号、Selection 或全文首次匹配。
 
 ## HostParagraphTextContract V1
 

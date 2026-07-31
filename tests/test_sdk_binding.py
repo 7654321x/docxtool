@@ -154,6 +154,7 @@ def test_host_binding_uses_monotonic_order_and_handles_shifted_paragraphs(tmp_pa
     assert all(item.binding_status == "confirmed" for item in binding.blocks)
     assert [item.host_paragraph_index for item in binding.blocks] == [10, 11, 11, 12]
     assert all(item.host_raw_end_utf16 is not None for item in binding.blocks)
+    assert all(item.host_canonical_end_utf16 is not None for item in binding.blocks)
     assert any("DUPLICATE_TEXT_DISAMBIGUATED" in item.binding_evidence for item in binding.blocks)
 
 
@@ -169,6 +170,8 @@ def test_host_binding_maps_canonical_text_to_host_raw_text_without_reusing_offse
 
     assert binding.blocks[0].binding_status == "review"
     assert binding.host_text_contract_version == HOST_TEXT_CONTRACT_VERSION
+    assert binding.blocks[0].host_canonical_start_utf16 == 0
+    assert binding.blocks[0].host_canonical_end_utf16 == len("正文 内容😀".encode("utf-16-le")) // 2
     assert "PHYSICAL_CANONICAL_TEXT_MATCH" in binding.blocks[0].binding_evidence
     assert "RAW_TEXT_NORMALIZED" in binding.blocks[0].binding_warnings
 

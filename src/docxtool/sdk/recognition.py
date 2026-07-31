@@ -148,13 +148,26 @@ def _segment_format_features(paragraph: ParagraphData) -> dict:
     return {
         "font_name": str(getattr(features, "segment_font_name", "") or ""),
         "dominant_font_name": str(getattr(features, "segment_dominant_font_name", "") or ""),
+        "font_name_east_asia": str(getattr(features, "segment_font_name_east_asia", "") or ""),
+        "font_name_ascii": str(getattr(features, "segment_font_name_ascii", "") or ""),
         "font_size_pt": getattr(features, "segment_font_size_pt", None),
         "weighted_font_size_pt": getattr(features, "segment_weighted_font_size_pt", None),
         "bold_char_ratio": float(getattr(features, "segment_bold_char_ratio", 0.0) or 0.0),
         "italic_char_ratio": float(getattr(features, "segment_italic_char_ratio", 0.0) or 0.0),
         "underline_char_ratio": float(getattr(features, "segment_underline_char_ratio", 0.0) or 0.0),
         "explicit_format_ratio": float(getattr(features, "segment_explicit_format_ratio", 0.0) or 0.0),
+        "inherited_format_ratio": float(getattr(features, "segment_inherited_format_ratio", 0.0) or 0.0),
         "run_count": int(getattr(features, "segment_run_count", 0) or 0),
+        "visible_char_count": int(getattr(features, "segment_visible_char_count", 0) or 0),
+        "mapped_format_char_count": int(
+            getattr(features, "segment_mapped_format_char_count", 0) or 0
+        ),
+        "format_coverage_ratio": float(
+            getattr(features, "segment_format_coverage_ratio", 0.0) or 0.0
+        ),
+        "format_status": str(getattr(features, "segment_format_status", "unknown") or "unknown"),
+        "format_warnings": list(getattr(features, "segment_format_warnings", ()) or ()),
+        "format_sources": list(getattr(features, "segment_format_sources", ()) or ()),
         "style_name": str(getattr(features, "segment_style_name", "") or ""),
         "has_mixed_fonts": bool(getattr(features, "segment_has_mixed_fonts", False)),
         "has_mixed_sizes": bool(getattr(features, "segment_has_mixed_sizes", False)),
@@ -291,6 +304,7 @@ def _build_plan(
             type_id=type_id,
             section=str(meta.get("recognition_section", "body") or "body"),
             text_sha256=visible_hashes[index],
+            text_length_utf16=utf16_length(_visible_text(paragraph)),
             previous_text_sha256=next((value for value in reversed(visible_hashes[:index]) if value), ""),
             next_text_sha256=next((value for value in visible_hashes[index + 1:] if value), ""),
             format_role=type_id,

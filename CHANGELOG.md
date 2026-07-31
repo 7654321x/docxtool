@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.7 - 2026-07-31
+
+- Added conservative multi-boundary logical segment candidates and complete segment-group source locators.
+- Added effective run formatting resolution across direct properties, styles, inheritance, document defaults and theme fonts, including East Asian font and coverage diagnostics.
+- Extended host binding with canonical host offsets and fragment UTF-16 length, plus a shared host-text-v1 gold contract for WPS integrations.
+
 ## 1.6 - 2026-07-31
 
 - Made recognition-plan host binding locally ambiguity-aware so unresolved repeated text does not invalidate unrelated physical paragraphs.

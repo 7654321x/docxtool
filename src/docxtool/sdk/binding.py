@@ -28,6 +28,22 @@ def _sha256(value: str) -> str:
     return hashlib.sha256((value or "").encode("utf-8")).hexdigest()
 
 
+def _raw_index_for_utf16_offset(value: str, offset: Optional[int]) -> Optional[int]:
+    """Return a code-point boundary for an exact UTF-16 offset."""
+    if offset is None or offset < 0:
+        return None
+    current = 0
+    if offset == 0:
+        return 0
+    for index, character in enumerate(value or "", start=1):
+        current += 2 if ord(character) > 0xFFFF else 1
+        if current == offset:
+            return index
+        if current > offset:
+            return None
+    return len(value or "") if current == offset else None
+
+
 @dataclass(frozen=True)
 class _HostText:
     paragraph: HostParagraph
@@ -183,6 +199,8 @@ def _bound(
     warnings: Sequence[str],
     start: Optional[int] = None,
     end: Optional[int] = None,
+    canonical_start: Optional[int] = None,
+    canonical_end: Optional[int] = None,
 ) -> BoundRecognitionBlock:
     return BoundRecognitionBlock(
         block_index=block.block_index,
@@ -194,6 +212,8 @@ def _bound(
         binding_warnings=tuple(dict.fromkeys(warnings)),
         host_raw_start_utf16=start,
         host_raw_end_utf16=end,
+        host_canonical_start_utf16=canonical_start,
+        host_canonical_end_utf16=canonical_end,
     )
 
 
@@ -280,9 +300,26 @@ def bind_recognition_plan(
                 ))
                 continue
             evidence.append("SEGMENT_TEXT_MATCH")
+            # Convert exact raw UTF-16 offsets through the verified host tape.
+            # A raw span may not begin inside a surrogate pair; that condition
+            # has already been rejected by ``raw_slice_utf16`` above.
+            raw_start_index = _raw_index_for_utf16_offset(host.tape.raw_text, start)
+            raw_end_index = _raw_index_for_utf16_offset(host.tape.raw_text, end)
+            host_canonical_range = (
+                host.tape.canonical_range_for_raw_span(raw_start_index, raw_end_index)
+                if raw_start_index is not None and raw_end_index is not None
+                else None
+            )
+            if host_canonical_range is None:
+                result.append(_bound(
+                    block, host.paragraph.host_paragraph_index, "unresolved", 0.0,
+                    evidence, ("HOST_CANONICAL_RANGE_UNRESOLVED",),
+                ))
+                continue
             result.append(_bound(
                 block, host.paragraph.host_paragraph_index, "confirmed", 1.0,
                 evidence + ["SEGMENT_ORDER_MATCH"], warnings, start, end,
+                host_canonical_range[0], host_canonical_range[1],
             ))
             continue
 
@@ -311,7 +348,7 @@ def bind_recognition_plan(
         result.append(_bound(
             block, host.paragraph.host_paragraph_index, "review", 0.93,
             evidence + ["SEGMENT_TEXT_MATCH", "SEGMENT_ORDER_MATCH"],
-            ("RAW_TEXT_NORMALIZED",), start, end,
+            ("RAW_TEXT_NORMALIZED",), start, end, canonical_start, canonical_end,
         ))
 
     return RecognitionBinding(

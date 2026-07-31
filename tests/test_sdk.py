@@ -39,7 +39,7 @@ def test_sdk_matches_existing_authoritative_recognition_and_redacts_text(tmp_pat
 
     assert plan.processing_mode == "structural"
     assert plan.recognition_mode == "authoritative"
-    assert plan.package_version == package_version == "1.6"
+    assert plan.package_version == package_version == "1.7"
     assert plan.locator_version == "source-locator-v2"
     assert plan.host_text_contract_version == "host-text-v1"
     assert [block.type_id for block in plan.blocks] == [item.type_id for item in imported.paragraphs]
@@ -68,6 +68,7 @@ def test_sdk_emits_verified_physical_utf16_ranges_and_local_text_is_opt_in(tmp_p
         assert len(block.physical_text_sha256) == 64
         assert block.range_start_utf16 is not None
         assert block.range_end_utf16 is not None
+        assert block.text_length_utf16 == len(block.recognized_text.encode("utf-16-le")) // 2
         physical = "一、测试标题。这是同一物理段落中的测试正文内容。".encode("utf-16-le")
         selected = physical[block.range_start_utf16 * 2:block.range_end_utf16 * 2].decode("utf-16-le")
         assert selected == block.recognized_text
