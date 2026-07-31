@@ -32,6 +32,7 @@ class NumberedBoldDetectionTest(unittest.TestCase):
             body = next(p for p in data.paragraphs if p.text.startswith("一是加强理论武装"))
 
             self.assertTrue(body.meta.get("numbered_bold"))
+            self.assertNotIn("inline_lead_bold", body.meta)
             self.assertNotIn("report_first_sentence_bold", body.meta)
 
     def test_date_after_role_name_is_detected_as_date_line(self):

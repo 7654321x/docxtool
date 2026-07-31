@@ -1,7 +1,9 @@
 import base64
 import logging
+import re
 import tempfile
 import unittest
+from collections import Counter
 from pathlib import Path
 
 from docx import Document
@@ -252,6 +254,49 @@ class SignatureDetectionTest(unittest.TestCase):
         self.assertEqual(data.paragraphs[-11].text, "附件：1. 基本情况")
         self.assertEqual(data.paragraphs[-10].text, "2. 具体情况")
         self.assertEqual(data.paragraphs[-8].text, "区政协办")
+
+    def test_signature_org_is_split_after_inline_heading_body_before_tail_date(self):
+        doc = Document()
+        doc.add_paragraph("总题目")
+        paragraph = doc.add_paragraph(
+            "（五）压实工作责任。这里是正文内容这里是正文内容这里是正文内容。"
+        )
+        for _ in range(4):
+            paragraph.add_run().add_break()
+        paragraph.add_run("某区工作办公室")
+        tail = doc.add_paragraph("2025年十月15日")
+        tail.add_run().add_break()
+        tail.add_run("附件：1.基本情况")
+        tail.add_run().add_break()
+        tail.add_run("2.具体情况")
+        path = self.root / "inline-heading-body-soft-broken-signature.docx"
+        doc.save(path)
+
+        data = DocxImporter().load(
+            str(path),
+            _rules(),
+            strict_preservation=False,
+            features={"processing": {"strategy": "structural"}},
+        )
+
+        self.assertEqual(
+            [(item.type_id, item.text) for item in data.paragraphs[-6:]],
+            [
+                ("heading2", "（五）压实工作责任。"),
+                ("body", "这里是正文内容这里是正文内容这里是正文内容。"),
+                ("attachment_note", "附件：1.基本情况"),
+                ("attachment_note_item", "2.具体情况"),
+                ("sign_org", "某区工作办公室"),
+                ("sign_date", "2025年10月15日"),
+            ],
+        )
+        source_visible = re.sub(r"\s+", "", paragraph.text + tail.text)
+        output_visible = re.sub(
+            r"\s+",
+            "",
+            "".join(item.original_text or item.text for item in data.paragraphs[-6:]),
+        )
+        self.assertEqual(Counter(output_visible), Counter(source_visible))
 
     def test_body_styled_numbered_paragraph_still_detects_inline_heading2(self):
         doc = Document()

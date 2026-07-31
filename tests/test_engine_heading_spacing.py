@@ -2,13 +2,15 @@ import logging
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from docx import Document
 from docx.oxml.ns import qn
 
 from docxtool.document.engine import export_doc
+from docxtool.document.engine import core as engine_core
 from docxtool.document.importer import DocumentData, ParagraphData, ParagraphFeatures
-from docxtool.document.style_config import PageSettings, StyleRule, logger
+from docxtool.document.style_config import ExportError, PageSettings, StyleRule, logger
 
 
 def _rules():
@@ -60,7 +62,7 @@ class EngineHeadingSpacingTest(unittest.TestCase):
         export_doc(doc_data, _rules(), PageSettings(), self.out)
         return Document(self.out)
 
-    def test_heading1_period_splits_body_to_next_paragraph(self):
+    def test_heading1_period_splits_one_complete_body_paragraph(self):
         doc = self._export([
             ParagraphData(
                 text="一级标题。这里是正文内容这里是正文内容",
@@ -74,13 +76,14 @@ class EngineHeadingSpacingTest(unittest.TestCase):
         heading = doc.paragraphs[0]
         body = doc.paragraphs[1]
 
+        self.assertEqual(len(doc.paragraphs), 2)
         self.assertEqual(heading.text, "一、一级标题")
         self.assertNotIn("。", heading.text)
         self.assertEqual(body.text, "这里是正文内容这里是正文内容")
         self.assertFalse(body.runs[-1].bold)
         self.assertEqual(_body_font(body.runs[-1]), "仿宋_GB2312")
 
-    def test_structural_heading1_period_splits_body_to_next_paragraph(self):
+    def test_structural_heading1_period_splits_one_complete_body_paragraph(self):
         doc = self._export([
             ParagraphData(
                 text="一级标题。这里是正文内容这里是正文内容",
@@ -91,10 +94,33 @@ class EngineHeadingSpacingTest(unittest.TestCase):
             )
         ], processing_strategy="structural")
 
+        self.assertEqual(len(doc.paragraphs), 2)
         self.assertEqual(doc.paragraphs[0].text, "一、一级标题")
         self.assertEqual(doc.paragraphs[1].text, "这里是正文内容这里是正文内容")
         self.assertEqual(doc.paragraphs[1].style.style_id, "DCT-Body")
         self.assertFalse(doc.paragraphs[1].runs[-1].bold)
+
+    def test_inline_heading_body_verification_blocks_truncated_output(self):
+        original = engine_core._apply_heading1_report_split
+
+        def corrupt_body(*args, **kwargs):
+            body = original(*args, **kwargs)
+            if body is not None:
+                body.add_run("错误附加内容")
+            return body
+
+        paragraphs = [
+            ParagraphData(
+                text="一级标题。这里是完整正文内容这里是完整正文内容",
+                type_id="heading1",
+                original_text="一、一级标题。这里是完整正文内容这里是完整正文内容",
+                features=ParagraphFeatures(),
+                meta={"numbering": "一、"},
+            )
+        ]
+        with patch.object(engine_core, "_apply_heading1_report_split", corrupt_body):
+            with self.assertRaisesRegex(ExportError, "正文未完整保留"):
+                self._export(paragraphs)
 
     def test_terminal_body_uses_widow_control_without_changing_earlier_body(self):
         doc = self._export([
@@ -173,6 +199,33 @@ class EngineHeadingSpacingTest(unittest.TestCase):
 
         self.assertEqual([p.text for p in doc.paragraphs[:2]], ["（2026年7月  日）", "正文内容正文内容。"])
         self.assertEqual(_spacing_after_lines(doc.paragraphs[0]), "100")
+
+    def test_opening_addressing_keeps_configured_one_line_before_spacing(self):
+        doc = self._export([
+            ParagraphData("讲话标题", "title", "讲话标题", ParagraphFeatures(), meta={"is_title": True}),
+            ParagraphData("（2026年8月27日）", "date_line", "（2026年8月27日）", ParagraphFeatures()),
+            ParagraphData("各位委员、同志们：", "addressing", "各位委员、同志们：", ParagraphFeatures()),
+            ParagraphData("正文内容完整保留。", "body", "正文内容完整保留。", ParagraphFeatures()),
+        ], processing_strategy="structural")
+
+        addressing = next(p for p in doc.paragraphs if p.text == "各位委员、同志们：")
+        self.assertEqual(_spacing_before_lines(addressing), "100")
+        self.assertIn(_spacing_after_lines(addressing), (None, "0"))
+
+    def test_addressing_after_body_has_no_before_spacing(self):
+        doc = self._export([
+            ParagraphData("讲话标题", "title", "讲话标题", ParagraphFeatures(), meta={"is_title": True}),
+            ParagraphData("各位委员、同志们：", "addressing", "各位委员、同志们：", ParagraphFeatures()),
+            ParagraphData("正文内容完整保留。", "body", "正文内容完整保留。", ParagraphFeatures()),
+            ParagraphData("各位委员、同志们！", "addressing", "各位委员、同志们！", ParagraphFeatures()),
+            ParagraphData("结尾正文内容完整保留。", "body", "结尾正文内容完整保留。", ParagraphFeatures()),
+        ], processing_strategy="structural")
+
+        opening = next(p for p in doc.paragraphs if p.text == "各位委员、同志们：")
+        closing = next(p for p in doc.paragraphs if p.text == "各位委员、同志们！")
+        self.assertEqual(_spacing_before_lines(opening), "100")
+        self.assertEqual(_spacing_before_lines(closing), "0")
+        self.assertEqual(_spacing_after_lines(closing), "0")
 
     def test_role_name_and_date_line_are_adjacent(self):
         doc = self._export([
@@ -335,6 +388,45 @@ class EngineHeadingSpacingTest(unittest.TestCase):
 
         self.assertEqual(doc.paragraphs[0].text, text)
         self.assertEqual(doc.paragraphs[0].text.count("一是加强理论武装"), 1)
+
+    def test_inline_lead_bold_stays_in_one_body_paragraph(self):
+        text = "推动重点工作走深走实。各单位结合实际持续抓好任务落实。"
+        doc = self._export([
+            ParagraphData(
+                text=text,
+                type_id="body",
+                original_text=text,
+                features=ParagraphFeatures(),
+                meta={"inline_lead_bold": True},
+            )
+        ], processing_strategy="structural")
+
+        self.assertEqual(len(doc.paragraphs), 1)
+        self.assertEqual(doc.paragraphs[0].text, text)
+        self.assertTrue(_has_bold(doc.paragraphs[0].runs[0]))
+        self.assertFalse(doc.paragraphs[0].runs[-1].bold)
+
+    def test_repeated_numbered_leads_only_bold_each_lead_sentence(self):
+        text = (
+            "一要坚持统筹推进。第一部分正文保持普通格式。"
+            "二要强化协同配合。第二部分正文保持普通格式。"
+            "三要完善长效机制。第三部分正文保持普通格式。"
+        )
+        doc = self._export([
+            ParagraphData(
+                text=text,
+                type_id="body",
+                original_text=text,
+                features=ParagraphFeatures(),
+                meta={"numbered_bold": True},
+            )
+        ], processing_strategy="structural")
+
+        paragraph = doc.paragraphs[0]
+        assert paragraph.text == text
+        assert len(paragraph.runs) >= 6
+        for index, run in enumerate(paragraph.runs[:6]):
+            assert bool(run.bold) is (index % 2 == 0)
 
 
 if __name__ == "__main__":

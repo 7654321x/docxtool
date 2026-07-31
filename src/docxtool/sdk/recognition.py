@@ -187,6 +187,9 @@ def _request_features(
     resolved = copy.deepcopy(dict(features or {}))
     processing = dict(resolved.get("processing") or {})
     processing["strategy"] = processing_mode
+    # The SDK contract describes the same reliable heading/body boundary as
+    # the renderer so a host can bind each logical range independently.
+    processing["split_inline_heading_body"] = True
     resolved["processing"] = processing
     recognition = dict(resolved.get("recognition") or {})
     recognition["mode"] = recognition_mode

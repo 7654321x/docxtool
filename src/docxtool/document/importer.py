@@ -24,6 +24,10 @@ from typing import Dict, List, Optional, Tuple
 
 from docxtool.document.classifier import ClassificationOptions, classify_paragraphs
 from docxtool.document.recognition import apply_recognition
+from docxtool.document.recognition.features import (
+    is_organization_label,
+    is_standalone_addressing_text,
+)
 from docxtool.document.recognition.version import RECOGNITION_VERSION_TAG
 from docxtool.document.source_tape import SourceTape, canonicalize_text, utf16_length
 from docxtool.document.effective_format import (
@@ -147,6 +151,7 @@ class ParagraphFeatures:
     bold_char_ratio: float = 0.0
     italic_char_ratio: float = 0.0
     explicitly_formatted_char_ratio: float = 0.0
+    inline_lead_bold: bool = False
 
 
 @dataclass
@@ -237,10 +242,6 @@ def _has_format_transition(
     return bool(left_fonts and right_fonts and left_fonts != right_fonts)
 
 
-_SHORT_LABEL_RE = re.compile(r"^[^。；;！？!?\r\n]{1,24}[：:]$")
-_LABEL_SUFFIX_RE = re.compile(r"(?:单位|人员|联系人|电话|地址|事项|时间|地点|主题|内容|要求|附件)$")
-
-
 def _segment_boundary_candidates(
     source: str,
     start: int,
@@ -279,30 +280,6 @@ def _segment_boundary_candidates(
                 ),
             ))
 
-    colon_match = re.match(r"^([^：:]{1,24}[：:])", text)
-    # Attachment notes have their own tail-structure state machine.  Splitting
-    # ``附件：1.材料`` into a label and a numbered item loses that structural
-    # fact before the tail recognizer can bind the complete attachment block.
-    if colon_match and not _ATT_NOTE_RE.match(text):
-        boundary = start + colon_match.end()
-        body_start, body_end = _trim_source_span(source, boundary, end)
-        label = colon_match.group(1)[:-1].strip()
-        has_label_shape = bool(_LABEL_SUFFIX_RE.search(label))
-        visual_transition = _has_format_transition(features, start, boundary, end)
-        if _SHORT_LABEL_RE.fullmatch(colon_match.group(1)) and body_start < body_end and (
-            has_label_shape or visual_transition
-        ):
-            candidates.append(SegmentBoundaryCandidate(
-                raw_start=start,
-                raw_end=boundary,
-                left_type_hint="label",
-                right_type_hint="content",
-                confidence=0.88 if has_label_shape and visual_transition else 0.80,
-                evidence=(
-                    "SHORT_LABEL_COLON",
-                    "LABEL_SHAPE" if has_label_shape else "VISUAL_LABEL_TRANSITION",
-                ),
-            ))
     return tuple(sorted(candidates, key=lambda item: (-item.confidence, item.raw_end)))
 
 
@@ -311,11 +288,25 @@ def _split_inline_heading_body_spans(
     start: int,
     end: int,
     features: Optional[ParagraphFeatures] = None,
+    *,
+    allow_visual_boundary: bool = True,
 ) -> List[Tuple[int, int]]:
     """Split selected logical segments using the shared boundary providers."""
     start, end = _trim_source_span(source, start, end)
     if start >= end:
         return []
+    # A numbered heading has exactly one safe inline boundary: the sentence
+    # terminator after the heading.  Do not recurse into its body text merely
+    # because a later run changes formatting; body emphasis is not another
+    # paragraph boundary.
+    root_candidates = _segment_boundary_candidates(source, start, end, features)
+    numbered_heading = next(
+        (item for item in root_candidates if item.left_type_hint == "heading"), None
+    )
+    if numbered_heading is not None:
+        body_start, body_end = _trim_source_span(source, numbered_heading.raw_end, end)
+        if body_start < body_end:
+            return [(numbered_heading.raw_start, numbered_heading.raw_end), (body_start, body_end)]
     spans = [(start, end)]
     # Multiple segments are allowed, but a physical line should not be
     # repeatedly split without fresh strong evidence.  This supports a
@@ -326,6 +317,10 @@ def _split_inline_heading_body_spans(
         next_spans = []
         for current_start, current_end in spans:
             candidates = _segment_boundary_candidates(source, current_start, current_end, features)
+            if not allow_visual_boundary:
+                candidates = tuple(
+                    item for item in candidates if item.left_type_hint != "title_or_heading"
+                )
             if not candidates:
                 next_spans.append((current_start, current_end))
                 continue
@@ -340,6 +335,167 @@ def _split_inline_heading_body_spans(
         if not changed:
             break
     return spans
+
+
+def _is_standalone_addressing_text(text: str) -> bool:
+    return is_standalone_addressing_text(text)
+
+
+def _is_strong_soft_line_structure(text: str) -> bool:
+    value = (text or "").strip()
+    return bool(
+        value
+        and (
+            _detect_numbering_prefix(value)
+            or _is_standalone_addressing_text(value)
+            or _SIGN_DATE_RE2.match(value)
+            or _is_attachment_boundary(value)
+        )
+    )
+
+
+def _split_structural_tail_after_numbered_heading(
+    source: str,
+    heading_body_spans: List[Tuple[int, int]],
+    next_text: str = "",
+) -> List[Tuple[int, int]]:
+    """Keep one body span while releasing later explicit soft-line structures.
+
+    The next physical paragraph is part of the structural evidence.  A common
+    malformed tail stores ``numbered heading + body + organization`` in one
+    paragraph and starts the following paragraph with the signature date.
+    """
+    if len(heading_body_spans) != 2:
+        return heading_body_spans
+    heading_span, body_span = heading_body_spans
+    body_start, body_end = body_span
+    line_spans = _source_line_spans(source)
+    next_visible_line = next(
+        (part.strip() for part in (next_text or "").splitlines() if part.strip()),
+        "",
+    )
+    structural_indexes = []
+    for index, (start, end) in enumerate(line_spans):
+        if start <= body_start:
+            continue
+        value = source[start:end]
+        if _is_strong_soft_line_structure(value):
+            structural_indexes.append(index)
+            continue
+        if (
+            index + 1 < len(line_spans)
+            and _SIGN_DATE_RE2.match(source[line_spans[index + 1][0]:line_spans[index + 1][1]])
+            and _is_tail_signature_org_text(value)
+        ):
+            structural_indexes.append(index)
+            continue
+        if (
+            index == len(line_spans) - 1
+            and _SIGN_DATE_RE2.match(next_visible_line)
+            and _is_tail_signature_org_text(value)
+        ):
+            structural_indexes.append(index)
+    if not structural_indexes:
+        return heading_body_spans
+
+    result = [heading_span]
+    cursor = body_start
+    for index in structural_indexes:
+        start, end = line_spans[index]
+        preceding = _trim_source_span(source, cursor, start)
+        if preceding[0] < preceding[1]:
+            result.append(preceding)
+        result.append((start, end))
+        cursor = end
+    trailing = _trim_source_span(source, cursor, body_end)
+    if trailing[0] < trailing[1]:
+        result.append(trailing)
+    return result
+
+
+def _validate_source_span_partition(source: str, spans: List[Tuple[int, int]]) -> None:
+    """Require ordered ranges to cover every visible source character once."""
+    if not spans:
+        return
+    previous_end = 0
+    for start, end in spans:
+        if start < previous_end or start >= end or end > len(source):
+            raise ValueError("结构分段范围重叠或越界")
+        if re.sub(r"\s+", "", source[previous_end:start]):
+            raise ValueError("结构分段遗漏了原始可见文字")
+        previous_end = end
+    if re.sub(r"\s+", "", source[previous_end:]):
+        raise ValueError("结构分段遗漏了原始可见文字")
+
+
+def _source_starts_body_region(source: str) -> bool:
+    value = re.sub(r"\s+", "", source or "")
+    if not value:
+        return False
+    if _detect_numbering_prefix(value):
+        return True
+    return len(value) >= 34 and any(mark in value for mark in "。！？")
+
+
+def _has_inline_lead_bold_transition(
+    source: str,
+    start: int,
+    end: int,
+    features: ParagraphFeatures,
+) -> bool:
+    """Detect a bold lead sentence followed by ordinary text in one body span."""
+    text = source[start:end]
+    period = text.find("。")
+    if period <= 0 or _detect_numbering_prefix(text):
+        return False
+    boundary = start + period + 1
+    if _visible_character_count(source[boundary:end]) < 5:
+        return False
+
+    def bold_ratio(range_start: int, range_end: int) -> float:
+        visible_total = bold_total = 0
+        for run in features.source_run_spans:
+            overlap_start = max(range_start, run.start)
+            overlap_end = min(range_end, run.end)
+            if overlap_start >= overlap_end:
+                continue
+            count = _visible_character_count(source[overlap_start:overlap_end])
+            visible_total += count
+            if run.bold is True:
+                bold_total += count
+        return bold_total / visible_total if visible_total else 0.0
+
+    return bold_ratio(start, boundary) >= 0.7 and bold_ratio(boundary, end) <= 0.3
+
+
+def _validate_numbered_heading_body_split(
+    source: str,
+    spans: List[Tuple[int, int]],
+    features: Optional[ParagraphFeatures] = None,
+) -> None:
+    """Validate the non-negotiable two-segment contract for numbered headings.
+
+    A physical paragraph such as ``一、标题。完整正文`` may become exactly a
+    heading and one body segment.  The body may contain later sentence marks,
+    tabs, page breaks, or mixed run formatting, but those must not create a
+    second body paragraph.  This check uses raw source coordinates so it does
+    not depend on normalized text or visual formatting.
+    """
+    start, end = _trim_source_span(source, 0, len(source))
+    if start >= end:
+        return
+    candidates = _segment_boundary_candidates(source, start, end, features)
+    heading = next((item for item in candidates if item.left_type_hint == "heading"), None)
+    if heading is None:
+        return
+    body_start, body_end = _trim_source_span(source, heading.raw_end, end)
+    if body_start >= body_end:
+        return
+    expected = [(heading.raw_start, heading.raw_end), (body_start, body_end)]
+    if spans != expected:
+        raise ValueError(
+            "编号标题与行内正文必须仅拆为标题和一个完整正文段"
+        )
 
 
 def _set_source_locator(
@@ -861,7 +1017,7 @@ def collect_section_header_footer_parts(doc, sectPr, data: DocumentData) -> None
 # ═══════════════════════════════════════════════════════════════
 
 _NUMBERING_PATTERNS = [
-    (re.compile(r'^[一二三四五六七八九十百]+、'), "chinese_dun"),
+    (re.compile(r'^[一二三四五六七八九十百]+[、.．]+'), "chinese_dun"),
     (re.compile(r'^[（\(][一二三四五六七八九十百]+[）\)]'), "chinese_paren"),
     (re.compile(r'^\d+[.．]'), "digit_dot"),
     (re.compile(r'^[（\(]\d+[）\)]'), "digit_paren"),
@@ -1657,7 +1813,7 @@ def _normalize_tail_structures(
 # ── 编号正则（仅匹配，不决策）──
 
 _HEADING_RE = [
-    (re.compile(r'^[一二三四五六七八九十百]+、'),           "heading1"),
+    (re.compile(r'^[一二三四五六七八九十百]+[、.．]+'),     "heading1"),
     (re.compile(r'^[（\(][一二三四五六七八九十百]+[）\)]'), "heading2"),
     (re.compile(r'^\d+[.．]'),                            "heading3"),
     (re.compile(r'^[（\(]\d+[）\)]'),                      "heading4"),
@@ -1684,7 +1840,16 @@ def _to_chinese_punctuation(text: str) -> str:
     text = re.sub(r'(?<=[\u4e00-\u9fff0-9]);\s*', '；', text)
     text = re.sub(r'(?<=[\u4e00-\u9fff])\?', '？', text)
     text = re.sub(r'(?<=[\u4e00-\u9fff])!', '！', text)
-    text = re.sub(r'(?<=[\u4e00-\u9fff])\.(?=$|[\s\u4e00-\u9fff])', '。', text)
+    def full_stop(match):
+        # A malformed first-level heading can use ``二.标题``.  Keep that
+        # structural dot until the heading family is classified and rebuilt;
+        # converting it to a sentence period here destroys the only level cue.
+        prefix = text[:match.start()]
+        if re.fullmatch(r'[一二三四五六七八九十百千零〇]{1,5}', prefix):
+            return '.'
+        return '。'
+
+    text = re.sub(r'(?<=[\u4e00-\u9fff])\.(?=$|[\s\u4e00-\u9fff])', full_stop, text)
     return text
 
 
@@ -1728,7 +1893,11 @@ def _colon_bold_match(text: str):
         return -1
     for colon in ('：', ':'):
         pos = text.find(colon)
-        if 0 < pos <= 10 and not re.search(r'[，。、；]', text[:pos]):
+        if (
+            0 < pos <= 10
+            and not is_organization_label(text[:pos])
+            and not re.search(r'[，。、；]', text[:pos])
+        ):
             return pos
     return -1
 
@@ -2064,6 +2233,8 @@ def _score_12_addressing_report(text: str, feats, ctx) -> Tuple[int, dict, str]:
 
 def _score_13_addressing_check(text: str, feats, ctx) -> Tuple[int, dict, str]:
     """⑬ addressing 对照检查主送（仿宋 左对齐 0缩进）：heading后第一段 + 冒号结尾。"""
+    if ctx.has_seen_real_body:
+        return 0, {}, ""
     if not ctx.prev_type_id.startswith("heading"):
         return 0, {}, ""
     if not text.rstrip().endswith(("：", ":")):
@@ -2297,8 +2468,13 @@ def detect_paragraph_type(text: str, feats: ParagraphFeatures,
             meta["heading_inline_body"] = True
 
     if type_id == "body":
-        if _find_numbered_bold_pos(text) >= 0:
+        numbered_bold = _find_numbered_bold_pos(text) >= 0
+        if numbered_bold:
             meta["numbered_bold"] = True
+        elif feats.inline_lead_bold:
+            # “一是/一要”正文由 numbered_bold 统一处理全部并列引导句；
+            # 不再叠加首句强调恢复，避免把句号后的普通正文重新加粗。
+            meta["inline_lead_bold"] = True
         cp = _colon_bold_match(text)
         if cp >= 0:
             meta["colon_bold"] = True
@@ -2497,6 +2673,12 @@ class DocxImporter:
             processing_strategy = "strict" if strict_preservation else "normalize"
         strict_preservation = processing_strategy == "strict"
         structural_preservation = processing_strategy == "structural"
+        # A numbered heading followed by prose is rendered as title/body
+        # paragraphs. The splitter only permits its first heading boundary;
+        # later font changes inside the body cannot create extra paragraphs.
+        split_inline_heading_body = structural_preservation and _feature_bool(
+            processing_options.get("split_inline_heading_body", True), True
+        )
         recognition_options = features.get("recognition", {}) if isinstance(features.get("recognition", {}), dict) else {}
         recognition_mode = str(recognition_options.get("mode", recognition_mode) or recognition_mode).lower()
         if recognition_mode not in {"legacy", "shadow", "authoritative"}:
@@ -2646,8 +2828,12 @@ class DocxImporter:
             )
             _set_source_locator(child, parent, start, end)
             _apply_segment_format_features(child, parent, start, end)
+            child.inline_lead_bold = _has_inline_lead_bold_transition(
+                parent.source_physical_text, start, end, parent
+            )
             return child
 
+        body_region_started = False
         for block_index, block in enumerate(raw_blocks):
             if block[0] != "paragraph":
                 flat_lines.append(block)
@@ -2688,27 +2874,56 @@ class DocxImporter:
 
             source_lines = [source[start:end] for start, end in source_spans]
             whole_start, whole_end = _trim_source_span(source, 0, len(source))
-            whole_heading_spans = (
-                _split_inline_heading_body_spans(source, whole_start, whole_end, pf)
-                if structural_preservation else [(whole_start, whole_end)]
+            current_body_region = body_region_started or _source_starts_body_region(source)
+            should_split_inline_heading_body = (
+                structural_preservation
+                and (split_inline_heading_body or has_page_break)
             )
+            whole_heading_spans = (
+                _split_inline_heading_body_spans(
+                    source,
+                    whole_start,
+                    whole_end,
+                    pf,
+                    allow_visual_boundary=not current_body_region,
+                )
+                if should_split_inline_heading_body else [(whole_start, whole_end)]
+            )
+            if should_split_inline_heading_body:
+                _validate_numbered_heading_body_split(source, whole_heading_spans, pf)
             split_soft_lines = (
                 len(source_spans) > 1
                 and _should_split_structural_line_breaks(source_lines, following_text)
             )
             split_inline_heading = len(whole_heading_spans) > 1
 
-            if has_structural_inline and not (split_soft_lines or split_inline_heading):
+            if split_inline_heading:
+                # Later run transitions stay inside the one body span.  Only
+                # explicit soft-line structures such as a standalone
+                # salutation may begin another logical block.
+                spans = _split_structural_tail_after_numbered_heading(
+                    source, whole_heading_spans, following_text
+                )
+                preserve_tokens = []
+            elif has_structural_inline and not split_soft_lines:
                 spans = [(whole_start, whole_end)]
                 preserve_tokens = list(inline_tokens) if source[whole_start:whole_end] == source else []
             else:
                 spans = []
                 for start, end in source_spans:
-                    if structural_preservation:
-                        spans.extend(_split_inline_heading_body_spans(source, start, end, pf))
+                    if should_split_inline_heading_body:
+                        spans.extend(_split_inline_heading_body_spans(
+                            source,
+                            start,
+                            end,
+                            pf,
+                            allow_visual_boundary=not current_body_region,
+                        ))
                     else:
                         spans.append((start, end))
                 preserve_tokens = []
+
+            _validate_source_span_partition(source, spans)
 
             for li, (start, end) in enumerate(spans):
                 raw_fragment = source[start:end]
@@ -2723,6 +2938,7 @@ class DocxImporter:
                     preserve_tokens if len(spans) == 1 else [],
                     sectPr if li == len(spans) - 1 else None,
                 ))
+            body_region_started = current_body_region
 
         # Segment numbering describes every logical block from the physical
         # paragraph, including blocks whose source range later proves invalid.

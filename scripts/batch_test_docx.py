@@ -19,6 +19,7 @@ from typing import Any, Iterable
 import zipfile
 
 from docx import Document
+from docx.oxml.ns import qn
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -33,13 +34,18 @@ TEMPLATE_DIR = ROOT / "test_docx" / "correct_docx"
 OUTPUT_DIR = ROOT / "test_docx" / "end_docx"
 SPECIAL_INPUT_DIR = ROOT / "test_docx" / "测试文稿"
 SPECIAL_OUTPUT_DIR = SPECIAL_INPUT_DIR / "测试目录"
-COMPARISON_VERSION = "structural-alignment-v2"
+COMPARISON_VERSION = "structural-alignment-v3"
 _DISPATCH_NUMBER_RE = re.compile(r"^(?P<agency_code>.+?)〔(?P<year>\d{4})〕(?P<sequence>\d+)号$")
 _PAGE_NUMBER_RE = re.compile(r"^[—–－\-\s]*\d{1,4}[—–－\-\s]*$")
 _DATE_RE = re.compile(
     r"^(?P<year>[0-9〇零一二三四五六七八九]{4})年"
     r"(?P<month>[0-9一二三四五六七八九十]{1,3})月"
     r"(?P<day>[0-9一二三四五六七八九十]{1,3})日$"
+)
+_SIGNATURE_ORG_SUFFIX_RE = re.compile(
+    r"(?:委员会|工作委员会|人民政府|人民法院|人民检察院|代表大会|"
+    r"办公室|街道办事处|领导小组|工作组|党组|党委|政府|政协|人大|"
+    r"总工会|局|厅|部|院|处|科|办|镇|乡)$"
 )
 _CJK_DIGITS = {"〇": 0, "零": 0, "一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
 _REGIONS = ("letterhead", "front", "body", "tail", "attachment")
@@ -49,6 +55,20 @@ _PHYSICAL_FIELDS = (
     "first_indent", "left_indent", "right_indent", "line_spacing", "space_before",
     "space_after", "page_break_before", "keep_with_next", "keep_together",
 )
+_HEADING_PREFIX_RE = re.compile(
+    r"^(?:"
+    r"[一二三四五六七八九十百千零〇]+[、.．。]+|"
+    r"[（(][一二三四五六七八九十百千零〇0-9]+[）)]|"
+    r"[0-9]+[.．、]+|"
+    r"[（(][0-9]+[）)]"
+    r")\s*"
+)
+_OBJECT_CAPTION_RE = re.compile(r"^[表图]\s*[一二三四五六七八九十百千零〇0-9]+(?:\s|[：:、.．]|$)")
+_INDENT_FIELDS = frozenset(("first_indent", "left_indent", "right_indent"))
+_PROTECTED_FORMAT_FIELDS = frozenset((
+    "style", "font", "size_pt", "bold", "italic", "underline", "alignment",
+))
+_INDENT_TOLERANCE_CHARS = 0.15
 
 
 class RenderUnavailable(RuntimeError):
@@ -102,6 +122,13 @@ def _is_heading(item: dict[str, Any]) -> bool:
     return bool(item.get("heading_level")) or str(item.get("type", "")).startswith("heading")
 
 
+def _heading_content(text: str) -> tuple[str, bool]:
+    match = _HEADING_PREFIX_RE.match(text)
+    if match is None:
+        return text, False
+    return text[match.end():].strip(), True
+
+
 def _identity_for(item: dict[str, Any]) -> tuple[str, str]:
     """Return a private in-memory alignment key and its explicit normalization reason."""
     text = _normalized_text(str(item.get("_text", "")))
@@ -110,9 +137,23 @@ def _identity_for(item: dict[str, Any]) -> tuple[str, str]:
     date_identity = _date_identity(text)
     if date_identity:
         return date_identity, "date_normalization"
-    if _is_heading(item) and text.endswith("。"):
-        return text[:-1], "heading_terminal_period"
+    heading_content, had_prefix = _heading_content(text)
+    if _is_heading(item) or had_prefix:
+        had_period = heading_content.endswith("。")
+        if had_period:
+            heading_content = heading_content[:-1].rstrip()
+        if heading_content:
+            if had_prefix:
+                return "heading:" + heading_content, "heading_number_normalization"
+            if had_period:
+                return "heading:" + heading_content, "heading_terminal_period"
+            return "heading:" + heading_content, "heading_content"
     return text, "exact_text"
+
+
+def _identity_hash(item: dict[str, Any]) -> str:
+    identity, _reason = _identity_for(item)
+    return text_hash(identity) if identity else ""
 
 
 def _recognition_region(item: dict[str, Any], index: int) -> str:
@@ -145,30 +186,108 @@ def _physical_region(item: dict[str, Any], index: int, total: int) -> str:
     return "body"
 
 
+def _paragraph_property_chain(paragraph) -> Iterable[Any]:
+    direct = getattr(getattr(paragraph, "_p", None), "pPr", None)
+    if direct is not None:
+        yield direct
+    seen: set[str] = set()
+    style = getattr(paragraph, "style", None)
+    while style is not None:
+        style_id = str(getattr(style, "style_id", "") or id(style))
+        if style_id in seen:
+            break
+        seen.add(style_id)
+        properties = getattr(getattr(style, "element", None), "pPr", None)
+        if properties is not None:
+            yield properties
+        style = getattr(style, "base_style", None)
+    styles_element = getattr(getattr(getattr(paragraph, "part", None), "styles", None), "element", None)
+    defaults = styles_element.find(qn("w:docDefaults")) if styles_element is not None else None
+    default = defaults.find(qn("w:pPrDefault")) if defaults is not None else None
+    properties = default.find(qn("w:pPr")) if default is not None else None
+    if properties is not None:
+        yield properties
+
+
+def _indent_chars(paragraph, name: str, fallback_size_pt: float = 16.0) -> float:
+    char_attribute = {
+        "first_indent": "w:firstLineChars",
+        "left_indent": "w:leftChars",
+        "right_indent": "w:rightChars",
+    }[name]
+    twip_attribute = {
+        "first_indent": "w:firstLine",
+        "left_indent": "w:left",
+        "right_indent": "w:right",
+    }[name]
+    for properties in _paragraph_property_chain(paragraph):
+        indent = properties.find(qn("w:ind"))
+        if indent is None:
+            continue
+        value = indent.get(qn(char_attribute))
+        if value is not None:
+            try:
+                return round(float(value) / 100.0, 3)
+            except ValueError:
+                pass
+        value = indent.get(qn(twip_attribute))
+        if value is not None:
+            try:
+                return round(float(value) / max(fallback_size_pt * 20.0, 1.0), 3)
+            except ValueError:
+                pass
+    return 0.0
+
+
+def _protected_object_kind(paragraph) -> str:
+    text = _normalized_text(paragraph.text)
+    if not _OBJECT_CAPTION_RE.match(text):
+        return ""
+    previous = paragraph._p.getprevious()
+    if previous is None:
+        return ""
+    if previous.tag == qn("w:tbl"):
+        return "table_caption"
+    if previous.tag == qn("w:p"):
+        has_drawing = any(previous.find(".//" + qn(tag)) is not None for tag in ("w:drawing", "w:pict", "w:object"))
+        visible_text = "".join(previous.itertext()).strip()
+        if has_drawing and not visible_text:
+            return "image_caption"
+    return ""
+
+
 def _physical_item(paragraph, index: int, total: int) -> dict[str, Any]:
     run = first_run(paragraph)
     fmt = paragraph.paragraph_format
+    size_pt = round(run.font.size.pt, 3) if run and run.font.size else 16.0
+    protected_kind = _protected_object_kind(paragraph)
     item = {
         "index": index,
         "_text": paragraph.text,
         "text_hash": text_hash(paragraph.text),
         "length": len(paragraph.text),
         "style": paragraph.style.name if paragraph.style else "",
+        "style_id": paragraph.style.style_id if paragraph.style else "",
         "font": run.font.name if run else "",
         "size_pt": round(run.font.size.pt, 3) if run and run.font.size else None,
         "bold": bool(run.bold) if run else False,
         "italic": bool(run.italic) if run else False,
         "underline": bool(run.underline) if run else False,
         "alignment": str(paragraph.alignment) if paragraph.alignment is not None else "",
-        "first_indent": int(fmt.first_line_indent) if fmt.first_line_indent else 0,
-        "left_indent": int(fmt.left_indent) if fmt.left_indent else 0,
-        "right_indent": int(fmt.right_indent) if fmt.right_indent else 0,
+        "first_indent": _indent_chars(paragraph, "first_indent", size_pt),
+        "left_indent": _indent_chars(paragraph, "left_indent", size_pt),
+        "right_indent": _indent_chars(paragraph, "right_indent", size_pt),
+        "first_indent_raw": int(fmt.first_line_indent) if fmt.first_line_indent else 0,
+        "left_indent_raw": int(fmt.left_indent) if fmt.left_indent else 0,
+        "right_indent_raw": int(fmt.right_indent) if fmt.right_indent else 0,
         "line_spacing": str(fmt.line_spacing) if fmt.line_spacing is not None else "",
         "space_before": int(fmt.space_before) if fmt.space_before else 0,
         "space_after": int(fmt.space_after) if fmt.space_after else 0,
         "page_break_before": bool(fmt.page_break_before),
         "keep_with_next": bool(fmt.keep_with_next),
         "keep_together": bool(fmt.keep_together),
+        "protected_object": bool(protected_kind),
+        "protected_kind": protected_kind,
     }
     item["region"] = _physical_region(item, index, total)
     return item
@@ -337,6 +456,9 @@ def _difference(
     expected_index: int | None,
     match_reason: str,
     expected_change: bool = False,
+    expected_reason: str = "",
+    difference_origin: str = "output_regression",
+    rule_basis: str = "template_reference",
 ) -> dict[str, Any]:
     return {
         "category": category,
@@ -348,7 +470,9 @@ def _difference(
         "comparison_source": source,
         "match_reason": match_reason,
         "expected_change": expected_change,
-        "expected_reason": "",
+        "expected_reason": expected_reason,
+        "difference_origin": difference_origin,
+        "rule_basis": rule_basis,
     }
 
 
@@ -356,7 +480,8 @@ def severity(category: str, *, expected_change: bool = False) -> str:
     if expected_change:
         return "P3"
     if category in {
-        "output_addition", "template_missing", "text_change", "mode", "tables", "images",
+        "output_addition", "template_missing", "source_text_addition", "source_text_loss",
+        "text_change", "mode", "tables", "images",
         "type", "recognition_type", "section", "heading_level", "region",
     }:
         return "P1"
@@ -368,6 +493,27 @@ def severity(category: str, *, expected_change: bool = False) -> str:
     }:
         return "P2"
     return "P3"
+
+
+def _field_values_equal(field: str, actual: Any, expected: Any) -> bool:
+    if field in _INDENT_FIELDS:
+        try:
+            return abs(float(actual or 0.0) - float(expected or 0.0)) <= _INDENT_TOLERANCE_CHARS
+        except (TypeError, ValueError):
+            return actual == expected
+    if field == "size_pt" and actual is not None and expected is not None:
+        try:
+            return abs(float(actual) - float(expected)) <= 0.05
+        except (TypeError, ValueError):
+            return actual == expected
+    return actual == expected
+
+
+def _mark_expected(item: dict[str, Any], *, reason: str, origin: str, rule_basis: str) -> None:
+    item["expected_change"] = True
+    item["expected_reason"] = reason
+    item["difference_origin"] = origin
+    item["rule_basis"] = rule_basis
 
 
 def compare_snapshots(
@@ -391,14 +537,27 @@ def compare_snapshots(
                 "expected_normalization", actual_item.get("text_hash"), expected_item.get("text_hash"),
                 source=source, actual_index=actual_item["index"], expected_index=expected_item["index"],
                 match_reason=reason, expected_change=True,
+                expected_reason=reason,
+                difference_origin="expected_normalization",
+                rule_basis="configured_normalization",
             ))
         for field in fields:
-            if actual_item.get(field) != expected_item.get(field):
-                differences.append(_difference(
+            if not _field_values_equal(field, actual_item.get(field), expected_item.get(field)):
+                difference = _difference(
                     field, actual_item.get(field), expected_item.get(field),
                     source=source, actual_index=actual_item["index"], expected_index=expected_item["index"],
                     match_reason=reason,
-                ))
+                )
+                difference.update({
+                    "actual_identity_hash": _identity_hash(actual_item),
+                    "expected_identity_hash": _identity_hash(expected_item),
+                    "actual_style_id": actual_item.get("style_id", ""),
+                    "expected_style_id": expected_item.get("style_id", ""),
+                    "actual_protected_object": bool(actual_item.get("protected_object")),
+                    "expected_protected_object": bool(expected_item.get("protected_object")),
+                    "protected_kind": actual_item.get("protected_kind", "") or expected_item.get("protected_kind", ""),
+                })
+                differences.append(difference)
     if report_unmatched:
         for item in alignment["actual_unmatched"]:
             generated = _is_generated_letterhead(item, source)
@@ -408,7 +567,11 @@ def compare_snapshots(
                 source=source, actual_index=item["index"], expected_index=None,
                 match_reason="generated_letterhead" if generated else "unmatched_output",
                 expected_change=generated or empty,
+                expected_reason="generated_letterhead" if generated else ("empty_paragraph" if empty else ""),
+                difference_origin="expected_normalization" if generated or empty else "output_regression",
+                rule_basis="configured_letterhead" if generated else "template_reference",
             ))
+            differences[-1]["actual_identity_hash"] = _identity_hash(item)
         for item in alignment["expected_unmatched"]:
             empty = not _normalized_text(str(item.get("_text", "")))
             differences.append(_difference(
@@ -416,7 +579,10 @@ def compare_snapshots(
                 source=source, actual_index=None, expected_index=item["index"],
                 match_reason="unmatched_template",
                 expected_change=empty,
+                expected_reason="empty_paragraph" if empty else "",
+                difference_origin="expected_normalization" if empty else "output_regression",
             ))
+            differences[-1]["expected_identity_hash"] = _identity_hash(item)
     for field in document_fields:
         if actual.get(field) != expected.get(field):
             differences.append(_difference(
@@ -434,32 +600,149 @@ def compare_snapshots(
 
 def _mark_input_fixture_differences(
     differences: list[dict[str, Any]], source_snapshot: dict[str, Any], expected_snapshot: dict[str, Any],
-) -> int:
+) -> Counter[str]:
     """Separate source-fixture content variants from output-introduced changes."""
     baseline, _ = compare_snapshots(
         source_snapshot, expected_snapshot, source="recognition", fields=(), document_fields=(), report_unmatched=True,
     )
     source_additions = Counter(
-        item["actual"] for item in baseline
+        item.get("actual_identity_hash", "") for item in baseline
         if item["category"] == "output_addition" and not item["expected_change"]
     )
-    source_missing = {
-        item["expected_paragraph_index"] for item in baseline
+    source_missing = Counter(
+        item.get("expected_identity_hash", "") for item in baseline
         if item["category"] == "template_missing" and not item["expected_change"]
-    }
-    marked = 0
+    )
+    source_identities = Counter(_identity_hash(item) for item in source_snapshot.get("paragraphs", []))
+    expected_identities = Counter(_identity_hash(item) for item in expected_snapshot.get("paragraphs", []))
+    marked: Counter[str] = Counter()
     for item in differences:
         if item["comparison_source"] != "recognition" or item["expected_change"]:
             continue
-        if item["category"] == "output_addition" and source_additions[item["actual"]] > 0:
-            source_additions[item["actual"]] -= 1
-        elif item["category"] == "template_missing" and item["expected_paragraph_index"] in source_missing:
-            pass
+        identity = ""
+        if item["category"] == "output_addition":
+            identity = item.get("actual_identity_hash", "")
+            if source_additions[identity] <= 0:
+                continue
+            source_additions[identity] -= 1
+        elif item["category"] == "template_missing":
+            identity = item.get("expected_identity_hash", "")
+            if source_missing[identity] <= 0:
+                continue
+            source_missing[identity] -= 1
         else:
             continue
-        item["expected_change"] = True
-        item["expected_reason"] = "input_fixture_difference"
-        item["match_reason"] = "input_fixture_difference"
+        reason = (
+            "source_order_difference"
+            if identity and source_identities[identity] and expected_identities[identity]
+            else "input_fixture_difference"
+        )
+        _mark_expected(
+            item,
+            reason=reason,
+            origin=reason,
+            rule_basis="source_fixture",
+        )
+        item["match_reason"] = reason
+        marked[reason] += 1
+    return marked
+
+
+def _source_preservation_differences(
+    actual_snapshot: dict[str, Any], source_snapshot: dict[str, Any],
+    existing_differences: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """Report output-only text changes that a template comparison cannot see."""
+    preservation, stats = compare_snapshots(
+        actual_snapshot, source_snapshot, source="source_preservation",
+        fields=(), document_fields=(), report_unmatched=True,
+    )
+    existing = {
+        (item.get("actual_identity_hash", ""), item.get("expected_identity_hash", ""))
+        for item in existing_differences
+        if not item.get("expected_change") and item.get("comparison_source") == "recognition"
+    }
+    results: list[dict[str, Any]] = []
+    for item in preservation:
+        if item.get("expected_change"):
+            continue
+        if item["category"] == "output_addition":
+            key = (item.get("actual_identity_hash", ""), "")
+            category = "source_text_addition"
+        elif item["category"] == "template_missing":
+            key = ("", item.get("expected_identity_hash", ""))
+            category = "source_text_loss"
+        else:
+            continue
+        if key in existing:
+            continue
+        item["category"] = category
+        item["difference_origin"] = "output_regression"
+        item["rule_basis"] = "source_text_preservation"
+        item["match_reason"] = "output_source_mismatch"
+        results.append(item)
+    return results, stats
+
+
+def _mark_project_config_differences(differences: list[dict[str, Any]]) -> Counter[str]:
+    marked: Counter[str] = Counter()
+    for item in differences:
+        if item.get("expected_change") or item.get("comparison_source") != "physical":
+            continue
+        style_id = str(item.get("actual_style_id", ""))
+        category = str(item.get("category", ""))
+        actual = item.get("actual")
+        configured = False
+        if category == "size_pt" and style_id == "DCT-LetterheadMark":
+            configured = _field_values_equal(category, actual, 32.0)
+        elif category == "right_indent" and style_id == "DCT-Signature":
+            configured = _field_values_equal(category, actual, 2.0)
+        elif category == "right_indent" and style_id == "DCT-Date":
+            configured = _field_values_equal(category, actual, 4.0)
+        elif category == "first_indent" and style_id in {"DCT-Body", "DCT-Responsibility"}:
+            configured = _field_values_equal(category, actual, 2.0)
+        elif category == "left_indent" and style_id == "DCT-AttachmentNoteItem":
+            configured = _field_values_equal(category, actual, 5.0)
+        if not configured:
+            continue
+        _mark_expected(
+            item,
+            reason="project_config_difference",
+            origin="project_config_difference",
+            rule_basis="GB/T 9704-2012 + versioned_project_config",
+        )
+        marked[category] += 1
+    return marked
+
+
+def _mark_protected_source_differences(
+    differences: list[dict[str, Any]], actual_snapshot: dict[str, Any], source_snapshot: dict[str, Any],
+) -> int:
+    alignment = align_paragraphs(
+        actual_snapshot.get("paragraphs", []), source_snapshot.get("paragraphs", []),
+    )
+    source_by_actual = {actual["index"]: source for actual, source, _reason in alignment["pairs"]}
+    marked = 0
+    for item in differences:
+        if (
+            item.get("expected_change")
+            or item.get("comparison_source") != "physical"
+            or item.get("category") not in _PROTECTED_FORMAT_FIELDS
+            or not item.get("actual_protected_object")
+        ):
+            continue
+        source_item = source_by_actual.get(item.get("actual_paragraph_index"))
+        if source_item is None or not source_item.get("protected_object"):
+            continue
+        field = str(item["category"])
+        if not _field_values_equal(field, item.get("actual"), source_item.get(field)):
+            continue
+        _mark_expected(
+            item,
+            reason="protected_source_difference",
+            origin="protected_source_difference",
+            rule_basis="protected_object_preservation_contract",
+        )
         marked += 1
     return marked
 
@@ -467,6 +750,7 @@ def _mark_input_fixture_differences(
 def compare_documents(
     actual: dict[str, dict[str, Any]], expected: dict[str, dict[str, Any]],
     *, source_recognition: dict[str, Any] | None = None,
+    source_physical: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     recognition_diffs, recognition_stats = compare_snapshots(
         actual["recognition"], expected["recognition"], source="recognition",
@@ -478,27 +762,43 @@ def compare_documents(
         report_unmatched=False,
     )
     differences = recognition_diffs + physical_diffs
-    fixture_differences = 0
+    fixture_reasons: Counter[str] = Counter()
+    preservation_stats: dict[str, int] = {}
     if source_recognition is not None:
-        fixture_differences = _mark_input_fixture_differences(
+        fixture_reasons = _mark_input_fixture_differences(
             differences, source_recognition, expected["recognition"],
         )
+        preservation, preservation_stats = _source_preservation_differences(
+            actual["recognition"], source_recognition, differences,
+        )
+        differences.extend(preservation)
+    protected_source_differences = 0
+    if source_physical is not None:
+        protected_source_differences = _mark_protected_source_differences(
+            differences, actual["physical"], source_physical,
+        )
+    project_config_differences = _mark_project_config_differences(differences)
     for item in differences:
         item["severity"] = severity(item["category"], expected_change=bool(item["expected_change"]))
     real = [item for item in differences if not item["expected_change"]]
     expected_changes = [item for item in differences if item["expected_change"]]
     return differences, {
         "version": COMPARISON_VERSION,
-        "alignment_method": "区域分段 + 保序文本锚点",
+        "alignment_method": "区域分段 + 去序号标题正文锚点 + 保序三方归因",
         "recognition": recognition_stats,
         "physical": physical_stats,
         "matched_pairs": recognition_stats["matched_pairs"],
         "output_additions": recognition_stats["output_additions"],
         "template_missing": recognition_stats["template_missing"],
         "expected_normalizations": sum(item["category"] == "expected_normalization" for item in expected_changes),
-        "input_fixture_differences": fixture_differences,
+        "input_fixture_differences": sum(fixture_reasons.values()),
+        "source_order_differences": fixture_reasons.get("source_order_difference", 0),
+        "source_preservation": preservation_stats,
+        "protected_source_differences": protected_source_differences,
+        "project_config_differences": dict(project_config_differences),
         "unexpected_differences": len(real),
         "real_issue_counts": dict(Counter(item["severity"] for item in real)),
+        "difference_origin_counts": dict(Counter(item["difference_origin"] for item in differences)),
         "expected_difference_counts": dict(Counter(item["expected_reason"] or item["category"] for item in expected_changes)),
     }
 
@@ -506,6 +806,12 @@ def compare_documents(
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, default=OUTPUT_DIR, help="Empty directory under test_docx/end_docx for this batch run.")
+    parser.add_argument(
+        "--special-output-dir",
+        type=Path,
+        default=SPECIAL_OUTPUT_DIR,
+        help="Directory under test_docx/测试文稿/测试目录 for the special regression set.",
+    )
     parser.add_argument("--without-template-letterhead", action="store_true", help="Do not derive managed letterhead options from the matched correct template.")
     parser.add_argument("--strict-preservation", action="store_true", help="Use strict preservation instead of the default smart/structural mode.")
     parser.add_argument("--mode", choices=("structural", "strict", "normalize"), default="structural", help="Processing strategy. The default matches the frontend smart mode.")
@@ -539,8 +845,14 @@ def visual_rendering_not_run(reason: str = "未执行视觉渲染检查：未请
 def _validate_special_output_dir(path: Path) -> Path:
     output_dir = path.resolve()
     expected_root = SPECIAL_OUTPUT_DIR.resolve()
-    if output_dir != expected_root:
-        raise SystemExit(f"special output directory must be {expected_root}: {output_dir}")
+    try:
+        output_dir.relative_to(expected_root)
+    except ValueError as exc:
+        raise SystemExit(
+            f"special output directory must be inside {expected_root}: {output_dir}"
+        ) from exc
+    if output_dir != expected_root and output_dir.exists() and any(output_dir.iterdir()):
+        raise SystemExit(f"special output directory is not empty: {output_dir}")
     output_dir.mkdir(parents=True, exist_ok=True)
     return output_dir
 
@@ -568,6 +880,124 @@ def _export_and_validate(
         raise
 
 
+def source_heading_cue_audit(source_data: Any, output_data: Any) -> dict[str, Any]:
+    """Check source-backed Word list headings against round-tripped output.
+
+    The report intentionally stores hashes and indexes instead of paragraph
+    text.  It is useful for special fixtures that have no canonical template:
+    a short bold ``@lvl_N`` source item must remain the corresponding heading
+    after export and re-import.
+    """
+    def heading_content_key(value: str) -> str:
+        normalized = _normalized_text(value)
+        return re.sub(
+            r"^(?:[一二三四五六七八九十百千零〇]+、|"
+            r"[（(][一二三四五六七八九十百千零〇0-9]+[）)]|"
+            r"\d+[.．、])\s*",
+            "",
+            normalized,
+            count=1,
+        )
+
+    output_by_text: dict[str, list[tuple[int, str]]] = {}
+    for index, paragraph in enumerate(getattr(output_data, "paragraphs", ())):
+        key = heading_content_key(str(getattr(paragraph, "text", "") or ""))
+        if key:
+            output_by_text.setdefault(key, []).append((index, str(getattr(paragraph, "type_id", ""))))
+
+    cue_count = 0
+    mismatches: list[dict[str, Any]] = []
+    for index, paragraph in enumerate(getattr(source_data, "paragraphs", ())):
+        features = getattr(paragraph, "features", None)
+        marker = str(
+            getattr(features, "segment_numbering_features", "")
+            or getattr(features, "numbering_prefix", "")
+            or ""
+        )
+        match = re.fullmatch(r"@lvl_(\d+)", marker)
+        text = heading_content_key(str(getattr(paragraph, "text", "") or ""))
+        bold_ratio = float(
+            getattr(features, "segment_bold_char_ratio", 0.0)
+            or getattr(features, "bold_char_ratio", 0.0)
+            or 0.0
+        )
+        if match is None or not text or len(text) > 40 or bold_ratio < 0.65:
+            continue
+        level = min(int(match.group(1)) + 2, 4)
+        expected_type = f"heading{level}"
+        cue_count += 1
+        matches = output_by_text.get(text, [])
+        if any(type_id == expected_type for _output_index, type_id in matches):
+            continue
+        mismatches.append({
+            "source_paragraph_index": index,
+            "source_physical_paragraph_index": getattr(features, "source_physical_paragraph_index", None),
+            "text_hash": text_hash(text),
+            "expected_type": expected_type,
+            "output_paragraph_indexes": [output_index for output_index, _type_id in matches],
+            "output_types": sorted({type_id for _output_index, type_id in matches}),
+            "evidence": [marker, "short-bold-source-list-item"],
+        })
+    return {"cue_count": cue_count, "mismatch_count": len(mismatches), "mismatches": mismatches}
+
+
+def signature_continuity_audit(output_data: Any) -> dict[str, Any]:
+    """Verify that recognized signature organizations directly precede dates."""
+    visible = [
+        (index, paragraph)
+        for index, paragraph in enumerate(getattr(output_data, "paragraphs", ()))
+        if str(getattr(paragraph, "text", "") or "").strip()
+    ]
+    issues: list[dict[str, Any]] = []
+    for position, (output_index, paragraph) in enumerate(visible):
+        if str(getattr(paragraph, "type_id", "")) != "sign_date":
+            continue
+        prior_orgs = [
+            prior_position
+            for prior_position, (_prior_index, prior) in enumerate(visible[:position])
+            if str(getattr(prior, "type_id", "")) == "sign_org"
+        ]
+        if not prior_orgs:
+            for prior_index, prior in reversed(visible[max(0, position - 12):position]):
+                if str(getattr(prior, "type_id", "")) != "body":
+                    continue
+                source_text = str(
+                    getattr(prior, "original_text", "")
+                    or getattr(prior, "text", "")
+                    or ""
+                )
+                source_lines = [line.strip() for line in source_text.splitlines() if line.strip()]
+                candidate = source_lines[-1] if len(source_lines) >= 2 else ""
+                if not (
+                    2 <= len(candidate) <= 40
+                    and not any(mark in candidate for mark in "。；;：:")
+                    and _SIGNATURE_ORG_SUFFIX_RE.search(candidate)
+                ):
+                    continue
+                issues.append({
+                    "issue": "signature_org_embedded_in_body",
+                    "organization_paragraph_index": prior_index,
+                    "date_paragraph_index": output_index,
+                    "organization_text_hash": text_hash(candidate),
+                    "date_text_hash": text_hash(str(getattr(paragraph, "text", ""))),
+                })
+                break
+            continue
+        org_position = prior_orgs[-1]
+        if org_position == position - 1:
+            continue
+        org_index, organization = visible[org_position]
+        between = visible[org_position + 1:position]
+        issues.append({
+            "organization_paragraph_index": org_index,
+            "date_paragraph_index": output_index,
+            "organization_text_hash": text_hash(str(getattr(organization, "text", ""))),
+            "date_text_hash": text_hash(str(getattr(paragraph, "text", ""))),
+            "intervening_types": [str(getattr(item, "type_id", "")) for _index, item in between],
+        })
+    return {"issue_count": len(issues), "issues": issues}
+
+
 def _special_record(
     importer: DocxImporter, source: Path, output_dir: Path, rules: list[StyleRule], settings: PageSettings,
     processing_features: dict[str, Any], processing_strategy: str,
@@ -579,12 +1009,19 @@ def _special_record(
         source_data, output_data = _export_and_validate(importer, source, output, rules, settings, processing_features)
         diagnostics = getattr(output_data, "recognition_diagnostics", {}) or {}
         summary = diagnostics.get("summary", {}) if isinstance(diagnostics, dict) else {}
+        title_cue_audit = source_heading_cue_audit(source_data, output_data)
+        signature_audit = signature_continuity_audit(output_data)
         record.update({
             "成功": True, "原文段落数": len(source_data.paragraphs), "输出段落数": len(output_data.paragraphs),
             "原文文字哈希": text_hash("\n".join(item.original_text for item in source_data.paragraphs)),
             "输出文字哈希": text_hash("\n".join(item.original_text for item in output_data.paragraphs)),
             "结构复核数": int(summary.get("needs_review_count", 0) or 0),
             "关键结构复核数": int(summary.get("critical_review_count", 0) or 0), "表格数": len(output_data.tables),
+            "源标题线索数": title_cue_audit["cue_count"],
+            "源标题线索未保留数": title_cue_audit["mismatch_count"],
+            "源标题线索检查": title_cue_audit["mismatches"],
+            "落款连续性问题数": signature_audit["issue_count"],
+            "落款连续性检查": signature_audit["issues"],
         })
     except Exception as exc:
         record["错误"] = f"{type(exc).__name__}: {exc}"
@@ -699,10 +1136,12 @@ def select_render_samples(records: list[dict[str, Any]], sample_size: int) -> li
     def score(record: dict[str, Any]) -> tuple[int, str]:
         alignment = record.get("模板对齐", {}) or {}
         real = alignment.get("real_issue_counts", {}) or {}
+        expected = alignment.get("expected_difference_counts", {}) or {}
         diagnostics = record.get("结构诊断", {}) or {}
         value = int(real.get("P1", 0)) * 100 + int(real.get("P2", 0)) * 10
         value += int(diagnostics.get("critical_review_count", 0) or 0) * 80
         value += int(diagnostics.get("needs_review_count", 0) or 0) * 5
+        value += int(expected.get("protected_source_difference", 0) or 0) * 30
         value += int(record.get("表格数", 0) or 0) * 2
         return value, str(record.get("编号", ""))
     selected: list[dict[str, Any]] = []
@@ -776,6 +1215,11 @@ def _report_lines(report: dict[str, Any]) -> list[str]:
         f"含输入固有差异的文件：{report['输入固有差异文件数']}",
         "问题统计：" + json.dumps(report["问题统计"], ensure_ascii=False),
         "输入固有差异统计：" + json.dumps(report["输入固有差异统计"], ensure_ascii=False),
+        "差异归因统计：" + json.dumps(report.get("差异归因统计", {}), ensure_ascii=False),
+        "项目配置差异统计：" + json.dumps(report.get("项目配置差异统计", {}), ensure_ascii=False),
+        "受保护对象差异统计：" + json.dumps(report.get("受保护对象差异统计", {}), ensure_ascii=False),
+        f"源标题线索未保留：{report.get('源标题线索未保留数', 0)}",
+        f"落款连续性问题：{report.get('落款连续性问题数', 0)}",
         "视觉渲染检查：" + str(report["视觉渲染检查"]["reason"]),
     ]
 
@@ -820,6 +1264,8 @@ def main(argv: list[str] | None = None) -> int:
             source_data, output_data = _export_and_validate(
                 importer, source, output, rules, settings, processing_features, letterhead_options=letterhead_options,
             )
+            title_cue_audit = source_heading_cue_audit(source_data, output_data)
+            signature_audit = signature_continuity_audit(output_data)
             standard_outputs[record["编号"]] = output
             record.update({
                 "成功": True, "原文段落数": len(source_data.paragraphs), "输出段落数": len(output_data.paragraphs),
@@ -830,6 +1276,11 @@ def main(argv: list[str] | None = None) -> int:
                 "发文字号数": sum(item.type_id == "dispatch_number" for item in output_data.paragraphs),
                 "表格数": len(output_data.tables),
                 "结构诊断": (getattr(output_data, "recognition_diagnostics", {}) or {}).get("summary", {}),
+                "源标题线索数": title_cue_audit["cue_count"],
+                "源标题线索未保留数": title_cue_audit["mismatch_count"],
+                "源标题线索检查": title_cue_audit["mismatches"],
+                "落款连续性问题数": signature_audit["issue_count"],
+                "落款连续性检查": signature_audit["issues"],
                 "原文文字哈希": text_hash("\n".join(item.original_text for item in source_data.paragraphs)),
                 "输出文字哈希": text_hash("\n".join(item.original_text for item in output_data.paragraphs)),
             })
@@ -837,14 +1288,17 @@ def main(argv: list[str] | None = None) -> int:
                 actual = {"recognition": recognition_snapshot(output, rules, processing_strategy=processing_strategy), "physical": physical_snapshot(output)}
                 expected = {"recognition": recognition_snapshot(template, rules, processing_strategy=processing_strategy), "physical": physical_snapshot(template)}
                 source_recognition = recognition_snapshot(source, rules, processing_strategy=processing_strategy)
+                source_physical = physical_snapshot(source)
                 record["差异"], record["模板对齐"] = compare_documents(
-                    actual, expected, source_recognition=source_recognition,
+                    actual, expected,
+                    source_recognition=source_recognition,
+                    source_physical=source_physical,
                 )
         except Exception as exc:
             record["错误"] = f"{type(exc).__name__}: {exc}"
         record["耗时_ms"] = round((time.perf_counter() - start) * 1000, 2)
         results.append(record)
-    special_output_dir = _validate_special_output_dir(SPECIAL_OUTPUT_DIR)
+    special_output_dir = _validate_special_output_dir(args.special_output_dir)
     special_results: list[dict[str, Any]] = []
     special_outputs: dict[str, Path] = {}
     for source in sorted(SPECIAL_INPUT_DIR.glob("*.docx")):
@@ -871,14 +1325,18 @@ def main(argv: list[str] | None = None) -> int:
         "总数": len(special_results), "成功数": sum(bool(item["成功"]) for item in special_results),
         "失败数": sum(not item["成功"] for item in special_results), "处理策略": processing_strategy,
         "模板对比": "专项集没有统一对照模板，未与 correct_docx 进行格式差异判定。",
+        "源标题线索未保留数": sum(int(item.get("源标题线索未保留数", 0) or 0) for item in special_results),
+        "落款连续性问题数": sum(int(item.get("落款连续性问题数", 0) or 0) for item in special_results),
         "视觉渲染检查": special_visual, "结果": special_results,
     }
     (special_output_dir / "批量测试报告.json").write_text(json.dumps(special_report, ensure_ascii=False, indent=2), encoding="utf-8")
     (special_output_dir / "批量测试报告.txt").write_text("\n".join([
         f"总数：{special_report['总数']}", f"成功：{special_report['成功数']}", f"失败：{special_report['失败数']}",
         f"处理策略：{processing_strategy}", "模板对比：" + special_report["模板对比"],
+        f"源标题线索未保留：{special_report['源标题线索未保留数']}",
+        f"落款连续性问题：{special_report['落款连续性问题数']}",
         "视觉渲染检查：" + str(special_visual["reason"]),
-        *[f"{item['文件名']} | 成功={item['成功']} | 复核={item.get('结构复核数', 0)} | 错误={item['错误']}" for item in special_results],
+        *[f"{item['文件名']} | 成功={item['成功']} | 复核={item.get('结构复核数', 0)} | 源标题未保留={item.get('源标题线索未保留数', 0)} | 落款连续性={item.get('落款连续性问题数', 0)} | 错误={item['错误']}" for item in special_results],
     ]), encoding="utf-8")
     real_issue_files = sum(bool((item.get("模板对齐", {}).get("unexpected_differences", 0))) for item in results if item.get("成功"))
     expected_only_files = sum(
@@ -899,8 +1357,22 @@ def main(argv: list[str] | None = None) -> int:
         "预期差异统计": dict(Counter(diff["category"] for item in results for diff in item["差异"] if diff["expected_change"])),
         "输入固有差异统计": dict(Counter(
             diff["category"] for item in results for diff in item["差异"]
-            if diff.get("expected_reason") == "input_fixture_difference"
+            if diff.get("expected_reason") in {"input_fixture_difference", "source_order_difference"}
         )),
+        "差异归因统计": dict(Counter(
+            diff.get("difference_origin", "unclassified")
+            for item in results for diff in item["差异"]
+        )),
+        "项目配置差异统计": dict(Counter(
+            diff["category"] for item in results for diff in item["差异"]
+            if diff.get("expected_reason") == "project_config_difference"
+        )),
+        "受保护对象差异统计": dict(Counter(
+            diff["category"] for item in results for diff in item["差异"]
+            if diff.get("expected_reason") == "protected_source_difference"
+        )),
+        "源标题线索未保留数": sum(int(item.get("源标题线索未保留数", 0) or 0) for item in results),
+        "落款连续性问题数": sum(int(item.get("落款连续性问题数", 0) or 0) for item in results),
         "视觉渲染检查": visual_status,
         "专项集": {"目录": str(SPECIAL_INPUT_DIR.relative_to(ROOT)), "结果目录": str(special_output_dir.relative_to(ROOT)), "总数": special_report["总数"], "成功数": special_report["成功数"], "失败数": special_report["失败数"]},
         "结果": results,

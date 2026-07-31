@@ -6,12 +6,21 @@ from dataclasses import dataclass
 import re
 from typing import Protocol
 
-from .features import DocumentBlock, ParagraphFeatures
+from .features import (
+    DocumentBlock,
+    ParagraphFeatures,
+    is_organization_label,
+    is_standalone_addressing_text,
+)
 from .global_context import DocumentContext
 from .model import DocumentMode, ParagraphType, SectionKind
 
 
 _OPENING_SPEECH_TITLE_RE = re.compile(r"^(?:[一二三四五六七八九十]+、)?在[\u4e00-\u9fffA-Za-z0-9（）()、，,.·\-]{3,70}(?:上)?的?讲话$")
+_EMPTY_KEY_VALUE_LABELS = frozenset({
+    "责任单位", "责任人", "联系人", "联系电话", "联系地址",
+    "承办单位", "牵头单位", "配合单位", "时间", "地点",
+})
 
 
 @dataclass(frozen=True)
@@ -82,8 +91,25 @@ class StructuralCandidateProvider:
             result.append(Candidate(ParagraphType.DISPATCH_NUMBER, 1.0, self.name, ("dispatch-number",), hard=True, section_hint=SectionKind.DISPATCH_META))
         if features.date_match:
             result.append(Candidate(ParagraphType.SIGNATURE_DATE, 0.85, self.name, ("date-shape",), section_hint=SectionKind.SIGNATURE))
-        if features.recipient_match:
-            result.append(Candidate(ParagraphType.RECIPIENT, 0.95, self.name, ("recipient",), hard=True, section_hint=SectionKind.RECIPIENT))
+        if is_standalone_addressing_text(features.normalized_text):
+            result.append(Candidate(
+                ParagraphType.ADDRESSING,
+                0.99,
+                self.name,
+                ("standalone-addressing",),
+                hard=True,
+                section_hint=SectionKind.RECIPIENT,
+            ))
+        elif (
+            features.recipient_match
+            and context.document_context is not None
+            and (
+                context.index == 0
+                or context.document_context.before_body(context.index)
+                or context.index in context.document_context.front_positions
+            )
+        ):
+            result.append(Candidate(ParagraphType.RECIPIENT, 0.95, self.name, ("front-recipient",), hard=True, section_hint=SectionKind.RECIPIENT))
         if features.attachment_note_match:
             result.append(Candidate(ParagraphType.ATTACHMENT_NOTE, 0.97, self.name, ("attachment-note",), hard=True, section_hint=SectionKind.ATTACHMENT_NOTE))
         return result
@@ -95,6 +121,10 @@ class KeyValueCandidateProvider:
     def propose(self, block, features, context):
         label = features.key_value_label or ""
         if not label:
+            return []
+        if is_organization_label(label):
+            return []
+        if not str(features.key_value_value or "").strip() and label not in _EMPTY_KEY_VALUE_LABELS:
             return []
         if label in {"时间", "地点", "主持", "记录", "出席", "缺席", "列席", "参会", "参加", "议题", "议定事项", "会议名称", "会议时间", "会议地点"}:
             return [Candidate(ParagraphType.MEETING_META, 0.99, self.name, ("meeting-label",), hard=True, section_hint=SectionKind.MEETING_META)]
@@ -202,6 +232,54 @@ class FrontMatterMetadataCandidateProvider:
                 section_hint=SectionKind.HEADER,
             )]
         return []
+
+
+class SourceListNumberingCandidateProvider:
+    """Preserve short, visually explicit Word list headings.
+
+    Word stores automatic list numbers outside paragraph text.  The importer
+    retains that physical fact as ``@lvl_N``; without this provider the core
+    prose classifier can overwrite a real heading merely because its visible
+    text has no numbering prefix.
+    """
+
+    name = "source-list-numbering"
+
+    def propose(self, block, features, context):
+        if features.heading_shape_level is not None:
+            return []
+        source_features = getattr(block.raw_reference, "features", None)
+        marker = str(
+            getattr(source_features, "segment_numbering_features", "")
+            or getattr(source_features, "numbering_prefix", "")
+            or ""
+        )
+        match = re.fullmatch(r"@lvl_(\d+)", marker)
+        if (
+            match is None
+            or features.text_length > 40
+            or features.key_value_label
+            or features.date_match
+            or features.attachment_note_match
+            or is_standalone_addressing_text(features.normalized_text)
+            or not (features.is_bold or features.bold_char_ratio >= 0.65)
+        ):
+            return []
+        level = min(int(match.group(1)) + 2, 4)
+        paragraph_type = {
+            2: ParagraphType.HEADING_2,
+            3: ParagraphType.HEADING_3,
+            4: ParagraphType.HEADING_4,
+        }[level]
+        return [Candidate(
+            paragraph_type,
+            1.0,
+            self.name,
+            (f"source-word-list-level-{match.group(1)}", "short-bold-list-heading"),
+            hard=True,
+            section_hint=SectionKind.BODY,
+            heading_level=level,
+        )]
 
 
 class CoreCandidateProvider:
@@ -357,4 +435,14 @@ def _legacy_type(paragraph) -> ParagraphType:
     return aliases.get(value, ParagraphType.BODY)
 
 
-DEFAULT_PROVIDERS = (StructuralCandidateProvider(), KeyValueCandidateProvider(), NumberingCandidateProvider(), SemanticCandidateProvider(), FrontMatterMetadataCandidateProvider(), CoreCandidateProvider(), LegacyCandidateProvider(), StyleCandidateProvider())
+DEFAULT_PROVIDERS = (
+    StructuralCandidateProvider(),
+    KeyValueCandidateProvider(),
+    NumberingCandidateProvider(),
+    SemanticCandidateProvider(),
+    FrontMatterMetadataCandidateProvider(),
+    SourceListNumberingCandidateProvider(),
+    CoreCandidateProvider(),
+    LegacyCandidateProvider(),
+    StyleCandidateProvider(),
+)

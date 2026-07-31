@@ -657,7 +657,7 @@ def _attachment_item_wrap_start_chars(text: str) -> int:
 # ── 清理旧编号 ──
 _LEADING_NUM_RE = re.compile(
     r"^\s*(?:"
-    r"[一二三四五六七八九十百千零〇]+、"
+    r"[一二三四五六七八九十百千零〇]+[、\.．]+"
     r"|[（(][一二三四五六七八九十百千零〇0-9]+[）)]"
     # A copied list number can carry duplicate punctuation (for example
     # "3..标题").  Consume the whole punctuation run before inserting the
@@ -917,6 +917,21 @@ def _apply_heading1_report_split(
     return body_para
 
 
+def _verify_inline_heading_body_pair(heading_para, body_para, expected_body_text: str) -> None:
+    """Reject an output where a protected heading/body split was altered.
+
+    The importer guarantees that a numbered ``标题。正文`` source is split only
+    once.  Keep a final renderer-side check because later style passes must
+    never truncate the body or insert another paragraph between the pair.
+    """
+    if heading_para._p.getnext() is not body_para._p:
+        raise ExportError("一级标题与其完整正文段不再相邻，已中止导出")
+    if body_para.text != expected_body_text:
+        raise ExportError("一级标题后的正文未完整保留，已中止导出")
+    if body_para.style.style_id != "DCT-Body":
+        raise ExportError("一级标题后的正文未使用正文样式，已中止导出")
+
+
 def _apply_glossary_item(para, text: str, rule) -> None:
     """名词解释条目：编号不加粗 + 关键词（冒号前）黑体，正文（冒号后）仿宋。"""
     if len(para.runs) < 2:
@@ -964,15 +979,37 @@ def _apply_report_first_sentence(para, text: str, rule) -> None:
         write(rest, bold=False, cn_font=rule.font, size_pt=rule.font_size_pt)
 
 
+def _apply_inline_lead_bold(para, text: str, rule) -> None:
+    """Restore source-backed lead-sentence emphasis without splitting a body."""
+    if not para.runs:
+        return
+    period = text.find("。")
+    if period <= 0 or period >= len(text) - 1:
+        return
+    write = _segment_writer(para)
+    write(
+        text[:period + 1],
+        bold=True,
+        cn_font=rule.font,
+        size_pt=rule.font_size_pt,
+    )
+    write(
+        text[period + 1:],
+        bold=rule.bold,
+        cn_font=rule.font,
+        size_pt=rule.font_size_pt,
+    )
+
+
 def _set_para_spacing(para, before_lines: float = 0, after_lines: float = 0,
-                      line_twips: int = 560) -> None:
+                      line_twips: int = 560, *, explicit_zero: bool = False) -> None:
     """设置段前段后间距（单位：行）。"""
     pPr = para._element.get_or_add_pPr()
     spacing = OxmlElement('w:spacing')
-    if before_lines > 0:
+    if before_lines > 0 or explicit_zero:
         spacing.set(qn('w:before'), str(int(round(before_lines * line_twips))))
         spacing.set(qn('w:beforeLines'), str(int(round(before_lines * 100))))
-    if after_lines > 0:
+    if after_lines > 0 or explicit_zero:
         spacing.set(qn('w:after'), str(int(round(after_lines * line_twips))))
         spacing.set(qn('w:afterLines'), str(int(round(after_lines * 100))))
     if line_twips > 0:
@@ -1797,6 +1834,11 @@ TYPE_TO_STYLE_ID: Dict[str, str] = {
 
 HEAD_TYPES_REQUIRING_GAP = ("title", "title_cont", "date_line", "author_line", "role_name")
 HEAD_GAP_FOLLOW_TYPES = ("body", "attachment_body", "heading1")
+BODY_FLOW_TYPES = frozenset({
+    "body", "heading1", "heading1_report", "heading2", "heading3", "heading4",
+    "title2", "responsibility_line", "attachment_note", "attachment_note_item",
+    "attachment_page_mark", "attachment_title", "attachment_body", "sign_org", "sign_date",
+})
 
 
 def _feature_options(options: dict | None) -> dict:
@@ -1894,23 +1936,57 @@ def _normalize_signature_attachment_order(paragraphs: list[ParagraphData]) -> li
     """Enforce body → attachment note block → signature organization → date."""
     normalized = list(paragraphs)
     allowed = {"attachment_note", "attachment_note_item", "sign_org", "sign_date"}
+
+    def ignorable_gap(item: ParagraphData) -> bool:
+        return bool(
+            not str(item.text or "").strip()
+            and not item.type_id.startswith("__")
+            and not (getattr(item, "inline_tokens", None) or [])
+            and not (item.meta or {}).get("sectPr")
+        )
+
     index = 0
     while index < len(normalized):
         if normalized[index].type_id not in allowed:
             index += 1
             continue
         end = index
-        while end < len(normalized) and normalized[end].type_id in allowed:
+        while end < len(normalized) and (
+            normalized[end].type_id in allowed or ignorable_gap(normalized[end])
+        ):
             end += 1
-        block = normalized[index:end]
+        block = [item for item in normalized[index:end] if item.type_id in allowed]
         notes = [item for item in block if item.type_id == "attachment_note"]
-        if notes:
-            note_items = [item for item in block if item.type_id == "attachment_note_item"]
-            organizations = [item for item in block if item.type_id == "sign_org"]
-            dates = [item for item in block if item.type_id == "sign_date"]
+        note_items = [item for item in block if item.type_id == "attachment_note_item"]
+        organizations = [item for item in block if item.type_id == "sign_org"]
+        dates = [item for item in block if item.type_id == "sign_date"]
+        if notes or (organizations and dates):
             normalized[index:end] = notes + note_items + organizations + dates
+            end = index + len(notes) + len(note_items) + len(organizations) + len(dates)
         index = end
     return normalized
+
+
+def _validate_signature_attachment_order(paragraphs: list[ParagraphData]) -> None:
+    """Reject a non-strict render plan that separates a known signature pair."""
+    visible = [item for item in paragraphs if str(item.text or "").strip()]
+    for index, item in enumerate(visible):
+        if item.type_id != "sign_date":
+            continue
+        prior_org_indexes = [
+            position for position, candidate in enumerate(visible[:index])
+            if candidate.type_id == "sign_org"
+        ]
+        if not prior_org_indexes:
+            continue
+        previous_org = prior_org_indexes[-1]
+        if previous_org != index - 1:
+            raise ExportError("落款单位与落款日期未保持连续，已中止导出")
+        if any(
+            candidate.type_id in {"attachment_note", "attachment_note_item"}
+            for candidate in visible[previous_org + 1:index]
+        ):
+            raise ExportError("附件说明插入落款单位与日期之间，已中止导出")
 
 def export_doc(doc_data: DocumentData, rules: List[StyleRule],
                settings: PageSettings, output_path: str,
@@ -1949,6 +2025,7 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
         "body": 0, "fallback_count": 0, "style_fallback_count": 0, "numpr_removed": 0,
         "output_path": output_path,
         "removed_external_relationships": removed_external_relationships,
+        "inline_heading_body_verified": 0,
     }
 
     # 查找页码规则（row 7）
@@ -1956,6 +2033,7 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
 
     prev_was_title = False
     prev_type_id = ""
+    body_flow_started = False
     line_twips = _line_spacing_twips(settings)
     numbering_enabled = _feature_enabled(numbering_options, False)
     numbering_mode = str(_feature_options(numbering_options).get("mode", "safe") or "safe").lower()
@@ -1967,8 +2045,11 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
         if strict_preservation
         else _normalize_signature_attachment_order(doc_data.paragraphs)
     )
+    if not strict_preservation:
+        _validate_signature_attachment_order(render_items)
     paragraph_i = 0
     _deferred_body_log = []  # heading1 拆出的 body 日志
+    inline_heading_body_pairs = []
     section_paragraphs = []
     protected_paragraph_elements = set()
     letterhead_detection = getattr(doc_data, "letterhead_detection", None) or LetterheadDetection()
@@ -2187,6 +2268,17 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
                 )
             elif pd.type_id == "date_line":
                 _set_para_spacing(para, before_lines=0, after_lines=1, line_twips=line_twips)
+            elif pd.type_id == "addressing" and body_flow_started:
+                # Opening salutations keep the configured one-line gap.  A
+                # repeated salutation inside or after the speech body is part
+                # of the body flow and must not create another blank line.
+                _set_para_spacing(
+                    para,
+                    before_lines=0,
+                    after_lines=0,
+                    line_twips=line_twips,
+                    explicit_zero=True,
+                )
             elif pd.type_id in ("heading2", "heading3", "heading4"):
                 _set_para_spacing(para, before_lines=0, after_lines=0, line_twips=line_twips)
             elif pd.type_id == "sign_org" and prev_type_id in (
@@ -2214,11 +2306,12 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
             if pd.type_id == "glossary_title":
                 _set_para_spacing(para, before_lines=1, after_lines=1, line_twips=line_twips)
 
-            # A numbered first-level heading followed by a real sentence is a
-            # malformed one-paragraph structure.  All editable modes repair
-            # that structural boundary; normalize mode is not required.
+            # Compatibility input can still contain a heading/body sentence
+            # in one ParagraphData item. Split it once into a heading and one
+            # complete body paragraph; later body sentences stay together.
             if not strict_preservation and pd.type_id == "heading1" and "。" in para.text:
                 full_text = para.text
+                expected_body_text = full_text.split("。", 1)[1].strip()
                 body_rule = rules[5] if len(rules) > 5 else StyleRule.default_for_row(5)
                 body_para = _apply_heading1_report_split(
                     para, full_text, resolved, body_rule, line_twips,
@@ -2226,6 +2319,7 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
                 )
                 if body_para is not None:
                     body_text = body_para.text
+                    inline_heading_body_pairs.append((para, body_para, expected_body_text))
                     stats["body"] += 1
                     apply_superscript_split(body_para)
                     if numbered_bold_enabled:
@@ -2274,12 +2368,17 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
                 and "。" in para.text
             ):
                 body_rule = rules[5] if len(rules) > 5 else StyleRule.default_for_row(5)
+                expected_body_text = pd.text.split("。", 1)[1].strip()
                 body_para = _apply_heading1_report_split(para, pd.text, resolved, body_rule, line_twips)
                 if body_para is not None:
+                    inline_heading_body_pairs.append((para, body_para, expected_body_text))
                     stats["body"] += 1
 
+            # Source-backed inline emphasis keeps one physical body paragraph.
+            if pd.meta.get("inline_lead_bold") and para.runs:
+                _apply_inline_lead_bold(para, pd.text, resolved)
             # 报告首句加粗（首句楷体_GB2312 加粗，剩余仿宋正文）
-            if pd.meta.get("report_first_sentence_bold") and para.runs:
+            elif pd.meta.get("report_first_sentence_bold") and para.runs:
                 _apply_report_first_sentence(para, pd.text, resolved)
 
             # 编号：从 meta 读取预计算编号，插入到第一个 run 前
@@ -2357,6 +2456,8 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
             # 记录头部区域；后接正文或一级标题时需要空一行。
             prev_was_title = (pd.type_id in HEAD_TYPES_REQUIRING_GAP)
             prev_type_id = pd.type_id
+            if pd.type_id in BODY_FLOW_TYPES:
+                body_flow_started = True
 
             # 统计
             if pd.type_id in stats:
@@ -2491,6 +2592,9 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
 
     invariant_stats = _enforce_body_paragraph_invariants(doc, protected_paragraph_elements)
     stats.update(invariant_stats)
+    for heading_para, body_para, expected_body_text in inline_heading_body_pairs:
+        _verify_inline_heading_body_pair(heading_para, body_para, expected_body_text)
+    stats["inline_heading_body_verified"] = len(inline_heading_body_pairs)
     stats["style_fallback_count"] = stats["fallback_count"]
     if invariant_stats["fallback_count"] or invariant_stats["numpr_removed"]:
         logger.info(

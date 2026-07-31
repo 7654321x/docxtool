@@ -32,6 +32,7 @@
 - `.env.example`：环境变量示例，不包含真实密钥。
 - `docs/API.md`：HTTP 接口、鉴权、错误码说明。
 - `docs/DEPLOY.md`：生产部署说明。
+- `docs/DOCX_REGRESSION_CHECKLIST.md`：已知公文问题与批量回归检查清单。
 - `docs/UPLOAD_MANIFEST.md`：AI 修改和 GitHub 上传范围清单。
 - `docs/GITHUB_UPLOAD_GUIDE.md`：安全发布到 GitHub 的操作说明。
 - `scripts/publish_to_github.ps1`：PowerShell 7 安全发布脚本，默认只演练。

@@ -5,6 +5,7 @@ from zipfile import ZipFile
 
 from docx import Document
 from docx.enum.text import WD_BREAK
+from docx.shared import Pt
 
 from docxtool.document.engine import export_doc
 from docxtool.document.importer import DocxImporter, DocumentData, ParagraphData, ParagraphFeatures
@@ -89,7 +90,7 @@ class ProcessingFlagsTest(unittest.TestCase):
                 footer_names = [name for name in names if name.startswith("word/footer")]
                 self.assertEqual(footer_names, [])
 
-    def test_smart_mode_splits_reliable_structure_without_rewriting_text(self):
+    def test_smart_mode_splits_numbered_heading_from_one_complete_body_paragraph(self):
         with tempfile.TemporaryDirectory() as tmp:
             src = Path(tmp) / "fused-structure.docx"
             doc = Document()
@@ -164,6 +165,71 @@ class ProcessingFlagsTest(unittest.TestCase):
             )
             self.assertFalse(any(token.kind == "page_break" for token in data.paragraphs[0].inline_tokens))
             self.assertFalse(any(token.kind == "page_break" for token in data.paragraphs[1].inline_tokens))
+
+    def test_smart_mode_keeps_bold_lead_sentence_in_one_body_paragraph(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "inline-emphasis.docx"
+            document = Document()
+            document.add_paragraph("一、工作情况")
+            paragraph = document.add_paragraph()
+            lead = paragraph.add_run("推动重点工作走深走实。")
+            lead.bold = True
+            lead.font.size = Pt(16)
+            paragraph.add_run("各单位结合实际持续抓好任务落实，确保工作取得实效。")
+            document.save(source)
+
+            rules, _, features = load_rules_and_settings({"mode": "smart"})
+            data = DocxImporter().load(str(source), rules, features=features)
+
+            self.assertEqual(len(data.paragraphs), 2)
+            self.assertEqual(data.paragraphs[1].type_id, "body")
+            self.assertEqual(
+                data.paragraphs[1].text,
+                "推动重点工作走深走实。各单位结合实际持续抓好任务落实，确保工作取得实效。",
+            )
+            self.assertTrue(data.paragraphs[1].meta.get("inline_lead_bold"))
+
+    def test_smart_mode_separates_salutation_after_heading_body_soft_lines(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "heading-body-salutation.docx"
+            document = Document()
+            paragraph = document.add_paragraph()
+            paragraph.add_run("一、总体要求。正文内容完整保留。")
+            for _unused in range(4):
+                paragraph.add_run().add_break(WD_BREAK.LINE)
+            paragraph.add_run("各位委员、同志们！")
+            document.add_paragraph("后续正文继续正常排版。")
+            document.save(source)
+
+            rules, _, features = load_rules_and_settings({"mode": "smart"})
+            data = DocxImporter().load(str(source), rules, features=features)
+
+            self.assertEqual(
+                [(item.type_id, item.text) for item in data.paragraphs],
+                [
+                    ("heading1", "一、总体要求。"),
+                    ("body", "正文内容完整保留。"),
+                    ("addressing", "各位委员、同志们！"),
+                    ("body", "后续正文继续正常排版。"),
+                ],
+            )
+
+    def test_body_colon_label_is_not_reclassified_as_recipient(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "body-label.docx"
+            document = Document()
+            document.add_paragraph("工作情况", style="Title")
+            document.add_paragraph("现将有关情况报告如下，供审阅。")
+            document.add_paragraph("某某学院：")
+            document.add_paragraph("调研发现有关工作正在有序推进。")
+            document.save(source)
+
+            rules, _, features = load_rules_and_settings({"mode": "smart"})
+            data = DocxImporter().load(str(source), rules, features=features)
+            label = next(item for item in data.paragraphs if item.text == "某某学院：")
+
+            self.assertEqual(label.type_id, "body")
+            self.assertTrue(label.meta.get("no_indent"))
 
     def test_smart_mode_recovers_speech_title_and_soft_line_body_from_heading_style(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -248,6 +314,37 @@ class ProcessingFlagsTest(unittest.TestCase):
                 }
             ]
             self.assertEqual(headings, ["一、第一部分", "（一）第二层", "1.第三层", "（1）第四层"])
+
+    def test_smart_mode_rebuilds_malformed_chinese_dot_heading1(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "malformed-heading1.docx"
+            output = Path(tmp) / "malformed-heading1-output.docx"
+            document = Document()
+            document.add_paragraph("测试材料")
+            document.add_paragraph("一、第一部分")
+            document.add_paragraph("正文内容完整保留。")
+            document.add_paragraph("二.存在的问题")
+            document.add_paragraph("后续正文内容完整保留。")
+            document.save(source)
+
+            rules, settings, features = load_rules_and_settings(
+                {"mode": "smart", "numbering": {"enabled": True}}
+            )
+            data = DocxImporter().load(str(source), rules, features=features)
+            export_doc(
+                data,
+                rules,
+                settings,
+                str(output),
+                numbering_options=features["numbering"],
+            )
+
+            headings = [
+                paragraph.text
+                for paragraph in Document(output).paragraphs
+                if paragraph.style.style_id == "DCT-Heading1"
+            ]
+            self.assertEqual(headings, ["一、第一部分", "二、存在的问题"])
 
 
 if __name__ == "__main__":

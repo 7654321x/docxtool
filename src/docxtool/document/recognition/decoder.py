@@ -92,8 +92,6 @@ def _extra_candidates(block: DocumentBlock, features, context: _Context, previou
         result.append(Candidate(ParagraphType.SOURCE_NOTE, 0.97, "structural", ("source-note",), hard=True, section_hint=SectionKind.SOURCE_NOTE))
     if features.date_match:
         result.append(Candidate(ParagraphType.SIGNATURE_DATE, 0.85, "structural", ("date-shape",), section_hint=SectionKind.SIGNATURE))
-    if features.recipient_match:
-        result.append(Candidate(ParagraphType.RECIPIENT, 0.95, "structural", ("recipient-boundary",), hard=True, section_hint=SectionKind.RECIPIENT))
     has_following_chapter = any(re.match(r"^(?:第[一二三四五六七八九十百0-9]+章|[一二三四五六七八九十]+、)", item.compact_text) for item in lookahead)
     if previous_features and (previous_features.date_match or "本文有删减" in previous_features.compact_text or "本文有删减" in text):
         if _EMBEDDED_TITLE_RE.fullmatch(text):

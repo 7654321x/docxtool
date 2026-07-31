@@ -39,6 +39,7 @@ pwsh -NoProfile -Command "node --test tests/worker-routing.test.mjs"
 3. 记录内容应包含触发场景、推荐处理方式和必要的验证命令，避免只写结论。
 4. 对 `python-docx`、OOXML、页眉页脚、分节、字段、样式、关系包等问题，优先查官方文档，再决定使用高层 API 还是直接 OOXML。
 5. 不为沉淀经验而下载大型资料、提交本地资料副本、或把用户私有文件内容写入文档。
+6. 用户每次反馈的问题在确认根因后，都必须把脱敏后的触发场景、处理规则和必要验证命令写入 `AGENTS.md` 或明确引用的项目问题清单；不以问题大小或是否可能复现为由省略记录。
 
 ## 公文结构排版回归
 
@@ -89,7 +90,13 @@ pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m pytest tests/test_struct
 34. 触发场景：用户开启前端“序号规范”时，结构拆分保真模式也必须在最终识别完成后重建一至四级标题序号；仅替换标题前缀，不改写标题正文、标点或段落顺序。渲染前必须同时清除源前缀“一、”“（一）”“1.”“（1）”及其错误编号，防止重复编号。关闭开关时保留原始编号。修改后至少运行 `tests/test_processing_flags.py tests/test_engine_heading_spacing.py tests/test_config_driven_styles.py`。
 35. 触发场景：`smart`（结构拆分保真）模式不是关闭所有修复。默认保留正文和未启用的文字改写；但用户显式开启的标点修复、序号规范、页码、版头、表格优化、清理、特殊加粗和落款版式必须按各自开关生效。标点修复关闭时不得转换任何普通文本标点；开启时按安全标点规则处理。修改后至少运行 `tests/test_processing_flags.py tests/test_punctuation_engine.py tests/test_config_driven_styles.py`。
 36. 触发场景：文首“在……上的讲话”被 Word 的 Heading 1 样式或既有错误输出误标为一级标题时，必须优先识别为 `title`，不得生成“一、”。仅在首个可分类段落、无冒号且正文去除单个“一、”后仍完整符合“在……上的讲话”时，才移除该推断出的错误前缀；普通一级标题不得受影响。若讲话材料的“职务姓名”和括号日期通过软换行粘连，或编号标题后通过软换行粘连正文，`smart` 模式必须拆为独立结构段，避免职务日期继承正文样式或正文继承标题样式。修改后至少运行 `tests/test_processing_flags.py tests/test_importer_heading_flow.py tests/test_engine_heading_spacing.py tests/test_recognition_decoder.py`。
-37. 触发场景：编号标题与不少于 5 个可见正文字符被同一物理段落承载，且段内混有手动分页符、制表符或软换行时，`smart` 模式必须优先按“标题 → 正文”拆为两个结构段；不得保留会令正文继承标题样式的分页符。导出阶段也必须兜底拆分旧数据路径，并只在用户启用序号规范时重建一至四级标题序号。修改后至少运行 `tests/test_processing_flags.py tests/test_engine_heading_spacing.py`。
+37. 触发场景：编号一级标题后紧跟不少于 5 个可见正文字符时，`smart`/`structural` 必须先拆为“一级标题 → 一段完整正文”。正文不得因后续句号、加粗或字体切换再次拆段；正文区“加粗首句 + 普通正文”保持一个 `body`，只按源 run 证据恢复首句加粗。若正文后通过软换行出现独立称呼、编号标题、日期、附件或落款等强结构，可在完整正文之后继续拆出精确结构段；普通软换行不得增加正文段。SDK 对每段继续输出可验证定位范围，所有范围必须覆盖原始可见文字且不重叠、不丢失。修改后至少运行 `tests/test_processing_flags.py tests/test_engine_heading_spacing.py tests/test_sdk.py tests/test_segment_boundaries.py`。
+38. 触发场景：独立一级标题错误写成`二.标题`、`三．标题`或带重复句点时，中文序数加点号仍作为损坏的一级序号证据；标点规范化不得先将该点号转换为正文句号，开启序号规范后统一重建为`二、标题`、`三、标题`。不得将正文中的“一是、二是、三是”纳入此规则。修改后至少运行 `tests/test_importer_heading_flow.py tests/test_processing_flags.py tests/test_punctuation_engine.py tests/test_recognition_decoder.py`。
+38. 触发场景：广义“任意短句以冒号结尾”不能全局作为主送机关。`recipient/addressing`只允许文首正文开始前的主送机关，或任意区域中明确的独立称呼；进入正文后，空值的“机构名称：”按 `body + no_indent` 输出，使用 `DCT-Body` 且段前段后为 0。已有责任单位、联系人等明确字段标签继续走键值段规则，禁止维护具体机构名称名单。修改后至少运行 `tests/test_recognition_decoder.py tests/test_processing_flags.py tests/test_structured_layout_quality.py`。
+39. 触发场景：“姓名/姓氏或职务修饰 + 书记、主席、主任、局长、老师、同志等个人称谓 + 冒号/感叹号”的短独立行应识别为称呼，不维护具体人名。“机构名称：正文内容”和“责任单位：内容”不得因冒号生成新段落，冒号只用于段内格式。同一段中的“一是/二是/三是”或“一要/二要/三要”仅加粗各自引导句，句号后正文必须恢复普通格式，不得与 `inline_lead_bold` 重复重写。
+40. 触发场景：源 DOCX 的自动列表编号可能只存在于 `w:numPr`，不出现在段落文本中。短独立段若保留 `@lvl_N`、高加粗比例且旧导入链已识别为对应标题，authoritative decoder 不得被普通正文候选覆盖；超过 40 字的列表继承正文不按该规则升级。批处理必须对比源结构线索与输出类型，报告“源标题线索数/未保留数”，只记录段落号、类型、证据和文字哈希，不记录完整正文。
+41. 触发场景：附件说明、落款单位和落款日期在源文档中交错，或被无内容空段隔开时，非 strict 导出必须整理为“附件说明及附件项 → 落款单位 → 日期”，并删除该尾部块内部无结构含义的空段。若同一物理段落包含“编号标题 + 正文 + 多个软换行 + 末行落款单位”，且下一物理段落首个可见行是日期，也必须在标题/正文拆分后继续拆出落款单位，不能让标题正文分支吞掉尾部结构。识别到落款单位和日期后，最终渲染计划必须保证二者相邻；批处理报告“落款连续性问题数”，附件不得出现在二者之间。
+42. 触发场景：讲话稿开头和正文结尾都出现独立称呼时，开场称呼继续使用“称呼”配置的段前 1 行；一旦正文流已经开始，后续 `addressing`（例如文末再次称呼）段前、段后均强制为 0，不得因共用 `DCT-Recipient` 样式再次产生空一行。源段落中的连续手动空行仍按结构拆分规则清理。修改后至少运行 `tests/test_engine_heading_spacing.py tests/test_processing_flags.py tests/test_segment_boundaries.py`，并复排讲话专项稿检查最终 OOXML 的 `w:beforeLines`。
 
 ## 可移动服务器部署
 
@@ -132,6 +139,8 @@ GitHub 发布以 `docs/GITHUB_UPLOAD_GUIDE.md` 和 `scripts/publish_to_github.ps
 3. 用户明确要求提交时，更新 `pyproject.toml` 和 `CHANGELOG.md` 后再执行发布安全扫描、提交与推送；不得将密钥、运行数据或用户文档纳入提交。
 
 ## 公文测试文档批处理
+
+执行文档批处理前必须阅读并逐项核对 `docs/DOCX_REGRESSION_CHECKLIST.md`。该清单汇总项目已经真实出现过的问题；测试结论必须分别说明文件生成、结构审计、模板差异和视觉抽查结果，不能用“处理成功”代替全部验收。
 
 测试文档统一放在项目根目录下的 `test_docx` 目录，不得散落到项目根目录或运行时目录：
 

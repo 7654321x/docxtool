@@ -123,6 +123,20 @@ class ImporterHeadingFlowTest(unittest.TestCase):
 
         self.assertNotEqual(illegal_child.type_id, "heading4")
 
+    def test_malformed_chinese_dot_prefix_is_a_heading1_shape(self):
+        data = self._load_lines([
+            "测试材料",
+            "一、前一部分",
+            "正文内容完整保留。",
+            "二.存在的问题",
+            "后续正文内容完整保留。",
+        ])
+
+        malformed = self._find_original(data, "二.存在的问题")
+
+        self.assertEqual(malformed.type_id, "heading1")
+        self.assertEqual(malformed.features.numbering_prefix, "二.")
+
 
 if __name__ == "__main__":
     unittest.main()

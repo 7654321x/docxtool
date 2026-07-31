@@ -16,12 +16,31 @@ from docx.shared import Cm
 from docx.shared import Pt, RGBColor
 
 from docxtool.document.engine import export_doc
-from docxtool.document.importer import DocxImporter
+from docxtool.document.engine.core import _normalize_signature_attachment_order
+from docxtool.document.importer import DocxImporter, ParagraphData, ParagraphFeatures
 from docxtool.document.style_config import PageSettings, StyleRule, logger
 
 
 def _rules():
     return [StyleRule.default_for_row(i) for i in range(10)]
+
+
+def test_export_tail_order_crosses_ignorable_empty_paragraphs() -> None:
+    def paragraph(text: str, type_id: str) -> ParagraphData:
+        return ParagraphData(text, type_id, text, ParagraphFeatures())
+
+    normalized = _normalize_signature_attachment_order([
+        paragraph("测试单位", "sign_org"),
+        paragraph("", "body"),
+        paragraph("附件：1. 测试材料", "attachment_note"),
+        paragraph("2. 补充材料", "attachment_note_item"),
+        paragraph("", "body"),
+        paragraph("2026年7月31日", "sign_date"),
+    ])
+
+    assert [item.type_id for item in normalized] == [
+        "attachment_note", "attachment_note_item", "sign_org", "sign_date",
+    ]
 
 
 def _body_order(path):

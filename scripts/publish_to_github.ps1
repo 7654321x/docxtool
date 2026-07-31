@@ -119,6 +119,7 @@ $requiredFiles = @(
     "docs/DEPLOY.md",
     "docs/RECOGNITION_ARCHITECTURE.md",
     "docs/RECOGNITION_RELEASE.md",
+    "docs/DOCX_REGRESSION_CHECKLIST.md",
     "docs/GITHUB_UPLOAD_GUIDE.md",
     "README.md",
     "docs/UPLOAD_MANIFEST.md",
@@ -214,6 +215,7 @@ $nodeTestFiles = $testFiles | Where-Object { $_ -like "*.test.mjs" }
 
 $publishFiles = @($requiredFiles + $testFiles | Sort-Object -Unique)
 $tempRoot = Join-Path $env:TEMP ("docxtool-publish-" + [guid]::NewGuid().ToString("N"))
+$buildRoot = Join-Path $env:TEMP ("docxtool-build-" + [guid]::NewGuid().ToString("N"))
 
 try {
     Write-Host "Source: $SourceRoot"
@@ -238,6 +240,7 @@ try {
         if ($nodeTestFiles) {
             Invoke-Checked node (@("--test") + $nodeTestFiles)
         }
+        Invoke-Checked $testPython @("-m", "build", "--outdir", $buildRoot)
 
         Invoke-Checked git @("add", "-A")
         Invoke-Checked git @("diff", "--cached", "--check")
@@ -273,6 +276,9 @@ try {
     }
 }
 finally {
+    if (Test-Path -LiteralPath $buildRoot) {
+        Remove-Item -LiteralPath $buildRoot -Recurse -Force
+    }
     if ($KeepTemp) {
         Write-Host "Keeping temp clone: $tempRoot"
     }

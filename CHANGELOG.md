@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.8 - 2026-07-31
+
+- Reworked DOCX regression comparison with heading-content alignment, source/output/template attribution, character-based indent comparison, and protected-caption provenance checks.
+- Recognized malformed Chinese first-level prefixes such as `二.标题` without confusing `一是/二是` prose, and rebuilt them through the existing numbering option.
+- Kept the configured gap for opening salutations while removing inherited before/after spacing from repeated salutations after the speech body has started.
+
 ## 1.7 - 2026-07-31
 
 - Added conservative multi-boundary logical segment candidates and complete segment-group source locators.

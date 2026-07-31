@@ -12,12 +12,36 @@ from .model import DocumentModeDecision, DocumentMode
 
 DISPATCH_RE = re.compile(r"^(?P<issuer>[\u4e00-\u9fffA-Za-z0-9]{0,16})(?:〔|\[)(?P<year>\d{4})(?:〕|\])\s*(?P<number>\d+)\s*号$")
 DATE_RE = re.compile(r"^(?:19|20)\d{2}年\s*\d{1,2}月\s*\d{1,2}日$")
-NUMBERING_RE = re.compile(r"^(?P<prefix>(?:[一二三四五六七八九十百千万零〇]{1,5}、|[（(][一二三四五六七八九十百千万零〇]{1,5}[）)]|\d{1,2}[.．、]|[（(]\d{1,2}[）)]|[①②③④⑤⑥⑦⑧⑨⑩]))(?P<body>.*)$")
+NUMBERING_RE = re.compile(r"^(?P<prefix>(?:[一二三四五六七八九十百千万零〇]{1,5}[、.．]+|[（(][一二三四五六七八九十百千万零〇]{1,5}[）)]|\d{1,2}[.．、]+|[（(]\d{1,2}[）)]|[①②③④⑤⑥⑦⑧⑨⑩]))(?P<body>.*)$")
 KEY_VALUE_RE = re.compile(r"^(?P<label>[^:：]{1,24})(?P<separator>[:：])(?P<value>.*)$")
 MEETING_LABELS = frozenset({"时间", "地点", "主持", "记录", "出席", "缺席", "列席", "参会", "参加", "议题", "议定事项", "会议名称", "会议时间", "会议地点"})
 SOURCE_NOTE_RE = re.compile(r"^(?:来源|注|说明|备注)\s*[:：]")
 ATTACHMENT_RE = re.compile(r"^附件\s*[:：]")
 RECIPIENT_RE = re.compile(r"^[\u4e00-\u9fffA-Za-z0-9、，,（）()\s]{2,40}[:：]$")
+STANDALONE_ADDRESSING_RE = re.compile(
+    r"^(?:"
+    r"各位[\u4e00-\u9fff、，,]{1,18}"
+    r"|同志们"
+    r"|(?:尊敬的)?[\u4e00-\u9fff·]{1,6}"
+    r"(?:书记|主席|主任|部长|局长|处长|科长|司长|厅长|市长|县长|区长|"
+    r"镇长|乡长|院长|校长|政委|组长|队长|秘书长|委员|常委|经理|总监|"
+    r"老师|教授|同志|先生|女士)"
+    r")[：:！!]$"
+)
+ORGANIZATION_LABEL_SUFFIX_RE = re.compile(
+    r"(?:学院|学校|大学|公司|集团|委员会|政府|办公室|中心|协会|学会|医院|"
+    r"研究院|研究所|园区|社区|街道|机关|党委|党组|党支部|团委|工会|商会|"
+    r"局|厅|处|科|院|所|乡|镇)$"
+)
+
+
+def is_standalone_addressing_text(value: str) -> bool:
+    return bool(STANDALONE_ADDRESSING_RE.fullmatch(re.sub(r"\s+", "", value or "")))
+
+
+def is_organization_label(value: str) -> bool:
+    compact = re.sub(r"\s+", "", value or "").rstrip("：:")
+    return bool(compact and ORGANIZATION_LABEL_SUFFIX_RE.search(compact))
 
 
 class BlockKind(str):
@@ -164,10 +188,9 @@ def extract_features(block: DocumentBlock, previous: DocumentBlock | None = None
     numbering = NUMBERING_RE.match(normalized)
     prefix = numbering.group("prefix") if numbering else None
     content = numbering.group("body").strip() if numbering else normalized
-    compact_content = re.sub(r"\s+", "", content)
     level = None
     if prefix:
-        if prefix.endswith("、") and not prefix[0].isdigit():
+        if not prefix[0].isdigit() and not prefix.startswith(("（", "(")):
             level = 1
         elif prefix.startswith(("（", "(")):
             inner = prefix[1:-1].strip()

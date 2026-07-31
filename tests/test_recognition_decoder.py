@@ -18,11 +18,23 @@ from docxtool.document.style_config import PageSettings, StyleRule
 
 
 def _paragraph(text, type_id="body", index=0, **meta):
+    numbering_prefix = meta.pop("numbering_prefix", "")
+    segment_numbering_features = meta.pop("segment_numbering_features", numbering_prefix)
+    bold_char_ratio = meta.pop("bold_char_ratio", 0.0)
     return SimpleNamespace(
         text=text,
         original_text=text,
         type_id=type_id,
-        features=SimpleNamespace(paragraph_index=index, alignment=meta.pop("alignment", ""), style_name=meta.pop("style_name", ""), bold=False, font_size_pt=None),
+        features=SimpleNamespace(
+            paragraph_index=index,
+            alignment=meta.pop("alignment", ""),
+            style_name=meta.pop("style_name", ""),
+            bold=bold_char_ratio >= 0.65,
+            bold_char_ratio=bold_char_ratio,
+            font_size_pt=None,
+            numbering_prefix=numbering_prefix,
+            segment_numbering_features=segment_numbering_features,
+        ),
         meta=meta,
     )
 
@@ -202,6 +214,120 @@ def test_front_matter_context_overrides_misused_heading_style_without_keywords()
     assert context["front_matter_positions"] == [0, 1, 2, 3]
     assert context["body_start"] == 4
     assert context["body_start_reason"] == "recipient-following-body"
+
+
+def test_body_empty_colon_label_is_not_a_recipient_or_key_value() -> None:
+    label = _paragraph("某某学院：", "body", 2, no_indent=True)
+    data = _document(
+        _paragraph("工作情况", "title", 0, alignment="CENTER"),
+        _paragraph("现将有关情况报告如下，供审阅。", "body", 1),
+        label,
+        _paragraph("调研发现有关工作正在有序推进。", "body", 3),
+    )
+
+    apply_recognition(data)
+
+    assert label.type_id == "body"
+    assert label.meta["no_indent"] is True
+    assert label.meta["recognition_section"] == "body"
+
+
+def test_standalone_salutation_remains_addressing_after_body_started() -> None:
+    salutation = _paragraph("各位委员、同志们！", "body", 2)
+    data = _document(
+        _paragraph("工作情况", "title", 0, alignment="CENTER"),
+        _paragraph("前段正文已经开始，并完整说明有关工作情况。", "body", 1),
+        salutation,
+        _paragraph("后续正文继续正常排版。", "body", 3),
+    )
+
+    apply_recognition(data)
+
+    assert salutation.type_id == "addressing"
+    assert "standalone-addressing" in salutation.meta["recognition_evidence"]
+
+
+def test_personal_title_salutation_remains_addressing_after_body_started() -> None:
+    salutation = _paragraph("余书记：", "body", 2)
+    data = _document(
+        _paragraph("工作情况", "title", 0, alignment="CENTER"),
+        _paragraph("前段正文已经开始，并完整说明有关工作情况。", "body", 1),
+        salutation,
+        _paragraph("后续正文继续正常排版。", "body", 3),
+    )
+
+    apply_recognition(data)
+
+    assert salutation.type_id == "addressing"
+    assert "standalone-addressing" in salutation.meta["recognition_evidence"]
+
+
+def test_organization_label_is_not_a_personal_title_salutation() -> None:
+    label = _paragraph("某某学院：", "body", 2, no_indent=True)
+    data = _document(
+        _paragraph("工作情况", "title", 0, alignment="CENTER"),
+        _paragraph("前段正文已经开始，并完整说明有关工作情况。", "body", 1),
+        label,
+        _paragraph("后续正文继续正常排版。", "body", 3),
+    )
+
+    apply_recognition(data)
+
+    assert label.type_id == "body"
+
+
+def test_organization_label_with_inline_content_is_not_a_key_value() -> None:
+    paragraph = _paragraph("某某职业学院：调研工作正在有序推进。", "body", 2)
+    data = _document(
+        _paragraph("工作情况", "title", 0, alignment="CENTER"),
+        _paragraph("前段正文已经开始，并完整说明有关工作情况。", "body", 1),
+        paragraph,
+    )
+
+    apply_recognition(data)
+
+    assert paragraph.type_id == "body"
+    assert paragraph.meta["recognition_section"] == "body"
+
+
+def test_short_bold_source_list_heading_survives_core_body_candidate() -> None:
+    paragraph = _paragraph(
+        "企业在订单班的重视度和投入上主动性不足",
+        "heading2",
+        2,
+        numbering_prefix="@lvl_0",
+        bold_char_ratio=1.0,
+        classification_kind="body",
+        classification_confidence=0.78,
+    )
+    data = _document(
+        _paragraph("三、存在的主要问题", "heading1", 0),
+        _paragraph("前段正文已经开始，并完整说明有关工作情况。", "body", 1),
+        paragraph,
+        _paragraph("后续正文对该标题展开具体说明。", "body", 3),
+    )
+
+    apply_recognition(data)
+
+    assert paragraph.type_id == "heading2"
+    assert paragraph.meta["recognition_provider"].startswith("source-list-numbering:")
+
+
+def test_long_source_list_prose_is_not_promoted_to_heading() -> None:
+    paragraph = _paragraph(
+        "这是继承了Word列表属性的较长正文段落，其中包含完整叙述和多项具体情况，不应因为隐藏列表属性被识别成标题。",
+        "body",
+        1,
+        numbering_prefix="@lvl_0",
+        bold_char_ratio=1.0,
+        classification_kind="body",
+        classification_confidence=0.9,
+    )
+    data = _document(_paragraph("工作情况", "title", 0), paragraph)
+
+    apply_recognition(data)
+
+    assert paragraph.type_id == "body"
 
 
 def test_title_formatting_cannot_override_front_role_and_placeholder_date():

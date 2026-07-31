@@ -3,12 +3,16 @@ from __future__ import annotations
 from docx import Document
 from docx.enum.text import WD_BREAK
 from docx.shared import Pt
+import pytest
 
 from docxtool.document.importer import (
     ParagraphFeatures,
     SourceRun,
     _segment_boundary_candidates,
     _split_inline_heading_body_spans,
+    _split_structural_tail_after_numbered_heading,
+    _validate_source_span_partition,
+    _validate_numbered_heading_body_split,
 )
 from docxtool.sdk import recognize_docx
 
@@ -51,6 +55,18 @@ def test_visual_title_terminator_can_split_without_numbering() -> None:
     ]
 
 
+def test_body_visual_emphasis_does_not_create_a_paragraph_boundary() -> None:
+    source = "推动重点工作走深走实。各单位应当结合实际认真执行。"
+    boundary = source.index("。") + 1
+    features = _features_for_visual_boundary(source, boundary)
+
+    spans = _split_inline_heading_body_spans(
+        source, 0, len(source), features, allow_visual_boundary=False
+    )
+
+    assert spans == [(0, len(source))]
+
+
 def test_plain_prose_sentence_is_not_split_without_structure_evidence() -> None:
     source = "这是普通正文第一句。后面仍然是同一段普通正文内容。"
 
@@ -58,14 +74,85 @@ def test_plain_prose_sentence_is_not_split_without_structure_evidence() -> None:
     assert _split_inline_heading_body_spans(source, 0, len(source)) == [(0, len(source))]
 
 
-def test_short_label_colon_uses_label_shape_or_visual_transition() -> None:
+def test_numbered_heading_splits_to_one_complete_body_despite_later_format_change() -> None:
+    source = "一、总体要求。正文首句说明。后续正文仍属于同一段。"
+    heading_end = source.index("。") + 1
+    body_sentence_end = source.index("。", heading_end) + 1
+    features = _features_for_visual_boundary(source, body_sentence_end)
+
+    later_candidates = _segment_boundary_candidates(source, heading_end, len(source), features)
+    spans = _split_inline_heading_body_spans(source, 0, len(source), features)
+
+    assert later_candidates[0].left_type_hint == "title_or_heading"
+    assert [source[start:end] for start, end in spans] == [
+        "一、总体要求。", "正文首句说明。后续正文仍属于同一段。",
+    ]
+    _validate_numbered_heading_body_split(source, spans, features)
+
+
+def test_numbered_heading_body_validation_rejects_extra_body_segment() -> None:
+    source = "一、总体要求。正文首句说明。后续正文仍属于同一段。"
+    heading_end = source.index("。") + 1
+    body_sentence_end = source.index("。", heading_end) + 1
+
+    with pytest.raises(ValueError, match="一个完整正文段"):
+        _validate_numbered_heading_body_split(
+            source,
+            [(0, heading_end), (heading_end, body_sentence_end), (body_sentence_end, len(source))],
+        )
+
+
+def test_numbered_heading_releases_standalone_salutation_after_one_body() -> None:
+    source = "一、总体要求。正文首句说明。后续正文仍属于同一段。\n\n\n各位委员、同志们！"
+    heading_body = _split_inline_heading_body_spans(source, 0, len(source))
+
+    spans = _split_structural_tail_after_numbered_heading(source, heading_body)
+
+    _validate_source_span_partition(source, spans)
+    assert [source[start:end] for start, end in spans] == [
+        "一、总体要求。",
+        "正文首句说明。后续正文仍属于同一段。",
+        "各位委员、同志们！",
+    ]
+
+
+def test_numbered_heading_releases_personal_title_salutation_after_one_body() -> None:
+    source = "一、总体要求。正文首句说明。后续正文仍属于同一段。\n\n余书记："
+    heading_body = _split_inline_heading_body_spans(source, 0, len(source))
+
+    spans = _split_structural_tail_after_numbered_heading(source, heading_body)
+
+    _validate_source_span_partition(source, spans)
+    assert [source[start:end] for start, end in spans] == [
+        "一、总体要求。",
+        "正文首句说明。后续正文仍属于同一段。",
+        "余书记：",
+    ]
+
+
+def test_inline_label_and_content_do_not_create_a_paragraph_boundary() -> None:
     source = "责任单位：办公室负责统筹落实相关工作。"
     candidates = _segment_boundary_candidates(source, 0, len(source))
 
-    assert len(candidates) == 1
-    assert candidates[0].left_type_hint == "label"
-    assert candidates[0].right_type_hint == "content"
-    assert "LABEL_SHAPE" in candidates[0].evidence
+    assert candidates == ()
+
+
+def test_organization_label_and_content_stay_in_one_sdk_block(tmp_path) -> None:
+    source = tmp_path / "organization-label-body.docx"
+    text = "某某职业学院：调研中发现该校有关工作正在有序推进。"
+    document = Document()
+    paragraph = document.add_paragraph()
+    paragraph.add_run("某某职业学院：")
+    paragraph.add_run("调研中发现该校有关工作正在有序推进。")
+    document.save(source)
+
+    plan = recognize_docx(source, recognition_mode="authoritative", include_text=True)
+    blocks = [block for block in plan.blocks if block.physical_paragraph_index == 0]
+
+    assert len(blocks) == 1
+    assert blocks[0].type_id == "body"
+    assert blocks[0].recognized_text == text
+    assert blocks[0].locator_verified
 
 
 def test_attachment_note_is_not_split_as_a_short_label() -> None:
@@ -75,26 +162,46 @@ def test_attachment_note_is_not_split_as_a_short_label() -> None:
     assert _split_inline_heading_body_spans(source, 0, len(source)) == [(0, len(source))]
 
 
-def test_one_physical_paragraph_can_emit_three_ordered_segments(tmp_path) -> None:
-    source = tmp_path / "three-segments.docx"
+def test_numbered_heading_with_wrapped_body_emits_one_complete_body_segment(tmp_path) -> None:
+    source = tmp_path / "heading-and-complete-body.docx"
     document = Document()
     paragraph = document.add_paragraph()
     heading = paragraph.add_run("一、总体要求。")
     heading.font.bold = True
     heading.font.size = Pt(16)
-    paragraph.add_run("正文第一部分应当独立识别。")
+    paragraph.add_run("正文第一部分属于同一正文段。")
     trailing = paragraph.add_run()
     trailing.add_break(WD_BREAK.LINE)
-    trailing.add_text("正文第二部分保持为单独逻辑片段。")
+    trailing.add_text("正文第二部分仍属于同一正文段。")
     document.save(source)
 
     plan = recognize_docx(source, recognition_mode="legacy", include_text=True)
     blocks = [block for block in plan.blocks if block.physical_paragraph_index == 0]
 
-    assert len(blocks) == 3
-    assert [block.segment_index for block in blocks] == [0, 1, 2]
-    assert {block.segment_count_total for block in blocks} == {3}
+    assert len(blocks) == 2
+    assert [block.segment_index for block in blocks] == [0, 1]
+    assert {block.segment_count_total for block in blocks} == {2}
     assert all(block.source_locator_status == "confirmed" for block in blocks)
     assert [block.recognized_text for block in blocks] == [
-        "一、总体要求。", "正文第一部分应当独立识别。", "正文第二部分保持为单独逻辑片段。",
+        "一、总体要求。", "正文第一部分属于同一正文段。\n正文第二部分仍属于同一正文段。",
     ]
+
+
+def test_sdk_locates_heading_body_and_later_salutation_without_gaps(tmp_path) -> None:
+    source = tmp_path / "heading-body-salutation.docx"
+    document = Document()
+    paragraph = document.add_paragraph()
+    paragraph.add_run("一、总体要求。正文内容完整保留。")
+    for _unused in range(3):
+        paragraph.add_run().add_break(WD_BREAK.LINE)
+    paragraph.add_run("各位委员、同志们！")
+    document.save(source)
+
+    plan = recognize_docx(source, recognition_mode="authoritative", include_text=True)
+    blocks = [block for block in plan.blocks if block.physical_paragraph_index == 0]
+
+    assert [block.type_id for block in blocks] == ["heading1", "body", "addressing"]
+    assert [block.recognized_text for block in blocks] == [
+        "一、总体要求。", "正文内容完整保留。", "各位委员、同志们！",
+    ]
+    assert all(block.locator_verified for block in blocks)
