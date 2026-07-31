@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.9 - 2026-07-31
+
+- Simplified GitHub publishing to one default command covering the allowlist, sensitive-file scan, commit, push, and remote-head verification.
+- Made dry-run and full test verification optional through `-DryRun` and `-Verify`, while retaining the clean temporary clone and no-force-push protections.
+
 ## 1.8 - 2026-07-31
 
 - Reworked DOCX regression comparison with heading-content alignment, source/output/template attribution, character-based indent comparison, and protected-caption provenance checks.

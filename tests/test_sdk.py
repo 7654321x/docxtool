@@ -39,7 +39,7 @@ def test_sdk_matches_existing_authoritative_recognition_and_redacts_text(tmp_pat
 
     assert plan.processing_mode == "structural"
     assert plan.recognition_mode == "authoritative"
-    assert plan.package_version == package_version == "1.8"
+    assert plan.package_version == package_version == "1.9"
     assert plan.locator_version == "source-locator-v2"
     assert plan.host_text_contract_version == "host-text-v1"
     assert [block.type_id for block in plan.blocks] == [item.type_id for item in imported.paragraphs]

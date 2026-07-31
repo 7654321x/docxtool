@@ -204,16 +204,17 @@ tmp_wheels/
 推荐使用：
 
 ```pwsh
-pwsh -NoProfile -File .\scripts\publish_to_github.ps1
+pwsh -NoProfile -File .\scripts\publish_to_github.ps1 -CommitMessage "说明本次修改"
 ```
 
-默认只演练，不提交、不推送。确认无误后：
+该命令默认完成安全扫描、提交、推送和远程核验。可选操作：
 
 ```pwsh
-pwsh -NoProfile -File .\scripts\publish_to_github.ps1 -Push
+pwsh -NoProfile -File .\scripts\publish_to_github.ps1 -DryRun
+pwsh -NoProfile -File .\scripts\publish_to_github.ps1 -Verify -CommitMessage "说明本次修改"
 ```
 
-发布脚本会使用临时干净克隆，把本清单允许的文件复制进去，并让远端已退役文件在新提交中删除。它不会清除远端旧 Git 历史，也不会 force push。
+发布脚本会使用临时干净克隆，只复制允许文件，并阻止密钥、DOCX、数据库、日志和 WPS 私有工程进入提交。它不会 force push。
 
 ## 8. 发布前检查
 

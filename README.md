@@ -35,7 +35,7 @@
 - `docs/DOCX_REGRESSION_CHECKLIST.md`：已知公文问题与批量回归检查清单。
 - `docs/UPLOAD_MANIFEST.md`：AI 修改和 GitHub 上传范围清单。
 - `docs/GITHUB_UPLOAD_GUIDE.md`：安全发布到 GitHub 的操作说明。
-- `scripts/publish_to_github.ps1`：PowerShell 7 安全发布脚本，默认只演练。
+- `scripts/publish_to_github.ps1`：PowerShell 7 安全发布脚本，一条命令完成提交、推送和远程核验。
 
 ## 本地运行
 
@@ -162,18 +162,17 @@ binding = bind_recognition_plan(plan, {
 
 ## GitHub 发布
 
-不要直接把当前工作树整仓库推送到 GitHub。当前本地历史里曾跟踪过 `.docx` 样例和本地文件，推荐使用：
+不要直接把当前工作树整仓库推送到 GitHub。使用下列一条命令完成安全扫描、提交、推送和远程核验：
 
 ```pwsh
-pwsh -NoProfile -File .\scripts\publish_to_github.ps1
+pwsh -NoProfile -File .\scripts\publish_to_github.ps1 -CommitMessage "说明本次修改"
 ```
 
-默认是 dry run，只演练、运行检查并展示 staged diff，不提交、不推送。
-
-确认无误后才执行：
+需要先预览时增加 `-DryRun`；需要同时重跑全量测试时增加 `-Verify`：
 
 ```pwsh
-pwsh -NoProfile -File .\scripts\publish_to_github.ps1 -Push
+pwsh -NoProfile -File .\scripts\publish_to_github.ps1 -DryRun
+pwsh -NoProfile -File .\scripts\publish_to_github.ps1 -Verify -CommitMessage "说明本次修改"
 ```
 
 详细规则见 `docs/GITHUB_UPLOAD_GUIDE.md`。

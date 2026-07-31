@@ -51,15 +51,17 @@ class PagesProxyPackagingTest(unittest.TestCase):
         self.assertNotIn("trycloudflare.com", html)
         self.assertIn("const API_PREFIX = '/api'", html)
 
-    def test_publish_script_uses_pages_manifest_and_dry_run_default(self):
+    def test_publish_script_uses_pages_manifest_and_push_default(self):
         script = (ROOT / "scripts" / "publish_to_github.ps1").read_text(encoding="utf-8")
 
-        self.assertIn("[switch]$Push", script)
-        self.assertIn("Mode: $(if ($Push) { 'push' } else { 'dry-run' })", script)
-        self.assertIn("if (-not $Push)", script)
-        self.assertIn("Dry run complete. Re-run with -Push", script)
+        self.assertIn("[switch]$DryRun", script)
+        self.assertIn("[switch]$Verify", script)
+        self.assertIn("Mode: $(if ($DryRun) { 'dry-run' } else { 'push' })", script)
+        self.assertIn("if ($DryRun)", script)
+        self.assertIn("No commit was created and nothing was pushed", script)
         self.assertIn('Invoke-Checked git @("commit", "-m", $CommitMessage)', script)
         self.assertIn('Invoke-Checked git @("push", "origin", "HEAD:$Branch")', script)
+        self.assertIn("Push verification failed", script)
         self.assertNotIn("--force", script)
         self.assertNotIn("--force-with-lease", script)
         self.assertIn("Remote $Branch changed after clone", script)

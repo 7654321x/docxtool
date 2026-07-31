@@ -128,9 +128,9 @@ pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m pytest tests/test_struct
 
 ## GitHub 发布
 
-GitHub 发布以 `docs/GITHUB_UPLOAD_GUIDE.md` 和 `scripts/publish_to_github.ps1` 为准。默认使用临时干净克隆发布，不直接推送当前工作树。
+GitHub 发布以 `docs/GITHUB_UPLOAD_GUIDE.md` 和 `scripts/publish_to_github.ps1` 为准。脚本默认使用临时干净克隆，一次完成安全扫描、提交、推送和远程核验，不直接推送当前工作树。
 
-发布安全扫描必须精确允许仓库根目录的 `.env.example`，同时继续禁止 `.env` 和其他 `.env.*` 文件；修改发布清单或脚本后，必须先执行不带 `-Push` 的演练，再执行正式推送。
+发布安全扫描必须精确允许仓库根目录的 `.env.example`，同时继续禁止 `.env` 和其他 `.env.*` 文件。日常发布无需重复演练；需要预览时使用 `-DryRun`，需要在发布脚本内重跑全量测试时使用 `-Verify`。
 
 ## 版本与提交提醒
 

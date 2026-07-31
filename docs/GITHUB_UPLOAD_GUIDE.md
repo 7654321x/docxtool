@@ -76,33 +76,25 @@ pwsh -NoProfile -Command "git ls-remote https://github.com/7654321x/docxtool.git
 
 `.gitignore` 只影响未跟踪文件。已经被 Git 跟踪或已经进入历史的文件，不会因为写入 `.gitignore` 自动消失。
 
-## 5. 推荐发布命令
+## 5. 发布命令
 
-先演练：
-
-```pwsh
-pwsh -NoProfile -File .\scripts\publish_to_github.ps1
-```
-
-演练会：
-
-- 临时克隆 `https://github.com/7654321x/docxtool.git`
-- 清空临时克隆工作区，但保留 `.git`
-- 复制允许发布的真实项目文件
-- 运行 `pytest`、Ruff、Node Worker 测试
-- 验证 Python 包构建
-- 执行 `git diff --cached --check`
-- 展示 staged diff
-- 不提交、不推送
-- 结束后清理临时目录
-
-确认无误后推送：
+日常发布只执行一条命令：
 
 ```pwsh
-pwsh -NoProfile -File .\scripts\publish_to_github.ps1 -Push
+pwsh -NoProfile -File .\scripts\publish_to_github.ps1 -CommitMessage "说明本次修改"
 ```
 
-`-Push` 才会提交并推送。脚本不会 force push；如果远端分支在临时克隆后发生变化，脚本会停止。
+脚本自动完成：复制允许文件、敏感文件扫描、差异检查、提交、推送和远程提交号核验。它不会 force push；如果发布期间远端分支发生变化，脚本会停止。
+
+仅在需要时使用：
+
+```pwsh
+# 只预览，不提交、不推送
+pwsh -NoProfile -File .\scripts\publish_to_github.ps1 -DryRun
+
+# 发布前同时重跑 Python、Ruff 和 Node 测试
+pwsh -NoProfile -File .\scripts\publish_to_github.ps1 -Verify -CommitMessage "说明本次修改"
+```
 
 ## 6. 重要限制
 

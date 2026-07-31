@@ -2,7 +2,8 @@
 
 [CmdletBinding()]
 param(
-    [switch]$Push,
+    [switch]$DryRun,
+    [switch]$Verify,
     [string]$Repository = "https://github.com/7654321x/docxtool.git",
     [string]$Branch = "main",
     [string]$SourceRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path,
@@ -11,13 +12,6 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$sourceVenvPython = Join-Path $SourceRoot ".venv\Scripts\python.exe"
-$testPython = if (Test-Path -LiteralPath $sourceVenvPython -PathType Leaf) {
-    $sourceVenvPython
-}
-else {
-    (Get-Command python -ErrorAction Stop).Source
-}
 
 function Invoke-Checked {
     param(
@@ -211,17 +205,14 @@ $requiredFiles = @(
 $testFiles = Get-ChildItem -LiteralPath (Join-Path $SourceRoot "tests") -File |
     Where-Object { $_.Name -like "test_*.py" -or $_.Name -like "*.test.mjs" } |
     ForEach-Object { "tests/$($_.Name)" }
-$nodeTestFiles = $testFiles | Where-Object { $_ -like "*.test.mjs" }
-
 $publishFiles = @($requiredFiles + $testFiles | Sort-Object -Unique)
 $tempRoot = Join-Path $env:TEMP ("docxtool-publish-" + [guid]::NewGuid().ToString("N"))
-$buildRoot = Join-Path $env:TEMP ("docxtool-build-" + [guid]::NewGuid().ToString("N"))
 
 try {
     Write-Host "Source: $SourceRoot"
     Write-Host "Repository: $Repository"
     Write-Host "Branch: $Branch"
-    Write-Host "Mode: $(if ($Push) { 'push' } else { 'dry-run' })"
+    Write-Host "Mode: $(if ($DryRun) { 'dry-run' } else { 'push' })"
 
     Invoke-Checked git @("clone", "--branch", $Branch, "--single-branch", $Repository, $tempRoot)
     Push-Location -LiteralPath $tempRoot
@@ -235,12 +226,22 @@ try {
 
         Assert-NoForbiddenFiles -CloneRoot $tempRoot
 
-        Invoke-Checked $testPython @("-m", "pytest")
-        Invoke-Checked $testPython @("-m", "ruff", "check", "src", "tests", "scripts")
-        if ($nodeTestFiles) {
-            Invoke-Checked node (@("--test") + $nodeTestFiles)
+        if ($Verify) {
+            $sourceVenvPython = Join-Path $SourceRoot ".venv\Scripts\python.exe"
+            $testPython = if (Test-Path -LiteralPath $sourceVenvPython -PathType Leaf) {
+                $sourceVenvPython
+            }
+            else {
+                (Get-Command python -ErrorAction Stop).Source
+            }
+            $nodeTestFiles = $testFiles | Where-Object { $_ -like "*.test.mjs" }
+
+            Invoke-Checked $testPython @("-m", "pytest")
+            Invoke-Checked $testPython @("-m", "ruff", "check", "src", "tests", "scripts")
+            if ($nodeTestFiles) {
+                Invoke-Checked node (@("--test") + $nodeTestFiles)
+            }
         }
-        Invoke-Checked $testPython @("-m", "build", "--outdir", $buildRoot)
 
         Invoke-Checked git @("add", "-A")
         Invoke-Checked git @("diff", "--cached", "--check")
@@ -260,25 +261,28 @@ try {
             throw "Remote $Branch changed after clone ($initialRemote -> $latestRemote). Stop and review before pushing."
         }
 
-        if (-not $Push) {
-            Write-Host "Dry run complete. Re-run with -Push to commit and push these staged changes."
+        if ($DryRun) {
+            Write-Host "Dry run complete. No commit was created and nothing was pushed."
             return
         }
 
         Invoke-Checked git @("config", "user.name", "7654321x")
         Invoke-Checked git @("config", "user.email", "7654321x@users.noreply.github.com")
         Invoke-Checked git @("commit", "-m", $CommitMessage)
+        $localCommit = (git rev-parse HEAD).Trim()
         Invoke-Checked git @("push", "origin", "HEAD:$Branch")
-        Write-Host "Pushed to $Repository $Branch."
+        $remoteLine = (git ls-remote $Repository "refs/heads/$Branch").Trim()
+        $remoteCommit = ($remoteLine -split "\s+")[0]
+        if ($remoteCommit -ne $localCommit) {
+            throw "Push verification failed: local=$localCommit remote=$remoteCommit"
+        }
+        Write-Host "Pushed and verified: $Repository $Branch $localCommit"
     }
     finally {
         Pop-Location
     }
 }
 finally {
-    if (Test-Path -LiteralPath $buildRoot) {
-        Remove-Item -LiteralPath $buildRoot -Recurse -Force
-    }
     if ($KeepTemp) {
         Write-Host "Keeping temp clone: $tempRoot"
     }
