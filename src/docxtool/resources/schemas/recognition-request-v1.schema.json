@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docxtool.local/schemas/recognition-request-v1.schema.json",
+  "title": "DocxTool RecognitionRequest v1",
+  "description": "Versioned request object for local DOCX recognition.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "processing_mode",
+    "recognition_mode",
+    "include_text",
+    "include_raw_text",
+    "format_config",
+    "feature_overrides"
+  ],
+  "properties": {
+    "schema_version": { "const": "recognition-request-v1" },
+    "processing_mode": { "enum": ["strict", "structural", "normalize"] },
+    "recognition_mode": { "enum": ["legacy", "shadow", "authoritative"] },
+    "include_text": { "type": "boolean" },
+    "include_raw_text": { "type": "boolean" },
+    "format_config": { "type": ["object", "null"], "additionalProperties": true },
+    "feature_overrides": { "type": ["object", "null"], "additionalProperties": true }
+  },
+  "additionalProperties": true
+}

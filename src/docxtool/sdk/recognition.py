@@ -11,12 +11,10 @@ from typing import Any, Mapping, Optional, Sequence
 from docxtool import __version__ as PACKAGE_VERSION
 from docxtool.document.importer import DocxImporter, ParagraphData
 from docxtool.document.recognition.version import (
-    RECOGNITION_DIAGNOSTIC_SCHEMA_VERSION,
     RECOGNITION_ENGINE_VERSION,
 )
 from docxtool.document.style_config import load_rules_and_settings
 from docxtool.document.source_tape import (
-    HOST_TEXT_CONTRACT_VERSION,
     SOURCE_LOCATOR_VERSION,
     SourceTape,
     canonicalize_text,
@@ -24,23 +22,15 @@ from docxtool.document.source_tape import (
 )
 from docxtool.paths import default_format_config_path
 
-from .models import RecognitionBlock, RecognitionPlan, ReviewItem
-
-
-class RecognitionSdkError(RuntimeError):
-    """Base error for the stable SDK boundary."""
-
-    code = "RECOGNITION_FAILED"
-
-
-class RecognitionInputError(RecognitionSdkError):
-    """Raised when a caller does not provide a readable DOCX snapshot."""
-
-    code = "INVALID_DOCX_INPUT"
-
-
-_PROCESSING_MODES = frozenset({"strict", "structural", "normalize"})
-_RECOGNITION_MODES = frozenset({"legacy", "shadow", "authoritative"})
+from .constants import (
+    HOST_TEXT_CONTRACT_VERSION as SDK_HOST_TEXT_CONTRACT_VERSION,
+    PROCESSING_MODES,
+    RECOGNITION_MODES,
+    RECOGNITION_PLAN_SCHEMA_VERSION,
+    SOURCE_LOCATOR_VERSION as SDK_SOURCE_LOCATOR_VERSION,
+)
+from .errors import InvalidRequestError, RecognitionInputError, RecognitionSdkError
+from .models import RecognitionBlock, RecognitionPlan, RecognitionRequest, ReviewItem, mapping_digest
 _SPECIAL_KIND_BY_TYPE = {
     "__table__": "table",
     "__image__": "image",
@@ -218,6 +208,7 @@ def _build_plan(
     source_sha256: str,
     include_text: bool = False,
     include_raw_text: bool = False,
+    request_digest: str = "",
 ) -> RecognitionPlan:
     paragraphs = list(getattr(data, "paragraphs", ()) or ())
     visible_hashes = [_sha256_text(_visible_text(item)) if _visible_text(item) else "" for item in paragraphs]
@@ -335,11 +326,11 @@ def _build_plan(
                 evidence=_safe_strings(meta.get("recognition_evidence")),
             ))
     return RecognitionPlan(
-        schema_version=str(report.get("schema_version", RECOGNITION_DIAGNOSTIC_SCHEMA_VERSION)),
+        schema_version=RECOGNITION_PLAN_SCHEMA_VERSION,
         engine_version=str(report.get("engine_version", RECOGNITION_ENGINE_VERSION)),
         package_version=PACKAGE_VERSION,
-        locator_version=SOURCE_LOCATOR_VERSION,
-        host_text_contract_version=HOST_TEXT_CONTRACT_VERSION,
+        locator_version=SDK_SOURCE_LOCATOR_VERSION,
+        host_text_contract_version=SDK_HOST_TEXT_CONTRACT_VERSION,
         source_sha256=source_sha256,
         processing_mode=str(getattr(data, "processing_strategy", "")),
         recognition_mode=str(getattr(data, "recognition_mode", "")),
@@ -347,18 +338,87 @@ def _build_plan(
         document_mode_confidence=float(report.get("mode_confidence", 0.0) or 0.0),
         blocks=tuple(blocks),
         review_items=tuple(review_items),
+        request_digest=request_digest,
+        text_included=include_text,
+        raw_text_included=include_raw_text,
     )
+
+
+_UNSET = object()
+
+
+def _request_from_legacy(
+    *,
+    processing_mode: Any,
+    recognition_mode: Any,
+    format_config: Any,
+    features: Any,
+    include_text: Any,
+    include_raw_text: Any,
+) -> RecognitionRequest:
+    return RecognitionRequest(
+        processing_mode="structural" if processing_mode is _UNSET else str(processing_mode),
+        recognition_mode="authoritative" if recognition_mode is _UNSET else str(recognition_mode),
+        format_config=None if format_config is _UNSET else format_config,
+        feature_overrides=None if features is _UNSET else features,
+        include_text=False if include_text is _UNSET else bool(include_text),
+        include_raw_text=False if include_raw_text is _UNSET else bool(include_raw_text),
+    )
+
+
+def _resolve_request(
+    request: RecognitionRequest | Mapping[str, Any] | None,
+    *,
+    processing_mode: Any,
+    recognition_mode: Any,
+    format_config: Any,
+    features: Any,
+    include_text: Any,
+    include_raw_text: Any,
+) -> RecognitionRequest:
+    legacy = _request_from_legacy(
+        processing_mode=processing_mode,
+        recognition_mode=recognition_mode,
+        format_config=format_config,
+        features=features,
+        include_text=include_text,
+        include_raw_text=include_raw_text,
+    )
+    if request is None:
+        return legacy
+    resolved = request if isinstance(request, RecognitionRequest) else RecognitionRequest.from_dict(request)
+    comparisons = {
+        "processing_mode": processing_mode,
+        "recognition_mode": recognition_mode,
+        "format_config": format_config,
+        "feature_overrides": features,
+        "include_text": include_text,
+        "include_raw_text": include_raw_text,
+    }
+    for field_name, supplied in comparisons.items():
+        if supplied is _UNSET:
+            continue
+        expected = getattr(resolved, field_name)
+        if field_name == "feature_overrides":
+            expected = resolved.feature_overrides
+        if supplied != expected:
+            raise InvalidRequestError(
+                "request 与旧关键字参数冲突",
+                details={"path": field_name},
+            )
+    return resolved
 
 
 def recognize_docx(
     source: str | Path,
     *,
-    processing_mode: str = "structural",
-    recognition_mode: str = "authoritative",
-    format_config: Optional[Mapping[str, Any]] = None,
-    features: Optional[Mapping[str, Any]] = None,
-    include_text: bool = False,
-    include_raw_text: bool = False,
+    request: RecognitionRequest | Mapping[str, Any] | None = None,
+    processing_mode: Any = _UNSET,
+    recognition_mode: Any = _UNSET,
+    format_config: Any = _UNSET,
+    features: Any = _UNSET,
+    include_text: Any = _UNSET,
+    include_raw_text: Any = _UNSET,
 ) -> RecognitionPlan:
     """Recognize a local DOCX snapshot without starting the web service.
 
@@ -367,30 +427,52 @@ def recognize_docx(
     the corresponding paragraphs before applying their own editor APIs.
     """
     path = Path(source).expanduser()
-    if processing_mode not in _PROCESSING_MODES:
+    resolved_request = _resolve_request(
+        request,
+        processing_mode=processing_mode,
+        recognition_mode=recognition_mode,
+        format_config=format_config,
+        features=features,
+        include_text=include_text,
+        include_raw_text=include_raw_text,
+    )
+    if resolved_request.processing_mode not in PROCESSING_MODES:
         raise RecognitionInputError("processing_mode 必须为 strict、structural 或 normalize")
-    if recognition_mode not in _RECOGNITION_MODES:
+    if resolved_request.recognition_mode not in RECOGNITION_MODES:
         raise RecognitionInputError("recognition_mode 必须为 legacy、shadow 或 authoritative")
-    if not isinstance(include_text, bool) or not isinstance(include_raw_text, bool):
-        raise RecognitionInputError("include_text 和 include_raw_text 必须为布尔值")
     if path.suffix.lower() != ".docx" or not path.is_file():
         raise RecognitionInputError("source 必须是可读取的 .docx 文件")
 
     try:
-        rules, configured_features = _load_rules_and_features(format_config, features)
+        rules, configured_features = _load_rules_and_features(
+            resolved_request.format_config,
+            resolved_request.feature_overrides,
+        )
         data = DocxImporter().load(
             str(path),
             rules,
-            features=_request_features(processing_mode, recognition_mode, configured_features),
-            recognition_mode=recognition_mode,
+            features=_request_features(
+                resolved_request.processing_mode,
+                resolved_request.recognition_mode,
+                configured_features,
+            ),
+            recognition_mode=resolved_request.recognition_mode,
         )
     except RecognitionInputError:
+        raise
+    except InvalidRequestError:
         raise
     except Exception as exc:
         raise RecognitionSdkError(f"无法识别 DOCX：{type(exc).__name__}") from exc
     return _build_plan(
         data,
         _sha256_file(path),
-        include_text=include_text,
-        include_raw_text=include_raw_text,
+        include_text=resolved_request.include_text,
+        include_raw_text=resolved_request.include_raw_text,
+        request_digest=mapping_digest(
+            {
+                "request": resolved_request.to_dict(),
+                "effective_features": configured_features,
+            }
+        ),
     )

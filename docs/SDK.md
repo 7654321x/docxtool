@@ -145,6 +145,87 @@ docxtool-recognize input.docx --mode structural --output recognition-plan.json
 `--include-text` 与 `--include-raw-text` 均需显式开启；后者仅限本机调试。
 使用 `--host-snapshot snapshot.json` 可在同一次调用中输出脱敏绑定结果。
 
+`2.0` 起新增跨语言统一入口：
+
+```pwsh
+docxtool-sdk manifest
+docxtool-sdk recognize --source input.docx --request request.json --output plan.json
+docxtool-sdk bind --plan plan.json --snapshot snapshot.json --output binding.json
+docxtool-sdk validate --kind recognition-plan --input plan.json
+docxtool-sdk validate --kind host-snapshot --input snapshot.json
+docxtool-sdk validate --kind recognition-binding --input binding.json
+```
+
+所有新命令都使用统一 envelope：
+
+```json
+{"ok": true, "data": {}}
+```
+
+失败时返回：
+
+```json
+{"ok": false, "error": {"schema_version": "sdk-error-v1", "code": "INVALID_HOST_SNAPSHOT", "message": "简短错误", "retryable": false, "details": {"path": "snapshot_id"}}}
+```
+
+## Integration Contract v1
+
+公共跨语言协议为 `integration-contract-v1`，由以下对象组成：
+
+- `SdkManifest`
+- `RecognitionRequest`
+- `RecognitionPlan`
+- `HostSnapshot`
+- `RecognitionBinding`
+- `SdkError`
+
+JSON Schema 是正式协议来源，随 wheel 安装在：
+
+```text
+docxtool/resources/schemas/
+```
+
+Python dataclass 只是该协议的一种实现。宿主不能通过包版本猜测能力，应先调用
+`get_sdk_manifest()` 或 `docxtool-sdk manifest` 检查支持的 contract、schema、
+locator、host-text 和 offset encoding 版本。
+
+## Stable IDs
+
+新调用方应优先使用以下稳定 ID：
+
+- `RecognitionPlan.plan_id`
+- `RecognitionBlock.block_id`
+- `RecognitionBlock.physical_group_id`
+- `HostSnapshot.snapshot_id`
+- `HostParagraph.host_paragraph_id`
+- `RecognitionBinding.binding_id`
+
+`block_index`、`host_paragraph_index`、`source_paragraph_index` 继续作为兼容字段保留，
+但不能作为长期唯一标识。
+
+`plan_id` 由来源文件 SHA-256、协议版本、识别模式和配置摘要确定性生成，不含路径
+或正文。`block_id` 由 `plan_id`、物理段落组、片段序号和片段哈希生成。`snapshot_id`
+由宿主生成；旧输入缺失时 SDK 仅为兼容绑定合成临时 ID，但正式 v1 schema 校验会拒绝。
+
+## Binding Preconditions
+
+`RecognitionBinding` 不是可直接执行的编辑器 Range。`confirmed` 块只表示宿主可以继续
+执行真实 Range 读回验证。每个 confirmed 结果都带有：
+
+- `plan_id`
+- `snapshot_id`
+- `document_identity`
+- `document_revision`
+- `host_paragraph_id`
+- 宿主物理段落 raw/canonical SHA-256
+- raw/canonical fragment SHA-256
+- `text_contract_version`
+- `offset_encoding`
+
+宿主写入前必须重新读取当前段落、按 `host-text-v1` 生成 raw/canonical 文本、校验物理
+段落哈希和片段哈希，再创建真实 Range 并读回确认。`review` 只能预览，`unresolved`
+必须跳过。
+
 ## WPS 集成边界
 
 SDK 只负责识别，不直接操作 WPS。未来 WPS 加载项应：
@@ -155,3 +236,15 @@ SDK 只负责识别，不直接操作 WPS。未来 WPS 加载项应：
 4. 使用 WPS API 将类型和格式角色写回当前打开的文档。
 
 这样不会通过云端上传文档，也不需要让最终用户自行管理 Python wheel。
+
+同样，SDK 不调用 Office.js、VSTO、COM 或 WPS 原生 API。Word/WPS 适配器需要自行实现：
+
+1. 从当前打开文档生成 `HostSnapshot`；
+2. 调用 SDK；
+3. 根据 `RecognitionBinding` 找到候选段落；
+4. 通过宿主 API 创建真实 Range；
+5. 读回 Range.Text 并验证 preconditions；
+6. 验证通过后写入格式。
+
+详细协议见 [INTEGRATION_CONTRACT_V1.md](INTEGRATION_CONTRACT_V1.md)，宿主伪代码见
+[HOST_ADAPTER_GUIDE.md](HOST_ADAPTER_GUIDE.md)。

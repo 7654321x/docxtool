@@ -6,12 +6,18 @@ from dataclasses import dataclass
 import hashlib
 from typing import Any, Mapping, Optional, Sequence, Tuple
 
+from .constants import (
+    HOST_TEXT_CONTRACT_VERSION as SDK_HOST_TEXT_CONTRACT_VERSION,
+    OFFSET_ENCODING,
+    SOURCE_LOCATOR_VERSION as SDK_SOURCE_LOCATOR_VERSION,
+)
 from docxtool.document.source_tape import (
     HOST_TEXT_CONTRACT_VERSION,
     SOURCE_LOCATOR_VERSION,
     SourceTape,
     canonicalize_text,
 )
+from .errors import BindingError, UnsupportedContractError
 
 from .models import (
     BoundRecognitionBlock,
@@ -21,11 +27,20 @@ from .models import (
     RecognitionBinding,
     RecognitionBlock,
     RecognitionPlan,
+    recognition_plan_from_dict,
 )
 
 
 def _sha256(value: str) -> str:
     return hashlib.sha256((value or "").encode("utf-8")).hexdigest()
+
+
+def _recommended_action(status: str) -> str:
+    if status == "confirmed":
+        return "verify_host_range"
+    if status == "review":
+        return "preview_only"
+    return "skip"
 
 
 def _raw_index_for_utf16_offset(value: str, offset: Optional[int]) -> Optional[int]:
@@ -63,40 +78,15 @@ class _PhysicalGroup:
 def _coerce_snapshot(value: HostSnapshot | Mapping[str, Any]) -> HostSnapshot:
     if isinstance(value, HostSnapshot):
         return value
-    if not isinstance(value, Mapping):
-        raise TypeError("host_snapshot 必须为 HostSnapshot 或 JSON 对象")
-    paragraphs_value = value.get("paragraphs")
-    if not isinstance(paragraphs_value, Sequence) or isinstance(paragraphs_value, (str, bytes)):
-        raise ValueError("host_snapshot.paragraphs 必须为段落数组")
-    paragraphs = []
-    for ordinal, item in enumerate(paragraphs_value):
-        if isinstance(item, HostParagraph):
-            paragraphs.append(item)
-            continue
-        if not isinstance(item, Mapping) or not isinstance(item.get("raw_text"), str):
-            raise ValueError("每个 host paragraph 必须包含 raw_text 字符串")
-        index = item.get("host_paragraph_index", ordinal)
-        if not isinstance(index, int) or index < 0:
-            raise ValueError("host_paragraph_index 必须为非负整数")
-        paragraphs.append(HostParagraph(
-            host_paragraph_index=index,
-            raw_text=item["raw_text"],
-            story_type=str(item.get("story_type", "main") or "main"),
-            is_in_table=bool(item.get("is_in_table", False)),
-        ))
-    host_type = value.get("host_type", "unknown")
-    if not isinstance(host_type, str) or not host_type:
-        raise ValueError("host_snapshot.host_type 必须为非空字符串")
-    identity = value.get("document_identity")
-    contract_version = value.get("text_contract_version", HOST_TEXT_CONTRACT_VERSION)
-    if not isinstance(contract_version, str):
-        raise ValueError("host_snapshot.text_contract_version 必须为字符串")
-    return HostSnapshot(
-        host_type=host_type,
-        paragraphs=tuple(paragraphs),
-        document_identity=str(identity) if identity is not None else None,
-        text_contract_version=contract_version,
-    )
+    return HostSnapshot.from_dict(value, allow_legacy=True)
+
+
+def _coerce_plan(value: RecognitionPlan | Mapping[str, Any]) -> RecognitionPlan:
+    if isinstance(value, RecognitionPlan):
+        return value
+    if isinstance(value, Mapping):
+        return recognition_plan_from_dict(value)
+    raise BindingError("plan 必须为 RecognitionPlan 或 JSON 对象")
 
 
 def _physical_groups(plan: RecognitionPlan) -> Tuple[_PhysicalGroup, ...]:
@@ -193,6 +183,7 @@ def _align_groups(
 def _bound(
     block: RecognitionBlock,
     host_index: Optional[int],
+    host: Optional[_HostText],
     status: str,
     confidence: float,
     evidence: Sequence[str],
@@ -201,24 +192,51 @@ def _bound(
     end: Optional[int] = None,
     canonical_start: Optional[int] = None,
     canonical_end: Optional[int] = None,
+    *,
+    plan_id: str = "",
+    snapshot: Optional[HostSnapshot] = None,
 ) -> BoundRecognitionBlock:
+    preconditions = {}
+    if host is not None and snapshot is not None and status in {"confirmed", "review"}:
+        fragment = host.tape.raw_slice_utf16(start or 0, end or 0) if start is not None and end is not None else ""
+        canonical_fragment = canonicalize_text(fragment or "") if fragment else ""
+        preconditions = {
+            "plan_id": plan_id,
+            "snapshot_id": snapshot.snapshot_id,
+            "document_identity": snapshot.document_identity,
+            "document_revision": snapshot.document_revision,
+            "host_paragraph_id": host.paragraph.host_paragraph_id,
+            "host_paragraph_raw_sha256": host.raw_hash,
+            "host_paragraph_canonical_sha256": host.canonical_hash,
+            "raw_fragment_sha256": _sha256(fragment or ""),
+            "canonical_fragment_sha256": _sha256(canonical_fragment or ""),
+            "text_contract_version": snapshot.text_contract_version,
+            "offset_encoding": OFFSET_ENCODING,
+        }
     return BoundRecognitionBlock(
+        block_id=block.block_id,
         block_index=block.block_index,
+        physical_group_id=block.physical_group_id,
         physical_paragraph_index=block.physical_paragraph_index,
         host_paragraph_index=host_index,
+        host_paragraph_id=host.paragraph.host_paragraph_id if host is not None else None,
+        story_id=host.paragraph.story_id if host is not None else None,
+        story_type=host.paragraph.story_type if host is not None else None,
         binding_status=status,
         binding_confidence=confidence,
         binding_evidence=tuple(dict.fromkeys(evidence)),
         binding_warnings=tuple(dict.fromkeys(warnings)),
+        recommended_action=_recommended_action(status),
         host_raw_start_utf16=start,
         host_raw_end_utf16=end,
         host_canonical_start_utf16=canonical_start,
         host_canonical_end_utf16=canonical_end,
+        preconditions=preconditions,
     )
 
 
 def bind_recognition_plan(
-    plan: RecognitionPlan,
+    plan: RecognitionPlan | Mapping[str, Any],
     host_snapshot: HostSnapshot | Mapping[str, Any],
 ) -> RecognitionBinding:
     """Bind a plan to a local host snapshot without calling any editor API.
@@ -227,7 +245,32 @@ def bind_recognition_plan(
     Word integrations must translate them only after their own API snapshot is
     verified, and must skip any block whose status is not ``confirmed``.
     """
+    plan = _coerce_plan(plan)
     snapshot = _coerce_snapshot(host_snapshot)
+    if plan.integration_contract_version and plan.integration_contract_version != "integration-contract-v1":
+        raise UnsupportedContractError(
+            "不支持的识别计划协议版本",
+            code="UNSUPPORTED_INTEGRATION_CONTRACT",
+            details={"path": "plan.integration_contract_version"},
+        )
+    if plan.locator_version != SDK_SOURCE_LOCATOR_VERSION:
+        raise UnsupportedContractError(
+            "不支持的来源定位版本",
+            code="UNSUPPORTED_SCHEMA_VERSION",
+            details={"path": "plan.contracts.source_locator_version"},
+        )
+    if snapshot.text_contract_version != SDK_HOST_TEXT_CONTRACT_VERSION:
+        raise UnsupportedContractError(
+            "不支持的宿主文本契约",
+            code="UNSUPPORTED_HOST_TEXT_CONTRACT",
+            details={"path": "host_snapshot.text_contract_version"},
+        )
+    if snapshot.offset_encoding != OFFSET_ENCODING:
+        raise UnsupportedContractError(
+            "不支持的 offset encoding",
+            code="UNSUPPORTED_OFFSET_ENCODING",
+            details={"path": "host_snapshot.offset_encoding"},
+        )
     hosts = tuple(_HostText(
         paragraph=item,
         tape=SourceTape.from_text(item.raw_text, contract_version=snapshot.text_contract_version),
@@ -248,16 +291,22 @@ def bind_recognition_plan(
     physical_paragraphs = []
     for physical_index in sorted(group_by_index):
         status, host_position, score, candidates, evidence, warnings = alignments[physical_index]
+        host = host_by_position[host_position] if host_position is not None else None
         physical_paragraphs.append(PhysicalParagraphBinding(
+            physical_group_id=group_by_index[physical_index].blocks[0].physical_group_id,
             source_physical_paragraph_index=physical_index,
             host_paragraph_index=(
-                host_by_position[host_position].paragraph.host_paragraph_index
-                if host_position is not None else None
+                host.paragraph.host_paragraph_index
+                if host is not None else None
             ),
+            host_paragraph_id=host.paragraph.host_paragraph_id if host is not None else None,
             status=status,
             score=score,
             candidate_host_paragraph_indexes=tuple(
                 host_by_position[position].paragraph.host_paragraph_index for position in candidates
+            ),
+            candidate_host_paragraph_ids=tuple(
+                host_by_position[position].paragraph.host_paragraph_id for position in candidates
             ),
             evidence=evidence,
             warnings=warnings,
@@ -266,22 +315,22 @@ def bind_recognition_plan(
 
     for block in plan.blocks:
         if block.physical_paragraph_index is None:
-            result.append(_bound(block, None, "unresolved", 0.0, (), ("SOURCE_PHYSICAL_PARAGRAPH_MISSING",)))
+            result.append(_bound(block, None, None, "unresolved", 0.0, (), ("SOURCE_PHYSICAL_PARAGRAPH_MISSING",)))
             continue
         if block.source_locator_status != "confirmed" or not block.locator_verified:
             result.append(_bound(
-                block, None, "unresolved", 0.0, (),
+                block, None, None, "unresolved", 0.0, (),
                 tuple(block.source_locator_warnings) + ("SOURCE_LOCATOR_NOT_CONFIRMED",),
             ))
             continue
         alignment = alignments.get(block.physical_paragraph_index)
         if alignment is None:
-            result.append(_bound(block, None, "unresolved", 0.0, (), ("PHYSICAL_PARAGRAPH_UNMATCHED",)))
+            result.append(_bound(block, None, None, "unresolved", 0.0, (), ("PHYSICAL_PARAGRAPH_UNMATCHED",)))
             continue
         alignment_status, host_position, score, _candidates, alignment_evidence, alignment_warnings = alignment
         if alignment_status in {"ambiguous", "unmatched"} or host_position is None:
             result.append(_bound(
-                block, None, "unresolved", 0.0,
+                block, None, None, "unresolved", 0.0,
                 alignment_evidence, alignment_warnings,
             ))
             continue
@@ -295,7 +344,7 @@ def bind_recognition_plan(
             fragment = host.tape.raw_slice_utf16(start or 0, end or 0) if start is not None and end is not None else None
             if fragment is None or _sha256(fragment) != block.raw_fragment_sha256:
                 result.append(_bound(
-                    block, host.paragraph.host_paragraph_index, "unresolved", 0.0,
+                    block, host.paragraph.host_paragraph_index, host, "unresolved", 0.0,
                     evidence, ("SOURCE_TEXT_HASH_MISMATCH",),
                 ))
                 continue
@@ -312,14 +361,16 @@ def bind_recognition_plan(
             )
             if host_canonical_range is None:
                 result.append(_bound(
-                    block, host.paragraph.host_paragraph_index, "unresolved", 0.0,
+                    block, host.paragraph.host_paragraph_index, host, "unresolved", 0.0,
                     evidence, ("HOST_CANONICAL_RANGE_UNRESOLVED",),
                 ))
                 continue
             result.append(_bound(
-                block, host.paragraph.host_paragraph_index, "confirmed", 1.0,
+                block, host.paragraph.host_paragraph_index, host, "confirmed", 1.0,
                 evidence + ["SEGMENT_ORDER_MATCH"], warnings, start, end,
                 host_canonical_range[0], host_canonical_range[1],
+                plan_id=plan.plan_id,
+                snapshot=snapshot,
             ))
             continue
 
@@ -332,7 +383,7 @@ def bind_recognition_plan(
         )
         if raw_span is None:
             result.append(_bound(
-                block, host.paragraph.host_paragraph_index, "unresolved", 0.0,
+                block, host.paragraph.host_paragraph_index, host, "unresolved", 0.0,
                 evidence + ["PHYSICAL_CANONICAL_TEXT_MATCH"], ("SOURCE_RANGE_UNRESOLVED",),
             ))
             continue
@@ -341,14 +392,16 @@ def bind_recognition_plan(
         fragment = host.tape.raw_slice_utf16(start or 0, end or 0) if start is not None and end is not None else None
         if fragment is None or _sha256(canonicalize_text(fragment)) != block.canonical_fragment_sha256:
             result.append(_bound(
-                block, host.paragraph.host_paragraph_index, "unresolved", 0.0,
+                block, host.paragraph.host_paragraph_index, host, "unresolved", 0.0,
                 evidence + ["PHYSICAL_CANONICAL_TEXT_MATCH"], ("SOURCE_TEXT_HASH_MISMATCH",),
             ))
             continue
         result.append(_bound(
-            block, host.paragraph.host_paragraph_index, "review", 0.93,
+            block, host.paragraph.host_paragraph_index, host, "review", 0.93,
             evidence + ["SEGMENT_TEXT_MATCH", "SEGMENT_ORDER_MATCH"],
             ("RAW_TEXT_NORMALIZED",), start, end, canonical_start, canonical_end,
+            plan_id=plan.plan_id,
+            snapshot=snapshot,
         ))
 
     return RecognitionBinding(
@@ -359,4 +412,8 @@ def bind_recognition_plan(
         host_text_contract_version=snapshot.text_contract_version,
         blocks=tuple(result),
         physical_paragraphs=tuple(physical_paragraphs),
+        plan_id=plan.plan_id,
+        snapshot_id=snapshot.snapshot_id,
+        document_revision=snapshot.document_revision,
+        offset_encoding=snapshot.offset_encoding,
     )

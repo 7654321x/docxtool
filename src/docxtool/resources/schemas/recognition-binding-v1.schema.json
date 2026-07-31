@@ -1,0 +1,172 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docxtool.local/schemas/recognition-binding-v1.schema.json",
+  "title": "DocxTool RecognitionBinding v1",
+  "description": "Host-neutral binding result with preconditions for later editor Range verification.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "integration_contract_version",
+    "binding_id",
+    "plan_id",
+    "snapshot_id",
+    "source_sha256",
+    "host",
+    "contracts",
+    "summary",
+    "physical_paragraphs",
+    "blocks"
+  ],
+  "properties": {
+    "schema_version": { "const": "recognition-binding-v1" },
+    "integration_contract_version": { "const": "integration-contract-v1" },
+    "binding_id": { "type": "string", "minLength": 1 },
+    "plan_id": { "type": "string", "minLength": 1 },
+    "snapshot_id": { "type": "string", "minLength": 1 },
+    "source_sha256": { "type": "string", "minLength": 1 },
+    "document_identity": { "type": ["string", "null"] },
+    "document_revision": { "type": ["string", "null"] },
+    "host": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": { "kind": { "type": "string", "minLength": 1 } },
+      "additionalProperties": true
+    },
+    "host_type": { "type": "string" },
+    "contracts": {
+      "type": "object",
+      "required": ["source_locator_version", "host_text_contract_version", "offset_encoding"],
+      "properties": {
+        "source_locator_version": { "const": "source-locator-v2" },
+        "host_text_contract_version": { "const": "host-text-v1" },
+        "offset_encoding": { "const": "utf16_code_unit" }
+      },
+      "additionalProperties": true
+    },
+    "summary": {
+      "type": "object",
+      "required": [
+        "total_blocks",
+        "confirmed_blocks",
+        "review_blocks",
+        "unresolved_blocks",
+        "complete_physical_groups",
+        "incomplete_physical_groups"
+      ],
+      "properties": {
+        "total_blocks": { "type": "integer", "minimum": 0 },
+        "confirmed_blocks": { "type": "integer", "minimum": 0 },
+        "review_blocks": { "type": "integer", "minimum": 0 },
+        "unresolved_blocks": { "type": "integer", "minimum": 0 },
+        "complete_physical_groups": { "type": "integer", "minimum": 0 },
+        "incomplete_physical_groups": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": true
+    },
+    "physical_paragraphs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "physical_group_id",
+          "source_physical_paragraph_index",
+          "status",
+          "score",
+          "candidate_host_paragraph_indexes",
+          "evidence",
+          "warnings"
+        ],
+        "properties": {
+          "physical_group_id": { "type": "string" },
+          "source_physical_paragraph_index": { "type": "integer", "minimum": 0 },
+          "host_paragraph_id": { "type": ["string", "null"] },
+          "host_paragraph_index": { "type": ["integer", "null"], "minimum": 0 },
+          "status": { "type": "string", "minLength": 1 },
+          "score": { "type": "integer", "minimum": 0 },
+          "candidate_host_paragraph_ids": { "type": "array", "items": { "type": "string" } },
+          "candidate_host_paragraph_indexes": { "type": "array", "items": { "type": "integer" } },
+          "evidence": { "type": "array", "items": { "type": "string" } },
+          "warnings": { "type": "array", "items": { "type": "string" } }
+        },
+        "additionalProperties": true
+      }
+    },
+    "blocks": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/boundBlock" }
+    }
+  },
+  "$defs": {
+    "span": {
+      "type": "object",
+      "required": ["start", "end", "coordinate_system", "encoding"],
+      "properties": {
+        "start": { "type": ["integer", "null"], "minimum": 0 },
+        "end": { "type": ["integer", "null"], "minimum": 0 },
+        "coordinate_system": { "type": "string", "minLength": 1 },
+        "encoding": { "const": "utf16_code_unit" }
+      },
+      "additionalProperties": false
+    },
+    "boundBlock": {
+      "type": "object",
+      "required": [
+        "block_id",
+        "block_index",
+        "physical_group_id",
+        "binding",
+        "host_target",
+        "preconditions"
+      ],
+      "properties": {
+        "block_id": { "type": "string" },
+        "block_index": { "type": "integer", "minimum": 0 },
+        "physical_group_id": { "type": "string" },
+        "binding": {
+          "type": "object",
+          "required": ["status", "confidence", "evidence", "warnings", "recommended_action"],
+          "properties": {
+            "status": { "enum": ["confirmed", "review", "unresolved"] },
+            "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+            "evidence": { "type": "array", "items": { "type": "string" } },
+            "warnings": { "type": "array", "items": { "type": "string" } },
+            "recommended_action": { "enum": ["verify_host_range", "preview_only", "skip"] }
+          },
+          "additionalProperties": true
+        },
+        "host_target": {
+          "type": "object",
+          "required": ["host_paragraph_id", "host_paragraph_index", "story_id", "story_type", "raw_span", "canonical_span"],
+          "properties": {
+            "host_paragraph_id": { "type": ["string", "null"] },
+            "host_paragraph_index": { "type": ["integer", "null"], "minimum": 0 },
+            "story_id": { "type": ["string", "null"] },
+            "story_type": { "type": ["string", "null"] },
+            "raw_span": { "$ref": "#/$defs/span" },
+            "canonical_span": { "$ref": "#/$defs/span" }
+          },
+          "additionalProperties": true
+        },
+        "preconditions": {
+          "type": "object",
+          "properties": {
+            "plan_id": { "type": "string" },
+            "snapshot_id": { "type": "string" },
+            "document_identity": { "type": ["string", "null"] },
+            "document_revision": { "type": ["string", "null"] },
+            "host_paragraph_id": { "type": "string" },
+            "host_paragraph_raw_sha256": { "type": "string" },
+            "host_paragraph_canonical_sha256": { "type": "string" },
+            "raw_fragment_sha256": { "type": "string" },
+            "canonical_fragment_sha256": { "type": "string" },
+            "text_contract_version": { "const": "host-text-v1" },
+            "offset_encoding": { "const": "utf16_code_unit" }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

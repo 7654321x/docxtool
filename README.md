@@ -145,7 +145,9 @@ pwsh -NoProfile -Command "python -m build"
 
 ## 本地识别 SDK
 
-`1.3` 起，项目提供只读识别 SDK，供 WPS/Word 加载项或其他本地软件调用。SDK 不启动 Web 服务，也不生成结果 DOCX：
+`1.3` 起，项目提供只读识别 SDK，供 WPS/Word 加载项或其他本地软件调用。`2.0` 起，
+SDK 增加 `integration-contract-v1`、JSON Schema、能力协商和独立绑定 CLI。SDK 不启动 Web
+服务，也不生成结果 DOCX：
 
 ```python
 from docxtool.sdk import bind_recognition_plan, recognize_docx
@@ -158,7 +160,20 @@ binding = bind_recognition_plan(plan, {
 })
 ```
 
-构建 wheel 后可使用 `docxtool-recognize input.docx --output plan.json` 导出脱敏识别计划。详细接口、数据边界和 WPS 集成方式见 [docs/SDK.md](docs/SDK.md)。
+构建 wheel 后可使用 `docxtool-recognize input.docx --output plan.json` 导出脱敏识别计划。
+跨语言集成推荐使用：
+
+```pwsh
+docxtool-sdk manifest
+docxtool-sdk recognize --source input.docx --output plan.json
+docxtool-sdk bind --plan plan.json --snapshot snapshot.json --output binding.json
+docxtool-sdk validate --kind recognition-binding --input binding.json
+```
+
+详细接口、数据边界和宿主接入方式见 [docs/SDK.md](docs/SDK.md)、
+[docs/INTEGRATION_CONTRACT_V1.md](docs/INTEGRATION_CONTRACT_V1.md) 和
+[docs/HOST_ADAPTER_GUIDE.md](docs/HOST_ADAPTER_GUIDE.md)。本仓库只提供 wheel/SDK 通用接口，
+不包含 WPS 或 Microsoft Word 宿主插件实现。
 
 ## GitHub 发布
 

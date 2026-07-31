@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.0 - 2026-08-01
+
+- Added `integration-contract-v1` for host-neutral recognition and binding integration.
+- Added SDK manifest capability negotiation, `RecognitionRequest`, stable plan/block/snapshot/binding IDs, JSON Schema files, JSON validation helpers, and structured SDK errors.
+- Added the `docxtool-sdk` CLI with `manifest`, `recognize`, `bind`, and `validate` commands while keeping `docxtool-recognize` compatible.
+- Extended host binding output with `RecognitionBinding` preconditions so WPS, Microsoft Word, and other hosts can verify real editor ranges before applying formatting.
+- Documented that this release prepares the wheel/SDK contract only; WPS and Microsoft Word host adapters remain separate future work.
+
 ## 1.9 - 2026-07-31
 
 - Simplified GitHub publishing to one default command covering the allowlist, sensitive-file scan, commit, push, and remote-head verification.

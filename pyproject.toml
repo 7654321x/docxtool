@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "docxtool"
-version = "1.9"
+version = "2.0"
 description = "DOCX official-document formatting web service"
 requires-python = ">=3.8,<3.11"
 dependencies = [
@@ -12,6 +12,7 @@ dependencies = [
     "argon2-cffi-bindings==21.2.0",
     "cffi==1.17.1",
     "importlib-resources==6.4.5; python_version < '3.9'",
+    "jsonschema==4.23.0",
     "lxml==6.1.1",
     "pycparser==2.23",
     "python-docx==1.1.2",
@@ -28,10 +29,11 @@ dev = [
 ]
 
 [project.scripts]
-docxtool-recognize = "docxtool.sdk.cli:main"
+docxtool-recognize = "docxtool.sdk.cli:recognize_main"
+docxtool-sdk = "docxtool.sdk.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-docxtool = ["resources/config/*.json"]
+docxtool = ["resources/config/*.json", "resources/schemas/*.json"]

@@ -10,7 +10,7 @@ from docxtool import __version__ as package_version
 from docxtool.document.importer import DocxImporter
 from docxtool.document.style_config import load_rules_and_settings
 from docxtool.paths import default_format_config_path
-from docxtool.sdk import RecognitionInputError, recognize_docx
+from docxtool.sdk import InvalidRequestError, RecognitionInputError, recognize_docx
 from docxtool.sdk.cli import main as sdk_main
 
 
@@ -39,7 +39,11 @@ def test_sdk_matches_existing_authoritative_recognition_and_redacts_text(tmp_pat
 
     assert plan.processing_mode == "structural"
     assert plan.recognition_mode == "authoritative"
-    assert plan.package_version == package_version == "1.9"
+    assert plan.package_version == package_version == "2.0"
+    assert plan.schema_version == "recognition-plan-v1"
+    assert plan.integration_contract_version == "integration-contract-v1"
+    assert plan.plan_id
+    assert all(block.block_id and block.physical_group_id for block in plan.blocks)
     assert plan.locator_version == "source-locator-v2"
     assert plan.host_text_contract_version == "host-text-v1"
     assert [block.type_id for block in plan.blocks] == [item.type_id for item in imported.paragraphs]
@@ -82,7 +86,7 @@ def test_sdk_cli_writes_json_plan(tmp_path: Path) -> None:
     assert sdk_main([str(source), "--output", str(output)]) == 0
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["ok"] is True
-    assert payload["data"]["schema_version"] == "1.0"
+    assert payload["data"]["schema_version"] == "recognition-plan-v1"
     assert payload["data"]["blocks"]
 
 
@@ -90,7 +94,7 @@ def test_sdk_rejects_invalid_input_and_modes(tmp_path: Path) -> None:
     source = tmp_path / "source.docx"
     _source_document(source)
 
-    with pytest.raises(RecognitionInputError, match="processing_mode"):
+    with pytest.raises(InvalidRequestError, match="processing_mode"):
         recognize_docx(source, processing_mode="unexpected")
     with pytest.raises(RecognitionInputError, match="可读取"):
         recognize_docx(tmp_path / "missing.docx")

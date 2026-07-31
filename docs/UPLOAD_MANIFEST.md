@@ -26,6 +26,9 @@ https://github.com/7654321x/docxtool.git
 | `docs/RECOGNITION_RELEASE.md` | 识别发布门禁和回滚 | 发布验收依据 |
 | `docs/DOCX_REGRESSION_CHECKLIST.md` | 已知公文问题和回归检查清单 | 批量测试与视觉抽查依据 |
 | `docs/SDK.md` | 本地识别 SDK 接口和集成边界 | WPS/第三方软件调用依据 |
+| `docs/INTEGRATION_CONTRACT_V1.md` | SDK 通用宿主 JSON 协议 | WPS、Word 和其他宿主共同实现依据 |
+| `docs/HOST_ADAPTER_GUIDE.md` | 宿主适配器伪代码和职责边界 | 仅描述接入流程，不实现插件 |
+| `docs/examples/sdk-contract-examples.md` | 脱敏 SDK 协议示例 | 普通段落、多片段、review、unresolved 示例 |
 | `docs/RECOGNITION_SOURCE_LOCATORS.md` | 来源定位与宿主绑定协议 | WPS/第三方安全定位依据 |
 | `docs/HOST_TEXT_V1_GOLDEN.json` | 脱敏 host-text-v1 金标 | Python/WPS 统一文本契约依据 |
 | `docs/USER_WPS_VALIDATION.md` | WPS 用户验收步骤 | 仅操作脱敏 fixture |
@@ -77,6 +80,7 @@ https://github.com/7654321x/docxtool.git
 | `src/docxtool/document/style_config.py` | 样式规则、页面设置、日志配置、默认配置读取 |
 | `src/docxtool/resources/__init__.py` | 打包资源包入口 |
 | `src/docxtool/resources/config/default-format.json` | 默认公文格式配置，随 wheel 安装 |
+| `src/docxtool/resources/schemas/` | SDK JSON Schema 资源 | 随 wheel 安装，作为跨语言协议来源 |
 | `src/docxtool/document/engine/__init__.py` | 排版引擎导出入口 |
 | `src/docxtool/document/engine/core.py` | DOCX 导出和实际排版逻辑 |
 | `src/docxtool/document/engine/context_candidate.py` | 基于原始元素事实和局部邻接的独立上下文候选 |
