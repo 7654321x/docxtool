@@ -16,12 +16,25 @@ import copy
 import hashlib
 import os
 import re
-from collections import Counter
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Dict, List, Optional, Tuple
 
 from docxtool.document.classifier import ClassificationOptions, classify_paragraphs
+from docxtool.document.models import (
+    BodyBlock,
+    DocumentData,
+    InlineToken,
+    NormalizationChange,
+    ParagraphData,
+    ParagraphFeatures,
+    SegmentBoundaryCandidate,
+    SourceRun,
+)
+from docxtool.document.normalization.tail import (
+    normalize_tail_structures as _normalize_tail_structures,
+    sync_recognition_consistency as _sync_recognition_consistency,
+)
 from docxtool.document.recognition import apply_recognition
 from docxtool.document.recognition.colon import (
     analyze_colon_structure,
@@ -29,9 +42,28 @@ from docxtool.document.recognition.colon import (
     is_standalone_addressing_text,
 )
 from docxtool.document.recognition.version import RECOGNITION_VERSION_TAG
-from docxtool.document.source_tape import SourceTape, canonicalize_text, utf16_length
+from docxtool.document.segmentation.source_locator import (
+    apply_segment_format_features as _apply_segment_format_features,
+    inherit_source_locator as _inherit_source_locator,
+    set_source_locator as _set_source_locator,
+    source_line_spans as _source_line_spans,
+    trim_source_span as _trim_source_span,
+    utf16_length_of as _utf16_length,
+    visible_character_count as _visible_character_count,
+)
+from docxtool.document.segmentation.boundaries import (
+    has_format_transition as _seg_has_format_transition,
+    has_inline_lead_bold_transition as _seg_has_inline_lead_bold_transition,
+    is_strong_soft_line_structure as _seg_is_strong_soft_line_structure,
+    segment_boundary_candidates as _seg_segment_boundary_candidates,
+    source_starts_body_region as _seg_source_starts_body_region,
+    split_inline_heading_body_spans as _seg_split_inline_heading_body_spans,
+    split_structural_tail_after_numbered_heading as _seg_split_structural_tail_after_numbered_heading,
+    validate_numbered_heading_body_split as _seg_validate_numbered_heading_body_split,
+    validate_source_span_partition as _seg_validate_source_span_partition,
+)
+from docxtool.document.source_tape import SourceTape, canonicalize_text
 from docxtool.document.effective_format import (
-    FORMAT_COVERAGE_CONFIRMED,
     resolve_effective_run_format,
 )
 from docxtool.document.style_config import (
@@ -44,171 +76,9 @@ from docxtool.document.style_config import (
 # 数据模型
 # ═══════════════════════════════════════════════════════════════
 
-@dataclass(frozen=True)
-class SourceRun:
-    """Formatting facts for one source run in physical-text code-point spans."""
-
-    start: int
-    end: int
-    font_name: str
-    east_asia_font_name: Optional[str]
-    ascii_font_name: Optional[str]
-    font_size_pt: Optional[float]
-    bold: Optional[bool]
-    italic: Optional[bool]
-    underline: Optional[bool]
-    explicit: bool
-    inherited: bool
-    known: bool
-    format_sources: Tuple[str, ...] = ()
-    format_warnings: Tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
-class SegmentBoundaryCandidate:
-    """A conservative source-text boundary between two logical segments.
-
-    Positions are Python code-point indexes in the original physical paragraph
-    and are converted to UTF-16 only by ``SourceTape``.  The candidate is an
-    internal recognition aid; it never modifies source text.
-    """
-
-    raw_start: int
-    raw_end: int
-    left_type_hint: str
-    right_type_hint: str
-    confidence: float
-    evidence: Tuple[str, ...]
-    warnings: Tuple[str, ...] = ()
-
-
-@dataclass
-class ParagraphFeatures:
-    """段落的可观测物理特征。"""
-    text: str = ""
-    style_name: str = ""          # Word 原始样式名
-    font_name: str = ""           # 字体名
-    font_size_pt: Optional[float] = None
-    bold: bool = False
-    alignment: str = ""           # "LEFT"/"CENTER"/"RIGHT"/"JUSTIFY"
-    first_line_indent: float = 0.0
-    numbering_prefix: str = ""    # 检测到的编号前缀
-    paragraph_index: int = 0
-    # Stable locator back to the original main-story Word paragraph.  The
-    # classifier may split one physical paragraph into several logical blocks;
-    # paragraph_index continues to describe that logical stream only.
-    source_physical_paragraph_index: Optional[int] = None
-    source_physical_text: str = ""
-    source_start_utf16: Optional[int] = None
-    source_end_utf16: Optional[int] = None
-    # Source coordinates always describe the original physical paragraph, not
-    # a WPS/Word Range.  Logical blocks retain both raw and canonical spans.
-    source_canonical_text: str = ""
-    source_canonical_start_utf16: Optional[int] = None
-    source_canonical_end_utf16: Optional[int] = None
-    source_fragment_text: str = ""
-    source_canonical_fragment_text: str = ""
-    source_locator_status: str = "unresolved"
-    source_locator_evidence: Tuple[str, ...] = ()
-    source_locator_warnings: Tuple[str, ...] = ()
-    source_run_spans: Tuple[SourceRun, ...] = ()
-    segment_font_name: str = ""
-    segment_dominant_font_name: str = ""
-    segment_font_name_east_asia: str = ""
-    segment_font_name_ascii: str = ""
-    segment_font_size_pt: Optional[float] = None
-    segment_weighted_font_size_pt: Optional[float] = None
-    segment_bold_char_ratio: float = 0.0
-    segment_italic_char_ratio: float = 0.0
-    segment_underline_char_ratio: float = 0.0
-    segment_explicit_format_ratio: float = 0.0
-    segment_inherited_format_ratio: float = 0.0
-    segment_run_count: int = 0
-    segment_visible_char_count: int = 0
-    segment_mapped_format_char_count: int = 0
-    segment_format_coverage_ratio: float = 0.0
-    segment_format_status: str = "unknown"
-    segment_format_warnings: Tuple[str, ...] = ()
-    segment_format_sources: Tuple[str, ...] = ()
-    segment_style_name: str = ""
-    segment_has_mixed_fonts: bool = False
-    segment_has_mixed_sizes: bool = False
-    segment_numbering_features: str = ""
-    segment_alignment: str = ""
-    segment_position_in_physical_paragraph: str = "whole"
-    segment_index: int = 0
-    segment_count: int = 1
-    is_in_table: bool = False
-    contains_image: bool = False
-    is_new_line: bool = False     # 是否由 \n 拆分出的新行
-    first_run_font_name: str = ""
-    first_run_font_size_pt: Optional[float] = None
-    first_run_bold: bool = False
-    dominant_font_name: str = ""
-    weighted_font_size: Optional[float] = None
-    max_font_size: Optional[float] = None
-    min_font_size: Optional[float] = None
-    bold_char_ratio: float = 0.0
-    italic_char_ratio: float = 0.0
-    explicitly_formatted_char_ratio: float = 0.0
-    inline_lead_bold: bool = False
-
-
-@dataclass
-class InlineToken:
-    """Inline paragraph content that must survive re-rendering."""
-    kind: str                     # "text" / "tab" / "line_break" / "page_break"
-    text: str = ""
-
-
-@dataclass
-class ParagraphData:
-    """段落数据（导入后的中间表示）。"""
-    text: str                     # 剥离编号后的纯文本
-    type_id: str                  # "heading1" / "body" / …
-    original_text: str            # 原始文本（含编号）
-    features: ParagraphFeatures
-    meta: dict = field(default_factory=dict)  # {"is_title": True, …}
-    inline_tokens: List[InlineToken] = field(default_factory=list)
-
-
-def _utf16_length(value: str) -> int:
-    """Return a string length in UTF-16 code units.
-
-    This is a source-text coordinate only.  A host editor must translate it
-    after verifying the corresponding source text; it is not a WPS Range.
-    """
-    return utf16_length(value)
-
-
-def _trim_source_span(source: str, start: int, end: int) -> Tuple[int, int]:
-    """Trim a source span without losing the original coordinate system."""
-    while start < end and source[start].isspace():
-        start += 1
-    while end > start and source[end - 1].isspace():
-        end -= 1
-    return start, end
-
-
-def _source_line_spans(source: str) -> List[Tuple[int, int]]:
-    """Return non-empty raw line spans without reverse text lookup."""
-    spans: List[Tuple[int, int]] = []
-    line_start = 0
-    index = 0
-    while index <= len(source):
-        if index == len(source) or source[index] in "\r\n":
-            start, end = _trim_source_span(source, line_start, index)
-            if start < end:
-                spans.append((start, end))
-            if index < len(source) and source[index] == "\r" and index + 1 < len(source) and source[index + 1] == "\n":
-                index += 1
-            line_start = index + 1
-        index += 1
-    return spans
-
-
-def _visible_character_count(value: str) -> int:
-    return len(re.sub(r"\s+", "", value or ""))
+# Stable document models live in ``docxtool.document.models``.  They are
+# imported above and re-exported from this module to keep legacy imports such
+# as ``from docxtool.document.importer import ParagraphData`` compatible.
 
 
 def _has_format_transition(
@@ -217,29 +87,8 @@ def _has_format_transition(
     boundary: int,
     end: int,
 ) -> bool:
-    """Return true only for a material left/right source-run distinction."""
-    if features is None or not features.source_run_spans:
-        return False
-    left = []
-    right = []
-    for run in features.source_run_spans:
-        if min(boundary, run.end) > max(start, run.start):
-            left.append(run)
-        if min(end, run.end) > max(boundary, run.start):
-            right.append(run)
-    if not left or not right:
-        return False
-    left_bold = any(run.bold is True for run in left)
-    right_bold = any(run.bold is True for run in right)
-    if left_bold != right_bold:
-        return True
-    left_sizes = [run.font_size_pt for run in left if run.font_size_pt is not None]
-    right_sizes = [run.font_size_pt for run in right if run.font_size_pt is not None]
-    if left_sizes and right_sizes and max(left_sizes) >= max(right_sizes) + 1.0:
-        return True
-    left_fonts = {run.font_name for run in left if run.font_name}
-    right_fonts = {run.font_name for run in right if run.font_name}
-    return bool(left_fonts and right_fonts and left_fonts != right_fonts)
+    """兼容旧私有入口，传入段落特征和范围，返回是否存在格式切换。"""
+    return _seg_has_format_transition(features, start, boundary, end)
 
 
 def _segment_boundary_candidates(
@@ -248,52 +97,15 @@ def _segment_boundary_candidates(
     end: int,
     features: Optional[ParagraphFeatures] = None,
 ) -> Tuple[SegmentBoundaryCandidate, ...]:
-    """Generate ordered, evidence-backed boundaries for one visible span.
-
-    The providers are intentionally few and composable.  They do not use
-    reverse ``find`` matching and do not split ordinary prose merely because
-    it contains a sentence terminator or colon.
-    """
-    start, end = _trim_source_span(source, start, end)
-    if start >= end:
-        return ()
-    text = source[start:end]
-    candidates = []
-    colon = analyze_colon_structure(text)
-    if colon.inline_addressing_body and colon.separator_index is not None:
-        boundary = start + colon.separator_index + 1
-        body_start, body_end = _trim_source_span(source, boundary, end)
-        if body_start < body_end:
-            candidates.append(SegmentBoundaryCandidate(
-                raw_start=start,
-                raw_end=boundary,
-                left_type_hint="addressing",
-                right_type_hint="body",
-                confidence=0.98,
-                evidence=("INLINE_ADDRESSING_COLON", "VISIBLE_BODY_AFTER_COLON"),
-            ))
-    period_index = text.find("。")
-    if period_index >= 0:
-        boundary = start + period_index + 1
-        body_start, body_end = _trim_source_span(source, boundary, end)
-        left = source[start:boundary]
-        body_count = _visible_character_count(source[body_start:body_end])
-        numbered = bool(_detect_numbering_prefix(left))
-        visual_transition = _has_format_transition(features, start, boundary, end)
-        if body_count >= 5 and (numbered or visual_transition):
-            candidates.append(SegmentBoundaryCandidate(
-                raw_start=start,
-                raw_end=boundary,
-                left_type_hint="heading" if numbered else "title_or_heading",
-                right_type_hint="body",
-                confidence=0.99 if numbered else 0.84,
-                evidence=(
-                    "NUMBERED_HEADING_TERMINATOR" if numbered else "VISUAL_TITLE_TERMINATOR",
-                    "VISIBLE_BODY_AFTER_TERMINATOR",
-                ),
-            ))
-
-    return tuple(sorted(candidates, key=lambda item: (-item.confidence, item.raw_end)))
+    """兼容旧私有入口，传入源范围和特征，返回候选逻辑边界。"""
+    return _seg_segment_boundary_candidates(
+        source,
+        start,
+        end,
+        features,
+        analyze_colon_structure_func=analyze_colon_structure,
+        detect_numbering_prefix_func=_detect_numbering_prefix,
+    )
 
 
 def _split_inline_heading_body_spans(
@@ -304,50 +116,16 @@ def _split_inline_heading_body_spans(
     *,
     allow_visual_boundary: bool = True,
 ) -> List[Tuple[int, int]]:
-    """Split selected logical segments using the shared boundary providers."""
-    start, end = _trim_source_span(source, start, end)
-    if start >= end:
-        return []
-    # A numbered heading has exactly one safe inline boundary: the sentence
-    # terminator after the heading.  Do not recurse into its body text merely
-    # because a later run changes formatting; body emphasis is not another
-    # paragraph boundary.
-    root_candidates = _segment_boundary_candidates(source, start, end, features)
-    numbered_heading = next(
-        (item for item in root_candidates if item.left_type_hint == "heading"), None
+    """兼容旧私有入口，传入源范围和特征，返回标题正文拆分范围。"""
+    return _seg_split_inline_heading_body_spans(
+        source,
+        start,
+        end,
+        features,
+        allow_visual_boundary=allow_visual_boundary,
+        analyze_colon_structure_func=analyze_colon_structure,
+        detect_numbering_prefix_func=_detect_numbering_prefix,
     )
-    if numbered_heading is not None:
-        body_start, body_end = _trim_source_span(source, numbered_heading.raw_end, end)
-        if body_start < body_end:
-            return [(numbered_heading.raw_start, numbered_heading.raw_end), (body_start, body_end)]
-    spans = [(start, end)]
-    # Multiple segments are allowed, but a physical line should not be
-    # repeatedly split without fresh strong evidence.  This supports a
-    # title/label plus two soft-line-derived content blocks while protecting
-    # normal prose from aggressive sentence splitting.
-    for _unused in range(2):
-        changed = False
-        next_spans = []
-        for current_start, current_end in spans:
-            candidates = _segment_boundary_candidates(source, current_start, current_end, features)
-            if not allow_visual_boundary:
-                candidates = tuple(
-                    item for item in candidates if item.left_type_hint != "title_or_heading"
-                )
-            if not candidates:
-                next_spans.append((current_start, current_end))
-                continue
-            candidate = candidates[0]
-            right_start, right_end = _trim_source_span(source, candidate.raw_end, current_end)
-            if candidate.raw_start < candidate.raw_end and right_start < right_end:
-                next_spans.extend(((candidate.raw_start, candidate.raw_end), (right_start, right_end)))
-                changed = True
-            else:
-                next_spans.append((current_start, current_end))
-        spans = next_spans
-        if not changed:
-            break
-    return spans
 
 
 def _is_standalone_addressing_text(text: str) -> bool:
@@ -355,15 +133,13 @@ def _is_standalone_addressing_text(text: str) -> bool:
 
 
 def _is_strong_soft_line_structure(text: str) -> bool:
-    value = (text or "").strip()
-    return bool(
-        value
-        and (
-            _detect_numbering_prefix(value)
-            or _is_standalone_addressing_text(value)
-            or _SIGN_DATE_RE2.match(value)
-            or _is_attachment_boundary(value)
-        )
+    """兼容旧私有入口，传入软换行文本，返回是否为强结构行。"""
+    return _seg_is_strong_soft_line_structure(
+        text,
+        detect_numbering_prefix_func=_detect_numbering_prefix,
+        is_standalone_addressing_func=_is_standalone_addressing_text,
+        is_sign_date_func=lambda value: bool(_SIGN_DATE_RE2.match(value or "")),
+        is_attachment_boundary_func=_is_attachment_boundary,
     )
 
 
@@ -372,82 +148,28 @@ def _split_structural_tail_after_numbered_heading(
     heading_body_spans: List[Tuple[int, int]],
     next_text: str = "",
 ) -> List[Tuple[int, int]]:
-    """Keep one body span while releasing later explicit soft-line structures.
-
-    The next physical paragraph is part of the structural evidence.  A common
-    malformed tail stores ``numbered heading + body + organization`` in one
-    paragraph and starts the following paragraph with the signature date.
-    """
-    if len(heading_body_spans) != 2:
-        return heading_body_spans
-    heading_span, body_span = heading_body_spans
-    body_start, body_end = body_span
-    line_spans = _source_line_spans(source)
-    next_visible_line = next(
-        (part.strip() for part in (next_text or "").splitlines() if part.strip()),
-        "",
+    """兼容旧私有入口，传入标题正文范围，返回释放尾部结构后的范围。"""
+    return _seg_split_structural_tail_after_numbered_heading(
+        source,
+        heading_body_spans,
+        next_text,
+        is_strong_soft_line_structure_func=_is_strong_soft_line_structure,
+        is_sign_date_func=lambda value: bool(_SIGN_DATE_RE2.match(value or "")),
+        is_tail_signature_org_func=_is_tail_signature_org_text,
     )
-    structural_indexes = []
-    for index, (start, end) in enumerate(line_spans):
-        if start <= body_start:
-            continue
-        value = source[start:end]
-        if _is_strong_soft_line_structure(value):
-            structural_indexes.append(index)
-            continue
-        if (
-            index + 1 < len(line_spans)
-            and _SIGN_DATE_RE2.match(source[line_spans[index + 1][0]:line_spans[index + 1][1]])
-            and _is_tail_signature_org_text(value)
-        ):
-            structural_indexes.append(index)
-            continue
-        if (
-            index == len(line_spans) - 1
-            and _SIGN_DATE_RE2.match(next_visible_line)
-            and _is_tail_signature_org_text(value)
-        ):
-            structural_indexes.append(index)
-    if not structural_indexes:
-        return heading_body_spans
-
-    result = [heading_span]
-    cursor = body_start
-    for index in structural_indexes:
-        start, end = line_spans[index]
-        preceding = _trim_source_span(source, cursor, start)
-        if preceding[0] < preceding[1]:
-            result.append(preceding)
-        result.append((start, end))
-        cursor = end
-    trailing = _trim_source_span(source, cursor, body_end)
-    if trailing[0] < trailing[1]:
-        result.append(trailing)
-    return result
 
 
 def _validate_source_span_partition(source: str, spans: List[Tuple[int, int]]) -> None:
-    """Require ordered ranges to cover every visible source character once."""
-    if not spans:
-        return
-    previous_end = 0
-    for start, end in spans:
-        if start < previous_end or start >= end or end > len(source):
-            raise ValueError("结构分段范围重叠或越界")
-        if re.sub(r"\s+", "", source[previous_end:start]):
-            raise ValueError("结构分段遗漏了原始可见文字")
-        previous_end = end
-    if re.sub(r"\s+", "", source[previous_end:]):
-        raise ValueError("结构分段遗漏了原始可见文字")
+    """兼容旧私有入口，传入源文本和范围列表，校验可见文字守恒。"""
+    return _seg_validate_source_span_partition(source, spans)
 
 
 def _source_starts_body_region(source: str) -> bool:
-    value = re.sub(r"\s+", "", source or "")
-    if not value:
-        return False
-    if _detect_numbering_prefix(value):
-        return True
-    return len(value) >= 34 and any(mark in value for mark in "。！？")
+    """兼容旧私有入口，传入源文本，返回是否足以开启正文区域。"""
+    return _seg_source_starts_body_region(
+        source,
+        detect_numbering_prefix_func=_detect_numbering_prefix,
+    )
 
 
 def _has_inline_lead_bold_transition(
@@ -456,29 +178,14 @@ def _has_inline_lead_bold_transition(
     end: int,
     features: ParagraphFeatures,
 ) -> bool:
-    """Detect a bold lead sentence followed by ordinary text in one body span."""
-    text = source[start:end]
-    period = text.find("。")
-    if period <= 0 or _detect_numbering_prefix(text):
-        return False
-    boundary = start + period + 1
-    if _visible_character_count(source[boundary:end]) < 5:
-        return False
-
-    def bold_ratio(range_start: int, range_end: int) -> float:
-        visible_total = bold_total = 0
-        for run in features.source_run_spans:
-            overlap_start = max(range_start, run.start)
-            overlap_end = min(range_end, run.end)
-            if overlap_start >= overlap_end:
-                continue
-            count = _visible_character_count(source[overlap_start:overlap_end])
-            visible_total += count
-            if run.bold is True:
-                bold_total += count
-        return bold_total / visible_total if visible_total else 0.0
-
-    return bold_ratio(start, boundary) >= 0.7 and bold_ratio(boundary, end) <= 0.3
+    """兼容旧私有入口，传入源范围和特征，返回是否存在正文首句加粗过渡。"""
+    return _seg_has_inline_lead_bold_transition(
+        source,
+        start,
+        end,
+        features,
+        detect_numbering_prefix_func=_detect_numbering_prefix,
+    )
 
 
 def _validate_numbered_heading_body_split(
@@ -486,290 +193,14 @@ def _validate_numbered_heading_body_split(
     spans: List[Tuple[int, int]],
     features: Optional[ParagraphFeatures] = None,
 ) -> None:
-    """Validate the non-negotiable two-segment contract for numbered headings.
-
-    A physical paragraph such as ``一、标题。完整正文`` may become exactly a
-    heading and one body segment.  The body may contain later sentence marks,
-    tabs, page breaks, or mixed run formatting, but those must not create a
-    second body paragraph.  This check uses raw source coordinates so it does
-    not depend on normalized text or visual formatting.
-    """
-    start, end = _trim_source_span(source, 0, len(source))
-    if start >= end:
-        return
-    candidates = _segment_boundary_candidates(source, start, end, features)
-    heading = next((item for item in candidates if item.left_type_hint == "heading"), None)
-    if heading is None:
-        return
-    body_start, body_end = _trim_source_span(source, heading.raw_end, end)
-    if body_start >= body_end:
-        return
-    expected = [(heading.raw_start, heading.raw_end), (body_start, body_end)]
-    if spans != expected:
-        raise ValueError(
-            "编号标题与行内正文必须仅拆为标题和一个完整正文段"
-        )
-
-
-def _set_source_locator(
-    child: ParagraphFeatures,
-    parent: ParagraphFeatures,
-    start: int,
-    end: int,
-) -> None:
-    """Attach a logical block to an exact raw source range.
-
-    Splitting code calls this with positions from the original physical text.
-    No normalized fragment is searched back into the source paragraph.
-    """
-    child.source_physical_paragraph_index = parent.source_physical_paragraph_index
-    child.source_physical_text = parent.source_physical_text
-    tape = SourceTape.from_text(parent.source_physical_text)
-    child.source_canonical_text = tape.canonical_text
-    if parent.source_physical_paragraph_index is None:
-        child.source_locator_status = "unresolved"
-        child.source_locator_warnings = ("SOURCE_PHYSICAL_PARAGRAPH_MISSING",)
-        return
-    if not 0 <= start < end <= len(tape.raw_text):
-        child.source_locator_status = "unresolved"
-        child.source_locator_warnings = ("SOURCE_RANGE_OUT_OF_BOUNDS",)
-        return
-    canonical_range = tape.canonical_range_for_raw_span(start, end)
-    raw_start = tape.raw_offset_utf16(start)
-    raw_end = tape.raw_offset_utf16(end)
-    if canonical_range is None or raw_start is None or raw_end is None:
-        child.source_locator_status = "unresolved"
-        child.source_locator_warnings = ("SOURCE_RANGE_UNRESOLVED",)
-        return
-    raw_fragment = tape.raw_text[start:end]
-    canonical_fragment = canonicalize_text(raw_fragment)
-    child.source_start_utf16 = raw_start
-    child.source_end_utf16 = raw_end
-    child.source_canonical_start_utf16 = canonical_range[0]
-    child.source_canonical_end_utf16 = canonical_range[1]
-    child.source_fragment_text = raw_fragment
-    child.source_canonical_fragment_text = canonical_fragment
-    child.source_locator_status = "confirmed"
-    child.source_locator_evidence = ("RAW_RANGE_READBACK_MATCH", "CANONICAL_RANGE_MAPPED")
-    child.source_locator_warnings = ()
-
-
-def _apply_segment_format_features(
-    child: ParagraphFeatures,
-    parent: ParagraphFeatures,
-    start: int,
-    end: int,
-) -> None:
-    """Compute formatting from run intersections with one raw logical span."""
-    source = parent.source_physical_text
-    font_weights: Counter[str] = Counter()
-    east_asia_weights: Counter[str] = Counter()
-    ascii_weights: Counter[str] = Counter()
-    size_weights: Counter[float] = Counter()
-    characters = bold_characters = italic_characters = underline_characters = 0
-    explicit_characters = inherited_characters = mapped_format_characters = 0
-    run_count = 0
-    format_sources = []
-    format_warnings = []
-    for run in parent.source_run_spans:
-        overlap_start = max(start, run.start)
-        overlap_end = min(end, run.end)
-        if overlap_start >= overlap_end:
-            continue
-        visible = re.sub(r"\s+", "", source[overlap_start:overlap_end])
-        count = len(visible)
-        if not count:
-            continue
-        run_count += 1
-        characters += count
-        if run.font_name:
-            font_weights[run.font_name] += count
-        if run.east_asia_font_name:
-            east_asia_weights[run.east_asia_font_name] += count
-        if run.ascii_font_name:
-            ascii_weights[run.ascii_font_name] += count
-        if run.font_size_pt is not None:
-            size_weights[float(run.font_size_pt)] += count
-        if run.bold is True:
-            bold_characters += count
-        if run.italic is True:
-            italic_characters += count
-        if run.underline is True:
-            underline_characters += count
-        if run.explicit:
-            explicit_characters += count
-        if run.inherited:
-            inherited_characters += count
-        if run.known:
-            mapped_format_characters += count
-        format_sources.extend(run.format_sources)
-        format_warnings.extend(run.format_warnings)
-
-    child.segment_style_name = parent.style_name
-    child.segment_alignment = parent.alignment
-    child.segment_numbering_features = child.numbering_prefix or parent.numbering_prefix
-    child.segment_run_count = run_count
-    child.segment_visible_char_count = characters
-    child.segment_mapped_format_char_count = mapped_format_characters
-    child.segment_format_coverage_ratio = (
-        mapped_format_characters / characters if characters else 0.0
+    """兼容旧私有入口，传入源文本和范围列表，校验编号标题正文拆分契约。"""
+    return _seg_validate_numbered_heading_body_split(
+        source,
+        spans,
+        features,
+        analyze_colon_structure_func=analyze_colon_structure,
+        detect_numbering_prefix_func=_detect_numbering_prefix,
     )
-    child.segment_format_sources = tuple(dict.fromkeys(format_sources))
-    if start == 0 and end == len(source):
-        child.segment_position_in_physical_paragraph = "whole"
-    elif start == 0:
-        child.segment_position_in_physical_paragraph = "start"
-    elif end == len(source):
-        child.segment_position_in_physical_paragraph = "end"
-    else:
-        child.segment_position_in_physical_paragraph = "middle"
-
-    if not characters:
-        # A paragraph with no textual run (or only controls) has no segment
-        # style evidence.  Keep the physical values solely as weak context.
-        child.segment_font_name = parent.font_name
-        child.segment_dominant_font_name = parent.dominant_font_name or parent.font_name
-        child.segment_font_size_pt = parent.font_size_pt
-        child.segment_weighted_font_size_pt = parent.weighted_font_size or parent.font_size_pt
-        child.segment_bold_char_ratio = parent.bold_char_ratio
-        child.segment_italic_char_ratio = parent.italic_char_ratio
-        child.segment_explicit_format_ratio = parent.explicitly_formatted_char_ratio
-        child.segment_inherited_format_ratio = 0.0
-        child.segment_format_status = "unknown"
-        child.segment_format_warnings = tuple(dict.fromkeys(
-            list(format_warnings) + ["NO_VISIBLE_RUN_FORMAT_COVERAGE"]
-        ))
-        return
-
-    dominant_font = font_weights.most_common(1)[0][0] if font_weights else parent.font_name
-    weighted_size = (
-        sum(size * weight for size, weight in size_weights.items()) / sum(size_weights.values())
-        if size_weights else parent.font_size_pt
-    )
-    child.segment_font_name = dominant_font
-    child.segment_dominant_font_name = dominant_font
-    child.segment_font_name_east_asia = (
-        east_asia_weights.most_common(1)[0][0] if east_asia_weights else ""
-    )
-    child.segment_font_name_ascii = (
-        ascii_weights.most_common(1)[0][0] if ascii_weights else ""
-    )
-    child.segment_font_size_pt = weighted_size
-    child.segment_weighted_font_size_pt = weighted_size
-    child.segment_bold_char_ratio = bold_characters / characters
-    child.segment_italic_char_ratio = italic_characters / characters
-    child.segment_underline_char_ratio = underline_characters / characters
-    child.segment_explicit_format_ratio = explicit_characters / characters
-    child.segment_inherited_format_ratio = inherited_characters / characters
-    child.segment_has_mixed_fonts = len(font_weights) > 1 or len(east_asia_weights) > 1 or len(ascii_weights) > 1
-    child.segment_has_mixed_sizes = len(size_weights) > 1
-    if child.segment_format_coverage_ratio >= FORMAT_COVERAGE_CONFIRMED:
-        child.segment_format_status = "confirmed"
-    elif child.segment_format_coverage_ratio > 0:
-        child.segment_format_status = "review"
-        format_warnings.append("PARTIAL_RUN_FORMAT_COVERAGE")
-    else:
-        child.segment_format_status = "unknown"
-        format_warnings.append("NO_RUN_FORMAT_COVERAGE")
-    child.segment_format_warnings = tuple(dict.fromkeys(format_warnings))
-
-    # Recognition providers consume these existing generic fields.  Replacing
-    # them with the segment facts makes mixed title/body paragraphs classify
-    # independently while the parent remains available as source context.
-    child.font_name = dominant_font
-    child.dominant_font_name = dominant_font
-    child.font_size_pt = weighted_size
-    child.weighted_font_size = weighted_size
-    child.max_font_size = max(size_weights) if size_weights else weighted_size
-    child.min_font_size = min(size_weights) if size_weights else weighted_size
-    child.bold_char_ratio = child.segment_bold_char_ratio
-    child.italic_char_ratio = child.segment_italic_char_ratio
-    child.explicitly_formatted_char_ratio = child.segment_explicit_format_ratio
-    child.bold = child.segment_bold_char_ratio >= 0.5
-
-
-def _inherit_source_locator(
-    child: ParagraphFeatures,
-    parent: ParagraphFeatures,
-    fragment: str,
-    search_from: int = 0,
-) -> int:
-    """Legacy fallback for third-party callers of the old private helper.
-
-    Importer paths use :func:`_set_source_locator` with source spans.  This
-    compatibility fallback is deliberately never marked confirmed because a
-    reverse lookup cannot prove repeated-text occurrence binding.
-    """
-    child.source_physical_paragraph_index = parent.source_physical_paragraph_index
-    child.source_physical_text = parent.source_physical_text
-    child.source_canonical_text = canonicalize_text(child.source_physical_text)
-    if parent.source_physical_paragraph_index is None:
-        child.source_locator_status = "unresolved"
-        child.source_locator_warnings = ("SOURCE_PHYSICAL_PARAGRAPH_MISSING",)
-        return search_from
-    source = parent.source_physical_text or ""
-    value = fragment or ""
-    start = source.find(value, max(0, search_from))
-    if start < 0 and value.strip() != value:
-        value = value.strip()
-        start = source.find(value, max(0, search_from))
-    if start < 0:
-        child.source_start_utf16 = None
-        child.source_end_utf16 = None
-        child.source_locator_status = "unresolved"
-        child.source_locator_warnings = ("SOURCE_RANGE_UNRESOLVED",)
-        return search_from
-    end = start + len(value)
-    child.source_start_utf16 = _utf16_length(source[:start])
-    child.source_end_utf16 = _utf16_length(source[:end])
-    tape = SourceTape.from_text(source)
-    canonical_range = tape.canonical_range_for_raw_span(start, end)
-    child.source_canonical_start_utf16 = canonical_range[0] if canonical_range else None
-    child.source_canonical_end_utf16 = canonical_range[1] if canonical_range else None
-    child.source_fragment_text = source[start:end]
-    child.source_canonical_fragment_text = canonicalize_text(child.source_fragment_text)
-    child.source_locator_status = "review"
-    child.source_locator_evidence = ("LEGACY_TEXT_SEARCH",)
-    child.source_locator_warnings = ("SOURCE_OCCURRENCE_AMBIGUOUS",)
-    return end
-
-
-@dataclass
-class BodyBlock:
-    """Original body-order block for export."""
-    kind: str                     # "paragraph" / "table" / "paragraph_xml"
-    value: object
-
-
-@dataclass
-class DocumentData:
-    """文档数据（导入后的完整表示）。"""
-    paragraphs: List[ParagraphData] = field(default_factory=list)
-    tables: list = field(default_factory=list)     # 原样保留的表格
-    body_blocks: list = field(default_factory=list) # 原文 body 顺序：段落/表格/图片段落
-    filepath: str = ""
-    has_cover: bool = False
-    doc_mode: str = ""  # 文种：REPORT / NORMAL / ""
-    body_sectPr: object = None
-    section_relationship_parts: Dict[str, object] = field(default_factory=dict)
-    even_and_odd_headers: object = None
-    letterhead_detection: object = None
-    strict_preservation: bool = False
-    processing_strategy: str = "normalize"
-    recognition_mode: str = "authoritative"
-    normalization_changes: list = field(default_factory=list)
-    recognition_diagnostics: dict = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
-class NormalizationChange:
-    paragraph_index: int
-    action: str
-    before: str
-    after: str
-    reason_code: str
-    confidence: float
-    applied: bool
 
 
 _OBJECT_CAPTION_RE = re.compile(
@@ -1547,10 +978,6 @@ def detect_structural_type(line: str, next_line: str, ctx,
     return None, {}, "", text
 
 
-def _tail_source_text(paragraph: ParagraphData) -> str:
-    return (paragraph.original_text or paragraph.text or "").strip()
-
-
 def _is_tail_signature_org_text(text: str) -> bool:
     value = (text or "").strip()
     return bool(
@@ -1559,316 +986,6 @@ def _is_tail_signature_org_text(text: str) -> bool:
         and not any(mark in value for mark in "。；;：:")
         and bool(_SIGN_ORG_SUFFIX_RE.search(value))
     )
-
-
-def _is_tail_structural_text(text: str) -> bool:
-    value = (text or "").strip()
-    return bool(
-        _ATT_NOTE_RE.match(value)
-        or _ATT_ITEM_RE.match(value)
-        or _SIGN_DATE_RE2.match(value)
-        or _is_attachment_page_mark(value)
-        or _is_tail_signature_org_text(value)
-    )
-
-
-def _allows_standalone_tail_date(paragraphs: list[ParagraphData], index: int) -> bool:
-    previous = next(
-        (
-            _tail_source_text(paragraphs[position])
-            for position in range(index - 1, -1, -1)
-            if _tail_source_text(paragraphs[position])
-        ),
-        "",
-    )
-    if not previous or previous.startswith(_SIGN_ORG_NEGATIVE_STARTS):
-        return False
-    return not _contains_colon(previous)
-
-
-def _retag_tail_paragraph(
-    paragraph: ParagraphData,
-    type_id: str,
-    text: str,
-    meta: Optional[dict] = None,
-) -> None:
-    old_text = paragraph.text
-    preserved = dict(paragraph.meta or {})
-    preserved.update(meta or {})
-    preserved["final_type"] = type_id
-    preserved.setdefault("recognition_type", type_id)
-    preserved.setdefault("recognized_type", type_id)
-    paragraph.type_id = type_id
-    paragraph.text = text
-    paragraph.meta = preserved
-    if text != old_text:
-        paragraph.inline_tokens = []
-
-
-def _normalize_attachment_note_block(
-    note: ParagraphData,
-    items: list[ParagraphData],
-    *,
-    normalize_text: bool,
-) -> None:
-    match = _ATT_NOTE_RE.match(_tail_source_text(note))
-    if match is None:
-        return
-    body = match.group(1).strip()
-    first_number = re.match(r"^(\d+)[.．、]\s*(.*)$", body)
-    if items:
-        if first_number:
-            start = int(first_number.group(1))
-            first_body = first_number.group(2).strip()
-        else:
-            start = 1
-            first_body = body
-        _retag_tail_paragraph(
-            note,
-            "attachment_note",
-            f"附件：{start}. {first_body}".rstrip() if normalize_text else _tail_source_text(note),
-            {"attachment_single": False, "attachment_multi": True},
-        )
-        for offset, item in enumerate(items, start=1):
-            item_body = re.sub(r"^\s*\d+[.．、]\s*", "", _tail_source_text(item), count=1).strip()
-            _retag_tail_paragraph(
-                item,
-                "attachment_note_item",
-                f"{start + offset}. {item_body}".rstrip() if normalize_text else _tail_source_text(item),
-            )
-        return
-
-    if first_number:
-        body = first_number.group(2).strip()
-    _retag_tail_paragraph(
-        note,
-        "attachment_note",
-        f"附件：{body}".rstrip() if normalize_text else _tail_source_text(note),
-        {"attachment_single": True, "attachment_multi": False},
-    )
-
-
-def _normalize_tail_structures(
-    paragraphs: list[ParagraphData],
-    *,
-    normalize_text: bool = True,
-) -> None:
-    """Reclassify and order a reliable document tail independent of source order.
-
-    Structural processing may retag and reorder a fully bounded tail region,
-    but must not rewrite its visible text.  Full normalization keeps the legacy
-    behavior of standardizing attachment numbering and dates.
-    """
-
-    plain_indexes = [
-        index
-        for index, paragraph in enumerate(paragraphs)
-        if not paragraph.type_id.startswith("__") and _tail_source_text(paragraph)
-    ]
-    if not plain_indexes:
-        return
-
-    raw_markers = [
-        index for index in plain_indexes
-        if paragraphs[index].type_id == "attachment_page_mark"
-    ]
-    raw_notes = [
-        index for index in plain_indexes
-        if paragraphs[index].type_id == "attachment_note"
-    ]
-    raw_dates = [
-        index for index in plain_indexes
-        if paragraphs[index].type_id == "sign_date"
-    ]
-    first_marker = raw_markers[0] if raw_markers else len(paragraphs)
-
-    tail_date = None
-    for index in reversed([value for value in raw_dates if value < first_marker]):
-        following = [
-            _tail_source_text(paragraphs[position])
-            for position in plain_indexes
-            if index < position < first_marker
-        ]
-        has_later_anchor = any(value > index for value in raw_notes + raw_markers)
-        if (index == plain_indexes[-1] and _allows_standalone_tail_date(paragraphs, index)) or (
-            has_later_anchor and all(_is_tail_structural_text(text) for text in following)
-        ):
-            tail_date = index
-            break
-
-    note_index = None
-    for index in raw_notes:
-        if index >= first_marker:
-            continue
-        following_plain = [
-            position for position in plain_indexes
-            if index < position < first_marker
-        ]
-        next_is_item = bool(
-            following_plain
-            and _ATT_ITEM_RE.match(_tail_source_text(paragraphs[following_plain[0]]))
-        )
-        near_tail_date = tail_date is not None and abs(index - tail_date) <= 12
-        if near_tail_date or next_is_item:
-            note_index = index
-            break
-    item_indexes = []
-    if note_index is not None:
-        item_indexes = [
-            index
-            for index in plain_indexes
-            if note_index < index < first_marker
-            and paragraphs[index].type_id == "attachment_note_item"
-        ]
-
-    sign_index = None
-    if tail_date is not None:
-        sign_candidates = [
-            index
-            for index in plain_indexes
-            if max(0, min(note_index if note_index is not None else tail_date, tail_date) - 4)
-            <= index < first_marker
-            and index != tail_date
-            and paragraphs[index].type_id == "sign_org"
-        ]
-        if sign_candidates:
-            sign_index = min(sign_candidates, key=lambda index: abs(index - tail_date))
-
-    if note_index is not None:
-        _normalize_attachment_note_block(
-            paragraphs[note_index],
-            [paragraphs[index] for index in item_indexes],
-            normalize_text=normalize_text,
-        )
-    if sign_index is not None:
-        _retag_tail_paragraph(
-            paragraphs[sign_index],
-            "sign_org",
-            _norm_sign_org(_tail_source_text(paragraphs[sign_index])) if normalize_text else _tail_source_text(paragraphs[sign_index]),
-        )
-    if tail_date is not None:
-        _retag_tail_paragraph(
-            paragraphs[tail_date],
-            "sign_date",
-            _norm_sign_date(_tail_source_text(paragraphs[tail_date])),
-        )
-
-    ordered_indexes = [index for index in [note_index, *item_indexes, sign_index, tail_date] if index is not None]
-    if len(ordered_indexes) >= 2:
-        region_start = min(ordered_indexes)
-        region_end = max(ordered_indexes)
-        region_plain = [
-            index for index in plain_indexes if region_start <= index <= region_end
-        ]
-        if set(region_plain) == set(ordered_indexes):
-            canonical = []
-            if note_index is not None:
-                canonical.append(paragraphs[note_index])
-                canonical.extend(paragraphs[index] for index in item_indexes)
-            if sign_index is not None:
-                canonical.append(paragraphs[sign_index])
-            if tail_date is not None:
-                canonical.append(paragraphs[tail_date])
-            paragraphs[region_start:region_end + 1] = canonical
-
-    # Re-evaluate after the optional move.  Attachment pages have already been
-    # classified by recognition; this pass only normalizes confirmed page marks
-    # and preserves protected tables, images, captions, and section breaks.
-    anchor_seen = False
-    attachment_mode = False
-    for paragraph in paragraphs:
-        source_text = _tail_source_text(paragraph)
-        if paragraph.type_id in {"attachment_note", "attachment_note_item", "sign_org", "sign_date"}:
-            anchor_seen = True
-        if paragraph.type_id.startswith("__") or not source_text:
-            continue
-        if anchor_seen and paragraph.type_id == "attachment_page_mark":
-            _retag_tail_paragraph(
-                paragraph,
-                "attachment_page_mark",
-                _norm_attach_mark(source_text) if normalize_text else source_text,
-            )
-            attachment_mode = True
-            continue
-        if not attachment_mode:
-            continue
-        if paragraph.type_id in {"attachment_title", "attachment_body"}:
-            _retag_tail_paragraph(paragraph, paragraph.type_id, source_text)
-
-
-def _diagnostic_text_hash(paragraph: ParagraphData, length: int) -> str:
-    text = paragraph.text or paragraph.original_text or ""
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:length]
-
-
-def _sync_recognition_consistency(data: DocumentData) -> None:
-    """Keep final paragraph metadata and diagnostics aligned after normalization."""
-    report = getattr(data, "recognition_diagnostics", None)
-    if not isinstance(report, dict):
-        return
-    diagnostics = report.get("paragraphs")
-    if not isinstance(diagnostics, list):
-        return
-    by_block = {
-        item.get("block_index"): dict(item)
-        for item in diagnostics
-        if isinstance(item, dict) and item.get("block_index") is not None
-    }
-    refreshed: list[dict] = []
-    fallback_index = 0
-    preview_length = int(
-        (report.get("config") or {}).get("text_preview_length")
-        or 12
-    )
-    for paragraph_index, paragraph in enumerate(data.paragraphs):
-        if paragraph.type_id in {"__table__", "__image__", "__letterhead__"}:
-            continue
-        meta = dict(paragraph.meta or {})
-        block_index = meta.get("recognition_block_index")
-        old = by_block.get(block_index)
-        if old is None and fallback_index < len(diagnostics) and isinstance(diagnostics[fallback_index], dict):
-            old = dict(diagnostics[fallback_index])
-        fallback_index += 1
-        if old is None:
-            continue
-        meta["final_type"] = paragraph.type_id
-        meta.setdefault("recognition_type", paragraph.type_id)
-        meta.setdefault("recognized_type", meta.get("recognition_type", paragraph.type_id))
-        paragraph.meta = meta
-        old.update({
-            "paragraph_index": paragraph_index,
-            "text_preview": _diagnostic_text_hash(paragraph, preview_length),
-            "recognized_type": meta.get("recognized_type", paragraph.type_id),
-            "final_type": paragraph.type_id,
-            "review_confidence": meta.get("review_confidence", old.get("review_confidence")),
-            "review_level": meta.get("review_level", old.get("review_level")),
-            "evidence_summary": meta.get("recognition_evidence", old.get("evidence_summary", [])),
-            "review_reasons": meta.get("review_reasons", old.get("review_reasons", [])),
-            "needs_review": meta.get("review_level", old.get("review_level")) in {"review", "critical_review"},
-            "mapping_applied": meta.get("mapping_applied", old.get("mapping_applied")),
-            "mapping_failed": meta.get("mapping_failed", old.get("mapping_failed")),
-        })
-        refreshed.append(old)
-    report["paragraphs"] = refreshed
-    report["validation"] = __import__(
-        "docxtool.document.recognition.validators",
-        fromlist=["validate_diagnostics"],
-    ).validate_diagnostics(report)
-    summary = report.get("summary")
-    if isinstance(summary, dict):
-        summary.update({
-            "paragraph_count": len(refreshed),
-            "low_confidence_count": sum(
-                item.get("review_confidence", 0) < (report.get("config") or {}).get("review_low_score", 0.62)
-                for item in refreshed
-            ),
-            "needs_review_count": sum(bool(item.get("needs_review")) for item in refreshed),
-            "unknown_type_fallback_count": sum(item.get("final_type") == "unknown" for item in refreshed),
-            "confirmed_count": sum(item.get("review_level") == "confirmed" for item in refreshed),
-            "info_count": sum(item.get("review_level") == "info" for item in refreshed),
-            "review_count": sum(item.get("review_level") == "review" for item in refreshed),
-            "critical_review_count": sum(item.get("review_level") == "critical_review" for item in refreshed),
-        })
 
 
 # ── 编号正则（仅匹配，不决策）──

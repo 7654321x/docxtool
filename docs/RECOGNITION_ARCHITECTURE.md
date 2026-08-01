@@ -7,6 +7,24 @@ DOCX 块抽取 -> 统一特征 -> 文档模式 -> 候选提供器 -> 硬约束 -
 -> 结构树 -> 结构校验 -> 兼容 type_id -> 现有渲染器
 ```
 
+## 共享文档模型
+
+`src/docxtool/document/models/` 提供导入后的稳定数据契约：
+
+- `source.py`：源 run 格式事实和逻辑段边界候选。
+- `paragraph.py`：物理段特征、行内 token 和逻辑段落数据。
+- `document.py`：整篇文档数据、body 顺序块和规范化审计记录。
+
+旧的 `docxtool.document.importer` 仍 re-export 这些类型，保持现有测试、SDK 和渲染器导入路径兼容。
+
+## 逻辑分段边界
+
+`src/docxtool/document/segmentation/` 开始承接物理段到逻辑段的守恒职责：
+
+- `source_locator.py`：根据源物理段 raw span 写入 UTF-16 locator、canonical locator 和段内格式特征。旧的 importer 私有函数名仍作为兼容入口转发到该模块。
+
+当前软换行、标题正文粘连和尾部软换行拆分规则仍保留在 importer 编排中，后续迁移时必须继续保持文字覆盖、不重叠和不丢失。
+
 ## 目录
 
 `src/docxtool/document/recognition/` 包含识别层：
@@ -21,6 +39,10 @@ DOCX 块抽取 -> 统一特征 -> 文档模式 -> 候选提供器 -> 硬约束 -
 - `validators.py`：有限结构序列校验。
 - `diagnostics.py`：只输出结构信息，不输出源文档正文、OOXML 或敏感字段。
 - `config.py` / `version.py`：集中管理 Beam 宽度、候选上限、诊断开关和引擎/schema 版本。
+
+`src/docxtool/document/normalization/` 位于识别层之后：
+
+- `tail.py`：消费最终 `type_id`，整理已确认的附件说明、落款单位、成文日期和附件正文页标记，并同步识别诊断。它不重新生成候选、不重新判定正文或标题，也不改变候选分数。
 
 ## 关键规则
 

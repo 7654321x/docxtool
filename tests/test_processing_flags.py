@@ -16,6 +16,7 @@ from docxtool.document.importer import (
     ParagraphFeatures,
     _normalize_tail_structures,
 )
+from docxtool.document.normalization import normalize_tail_structures
 from docxtool.document.style_config import PageSettings, StyleRule, load_rules_and_settings
 
 
@@ -24,6 +25,9 @@ def _rules():
 
 
 class ProcessingFlagsTest(unittest.TestCase):
+    def test_tail_normalizer_importer_facade_uses_normalization_module(self):
+        self.assertIs(_normalize_tail_structures, normalize_tail_structures)
+
     def test_punctuation_disabled_keeps_original_text(self):
         with tempfile.TemporaryDirectory() as tmp:
             src = Path(tmp) / "source.docx"

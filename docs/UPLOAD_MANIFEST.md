@@ -74,6 +74,9 @@ https://github.com/7654321x/docxtool.git
 | `src/docxtool/document/importer.py` | DOCX 结构识别、段落分类、元数据生成 |
 | `src/docxtool/document/effective_format.py` | run、样式继承、主题字体的有效格式解析 |
 | `src/docxtool/document/source_tape.py` | 物理段落来源范围与 raw/canonical 坐标映射 |
+| `src/docxtool/document/models/` | 导入链路共享数据模型 | 为 importer、分段和 SDK 兼容入口提供稳定中间结构 |
+| `src/docxtool/document/normalization/` | 导入后的结构归一化 | 当前承载尾部附件、落款、日期顺序修正和诊断同步 |
+| `src/docxtool/document/segmentation/` | 物理段到逻辑段的分段辅助 | 当前承载来源定位、标题正文边界和软换行强结构判断 |
 | `src/docxtool/document/classifier.py` | 文档模式和段落结构分类 |
 | `src/docxtool/document/letterhead_config.py` | 版头配置归一化和安全校验 |
 | `src/docxtool/document/recognition/` | 候选、Beam 解码、诊断、验证和兼容映射 |

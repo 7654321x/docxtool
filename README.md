@@ -18,7 +18,10 @@
 
 - `server.py`：兼容入口，调用 `src/docxtool/web/app.py`。
 - `src/docxtool/web/app.py`：Web 服务、上传下载、任务队列、管理后台、健康检查。
+- `src/docxtool/document/models/`：导入、识别、规范化、渲染和 SDK 共享的稳定文档数据模型。
 - `src/docxtool/document/importer.py`：DOCX 结构识别、段落分类、元数据生成。
+- `src/docxtool/document/segmentation/`：逻辑段 source locator、可见文字守恒和段内格式特征映射。
+- `src/docxtool/document/normalization/`：识别完成后的尾部顺序、日期/附件显示规范和诊断一致性处理。
 - `src/docxtool/document/style_config.py`：样式规则、页面设置、日志配置。
 - `src/docxtool/document/engine/`：DOCX 导出和实际排版逻辑。
 - `src/docxtool/security/`：上传 DOCX 安全校验。
