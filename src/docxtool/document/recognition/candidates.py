@@ -6,11 +6,10 @@ from dataclasses import dataclass
 import re
 from typing import Protocol
 
+from .colon import is_organization_label, is_standalone_addressing_text
 from .features import (
     DocumentBlock,
     ParagraphFeatures,
-    is_organization_label,
-    is_standalone_addressing_text,
 )
 from .global_context import DocumentContext
 from .model import DocumentMode, ParagraphType, SectionKind
@@ -24,8 +23,10 @@ _EMPTY_KEY_VALUE_LABELS = frozenset({
 _STRUCTURE_CONTEXT_TYPES = {
     ParagraphType.ATTACHMENT_NOTE,
     ParagraphType.ATTACHMENT_NOTE_ITEM,
+    ParagraphType.SIGNATURE_DATE,
     ParagraphType.SIGNATURE_ORG,
 }
+_ATTACHMENT_PAGE_MARK_RE = re.compile(r"^附件\s*[0-9一二三四五六七八九十百千]*$")
 
 
 @dataclass(frozen=True)
@@ -99,8 +100,8 @@ def _context_evidence_for(
         return document_context.attachment_item_reasons(context.index)
     if paragraph_type == ParagraphType.SIGNATURE_ORG:
         return document_context.signature_org_reasons(context.index)
-    if paragraph_type == ParagraphType.SIGNATURE_DATE and features.date_match:
-        return ("date-shape",)
+    if paragraph_type == ParagraphType.SIGNATURE_DATE:
+        return document_context.signature_date_reasons(context.index)
     return ()
 
 
@@ -155,8 +156,67 @@ class StructuralCandidateProvider:
                 )]
         if features.dispatch_number_match:
             result.append(Candidate(ParagraphType.DISPATCH_NUMBER, 1.0, self.name, ("dispatch-number",), hard=True, section_hint=SectionKind.DISPATCH_META))
-        if features.date_match:
-            result.append(Candidate(ParagraphType.SIGNATURE_DATE, 0.85, self.name, ("date-shape",), section_hint=SectionKind.SIGNATURE))
+        if (
+            _ATTACHMENT_PAGE_MARK_RE.fullmatch(features.compact_text)
+            and context.previous_type in {
+                ParagraphType.ATTACHMENT_NOTE,
+                ParagraphType.ATTACHMENT_NOTE_ITEM,
+                ParagraphType.SIGNATURE_DATE,
+                ParagraphType.ATTACHMENT_BODY,
+            }
+        ):
+            result.append(Candidate(
+                ParagraphType.ATTACHMENT_PAGE_MARK,
+                1.0,
+                self.name,
+                ("attachment-page-boundary",),
+                hard=True,
+                section_hint=SectionKind.ATTACHMENT_BODY,
+            ))
+        if (
+            context.previous_type == ParagraphType.ATTACHMENT_PAGE_MARK
+            and features.compact_text
+            and features.text_length <= 40
+            and not features.contains_colon
+            and features.heading_shape_level is None
+        ):
+            result.append(Candidate(
+                ParagraphType.ATTACHMENT_TITLE,
+                0.98,
+                self.name,
+                ("after-attachment-page-mark",),
+                hard=True,
+                section_hint=SectionKind.ATTACHMENT_BODY,
+            ))
+        if context.previous_type in {ParagraphType.ATTACHMENT_TITLE, ParagraphType.ATTACHMENT_BODY} and features.compact_text:
+            result.append(Candidate(
+                ParagraphType.ATTACHMENT_BODY,
+                0.94,
+                self.name,
+                ("inside-attachment-body",),
+                section_hint=SectionKind.ATTACHMENT_BODY,
+            ))
+        signature_date_evidence = (
+            context.document_context.signature_date_reasons(context.index)
+            if context.document_context is not None else ()
+        )
+        if signature_date_evidence:
+            result.append(Candidate(
+                ParagraphType.SIGNATURE_DATE,
+                0.97,
+                self.name,
+                signature_date_evidence,
+                hard=True,
+                section_hint=SectionKind.SIGNATURE,
+            ))
+        elif features.date_match:
+            result.append(Candidate(
+                ParagraphType.BODY,
+                0.76,
+                self.name,
+                ("date-without-signature-context",),
+                section_hint=SectionKind.BODY,
+            ))
         signature_evidence = (
             context.document_context.signature_org_reasons(context.index)
             if context.document_context is not None else ()

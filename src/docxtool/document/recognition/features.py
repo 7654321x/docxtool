@@ -10,8 +10,6 @@ from typing import Any
 from .colon import (
     MEETING_KEY_VALUE_LABELS,
     analyze_colon_structure,
-    is_organization_label,
-    is_standalone_addressing_text,
 )
 from .model import DocumentModeDecision, DocumentMode
 
@@ -238,8 +236,6 @@ def detect_mode(features: list[ParagraphFeatures], legacy: str = "") -> Document
         style = re.sub(r"\s+", " ", item.style_name.strip().casefold())
         if style in {"title", "标题", "subtitle", "副标题"}:
             evidence.append("title-style")
-        if item.legacy_type_id in {"title", "title_cont", "subtitle"}:
-            evidence.append("legacy-title-classification")
         if item.is_centered:
             evidence.append("centered")
         if item.bold_char_ratio >= 0.5 or item.is_bold:
@@ -255,10 +251,10 @@ def detect_mode(features: list[ParagraphFeatures], legacy: str = "") -> Document
     for index, item in enumerate(title_region):
         evidence = title_evidence(item, index)
         strong = {
-            "title-style", "legacy-title-classification", "centered",
+            "title-style", "centered",
             "bold-majority", "larger-than-body",
         }.intersection(evidence)
-        if item.compact_text.endswith(meeting_titles) and len(evidence) >= 3 and strong:
+        if item.compact_text.endswith(meeting_titles) and (len(evidence) >= 3 and strong or index == 0 and "title-length" in evidence):
             return DocumentModeDecision(DocumentMode.MEETING_MINUTES, min(0.99, 0.72 + meeting_count * 0.06), evidence + ("meeting-title-suffix",))
     if meeting_count >= 2:
         return DocumentModeDecision(DocumentMode.MEETING_MINUTES, min(0.99, 0.75 + meeting_count * 0.06), ("meeting-title-or-metadata",))
@@ -270,7 +266,7 @@ def detect_mode(features: list[ParagraphFeatures], legacy: str = "") -> Document
     for index, item in enumerate(title_region):
         evidence = title_evidence(item, index)
         strong = {
-            "title-style", "legacy-title-classification", "centered",
+            "title-style", "centered",
             "bold-majority", "larger-than-body",
         }.intersection(evidence)
         for mode, endings, reason in suffixes:

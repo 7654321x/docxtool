@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.3 - 2026-08-01
+
+- Fixed authoritative recognition ownership so tail normalization no longer reclassifies body paragraphs after recognition.
+- Weakened legacy importer influence so it cannot hard-veto front metadata, headings, signature dates, or attachment decisions.
+- Made Beam Search diagnostics come from the final winning path instead of a temporary best prefix.
+- Replaced the fixed 12-paragraph front scan stop with a soft threshold and stronger post-threshold evidence requirements.
+- Updated DOCX regression paths for the current `test_docx/tset1` and `test_docx/test2` layout.
+
 ## 2.2 - 2026-08-01
 
 - Added shared colon-structure evidence for recipients, salutations, body labels, key-value fields, and explanatory prose.

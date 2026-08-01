@@ -18,7 +18,7 @@ from docx.shared import Pt
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "005班子对照检查材料.docx"
-OUTPUT = ROOT / "test_docx" / "strat_docx"
+OUTPUT = ROOT / "test_docx" / "tset1" / "test1"
 SEED = 20260721
 REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 

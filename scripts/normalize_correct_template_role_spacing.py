@@ -10,7 +10,7 @@ from docx.shared import Pt
 
 
 ROOT = Path(__file__).resolve().parents[1]
-TARGET = ROOT / "test_docx" / "correct_docx" / "005班子对照检查材料_正确格式.docx"
+TARGET = ROOT / "test_docx" / "tset1" / "test1正确格式" / "005班子对照检查材料_正确格式.docx"
 
 
 def main() -> int:

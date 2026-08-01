@@ -3,10 +3,13 @@ from types import SimpleNamespace
 
 from docx import Document
 from docxtool.document.engine import export_doc
+import docxtool.document.recognition.decoder as decoder
+from docxtool.document.recognition.candidates import Candidate
 from docxtool.document.recognition import (
     DocumentMode,
     ParagraphType,
     RecognitionConfig,
+    SectionKind,
     apply_recognition,
     diagnostics_to_json,
     extract_blocks,
@@ -83,8 +86,8 @@ def test_embedded_document_title_after_signature_note():
 
     assert data.paragraphs[2].type_id == "embedded_document_title"
     trace = data.recognition_diagnostics["candidate_trace"][2]
-    local_best = max(trace["candidates"], key=lambda item: item["score"])["type"]
-    assert local_best != "embedded_document_title"
+    assert "embedded_document_title" in [item["type"] for item in trace["candidates"]]
+    assert data.recognition_diagnostics["paragraphs"][2]["provider"].startswith("embedded-document:")
 
 
 def test_report_bold_metadata_removed_outside_report_mode():
@@ -221,8 +224,8 @@ def test_unverified_legacy_attachment_note_does_not_force_final_type() -> None:
 
 def test_previous_title_changes_ambiguous_centered_line_decision():
     after_title = _document(
-        _paragraph("主标题", "title", 0),
-        _paragraph("补充说明", "body", 1, alignment="CENTER"),
+        _paragraph("主标题", "title", 0, alignment="CENTER"),
+        _paragraph("补充说明", "body", 1, alignment="CENTER", bold_char_ratio=1.0),
     )
     after_body = _document(
         _paragraph("正文开头", "body", 0),
@@ -254,6 +257,58 @@ def test_front_matter_context_overrides_misused_heading_style_without_keywords()
     assert context["front_matter_positions"] == [0, 1, 2, 3]
     assert context["body_start"] == 4
     assert context["body_start_reason"] == "recipient-following-body"
+
+
+def test_wrong_legacy_front_metadata_cannot_veto_structural_title() -> None:
+    title = _paragraph(
+        "关于推进基层治理重点工作的通知",
+        "role_name",
+        0,
+        alignment="CENTER",
+        style_name="Heading 1",
+        legacy_type_id="role_name",
+    )
+    data = _document(
+        title,
+        _paragraph("各有关单位：", "body", 1),
+        _paragraph("现将有关事项通知如下，请结合实际抓好落实。", "body", 2),
+    )
+
+    apply_recognition(data)
+
+    assert title.type_id == "title"
+    diagnostic = data.recognition_diagnostics["paragraphs"][0]
+    assert diagnostic["final_type"] == "title"
+    assert "legacy-reclassified" in diagnostic["evidence_summary"]
+
+
+def test_disabling_legacy_ignores_legacy_context_and_candidates() -> None:
+    title = _paragraph(
+        "关于推进基层治理重点工作的通知",
+        "role_name",
+        0,
+        alignment="CENTER",
+        style_name="Heading 1",
+        legacy_type_id="role_name",
+    )
+    data = _document(
+        title,
+        _paragraph("各有关单位：", "body", 1),
+        _paragraph("现将有关事项通知如下，请结合实际抓好落实。", "body", 2),
+    )
+
+    apply_recognition(
+        data,
+        RecognitionConfig(enable_legacy_candidates=False),
+    )
+
+    assert title.type_id == "title"
+    diagnostic = data.recognition_diagnostics["paragraphs"][0]
+    assert all(
+        "legacy" not in evidence
+        for evidence in [*diagnostic["evidence_summary"], *diagnostic["title_context_evidence"]]
+    )
+    assert {item["source"] for item in data.recognition_diagnostics["candidate_trace"][0]["candidates"]}.isdisjoint({"legacy"})
 
 
 def test_body_empty_colon_label_is_not_a_recipient_or_key_value() -> None:
@@ -850,6 +905,28 @@ def test_front_matter_scan_skips_empty_and_caption_placeholders() -> None:
     assert context["body_start"] == 17
 
 
+def test_front_scan_uses_soft_threshold_until_real_structure_boundary() -> None:
+    prefix = [
+        _paragraph(f"联合发文机关{index}", "body", index)
+        for index in range(13)
+    ]
+    title = _paragraph("关于推进基层治理工作的通知", "body", 13, alignment="CENTER")
+    recipient = _paragraph("各有关单位：", "body", 14)
+    body = _paragraph("现将有关事项通知如下，请结合实际抓好落实。", "body", 15)
+    data = _document(*prefix, title, recipient, body)
+
+    apply_recognition(data)
+
+    assert title.type_id == "title"
+    assert recipient.type_id == "addressing"
+    context = data.recognition_diagnostics["document_context"]
+    assert 13 in context["front_matter_positions"]
+    assert context["front_scan_reason"] == "body-boundary"
+    assert context["front_soft_threshold_exceeded"] is True
+    assert context["front_scan_soft_threshold"] == 12
+    assert context["body_start"] == 15
+
+
 def test_key_value_and_source_variants_do_not_promote_numbering():
     for index, text in enumerate(("（一）缺席：李四", "（二）出 席:张三", "来源：国家卫生健康委员会")):
         paragraph = _paragraph(text, "heading2", index)
@@ -917,3 +994,40 @@ def test_same_input_is_thread_safe_across_twenty_independent_documents():
 
     assert len(results) == 20
     assert all(result == results[0] for result in results)
+
+
+def test_diagnostics_use_candidates_from_final_winning_beam(monkeypatch) -> None:
+    class BranchingProvider:
+        name = "branching"
+
+        def propose(self, block, features, context):
+            if context.index == 0:
+                return [
+                    Candidate(ParagraphType.BODY, 0.60, self.name, ("start-body",), section_hint=SectionKind.BODY),
+                    Candidate(ParagraphType.ADDRESSING, 0.55, self.name, ("start-addressing",), section_hint=SectionKind.RECIPIENT),
+                ]
+            if context.index == 1 and context.previous_type == ParagraphType.ADDRESSING:
+                return [
+                    Candidate(ParagraphType.HEADING_1, 1.00, self.name, ("after-addressing",), section_hint=SectionKind.BODY),
+                ]
+            if context.index == 1:
+                return [
+                    Candidate(ParagraphType.BODY, 0.10, self.name, ("after-body",), section_hint=SectionKind.BODY),
+                ]
+            return [
+                Candidate(ParagraphType.BODY, 0.10, self.name, ("tail",), section_hint=SectionKind.BODY),
+            ]
+
+    monkeypatch.setattr(decoder, "DEFAULT_PROVIDERS", (BranchingProvider(),))
+    data = _document(
+        _paragraph("起始行", "body", 0),
+        _paragraph("路径相关行", "body", 1),
+    )
+
+    apply_recognition(data, RecognitionConfig(beam_width=2, max_candidates_per_paragraph=4))
+
+    diagnostics = data.recognition_diagnostics["paragraphs"]
+    assert [item["final_type"] for item in diagnostics] == ["addressing", "heading1"]
+    assert diagnostics[1]["candidate_types"] == ["heading1"]
+    assert diagnostics[1]["provider"].startswith("branching:after-addressing")
+    assert diagnostics[1]["selected_candidate_score"] == 1.0

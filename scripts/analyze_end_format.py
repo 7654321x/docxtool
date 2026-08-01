@@ -15,8 +15,8 @@ from docx.oxml.ns import qn
 
 
 ROOT = Path(__file__).resolve().parents[1]
-OUTPUT = ROOT / "test_docx" / "end_docx"
-TEMPLATE = ROOT / "test_docx" / "correct_docx" / "005班子对照检查材料_正确格式.docx"
+OUTPUT = ROOT / "test_docx" / "tset1" / "test1测试结果"
+TEMPLATE = ROOT / "test_docx" / "tset1" / "test1正确格式" / "005班子对照检查材料_正确格式.docx"
 
 PARAGRAPH_FIELDS = (
     "style", "font", "size_pt", "bold", "italic", "underline", "alignment",

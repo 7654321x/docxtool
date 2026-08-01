@@ -8,7 +8,14 @@ from docx.enum.text import WD_BREAK
 from docx.shared import Pt
 
 from docxtool.document.engine import export_doc
-from docxtool.document.importer import DocxImporter, DocumentData, ParagraphData, ParagraphFeatures
+from docxtool.document.importer import (
+    DocxImporter,
+    DocumentData,
+    InlineToken,
+    ParagraphData,
+    ParagraphFeatures,
+    _normalize_tail_structures,
+)
 from docxtool.document.style_config import PageSettings, StyleRule, load_rules_and_settings
 
 
@@ -249,6 +256,60 @@ class ProcessingFlagsTest(unittest.TestCase):
             self.assertEqual(
                 paragraph.meta.get("recognition_evidence"),
                 ["attachment-keyword-without-tail-context", "hard-structure", "legacy-reclassified"],
+            )
+
+    def test_tail_normalizer_does_not_reclassify_final_body_date(self):
+        paragraph = ParagraphData(
+            "2026年5月29日",
+            "body",
+            "2026年5月29日",
+            ParagraphFeatures(),
+            meta={
+                "recognition_type": "body",
+                "recognized_type": "body",
+                "final_type": "body",
+                "source_locator_status": "verified",
+            },
+            inline_tokens=[InlineToken("text", "2026年5月29日")],
+        )
+        paragraphs = [
+            ParagraphData("前段正文已经开始，并完整说明有关工作情况。", "body", "前段正文已经开始，并完整说明有关工作情况。", ParagraphFeatures()),
+            paragraph,
+        ]
+
+        _normalize_tail_structures(paragraphs, normalize_text=False)
+
+        self.assertEqual(paragraph.type_id, "body")
+        self.assertEqual(paragraph.meta["final_type"], "body")
+        self.assertEqual(paragraph.meta["source_locator_status"], "verified")
+        self.assertEqual(paragraph.inline_tokens, [InlineToken("text", "2026年5月29日")])
+
+    def test_tail_reorder_keeps_recognition_diagnostics_in_output_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "tail-reorder-diagnostics.docx"
+            document = Document()
+            document.add_paragraph("工作情况", style="Title")
+            document.add_paragraph("前段正文已经开始，并完整说明有关工作情况。")
+            document.add_paragraph("星河治理委员会")
+            document.add_paragraph("2026年5月29日")
+            document.add_paragraph("附件：1.材料清单")
+            document.save(source)
+
+            rules, _, features = load_rules_and_settings({"mode": "smart"})
+            data = DocxImporter().load(str(source), rules, features=features)
+
+            self.assertEqual(
+                [item.type_id for item in data.paragraphs[-3:]],
+                ["attachment_note", "sign_org", "sign_date"],
+            )
+            diagnostics = data.recognition_diagnostics["paragraphs"]
+            self.assertEqual(
+                [item["final_type"] for item in diagnostics],
+                [paragraph.type_id for paragraph in data.paragraphs],
+            )
+            self.assertEqual(
+                [item["paragraph_index"] for item in diagnostics],
+                list(range(len(data.paragraphs))),
             )
 
     def test_smart_mode_recovers_speech_title_and_soft_line_body_from_heading_style(self):

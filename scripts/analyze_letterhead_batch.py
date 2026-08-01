@@ -16,9 +16,9 @@ from docxtool.document.style_config import StyleRule  # noqa: E402
 from batch_test_docx import physical_snapshot  # noqa: E402
 
 
-INPUT = ROOT / "test_docx" / "strat_docx"
-OUTPUT = ROOT / "test_docx" / "end_docx"
-TEMPLATE = ROOT / "test_docx" / "correct_docx" / "005班子对照检查材料_正确格式.docx"
+INPUT = ROOT / "test_docx" / "tset1" / "test1"
+OUTPUT = ROOT / "test_docx" / "tset1" / "test1测试结果"
+TEMPLATE = ROOT / "test_docx" / "tset1" / "test1正确格式" / "005班子对照检查材料_正确格式.docx"
 
 
 def inspect(path: Path, importer: DocxImporter, rules: list[StyleRule]) -> dict:

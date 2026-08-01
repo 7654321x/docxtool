@@ -23,11 +23,11 @@ from typing import Dict, List, Optional, Tuple
 
 from docxtool.document.classifier import ClassificationOptions, classify_paragraphs
 from docxtool.document.recognition import apply_recognition
-from docxtool.document.recognition.features import (
+from docxtool.document.recognition.colon import (
+    analyze_colon_structure,
     is_organization_label,
     is_standalone_addressing_text,
 )
-from docxtool.document.recognition.colon import analyze_colon_structure
 from docxtool.document.recognition.version import RECOGNITION_VERSION_TAG
 from docxtool.document.source_tape import SourceTape, canonicalize_text, utf16_length
 from docxtool.document.effective_format import (
@@ -1592,14 +1592,17 @@ def _retag_tail_paragraph(
     text: str,
     meta: Optional[dict] = None,
 ) -> None:
-    preserved = {}
-    if paragraph.meta and paragraph.meta.get("sectPr") is not None:
-        preserved["sectPr"] = paragraph.meta["sectPr"]
+    old_text = paragraph.text
+    preserved = dict(paragraph.meta or {})
     preserved.update(meta or {})
+    preserved["final_type"] = type_id
+    preserved.setdefault("recognition_type", type_id)
+    preserved.setdefault("recognized_type", type_id)
     paragraph.type_id = type_id
     paragraph.text = text
     paragraph.meta = preserved
-    paragraph.inline_tokens = []
+    if text != old_text:
+        paragraph.inline_tokens = []
 
 
 def _normalize_attachment_note_block(
@@ -1667,15 +1670,15 @@ def _normalize_tail_structures(
 
     raw_markers = [
         index for index in plain_indexes
-        if _is_attachment_page_mark(_tail_source_text(paragraphs[index]))
+        if paragraphs[index].type_id == "attachment_page_mark"
     ]
     raw_notes = [
         index for index in plain_indexes
-        if _ATT_NOTE_RE.match(_tail_source_text(paragraphs[index]))
+        if paragraphs[index].type_id == "attachment_note"
     ]
     raw_dates = [
         index for index in plain_indexes
-        if _SIGN_DATE_RE2.match(_tail_source_text(paragraphs[index]))
+        if paragraphs[index].type_id == "sign_date"
     ]
     first_marker = raw_markers[0] if raw_markers else len(paragraphs)
 
@@ -1715,7 +1718,7 @@ def _normalize_tail_structures(
             index
             for index in plain_indexes
             if note_index < index < first_marker
-            and _ATT_ITEM_RE.match(_tail_source_text(paragraphs[index]))
+            and paragraphs[index].type_id == "attachment_note_item"
         ]
 
     sign_index = None
@@ -1726,7 +1729,7 @@ def _normalize_tail_structures(
             if max(0, min(note_index if note_index is not None else tail_date, tail_date) - 4)
             <= index < first_marker
             and index != tail_date
-            and _is_tail_signature_org_text(_tail_source_text(paragraphs[index]))
+            and paragraphs[index].type_id == "sign_org"
         ]
         if sign_candidates:
             sign_index = min(sign_candidates, key=lambda index: abs(index - tail_date))
@@ -1768,36 +1771,104 @@ def _normalize_tail_structures(
                 canonical.append(paragraphs[tail_date])
             paragraphs[region_start:region_end + 1] = canonical
 
-    # Re-evaluate indexes after the optional move, then classify each attachment
-    # page without moving protected tables, images, captions, or section breaks.
+    # Re-evaluate after the optional move.  Attachment pages have already been
+    # classified by recognition; this pass only normalizes confirmed page marks
+    # and preserves protected tables, images, captions, and section breaks.
     anchor_seen = False
     attachment_mode = False
-    expect_title = False
     for paragraph in paragraphs:
         source_text = _tail_source_text(paragraph)
         if paragraph.type_id in {"attachment_note", "attachment_note_item", "sign_org", "sign_date"}:
             anchor_seen = True
         if paragraph.type_id.startswith("__") or not source_text:
             continue
-        if anchor_seen and _is_attachment_page_mark(source_text):
+        if anchor_seen and paragraph.type_id == "attachment_page_mark":
             _retag_tail_paragraph(
                 paragraph,
                 "attachment_page_mark",
                 _norm_attach_mark(source_text) if normalize_text else source_text,
             )
             attachment_mode = True
-            expect_title = True
             continue
         if not attachment_mode:
             continue
-        if expect_title and len(source_text) <= 28 and not _contains_colon(source_text):
-            type_id, _ = _match_numbering(source_text)
-            if not type_id:
-                _retag_tail_paragraph(paragraph, "attachment_title", source_text)
-                expect_title = False
-                continue
-        _retag_tail_paragraph(paragraph, "attachment_body", source_text)
-        expect_title = False
+        if paragraph.type_id in {"attachment_title", "attachment_body"}:
+            _retag_tail_paragraph(paragraph, paragraph.type_id, source_text)
+
+
+def _diagnostic_text_hash(paragraph: ParagraphData, length: int) -> str:
+    text = paragraph.text or paragraph.original_text or ""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:length]
+
+
+def _sync_recognition_consistency(data: DocumentData) -> None:
+    """Keep final paragraph metadata and diagnostics aligned after normalization."""
+    report = getattr(data, "recognition_diagnostics", None)
+    if not isinstance(report, dict):
+        return
+    diagnostics = report.get("paragraphs")
+    if not isinstance(diagnostics, list):
+        return
+    by_block = {
+        item.get("block_index"): dict(item)
+        for item in diagnostics
+        if isinstance(item, dict) and item.get("block_index") is not None
+    }
+    refreshed: list[dict] = []
+    fallback_index = 0
+    preview_length = int(
+        (report.get("config") or {}).get("text_preview_length")
+        or 12
+    )
+    for paragraph_index, paragraph in enumerate(data.paragraphs):
+        if paragraph.type_id in {"__table__", "__image__", "__letterhead__"}:
+            continue
+        meta = dict(paragraph.meta or {})
+        block_index = meta.get("recognition_block_index")
+        old = by_block.get(block_index)
+        if old is None and fallback_index < len(diagnostics) and isinstance(diagnostics[fallback_index], dict):
+            old = dict(diagnostics[fallback_index])
+        fallback_index += 1
+        if old is None:
+            continue
+        meta["final_type"] = paragraph.type_id
+        meta.setdefault("recognition_type", paragraph.type_id)
+        meta.setdefault("recognized_type", meta.get("recognition_type", paragraph.type_id))
+        paragraph.meta = meta
+        old.update({
+            "paragraph_index": paragraph_index,
+            "text_preview": _diagnostic_text_hash(paragraph, preview_length),
+            "recognized_type": meta.get("recognized_type", paragraph.type_id),
+            "final_type": paragraph.type_id,
+            "review_confidence": meta.get("review_confidence", old.get("review_confidence")),
+            "review_level": meta.get("review_level", old.get("review_level")),
+            "evidence_summary": meta.get("recognition_evidence", old.get("evidence_summary", [])),
+            "review_reasons": meta.get("review_reasons", old.get("review_reasons", [])),
+            "needs_review": meta.get("review_level", old.get("review_level")) in {"review", "critical_review"},
+            "mapping_applied": meta.get("mapping_applied", old.get("mapping_applied")),
+            "mapping_failed": meta.get("mapping_failed", old.get("mapping_failed")),
+        })
+        refreshed.append(old)
+    report["paragraphs"] = refreshed
+    report["validation"] = __import__(
+        "docxtool.document.recognition.validators",
+        fromlist=["validate_diagnostics"],
+    ).validate_diagnostics(report)
+    summary = report.get("summary")
+    if isinstance(summary, dict):
+        summary.update({
+            "paragraph_count": len(refreshed),
+            "low_confidence_count": sum(
+                item.get("review_confidence", 0) < (report.get("config") or {}).get("review_low_score", 0.62)
+                for item in refreshed
+            ),
+            "needs_review_count": sum(bool(item.get("needs_review")) for item in refreshed),
+            "unknown_type_fallback_count": sum(item.get("final_type") == "unknown" for item in refreshed),
+            "confirmed_count": sum(item.get("review_level") == "confirmed" for item in refreshed),
+            "info_count": sum(item.get("review_level") == "info" for item in refreshed),
+            "review_count": sum(item.get("review_level") == "review" for item in refreshed),
+            "critical_review_count": sum(item.get("review_level") == "critical_review" for item in refreshed),
+        })
 
 
 # ── 编号正则（仅匹配，不决策）──
@@ -3145,6 +3216,8 @@ class DocxImporter:
         if processing_strategy == "normalize":
             for para in doc.paragraphs:
                 self._strip_auto_numbering(para)
+
+        _sync_recognition_consistency(data)
 
         logger.info(
             "[导入] file_sha256=%s paragraphs=%s tables=%s strategy=%s recognition=%s",

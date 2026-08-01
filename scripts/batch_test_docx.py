@@ -29,11 +29,12 @@ from docxtool.document.importer import DocxImporter  # noqa: E402
 from docxtool.document.letterhead_config import default_letterhead_config  # noqa: E402
 from docxtool.document.style_config import PageSettings, StyleRule  # noqa: E402
 
-INPUT_DIR = ROOT / "test_docx" / "strat_docx"
-TEMPLATE_DIR = ROOT / "test_docx" / "correct_docx"
-OUTPUT_DIR = ROOT / "test_docx" / "end_docx"
-SPECIAL_INPUT_DIR = ROOT / "test_docx" / "测试文稿"
-SPECIAL_OUTPUT_DIR = SPECIAL_INPUT_DIR / "测试目录"
+INPUT_DIR = ROOT / "test_docx" / "tset1" / "test1"
+TEMPLATE_DIR = ROOT / "test_docx" / "tset1" / "test1正确格式"
+OUTPUT_DIR = ROOT / "test_docx" / "tset1" / "test1测试结果"
+SPECIAL_INPUT_DIR = ROOT / "test_docx" / "test2" / "test2"
+SPECIAL_TEMPLATE_DIR = ROOT / "test_docx" / "test2" / "test2正确格式"
+SPECIAL_OUTPUT_DIR = ROOT / "test_docx" / "test2" / "测试结果"
 COMPARISON_VERSION = "structural-alignment-v3"
 _DISPATCH_NUMBER_RE = re.compile(r"^(?P<agency_code>.+?)〔(?P<year>\d{4})〕(?P<sequence>\d+)号$")
 _PAGE_NUMBER_RE = re.compile(r"^[—–－\-\s]*\d{1,4}[—–－\-\s]*$")
@@ -805,12 +806,12 @@ def compare_documents(
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output-dir", type=Path, default=OUTPUT_DIR, help="Empty directory under test_docx/end_docx for this batch run.")
+    parser.add_argument("--output-dir", type=Path, default=OUTPUT_DIR, help="Empty directory under test_docx/tset1/test1测试结果 for this batch run.")
     parser.add_argument(
         "--special-output-dir",
         type=Path,
         default=SPECIAL_OUTPUT_DIR,
-        help="Directory under test_docx/测试文稿/测试目录 for the special regression set.",
+        help="Directory under test_docx/test2/测试结果 for the special regression set.",
     )
     parser.add_argument("--without-template-letterhead", action="store_true", help="Do not derive managed letterhead options from the matched correct template.")
     parser.add_argument("--strict-preservation", action="store_true", help="Use strict preservation instead of the default smart/structural mode.")
@@ -1324,7 +1325,7 @@ def main(argv: list[str] | None = None) -> int:
     special_report = {
         "总数": len(special_results), "成功数": sum(bool(item["成功"]) for item in special_results),
         "失败数": sum(not item["成功"] for item in special_results), "处理策略": processing_strategy,
-        "模板对比": "专项集没有统一对照模板，未与 correct_docx 进行格式差异判定。",
+        "模板对比": f"专项集模板目录：{SPECIAL_TEMPLATE_DIR.relative_to(ROOT)}；当前专项报告仍以结构审计和视觉抽查为主。",
         "源标题线索未保留数": sum(int(item.get("源标题线索未保留数", 0) or 0) for item in special_results),
         "落款连续性问题数": sum(int(item.get("落款连续性问题数", 0) or 0) for item in special_results),
         "视觉渲染检查": special_visual, "结果": special_results,

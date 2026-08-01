@@ -25,18 +25,12 @@ _ROLE_HINT_RE = re.compile(
 _HEAD_DATE_RE = re.compile(
     r"^[（(]?\s*(?:(?:19|20)\d{2}|[零〇○一二两三四五六七八九]{4})\s*年\s*"
     r"(?:[0-9一二两三四五六七八九十〇○×X]{1,3})\s*月\s*"
-    r"(?:[0-9一二两三四五六七八九十〇○×X]{1,3})\s*(?:日|号)"
+    r"(?:[0-9一二两三四五六七八九十〇○×X]{0,3})\s*(?:日|号)"
 )
 _PERSON_NAME_RE = re.compile(r"[\u4e00-\u9fff·×X]{2,4}$")
 _TITLE_STYLE_NAMES = frozenset({"title", "标题", "subtitle", "副标题"})
 _HEADING_STYLE_NAMES = frozenset({"heading1", "标题1", "heading2", "标题2", "heading3", "标题3", "heading4", "标题4"})
-_TITLE_LEGACY_TYPES = frozenset({"title", "title_cont", "subtitle", "title2"})
-_TITLE_META_TYPES = frozenset({"role_name", "author_line", "date_line", "addressing", "meeting_line", "location_line"})
-_BODY_LEGACY_TYPES = frozenset({
-    "body", "addressing", "responsibility_line", "heading1", "heading1_report",
-    "heading2", "heading3", "heading4", "title2", "glossary_item",
-    "attachment_body",
-})
+_FRONT_SCAN_SOFT_THRESHOLD = 12
 _ATTACHMENT_ITEM_RE = re.compile(r"^\s*\d{1,2}[.．、]\s*\S+")
 _ATTACHMENT_PAGE_RE = re.compile(r"^附件\s*[0-9一二三四五六七八九十百千]*$")
 _SIGNATURE_NEGATIVE_STARTS = ("以上", "请", "现将", "特此", "有关", "此", "联系人", "联系电话", "责任单位")
@@ -111,14 +105,43 @@ def _head_date_line(feature: ParagraphFeatures) -> bool:
     return bool(feature.date_match or _HEAD_DATE_RE.match(feature.compact_text))
 
 
-def _head_role_name(feature: ParagraphFeatures, following: ParagraphFeatures | None = None) -> bool:
+def _front_title_anchor(feature: ParagraphFeatures) -> bool:
+    if (
+        not feature.compact_text
+        or feature.dispatch_number_match
+        or feature.recipient_match
+        or feature.attachment_note_match
+        or feature.key_value_label
+        or _head_date_line(feature)
+        or _body_like(feature)
+    ):
+        return False
+    if _SPEECH_TITLE_RE.fullmatch(feature.compact_text):
+        return True
+    style = _style_name(feature.style_name)
+    return bool(
+        style in _TITLE_STYLE_NAMES
+        or feature.title_shape_score >= 0.5
+        or feature.is_centered
+        or (
+            feature.text_length <= 50
+            and not feature.heading_shape_level
+            and not feature.ends_with_sentence_punctuation
+        )
+    )
+
+
+def _head_role_name(
+    feature: ParagraphFeatures,
+    previous: ParagraphFeatures | None = None,
+    following: ParagraphFeatures | None = None,
+) -> bool:
     """Recognize a front-matter role/name line without using a name list."""
     text = feature.raw_text.strip()
     compact = feature.compact_text
     if (
         not text
         or feature.text_length > 42
-        or not _ROLE_HINT_RE.search(compact)
         or feature.ends_with_sentence_punctuation
         or any(mark in compact for mark in "：:；;")
     ):
@@ -126,25 +149,37 @@ def _head_role_name(feature: ParagraphFeatures, following: ParagraphFeatures | N
     # A role and name separated by ordinary or full-width whitespace is the
     # strongest and most common manuscript form.
     spaced_name = re.search(r"[\s　]+([\u4e00-\u9fff·×X]{2,4})$", text)
-    if spaced_name:
+    has_role_hint = bool(_ROLE_HINT_RE.search(compact))
+    if has_role_hint and spaced_name:
+        return True
+    if (
+        _PERSON_NAME_RE.fullmatch(compact)
+        and previous is not None
+        and following is not None
+        and _front_title_anchor(previous)
+        and (_head_date_line(following) or following.recipient_match)
+    ):
         return True
     # Some speech manuscripts omit the space, for example “党组书记、主席张三”.
     # Require a date or salutation immediately after it before accepting this
     # more ambiguous compact form.
     return bool(
+        has_role_hint
+        and
         _PERSON_NAME_RE.search(compact)
         and following is not None
         and (_head_date_line(following) or following.recipient_match)
     )
 
 
-def _title_metadata(feature: ParagraphFeatures, following: ParagraphFeatures | None = None) -> bool:
-    legacy = str(feature.legacy_type_id or "")
-    if legacy in _TITLE_META_TYPES:
-        return True
+def _title_metadata(
+    feature: ParagraphFeatures,
+    previous: ParagraphFeatures | None = None,
+    following: ParagraphFeatures | None = None,
+) -> bool:
     if _head_date_line(feature):
         return True
-    return _head_role_name(feature, following)
+    return _head_role_name(feature, previous, following)
 
 
 @dataclass(frozen=True)
@@ -169,11 +204,14 @@ class DocumentContext:
     body_start: int | None
     body_start_reason: str
     front_scan_reason: str
+    front_soft_threshold_exceeded: bool
+    front_scan_soft_threshold: int
     heading_families: tuple[HeadingFamily, ...]
     heading_evidence: tuple[tuple[str, ...], ...]
     front_metadata_kinds: tuple[str | None, ...]
     attachment_note_evidence: tuple[tuple[str, ...], ...]
     attachment_item_evidence: tuple[tuple[str, ...], ...]
+    signature_date_evidence: tuple[tuple[str, ...], ...]
     signature_org_evidence: tuple[tuple[str, ...], ...]
 
     def title_score(self, position: int) -> float:
@@ -203,6 +241,9 @@ class DocumentContext:
     def attachment_item_reasons(self, position: int) -> tuple[str, ...]:
         return self.attachment_item_evidence[position] if 0 <= position < len(self.attachment_item_evidence) else ()
 
+    def signature_date_reasons(self, position: int) -> tuple[str, ...]:
+        return self.signature_date_evidence[position] if 0 <= position < len(self.signature_date_evidence) else ()
+
     def signature_org_reasons(self, position: int) -> tuple[str, ...]:
         return self.signature_org_evidence[position] if 0 <= position < len(self.signature_org_evidence) else ()
 
@@ -212,6 +253,8 @@ class DocumentContext:
             "body_start": self.body_start,
             "body_start_reason": self.body_start_reason,
             "front_scan_reason": self.front_scan_reason,
+            "front_soft_threshold_exceeded": self.front_soft_threshold_exceeded,
+            "front_scan_soft_threshold": self.front_scan_soft_threshold,
             "heading_families": [
                 _family_diagnostic(family)
                 for family in self.heading_families
@@ -229,6 +272,11 @@ class DocumentContext:
             "signature_orgs": [
                 {"position": position, "evidence": list(evidence)}
                 for position, evidence in enumerate(self.signature_org_evidence)
+                if evidence
+            ],
+            "signature_dates": [
+                {"position": position, "evidence": list(evidence)}
+                for position, evidence in enumerate(self.signature_date_evidence)
                 if evidence
             ],
             "front_metadata": [
@@ -257,17 +305,17 @@ def _front_semantic_item(feature: ParagraphFeatures) -> bool:
     return feature.legacy_type_id != "__object_caption__"
 
 
-def _front_scan_positions(features: list[ParagraphFeatures]) -> tuple[tuple[int, ...], str]:
+def _front_scan_positions(features: list[ParagraphFeatures]) -> tuple[tuple[int, ...], str, bool]:
     positions: list[int] = []
     semantic_count = 0
     hard_cap = min(len(features), 80)
     reason = "document-end"
+    soft_threshold_exceeded = False
     for position, item in enumerate(features[:hard_cap]):
         if not _front_semantic_item(item):
             continue
-        if semantic_count >= 12:
-            reason = "effective-front-budget"
-            break
+        if semantic_count >= _FRONT_SCAN_SOFT_THRESHOLD:
+            soft_threshold_exceeded = True
         if semantic_count > 0 and (
             (_body_like(item) and not item.recipient_match)
             or item.attachment_note_match
@@ -281,11 +329,18 @@ def _front_scan_positions(features: list[ParagraphFeatures]) -> tuple[tuple[int,
     else:
         if len(features) > hard_cap:
             reason = "physical-safety-cap"
-    return tuple(positions), reason
+    return tuple(positions), reason, soft_threshold_exceeded
 
 
 def _next_semantic_position(features: list[ParagraphFeatures], start: int) -> int | None:
     for position in range(start, len(features)):
+        if _front_semantic_item(features[position]):
+            return position
+    return None
+
+
+def _previous_semantic_position(features: list[ParagraphFeatures], start: int) -> int | None:
+    for position in range(start, -1, -1):
         if _front_semantic_item(features[position]):
             return position
     return None
@@ -310,12 +365,17 @@ def _signature_date_like(feature: ParagraphFeatures) -> bool:
     return bool(feature.date_match or _head_date_line(feature))
 
 
+def _signature_org_text(feature: ParagraphFeatures) -> str:
+    if feature.heading_shape_level == 1 and feature.content_without_numbering:
+        return re.sub(r"\s+", "", feature.content_without_numbering)
+    return feature.compact_text
+
+
 def _signature_org_shape(feature: ParagraphFeatures) -> bool:
-    text = feature.compact_text
+    text = _signature_org_text(feature)
     if (
         not text
         or feature.text_length > 30
-        or feature.heading_shape_level
         or feature.date_match
         or feature.attachment_note_match
         or feature.ends_with_sentence_punctuation
@@ -326,6 +386,21 @@ def _signature_org_shape(feature: ParagraphFeatures) -> bool:
     return bool(_SIGNATURE_ORG_SUFFIX_RE.search(text))
 
 
+def _tail_bridge_item(feature: ParagraphFeatures) -> bool:
+    return bool(
+        feature.attachment_note_match
+        or _attachment_item_like(feature)
+        or _signature_date_like(feature)
+        or _signature_org_shape(feature)
+    )
+
+
+def _all_tail_bridge(features: list[ParagraphFeatures], start: int, end: int) -> bool:
+    if start > end:
+        return True
+    return all(_tail_bridge_item(features[position]) for position in range(start, end + 1))
+
+
 def _has_previous_body(features: list[ParagraphFeatures], body_start: int | None, position: int) -> bool:
     if body_start is None or position <= body_start:
         return False
@@ -333,7 +408,6 @@ def _has_previous_body(features: list[ParagraphFeatures], body_start: int | None
         if (
             _body_like(item)
             or item.heading_shape_level
-            or str(item.legacy_type_id or "") in _BODY_LEGACY_TYPES
         ):
             return True
     return False
@@ -357,11 +431,14 @@ def analyze_document_context(features: list[ParagraphFeatures]) -> DocumentConte
     """Build bounded front-matter and sibling-heading evidence for one file."""
     count = len(features)
     if not features:
-        return DocumentContext((), (), (), None, "no-visible-paragraph", "no-visible-paragraph", (), (), (), (), (), ())
+        return DocumentContext(
+            (), (), (), None, "no-visible-paragraph", "no-visible-paragraph",
+            False, _FRONT_SCAN_SOFT_THRESHOLD, (), (), (), (), (), (), (),
+        )
 
     body_sizes = [item.weighted_font_size or item.font_size_pt for item in features[3:] if item.weighted_font_size or item.font_size_pt]
     body_size = median(body_sizes) if body_sizes else None
-    front_scan_positions, front_scan_reason = _front_scan_positions(features)
+    front_scan_positions, front_scan_reason, front_soft_threshold_exceeded = _front_scan_positions(features)
     front_scan_rank = {position: rank for rank, position in enumerate(front_scan_positions)}
     title_scores: list[float] = [0.0] * count
     title_reasons: list[tuple[str, ...]] = [()] * count
@@ -371,19 +448,21 @@ def analyze_document_context(features: list[ParagraphFeatures]) -> DocumentConte
     for position in front_scan_positions:
         item = features[position]
         following = features[position + 1] if position + 1 < count else None
+        previous_position = _previous_semantic_position(features, position - 1)
+        previous = features[previous_position] if previous_position is not None else None
         if not item.compact_text or item.dispatch_number_match or item.recipient_match:
             continue
         if _head_date_line(item):
             front_metadata_kinds[position] = "date_line"
             continue
-        if _head_role_name(item, following):
+        if _head_role_name(item, previous, following):
             front_metadata_kinds[position] = "role_name"
             continue
         # Existing role/name and date metadata is stronger than title-like
         # visual formatting.  These lines commonly inherit bold, centering and
         # a large font from a copied title block; scoring them as titles lets a
         # later decoder overwrite a reliable document-front structure.
-        if _title_metadata(item, following):
+        if _title_metadata(item, previous, following):
             continue
         if item.attachment_note_match or item.key_value_label or _body_like(item):
             continue
@@ -411,9 +490,6 @@ def analyze_document_context(features: list[ParagraphFeatures]) -> DocumentConte
         if style in _TITLE_STYLE_NAMES:
             score += 0.08
             evidence.append("title-style-weak")
-        if item.legacy_type_id in _TITLE_LEGACY_TYPES:
-            score += 0.08
-            evidence.append("legacy-title-weak")
         if _SPEECH_TITLE_RE.fullmatch(item.compact_text):
             score = max(score, 0.98)
             evidence.append("opening-speech-title")
@@ -421,12 +497,14 @@ def analyze_document_context(features: list[ParagraphFeatures]) -> DocumentConte
             score -= 0.10
             evidence.append("numbered-heading-competition")
         following_positions = [candidate for candidate in front_scan_positions if candidate > position][:4]
-        for following in (features[candidate] for candidate in following_positions):
+        for candidate in following_positions:
+            following = features[candidate]
+            following_next = features[candidate + 1] if candidate + 1 < count else None
             if following.dispatch_number_match:
                 score += 0.14
                 evidence.append("following-dispatch-number")
                 continue
-            if _title_metadata(following):
+            if _title_metadata(following, item, following_next):
                 score += 0.20
                 evidence.append("following-title-metadata")
                 break
@@ -438,6 +516,18 @@ def analyze_document_context(features: list[ParagraphFeatures]) -> DocumentConte
                 score += 0.10
                 evidence.append("following-body-boundary")
                 break
+        if front_scan_rank.get(position, 0) >= _FRONT_SCAN_SOFT_THRESHOLD:
+            evidence.append("front-soft-threshold-exceeded")
+            if not any(
+                reason in evidence
+                for reason in (
+                    "following-dispatch-number",
+                    "following-title-metadata",
+                    "following-recipient",
+                    "opening-speech-title",
+                )
+            ):
+                score -= 0.20
         title_scores[position] = min(0.99, max(0.0, score))
         title_reasons[position] = tuple(dict.fromkeys(evidence))
 
@@ -450,10 +540,6 @@ def analyze_document_context(features: list[ParagraphFeatures]) -> DocumentConte
             "first-visible-line" in title_reasons[index]
             or any(reason.startswith("following-") for reason in title_reasons[index])
             or "opening-speech-title" in title_reasons[index]
-        ) or (
-            score >= 0.30
-            and "first-visible-line" in title_reasons[index]
-            and "legacy-title-weak" in title_reasons[index]
         )
     ]
     if title_positions:
@@ -465,7 +551,9 @@ def analyze_document_context(features: list[ParagraphFeatures]) -> DocumentConte
             cursor = following_front_positions[cursor_index]
             item = features[cursor]
             following = features[cursor + 1] if cursor + 1 < count else None
-            if _title_metadata(item, following) or title_scores[cursor] >= 0.48:
+            previous_position = _previous_semantic_position(features, cursor - 1)
+            previous = features[previous_position] if previous_position is not None else None
+            if _title_metadata(item, previous, following) or title_scores[cursor] >= 0.48:
                 front_positions.append(cursor)
                 cursor_index += 1
                 continue
@@ -565,18 +653,109 @@ def analyze_document_context(features: list[ParagraphFeatures]) -> DocumentConte
 
     signature_org_reasons: list[tuple[str, ...]] = [()] * count
     for position, item in enumerate(features):
-        next_position = _next_semantic_position(features, position + 1)
-        next_item = features[next_position] if next_position is not None else None
-        if (
-            next_item is not None
-            and _signature_date_like(next_item)
-            and _signature_org_shape(item)
-            and _has_previous_body(features, body_start, position)
-        ):
+        if not (_signature_org_shape(item) and _has_previous_body(features, body_start, position)):
+            continue
+        date_position = None
+        date_direction = "following-date"
+        for candidate in range(position + 1, min(count, position + 9)):
+            if not _front_semantic_item(features[candidate]):
+                continue
+            if _signature_date_like(features[candidate]) and _all_tail_bridge(features, position + 1, candidate - 1):
+                date_position = candidate
+                break
+            if not _tail_bridge_item(features[candidate]):
+                break
+        if date_position is None:
+            for candidate in range(position - 1, max(-1, position - 9), -1):
+                if not _front_semantic_item(features[candidate]):
+                    continue
+                if _signature_date_like(features[candidate]) and _all_tail_bridge(features, candidate + 1, position - 1):
+                    date_position = candidate
+                    date_direction = "previous-date"
+                    break
+                if not _tail_bridge_item(features[candidate]):
+                    break
+        if date_position is not None:
             signature_org_reasons[position] = (
                 "signature-tail-context",
-                "following-date",
+                date_direction,
                 "short-organization-shape",
+            )
+
+    signature_date_reasons: list[tuple[str, ...]] = [()] * count
+    for position, item in enumerate(features):
+        if not (_signature_date_like(item) and _has_previous_body(features, body_start, position)):
+            continue
+        org_position = None
+        org_direction = "previous-signature-org"
+        tail_boundary = ""
+        for candidate in range(position - 1, max(-1, position - 9), -1):
+            if not _front_semantic_item(features[candidate]):
+                continue
+            if _signature_org_shape(features[candidate]) and _all_tail_bridge(features, candidate + 1, position - 1):
+                org_position = candidate
+                break
+            if not _tail_bridge_item(features[candidate]):
+                break
+        if org_position is None:
+            for candidate in range(position + 1, min(count, position + 9)):
+                if not _front_semantic_item(features[candidate]):
+                    continue
+                if _signature_org_shape(features[candidate]) and _all_tail_bridge(features, position + 1, candidate - 1):
+                    org_position = candidate
+                    org_direction = "following-signature-org"
+                    break
+                if not _tail_bridge_item(features[candidate]):
+                    break
+        if org_position is not None:
+            signature_date_reasons[position] = (
+                "signature-tail-context",
+                "date-shape",
+                org_direction,
+            )
+            continue
+        next_position = _next_semantic_position(features, position + 1)
+        if next_position is None:
+            previous_position = _previous_semantic_position(features, position - 1)
+            previous_item = features[previous_position] if previous_position is not None else None
+            previous_supports_tail_date = bool(
+                previous_item is not None
+                and not previous_item.key_value_label
+                and not previous_item.compact_text.startswith(_SIGNATURE_NEGATIVE_STARTS)
+                and (
+                    _body_like(previous_item)
+                    or previous_item.heading_shape_level
+                    or previous_item.attachment_note_match
+                    or _attachment_item_like(previous_item)
+                )
+            )
+            if previous_supports_tail_date:
+                tail_boundary = "document-tail-date"
+        else:
+            for candidate in range(position + 1, min(count, position + 9)):
+                if not _front_semantic_item(features[candidate]):
+                    continue
+                candidate_item = features[candidate]
+                if (
+                    _attachment_page_like(candidate_item)
+                    and _all_tail_bridge(features, position + 1, candidate - 1)
+                ):
+                    tail_boundary = "following-attachment-page"
+                    break
+                if (
+                    candidate_item.attachment_note_match
+                    and _all_tail_bridge(features, position + 1, candidate - 1)
+                    and (_attachment_note_body(candidate_item) or _has_tail_after(features, candidate))
+                ):
+                    tail_boundary = "following-attachment-note"
+                    break
+                if not _tail_bridge_item(candidate_item):
+                    break
+        if tail_boundary:
+            signature_date_reasons[position] = (
+                "signature-tail-context",
+                "date-shape",
+                tail_boundary,
             )
 
     attachment_note_reasons: list[tuple[str, ...]] = [()] * count
@@ -586,20 +765,30 @@ def analyze_document_context(features: list[ParagraphFeatures]) -> DocumentConte
         if item.attachment_note_match:
             next_position = _next_semantic_position(features, position + 1)
             next_item = features[next_position] if next_position is not None else None
+            previous_position = _previous_semantic_position(features, position - 1)
+            previous_item = features[previous_position] if previous_position is not None else None
             body = _attachment_note_body(item)
             next_is_item = bool(next_item and _attachment_item_like(next_item))
+            previous_signature_tail = bool(
+                previous_item is not None
+                and (_signature_date_like(previous_item) or _signature_org_shape(previous_item))
+            )
             has_body = bool(body)
-            has_tail = next_is_item or _has_tail_after(features, position)
+            has_tail = next_is_item or _has_tail_after(features, position) or previous_signature_tail
             if (
                 _has_previous_body(features, body_start, position)
                 and has_tail
                 and (has_body or next_is_item)
             ):
-                attachment_note_reasons[position] = (
+                evidence = [
                     "attachment-tail-context",
                     "inside-body-region",
-                    "following-attachment-or-tail",
-                )
+                ]
+                if previous_signature_tail:
+                    evidence.append("near-signature-tail")
+                if next_is_item or _has_tail_after(features, position):
+                    evidence.append("following-attachment-or-tail")
+                attachment_note_reasons[position] = tuple(evidence)
                 active_note = True
             else:
                 active_note = False
@@ -610,11 +799,30 @@ def analyze_document_context(features: list[ParagraphFeatures]) -> DocumentConte
                 "previous-attachment-note",
             )
             continue
+        if _attachment_item_like(item):
+            note_position = None
+            for candidate in range(position - 1, max(-1, position - 12), -1):
+                if not _front_semantic_item(features[candidate]):
+                    continue
+                if features[candidate].attachment_note_match and _all_tail_bridge(features, candidate + 1, position - 1):
+                    note_position = candidate
+                    break
+                if not _tail_bridge_item(features[candidate]):
+                    break
+            if note_position is not None:
+                attachment_item_reasons[position] = (
+                    "attachment-note-item-context",
+                    "previous-attachment-note",
+                    "tail-structure-bridge",
+                )
+                continue
         if item.compact_text and not _attachment_item_like(item):
             active_note = False
 
     return DocumentContext(
         tuple(front_positions), tuple(title_scores), tuple(title_reasons), body_start,
-        body_reason, front_scan_reason, families, tuple(heading_reasons), tuple(front_metadata_kinds),
-        tuple(attachment_note_reasons), tuple(attachment_item_reasons), tuple(signature_org_reasons),
+        body_reason, front_scan_reason, front_soft_threshold_exceeded,
+        _FRONT_SCAN_SOFT_THRESHOLD, families, tuple(heading_reasons), tuple(front_metadata_kinds),
+        tuple(attachment_note_reasons), tuple(attachment_item_reasons),
+        tuple(signature_date_reasons), tuple(signature_org_reasons),
     )

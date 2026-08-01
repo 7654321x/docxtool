@@ -10,7 +10,7 @@
 - [ ] 原文段落顺序保持不变；唯一允许的尾部整理是“附件说明及附件项 → 落款单位 → 成文日期”。
 - [ ] 输出 DOCX ZIP、关系、图片、表格、页眉页脚和分节完整，可以被 Word、WPS 和 LibreOffice 打开。
 - [ ] 标题、正文、称呼、落款、附件没有因软换行、分页符或源样式错误而互相继承格式。
-- [ ] 标准 50 篇和 `test_docx/测试文稿` 专项集全部处理；报告、渲染图和疑似空白页清单写入新的批次目录。
+- [ ] 标准 50 篇和 `test_docx/test2/test2` 专项集全部处理；报告、渲染图和疑似空白页清单写入新的批次目录。
 - [ ] “处理成功”只表示文件生成成功，不能代替结构、模板差异和视觉检查结论。
 
 ## 二、标题与正文边界
@@ -133,12 +133,14 @@
 
 1. 运行相关识别、结构拆分、导出和审计单元测试。
 2. 运行全量 Python 测试与 Ruff；涉及前端或 Worker 时同时运行 Node 测试。
-3. 处理 `test_docx/strat_docx` 全部 50 篇，并按编号匹配 `correct_docx` 模板进行区域保序对齐。
-4. 处理 `test_docx/测试文稿` 全部专项稿，不使用无关模板强行比较。
+3. 处理 `test_docx/tset1/test1` 全部 50 篇，并按编号匹配 `test_docx/tset1/test1正确格式` 模板进行区域保序对齐。
+4. 处理 `test_docx/test2/test2` 全部专项稿，必要时参考 `test_docx/test2/test2正确格式`，不使用无关模板强行比较。
 5. 检查批量报告中的失败数、P0、文字新增/丢失、源标题线索未保留、结构复核和落款连续性。
 6. 渲染专项集全部文档和标准集确定性抽取的 10 篇，逐页查看疑似空白页、分页、标题、附件和落款。
 7. 对本轮直接修复的问题，必须打开对应原稿和输出稿对照，确认实际页面已修复，不能只看单元测试。
 8. 在 WPS 中抽查文档网格、页码、表格和分页等 LibreOffice 可能表现不同的项目。
+
+当前长期专项目录已经迁移到 `test_docx/test2/test2`；历史 `test_docx/测试文稿/测试目录` 仅作为旧空目录记录，不再写入新的测试结果。
 
 模板差异必须按“国标明确规则 → 当前版本配置 → 旧模板实现”分层判断。标题对齐先剥离一至四级编号和允许规范化的一级标题句号，再比较标题正文与层级；输入、输出和模板执行三方归因，原稿已有顺序或内容差异不得记为输出新增/丢失。缩进优先读取 OOXML 的`firstLineChars/leftChars/rightChars`并按字符值容差比较，不比较等效的 twip/EMU 整数。受保护表格或图片题注的字体、字号和斜体只核对输出是否保持原稿，不因旧模板不同而要求改写。
 
@@ -147,7 +149,7 @@
 ```pwsh
 pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m pytest -q"
 pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m ruff check src tests scripts"
-pwsh -NoProfile -Command ".\.venv\Scripts\python.exe scripts/batch_test_docx.py --output-dir test_docx/end_docx/<新批次> --special-output-dir test_docx/测试文稿/测试目录/<新批次> --render-review --require-render"
+pwsh -NoProfile -Command ".\.venv\Scripts\python.exe scripts/batch_test_docx.py --output-dir test_docx/tset1/test1测试结果/<新批次> --special-output-dir test_docx/test2/测试结果/<新批次> --render-review --require-render"
 ```
 
 ## 十三、报告结论用语
