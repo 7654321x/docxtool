@@ -7,6 +7,24 @@ DOCX 块抽取 -> 统一特征 -> 文档模式 -> 候选提供器 -> 硬约束 -
 -> 结构树 -> 结构校验 -> 兼容 type_id -> 现有渲染器
 ```
 
+## Web 边界
+
+`src/docxtool/web/app.py` 仍是 HTTP 兼容入口；纯环境解析和 CORS 响应头生成已迁移到
+`src/docxtool/web/config.py`。该模块只消费配置值并返回解析结果，不读写数据库、不启动
+worker，也不触碰 DOCX 识别链路。
+
+健康检查、readiness、版本信息和启动 URL payload 已迁移到 `src/docxtool/web/health.py`。
+`web.app` 只注入当前数据库检查、运行目录、队列计数和版本配置，继续保留旧私有入口。
+
+监控页的分页查询、页数计算和链接生成已迁移到 `src/docxtool/web/monitoring.py`。
+该模块只处理 query dict、URL 和 SQL 片段字符串，不读取任务表，也不生成监控页面 HTML。
+
+文件名清理、排版结果下载名、`Content-Disposition` 和内部错误脱敏已迁移到
+`src/docxtool/web/file_utils.py`。该模块只处理字符串，不读取或写入用户文件。
+
+启动时区提示、HTTP Date 解析和北京网络时间校验已迁移到
+`src/docxtool/web/time_check.py`。`web.app` 仅保留旧私有入口，主启动流程继续使用相同提示行。
+
 ## 共享文档模型
 
 `src/docxtool/document/models/` 提供导入后的稳定数据契约：

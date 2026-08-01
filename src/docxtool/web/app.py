@@ -22,19 +22,15 @@ import hashlib
 import hmac
 import socket
 import threading
-import tempfile
 import logging
 import html
 import ipaddress
 import shutil
 import re as _re
 from queue import Empty
-from datetime import timezone, timedelta
-from email.utils import parsedate_to_datetime
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from collections import Counter, OrderedDict
-from urllib.parse import unquote, urlparse, parse_qs, quote, urlencode
-from urllib.request import Request, urlopen
+from urllib.parse import unquote, urlparse, parse_qs, quote
 
 from docxtool.document.importer import DocxImporter
 from docxtool.document.engine import export_doc
@@ -49,6 +45,48 @@ from docxtool.paths import project_path, resource_path, runtime_dir
 from docxtool.storage.database import connect as _db_connect, default_database_path
 from docxtool.auth import hash_password, verify_password, validate_password, validate_username
 from docxtool.version import package_version
+from docxtool.web.config import (
+    cors_headers_for_request as _config_cors_headers_for_request,
+    is_local_origin_host as _is_local_origin_host,
+    parse_bool as _parse_bool,
+    parse_frontend_origin,
+    parse_int_env as _parse_int_env,
+    resolve_cookie_secure,
+)
+from docxtool.web.file_utils import (
+    content_disposition_filename as _file_content_disposition_filename,
+    is_safe_uuid as _file_is_safe_uuid,
+    safe_download_filename as _file_safe_download_filename,
+    safe_file_identifier as _file_safe_file_identifier,
+    sanitize_filename as _file_sanitize_filename,
+    sanitize_internal_error_detail as _file_sanitize_internal_error_detail,
+)
+from docxtool.web.health import (
+    dir_writable as _health_dir_writable,
+    health_payload as _build_health_payload,
+    ready_payload as _build_ready_payload,
+    server_bind_address as _build_server_bind_address,
+    startup_urls as _build_startup_urls,
+    version_payload as _build_version_payload,
+)
+from docxtool.web.monitoring import (
+    DEFAULT_MONITOR_PAGE_SIZE,
+    MAX_MONITOR_PAGE_SIZE,
+    clamp_int as _monitor_clamp_int,
+    first_query_value as _monitor_first_query_value,
+    monitor_query_from as _build_monitor_query_from,
+    monitor_url as _build_monitor_url,
+    normalize_monitor_query as _build_normalize_monitor_query,
+    page_count as _monitor_page_count,
+    where_sql as _monitor_where_sql,
+)
+from docxtool.web.time_check import (
+    NETWORK_TIME_URLS as _TIME_CHECK_NETWORK_TIME_URLS,
+    fetch_beijing_network_time as _time_check_fetch_beijing_network_time,
+    now_local as _time_check_now_local,
+    parse_http_date_to_beijing as _time_check_parse_http_date_to_beijing,
+    startup_time_check_lines as _time_check_startup_time_check_lines,
+)
 
 BASE_DIR = str(project_path())
 _SQL_LOCK = threading.Lock()
@@ -83,83 +121,10 @@ _WEAK_SECRETS = {
     DEFAULT_PROXY_SECRET,
 }
 
-def _parse_bool(value: str, default: bool = True) -> bool:
-    raw = str(value).strip().lower()
-    if raw in {"1", "true", "yes", "on"}:
-        return True
-    if raw in {"0", "false", "no", "off"}:
-        return False
-    return default
-
-def _parse_int_env(name: str, default: int) -> int:
-    try:
-        return int(os.environ.get(name, str(default)))
-    except (TypeError, ValueError):
-        return default
-
-def _is_local_origin_host(hostname: str) -> bool:
-    return hostname in {"localhost", "127.0.0.1", "::1"}
-
-def parse_frontend_origin(value: str, production_mode: bool = False) -> str:
-    raw = str(value or "").strip()
-    if not raw:
-        return ""
-
-    parsed = urlparse(raw)
-    if parsed.scheme not in {"http", "https"}:
-        raise ValueError("FRONTEND_ORIGIN must use http or https")
-    if not parsed.hostname:
-        raise ValueError("FRONTEND_ORIGIN must include host")
-    if parsed.username or parsed.password:
-        raise ValueError("FRONTEND_ORIGIN must not include username or password")
-    if parsed.query:
-        raise ValueError("FRONTEND_ORIGIN must not include query")
-    if parsed.fragment:
-        raise ValueError("FRONTEND_ORIGIN must not include fragment")
-    if parsed.path not in {"", "/"}:
-        raise ValueError("FRONTEND_ORIGIN must not include path")
-    if production_mode and parsed.scheme != "https" and not _is_local_origin_host(parsed.hostname):
-        raise ValueError("FRONTEND_ORIGIN must use https in production")
-
-    normalized = f"{parsed.scheme}://{parsed.netloc}"
-    return normalized.rstrip("/")
-
-def resolve_cookie_secure(origin: str, explicit_value: str = None, production_mode: bool = False) -> bool:
-    if explicit_value is None or str(explicit_value).strip() == "":
-        return str(origin or "").startswith("https://")
-
-    secure = _parse_bool(explicit_value, False)
-    if production_mode and str(origin or "").startswith("https://") and not secure:
-        raise ValueError("COOKIE_SECURE=false is not allowed with HTTPS FRONTEND_ORIGIN in production")
-    return secure
-
 def cors_headers_for_request(origin_header: str, frontend_origin: str = None) -> dict:
-    origin = str(origin_header or "").strip()
+    """传入请求 Origin，返回兼容旧全局 FRONTEND_ORIGIN 的 CORS 响应头。"""
     configured_origin = FRONTEND_ORIGIN if frontend_origin is None else str(frontend_origin or "").strip()
-    allow_origin = ""
-
-    if configured_origin:
-        if origin == configured_origin:
-            allow_origin = configured_origin
-    elif origin:
-        parsed = urlparse(origin)
-        if parsed.scheme in {"http", "https"} and _is_local_origin_host(parsed.hostname):
-            allow_origin = origin.rstrip("/")
-
-    if not allow_origin:
-        return {}
-
-    return {
-        "Access-Control-Allow-Origin": allow_origin,
-        "Access-Control-Allow-Credentials": "true",
-        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-        "Access-Control-Allow-Headers": (
-            "Content-Type, X-Filename, X-Proxy-Secret, X-Docxtool-Proxy, "
-            "X-Preset-Id, X-Preset-Name, X-Template-Type, X-Processing-Mode, "
-            "X-Format-Config, X-Format-Config-Encoding, X-CSRF-Token"
-        ),
-        "Access-Control-Max-Age": "86400",
-    }
+    return _config_cors_headers_for_request(origin_header, configured_origin)
 
 def _sql():
     return _db_connect(_DB_PATH)
@@ -419,90 +384,50 @@ def _seed_default_presets(conn):
     except Exception:
         conn.rollback()
 
-DEFAULT_MONITOR_PAGE_SIZE = 50
-MAX_MONITOR_PAGE_SIZE = 100
-
 def _first_query_value(values: dict, key: str, default=""):
-    raw = values.get(key, default) if values else default
-    if isinstance(raw, list):
-        return raw[0] if raw else default
-    return raw
+    """兼容旧私有入口，传入查询字典和键名，返回第一个值。"""
+    return _monitor_first_query_value(values, key, default)
 
 def _clamp_int(value, default: int, min_value: int = 1, max_value: int = MAX_MONITOR_PAGE_SIZE) -> int:
-    try:
-        n = int(value)
-    except (TypeError, ValueError):
-        n = default
-    return max(min_value, min(max_value, n))
+    """兼容旧私有入口，传入数值和边界，返回范围内整数。"""
+    return _monitor_clamp_int(value, default, min_value, max_value)
 
 def _now_local() -> str:
-    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+    """兼容旧私有入口，无需传入数据，返回本地时间字符串。"""
+    return _time_check_now_local()
 
-_BEIJING_TZ = timezone(timedelta(hours=8))
-_NETWORK_TIME_URLS = (
-    "https://www.baidu.com/",
-    "https://www.cloudflare.com/",
-)
+_NETWORK_TIME_URLS = _TIME_CHECK_NETWORK_TIME_URLS
 
 def _parse_http_date_to_beijing(date_header: str):
-    dt = parsedate_to_datetime(date_header)
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(_BEIJING_TZ)
+    """兼容旧私有入口，传入 HTTP Date 头，返回北京时间 datetime。"""
+    return _time_check_parse_http_date_to_beijing(date_header)
 
 def _fetch_beijing_network_time(timeout: int = 3):
-    last_error = None
-    for url in _NETWORK_TIME_URLS:
-        try:
-            req = Request(
-                url,
-                method="HEAD",
-                headers={"User-Agent": "docx-tool-time-check/1.0"},
-            )
-            with urlopen(req, timeout=timeout) as resp:
-                date_header = resp.headers.get("Date")
-            if date_header:
-                return _parse_http_date_to_beijing(date_header)
-            last_error = RuntimeError(f"{url} missing Date header")
-        except Exception as exc:
-            last_error = exc
-    raise RuntimeError(str(last_error) if last_error else "no network time source")
+    """兼容旧私有入口，传入超时秒数，返回网络北京时间。"""
+    return _time_check_fetch_beijing_network_time(timeout, _NETWORK_TIME_URLS)
 
 def _startup_time_check_lines() -> list:
-    system_time = _now_local()
-    try:
-        beijing_time = _fetch_beijing_network_time()
-    except Exception as exc:
-        return [f"时间校验: 未能获取北京网络时间，继续启动。原因: {exc}"]
-
-    beijing_text = beijing_time.strftime("%Y-%m-%d %H:%M:%S")
-    if system_time[:16] == beijing_text[:16]:
-        return [f"时间校验: 通过，系统时间与北京网络时间相同（{system_time[:16]}）"]
-    return [
-        "时间校验: 系统时间与北京网络时间不一致，建议检查服务器时区/NTP。",
-        f"系统时间为：{system_time[:16]}",
-        f"北京时间为：{beijing_text[:16]}",
-        "可执行: sudo timedatectl set-timezone Asia/Shanghai",
-        "可执行: sudo timedatectl set-ntp true",
-    ]
+    """兼容旧私有入口，无需传入数据，返回启动时间校验日志行。"""
+    return _time_check_startup_time_check_lines(
+        now_func=_now_local,
+        fetch_func=_fetch_beijing_network_time,
+    )
 
 def _monitor_query_from(parsed) -> dict:
-    return _normalize_monitor_query(parse_qs(parsed.query))
+    """兼容旧私有入口，传入 urlparse 结果，返回监控分页查询。"""
+    return _build_monitor_query_from(parsed)
 
 def _normalize_monitor_query(values: dict = None) -> dict:
-    values = values or {}
-    return {
-        "recent_page": _clamp_int(_first_query_value(values, "recent_page", 1), 1),
-        "recent_size": _clamp_int(_first_query_value(values, "recent_size", DEFAULT_MONITOR_PAGE_SIZE), DEFAULT_MONITOR_PAGE_SIZE),
-        "ip_page": _clamp_int(_first_query_value(values, "ip_page", 1), 1),
-        "ip_size": _clamp_int(_first_query_value(values, "ip_size", DEFAULT_MONITOR_PAGE_SIZE), DEFAULT_MONITOR_PAGE_SIZE),
-    }
+    """兼容旧私有入口，传入查询字典，返回规范化监控分页参数。"""
+    return _build_normalize_monitor_query(values)
 
 def _where_sql(clauses) -> str:
-    return " WHERE " + " AND ".join(clauses) if clauses else ""
+    """兼容旧私有入口，传入 SQL 条件片段，返回 WHERE 子句。"""
+    return _monitor_where_sql(clauses)
 
 def _page_count(total: int, size: int) -> int:
-    return max(1, (int(total) + int(size) - 1) // int(size))
+    """兼容旧私有入口，传入总数和页大小，返回页数。"""
+    return _monitor_page_count(total, size)
 
 def log_sql(task_id, ip, ua, filename, file_size, doc_type,
             paragraphs, headings, body, duration_ms, status="done", error="",
@@ -1052,21 +977,13 @@ def _public_task_state(task_id: str, owner_id: str = "") -> dict:
 
 
 def _safe_file_identifier(filename: str) -> str:
-    return hashlib.sha256(str(filename or "").encode("utf-8")).hexdigest()[:12]
+    """兼容旧私有入口，传入文件名，返回日志用短标识。"""
+    return _file_safe_file_identifier(filename)
 
 
 def _sanitize_internal_error_detail(value: object, limit: int = 500) -> str:
-    """Keep bounded diagnostics without retaining paths or authentication data."""
-    detail = str(value or "")
-    detail = _re.sub(
-        r"(?i)\b(authorization|cookie|password|token|secret|api[_-]?key)\b\s*[:=]\s*[^\s,;]+",
-        lambda match: f"{match.group(1)}=[redacted]",
-        detail,
-    )
-    detail = _re.sub(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+", "Bearer [redacted]", detail)
-    detail = _re.sub(r"[A-Za-z]:[\\/][^\r\n\t\"'<>|]+", "[local-path]", detail)
-    detail = _re.sub(r"(?<!:)\/(?:[^\s/]+\/)+[^\s\"'<>|]*", "[local-path]", detail)
-    return detail[: max(0, int(limit))]
+    """兼容旧私有入口，传入错误对象，返回脱敏诊断文本。"""
+    return _file_sanitize_internal_error_detail(value, limit)
 
 
 def _public_recognition_summary(doc_data) -> dict:
@@ -2385,85 +2302,73 @@ def _delete_preset(preset_id: str, owner_id: str = "", public_only: bool = True)
     return {"deleted": True, "id": preset_id}
 
 def _health_payload() -> dict:
-    return {"ok": True, "status": "ok"}
+    """兼容旧私有入口，无需传入数据，返回健康检查 payload。"""
+    return _build_health_payload()
 
 def _dir_writable(path: str) -> bool:
-    try:
-        os.makedirs(path, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(prefix=".ready-", dir=path)
-        os.close(fd)
-        os.unlink(tmp)
-        return True
-    except Exception:
-        return False
+    """兼容旧私有入口，传入目录路径，返回是否可写。"""
+    return _health_dir_writable(path)
 
-def _ready_payload() -> dict:
-    checks = {"database": False, "output_dir": False, "log_dir": False}
+def _database_ready() -> bool:
+    """无需传入数据，返回当前 SQLite 连接是否可执行基础查询。"""
     try:
         with _SQL_LOCK:
             conn = _sql()
             conn.execute("SELECT 1").fetchone()
             conn.close()
-        checks["database"] = True
+        return True
     except Exception:
-        checks["database"] = False
-    checks["output_dir"] = _dir_writable(OUTPUT_DIR)
-    checks["log_dir"] = _dir_writable(LOG_DIR)
-    return {"ok": all(checks.values()), "checks": checks}
+        return False
+
+def _ready_payload() -> dict:
+    """兼容旧私有入口，无需传入数据，返回服务 readiness payload。"""
+    return _build_ready_payload(
+        database_check=_database_ready,
+        output_dir=OUTPUT_DIR,
+        log_dir=LOG_DIR,
+    )
 
 def _version_payload() -> dict:
-    """Return public runtime information without mixing release and build fields."""
-    return {
-        "version": APP_VERSION,
-        "package_version": APP_VERSION,
-        "build_version": BUILD_VERSION or None,
-        "git_revision": GIT_REVISION or None,
-        "started_at": STARTED_AT,
-        "bind_host": BIND_HOST,
-        "file_retention_policy": FILE_RETENTION_POLICY,
-        "file_ttl_seconds": FILE_TTL,
-        "max_tasks": MAX_TASKS,
-        "task_retention_hours": TASK_RETENTION_HOURS,
-        "max_cached_tasks": MAX_CACHED_TASKS,
-        "cleanup_interval_minutes": CLEANUP_INTERVAL_MINUTES,
-        "max_upload_mb": MAX_SIZE // 1048576,
-        "upload_read_timeout_seconds": UPLOAD_READ_TIMEOUT_SECONDS,
-        "process_timeout_seconds": PROCESS_TIMEOUT,
-        "max_docx_uncompressed_mb": MAX_DOCX_UNCOMPRESSED_BYTES // 1048576,
-        "max_docx_file_count": MAX_DOCX_FILE_COUNT,
-        "max_docx_xml_mb": MAX_DOCX_XML_BYTES // 1048576,
-        "max_docx_media_mb": MAX_DOCX_MEDIA_BYTES // 1048576,
-        "max_docx_compression_ratio": MAX_DOCX_COMPRESSION_RATIO,
-        "max_workers": MAX_WORKERS,
-        "max_queue": MAX_QUEUE,
-        "proxy_secret_required": True,
-        "proxy_secret_configured": bool(PROXY_SECRET),
-        "frontend_origin": FRONTEND_ORIGIN,
-        "queued": _queued_count(),
-        "processing": _active_count(),
-    }
+    """兼容旧私有入口，无需传入数据，返回公开运行版本信息。"""
+    return _build_version_payload(
+        app_version=APP_VERSION,
+        build_version=BUILD_VERSION,
+        git_revision=GIT_REVISION,
+        started_at=STARTED_AT,
+        bind_host=BIND_HOST,
+        file_retention_policy=FILE_RETENTION_POLICY,
+        file_ttl=FILE_TTL,
+        max_tasks=MAX_TASKS,
+        task_retention_hours=TASK_RETENTION_HOURS,
+        max_cached_tasks=MAX_CACHED_TASKS,
+        cleanup_interval_minutes=CLEANUP_INTERVAL_MINUTES,
+        max_size=MAX_SIZE,
+        upload_read_timeout_seconds=UPLOAD_READ_TIMEOUT_SECONDS,
+        process_timeout=PROCESS_TIMEOUT,
+        max_docx_uncompressed_bytes=MAX_DOCX_UNCOMPRESSED_BYTES,
+        max_docx_file_count=MAX_DOCX_FILE_COUNT,
+        max_docx_xml_bytes=MAX_DOCX_XML_BYTES,
+        max_docx_media_bytes=MAX_DOCX_MEDIA_BYTES,
+        max_docx_compression_ratio=MAX_DOCX_COMPRESSION_RATIO,
+        max_workers=MAX_WORKERS,
+        max_queue=MAX_QUEUE,
+        proxy_secret=PROXY_SECRET,
+        frontend_origin=FRONTEND_ORIGIN,
+        queued_count=_queued_count,
+        active_count=_active_count,
+    )
 
 def _server_bind_address() -> tuple:
-    return (BIND_HOST, PORT)
+    """兼容旧私有入口，无需传入数据，返回服务绑定地址。"""
+    return _build_server_bind_address(BIND_HOST, PORT)
 
 def _startup_urls() -> dict:
-    base = f"http://{BIND_HOST}:{PORT}"
-    return {
-        "tool": base,
-        "admin_login": f"{base}/admin/login",
-        "monitor": f"{base}/monitor",
-        "tunnel_command": f"cloudflared tunnel --url {base}",
-    }
+    """兼容旧私有入口，无需传入数据，返回启动日志 URL 集合。"""
+    return _build_startup_urls(BIND_HOST, PORT)
 
 def _monitor_url(admin_token: str, query: dict, **overrides) -> str:
-    q = dict(query or {})
-    q.update(overrides)
-    values = {}
-    for key in ("recent_page", "recent_size", "ip_page", "ip_size"):
-        value = q.get(key, "")
-        if value != "":
-            values[key] = value
-    return "/monitor?" + urlencode(values) if values else "/monitor"
+    """兼容旧私有入口，传入当前查询和覆盖项，返回监控页链接。"""
+    return _build_monitor_url(query, **overrides)
 
 def _pager_html(stats: dict, admin_token: str, page_key: str, pages_key: str) -> str:
     query = stats.get("query", _normalize_monitor_query())
@@ -2660,45 +2565,20 @@ def _ip_detail_html(ip: str, admin_token: str = "") -> str:
 # ── 安全工具 ──
 
 def _is_safe_uuid(s: str) -> bool:
-    return bool(_re.match(r'^[0-9a-fA-F-]{32,36}$', s or ""))
+    """兼容旧私有入口，传入字符串，返回是否为安全 UUID 形态。"""
+    return _file_is_safe_uuid(s)
 
 def _sanitize_filename(name: str) -> str:
-    """Return a Windows-safe filename for display and download headers."""
-    raw = str(name or "").replace("\x00", "").replace("\r", " ").replace("\n", " ").strip()
-    raw = raw.replace("\\", "/")
-    raw = os.path.basename(raw) or raw
-    raw = _re.sub(r'[/\\:*?"<>|]+', "_", raw)
-    raw = _re.sub(r"\s+", " ", raw).strip(" ._")
-    if not raw or raw in {".", ".."}:
-        raw = "download.docx"
-    stem, ext = os.path.splitext(raw)
-    if not stem:
-        stem = "download"
-    reserved = {
-        "con", "prn", "aux", "nul",
-        *(f"com{i}" for i in range(1, 10)),
-        *(f"lpt{i}" for i in range(1, 10)),
-    }
-    if stem.rstrip(" ._").lower() in reserved:
-        stem = f"_{stem}"
-    if not ext:
-        ext = ".docx"
-    cleaned = f"{stem}{ext}"
-    return cleaned[:120]
+    """兼容旧私有入口，传入原始文件名，返回安全文件名。"""
+    return _file_sanitize_filename(name)
 
 def _safe_download_filename(orig_name: str) -> str:
-    safe = _sanitize_filename(orig_name)
-    stem, _ext = os.path.splitext(safe)
-    if not stem:
-        stem = "download"
-    return f"{stem}_排版文件.docx"
+    """兼容旧私有入口，传入原始文件名，返回排版结果下载名。"""
+    return _file_safe_download_filename(orig_name)
 
 def _content_disposition_filename(filename: str) -> str:
-    safe = _sanitize_filename(filename)
-    ascii_fallback = _re.sub(r"[^A-Za-z0-9._-]+", "_", safe.encode("ascii", "ignore").decode("ascii")).strip("._-")
-    if not ascii_fallback:
-        ascii_fallback = "formatted.docx"
-    return f"attachment; filename=\"{ascii_fallback}\"; filename*=UTF-8''{quote(safe, safe='')}"
+    """兼容旧私有入口，传入下载名，返回 Content-Disposition 头值。"""
+    return _file_content_disposition_filename(filename)
 
 def _trusted_proxy_source(client_address) -> bool:
     if not TRUST_PROXY_HEADERS:

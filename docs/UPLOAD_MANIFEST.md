@@ -68,6 +68,11 @@ https://github.com/7654321x/docxtool.git
 | `src/docxtool/auth/service.py` | 用户名和密码输入归一化及验证 |
 | `src/docxtool/web/__init__.py` | Web 包入口 |
 | `src/docxtool/web/app.py` | Web 服务入口、上传下载、任务队列、管理后台、健康检查 |
+| `src/docxtool/web/config.py` | Web 环境和 CORS 配置解析 | 不读写数据库、不处理请求体，供 `web.app` 兼容入口调用 |
+| `src/docxtool/web/file_utils.py` | 文件名、下载头和错误脱敏辅助 | 不读写磁盘，只处理字符串 |
+| `src/docxtool/web/health.py` | 健康检查、readiness、版本和启动 URL payload | 只组装只读状态，不处理 HTTP 路由 |
+| `src/docxtool/web/monitoring.py` | 监控页查询、分页和链接辅助 | 只处理分页参数和 URL，不读写数据库 |
+| `src/docxtool/web/time_check.py` | 启动时区和网络时间校验辅助 | 只生成启动提示，不影响服务启动流程 |
 | `src/docxtool/sdk/` | 面向第三方的只读识别 SDK | 返回脱敏结构计划，不操作宿主文档 |
 | `src/docxtool/sdk/binding.py` | 宿主无关的识别计划绑定 | 对本地段落快照保序验证，不调用 WPS API |
 | `src/docxtool/document/__init__.py` | 文档处理包入口 |
