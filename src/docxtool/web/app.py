@@ -48,6 +48,7 @@ from docxtool.document.style_config import (
 from docxtool.paths import project_path, resource_path, runtime_dir
 from docxtool.storage.database import connect as _db_connect, default_database_path
 from docxtool.auth import hash_password, verify_password, validate_password, validate_username
+from docxtool.version import package_version
 
 BASE_DIR = str(project_path())
 _SQL_LOCK = threading.Lock()
@@ -665,7 +666,9 @@ def get_sql_stats(query: dict = None):
 
 PORT = int(os.environ.get("PORT", "9527"))
 BIND_HOST = os.environ.get("BIND_HOST", "127.0.0.1")
-APP_VERSION = "2026.06.01"
+APP_VERSION = package_version()
+BUILD_VERSION = os.environ.get("DOCXTOOL_BUILD_VERSION", "").strip()
+GIT_REVISION = os.environ.get("DOCXTOOL_GIT_REVISION", "").strip()
 STARTED_AT = time.strftime("%Y-%m-%d %H:%M:%S")
 
 def _load_secret(name: str, default: str) -> str:
@@ -1184,6 +1187,12 @@ def _mark_task_terminal(task_id: str, status: str, error: str = "", output_path:
 def _enqueue_task(task_id: str, input_path: str, orig_name: str, ip: str, ua: str,
                   format_config: dict = None, request_meta: dict = None,
                   compatibility_warnings: list[str] = None, owner_id: str = "") -> dict:
+    """Persist a validated upload and make it visible to workers.
+
+    入队顺序不能调整：先检查队列容量，再写数据库 queued 记录，最后写入内存
+    队列并通知 worker。这样监控页、状态接口和后台线程看到的是同一个任务。
+    容量不足时调用方会删除未入队的上传半成品，不会留下伪装成功的任务行。
+    """
     now = time.time()
     try:
         file_size = os.path.getsize(input_path) if input_path and os.path.exists(input_path) else 0
@@ -1221,7 +1230,13 @@ def _enqueue_task(task_id: str, input_path: str, orig_name: str, ip: str, ua: st
 
 def _task_process_body(task_id: str, input_path: str, orig_name: str, ip: str, ua: str,
                        format_config: dict = None, request_meta: dict = None) -> dict:
-    """Run the actual DOCX pipeline and return a structured result."""
+    """Run the actual DOCX pipeline and return a structured result.
+
+    该函数在子进程内执行时是识别和导出的进程边界：Web 线程只传入文件路径、
+    格式配置和脱敏请求元数据，子进程负责 DOCX 导入、识别、导出和完整性
+    校验。返回值必须是可序列化字典，且失败信息要经过脱敏，避免把正文、
+    绝对路径或 traceback 暴露给普通用户。
+    """
     t0 = time.time()
     request_meta = request_meta or {}
     file_id = _safe_file_identifier(orig_name)
@@ -1412,6 +1427,12 @@ def _task_process_direct(task_id: str, input_path: str, orig_name: str, ip: str,
 
 def _task_process_subprocess(task_id: str, input_path: str, orig_name: str, ip: str, ua: str,
                              format_config: dict = None, request_meta: dict = None) -> dict:
+    """Execute one task in a spawned child process with a hard timeout.
+
+    worker 线程不能直接信任 DOCX 解析和 OOXML 导出过程；spawn 子进程隔离
+    崩溃、死循环和内存污染。超时后先 terminate，再 kill，随后清理本轮输出
+    目录；已接收的原始上传由永久保留策略保护，不在这里删除。
+    """
     ctx = mp.get_context("spawn")
     result_queue = ctx.Queue()
     process = ctx.Process(
@@ -1562,6 +1583,7 @@ def _record_task_result(task_id: str, input_path: str, orig_name: str, ip: str, 
         logger.warning("[Task] %s failed file_id=%s code=%s", task_id[:8], _safe_file_identifier(orig_name), error_code)
 
 def _worker_loop():
+    """Consume queued tasks sequentially inside one daemon worker thread."""
     while True:
         with QUEUE_COND:
             while not TASK_QUEUE:
@@ -1591,6 +1613,12 @@ def _ensure_workers_started():
 
 def _process_task(task_id: str, input_path: str, orig_name: str = "upload.docx", ip: str = "", ua: str = "",
                   format_config: dict = None, request_meta: dict = None):
+    """Choose the execution boundary and persist the terminal task state.
+
+    测试或显式主线程调用走 direct 路径，真实 worker 线程走子进程路径。两条
+    路径最终都必须进入 ``_record_task_result``，这是数据库、内存状态、日志
+    和下载路径保持一致的唯一收口。
+    """
     if threading.current_thread() is threading.main_thread():
         result = _task_process_direct(task_id, input_path, orig_name, ip, ua, format_config, request_meta)
     else:
@@ -2384,8 +2412,12 @@ def _ready_payload() -> dict:
     return {"ok": all(checks.values()), "checks": checks}
 
 def _version_payload() -> dict:
+    """Return public runtime information without mixing release and build fields."""
     return {
         "version": APP_VERSION,
+        "package_version": APP_VERSION,
+        "build_version": BUILD_VERSION or None,
+        "git_revision": GIT_REVISION or None,
         "started_at": STARTED_AT,
         "bind_host": BIND_HOST,
         "file_retention_policy": FILE_RETENTION_POLICY,

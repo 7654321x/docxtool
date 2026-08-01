@@ -35,7 +35,12 @@ def _sha256_text(value: str) -> str:
 
 
 def stable_id(prefix: str, *parts: Any) -> str:
-    """Create a deterministic, text-free public ID from JSON-safe inputs."""
+    """Create a deterministic, text-free public ID from JSON-safe inputs.
+
+    这些 ID 会跨进程、CLI 和宿主适配器流转，因此不能依赖数组下标或对象
+    地址。参与摘要的字段只包含哈希、协议版本、状态和前置条件，避免把正文
+    或本机路径写进 plan_id、block_id 或 binding_id。
+    """
     payload = json.dumps(parts, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
     return "{0}_{1}".format(prefix, _sha256_text(payload)[:32])
 
@@ -81,7 +86,12 @@ def _stable_preconditions(value: Mapping[str, Any]) -> Dict[str, Any]:
 
 @dataclass(frozen=True)
 class SdkManifest:
-    """Text-free SDK capability manifest."""
+    """Text-free SDK capability manifest.
+
+    manifest 是宿主执行前的能力协商结果，不是识别计划。它只声明当前 wheel
+    支持的协议、坐标编码和绑定范围；不携带正文，也不能被当成 HostSnapshot
+    或 RecognitionPlan 使用。
+    """
 
     schema_version: str
     package_version: str
@@ -135,7 +145,12 @@ class ValidationIssue:
 
 @dataclass(frozen=True)
 class ValidationReport:
-    """Public validation result returned by validate_* helpers."""
+    """Public validation result returned by validate_* helpers.
+
+    所有 Mapping 输入都先转成这个脱敏报告，再决定是否反序列化。错误详情
+    使用允许字段白名单，保证 CLI、Python API 和宿主侧看到相同稳定错误码，
+    但不会泄露正文、绝对路径或 traceback。
+    """
 
     valid: bool
     errors: Tuple[ValidationIssue, ...] = ()
@@ -167,7 +182,12 @@ class HostStorySummary:
 
 @dataclass(frozen=True)
 class HostSnapshotSummary:
-    """Text-free snapshot summary for diagnostics only; not bindable."""
+    """Text-free snapshot summary for diagnostics only; not bindable.
+
+    宿主可以把 summary 发给日志或远程诊断系统，因为它只含数量、版本和故事
+    区域统计。真正绑定必须使用 HostSnapshot 原文快照；把 summary 传入绑定
+    入口会被拒绝，避免用不可验证摘要生成可执行 Range。
+    """
 
     summary_type: str
     snapshot_id: str
@@ -200,7 +220,12 @@ class HostSnapshotSummary:
 
 @dataclass(frozen=True)
 class RecognitionRequest:
-    """Versioned recognition request for Python and CLI callers."""
+    """Versioned recognition request for Python and CLI callers.
+
+    该对象只描述识别策略和隐私开关，不接收宿主 Range，也不执行写回。
+    ``include_raw_text`` 会强制启用 ``include_text``，因为 raw 片段只允许在
+    本机离线链路中使用，不能被误当成默认联网响应。
+    """
 
     schema_version: str = RECOGNITION_REQUEST_SCHEMA_VERSION
     processing_mode: str = "structural"
@@ -608,7 +633,12 @@ class RecognitionBlock:
 
 @dataclass(frozen=True)
 class RecognitionPlan:
-    """Versioned, read-only recognition result for a DOCX snapshot."""
+    """Versioned, read-only recognition result for a DOCX snapshot.
+
+    plan 是“从 DOCX 快照得到的结构判断”，不是可直接应用到 WPS/Word 的
+    命令。稳定 plan_id 绑定源文件哈希、识别引擎、包版本、定位契约和请求
+    摘要；任一关键输入变化都应得到新 ID，防止宿主复用过期计划。
+    """
 
     schema_version: str
     engine_version: str
@@ -855,7 +885,12 @@ class HostParagraph:
 
 @dataclass(frozen=True)
 class HostSnapshot:
-    """A local editor snapshot used only to bind an existing recognition plan."""
+    """A local editor snapshot used only to bind an existing recognition plan.
+
+    HostSnapshot 是宿主在执行前采集的本地文本快照，必须包含真实 raw_text。
+    它的段落 ID、文档版本和文本契约共同组成写入前置条件；绑定结果确认后，
+    宿主仍需再次验证这些条件，才能调用自己的编辑 API。
+    """
 
     host_type: str
     paragraphs: Tuple[HostParagraph, ...]
@@ -988,7 +1023,12 @@ class HostSnapshot:
 
 @dataclass(frozen=True)
 class BoundRecognitionBlock:
-    """Verified host-text binding for one block; no editor range is implied."""
+    """Verified host-text binding for one block; no editor range is implied.
+
+    confirmed/review/unresolved 只描述 SDK 对文本快照的定位结果。即使状态为
+    confirmed，也只是要求宿主执行 ``verify_host_range``；SDK 不拥有 WPS、
+    Office.js 或 VSTO 的编辑 Range。
+    """
 
     block_index: int
     physical_paragraph_index: Optional[int]
@@ -1150,7 +1190,12 @@ class PhysicalParagraphBinding:
 
 @dataclass(frozen=True)
 class RecognitionBinding:
-    """Result of binding a recognition plan to a local host snapshot."""
+    """Result of binding a recognition plan to a local host snapshot.
+
+    binding_id 汇总 plan、snapshot、文档版本、目标段落、span、状态和写入
+    前置条件。任何子片段范围、哈希、状态或宿主快照变化都会改变该 ID，
+    使宿主能在事务开始前发现陈旧绑定。
+    """
 
     locator_version: str
     source_sha256: str

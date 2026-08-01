@@ -23,6 +23,7 @@ https://github.com/7654321x/docxtool.git
 | `docs/DEPLOY.md` | 生产部署说明 | Cloudflare Pages + Python 后端 |
 | `docs/API.md` | HTTP 接口、鉴权、错误码 | 前后端联调和排错 |
 | `docs/RECOGNITION_ARCHITECTURE.md` | 识别架构和稳定边界 | 识别层维护依据 |
+| `docs/ARCHITECTURE_DAG.md` | Web 处理链和 SDK 宿主适配 DAG | 解释队列、worker、子进程和绑定协议边界 |
 | `docs/RECOGNITION_RELEASE.md` | 识别发布门禁和回滚 | 发布验收依据 |
 | `docs/DOCX_REGRESSION_CHECKLIST.md` | 已知公文问题和回归检查清单 | 批量测试与视觉抽查依据 |
 | `docs/SDK.md` | 本地识别 SDK 接口和集成边界 | WPS/第三方软件调用依据 |
@@ -59,6 +60,7 @@ https://github.com/7654321x/docxtool.git
 | `server.py` | 兼容入口，调用新包 |
 | `src/docxtool/__init__.py` | Python 包入口 |
 | `src/docxtool/__main__.py` | `python -m docxtool` 入口 |
+| `src/docxtool/version.py` | 运行时包版本统一入口 |
 | `src/docxtool/paths.py` | 项目路径、运行目录和默认资源定位 |
 | `src/docxtool/env.py` | 环境变量加载和本地启动配置 |
 | `src/docxtool/auth/__init__.py` | 普通用户认证包入口 |

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from docxtool import __version__ as PACKAGE_VERSION
+from docxtool.version import package_version
 
 from .constants import (
     CAPABILITIES,
@@ -21,10 +21,15 @@ from .models import SdkManifest
 
 
 def get_sdk_manifest() -> SdkManifest:
-    """Return a text-free manifest for host capability negotiation."""
+    """Return a text-free manifest for host capability negotiation.
+
+    宿主适配器只通过 manifest 决定是否能继续识别和绑定；这里必须使用
+    真实包版本，不能使用构建日期或 Web 服务版本，否则 WPS、Office.js、
+    VSTO 等宿主会把同一个 wheel 识别成不同能力集。
+    """
     return SdkManifest(
         schema_version=SDK_MANIFEST_SCHEMA_VERSION,
-        package_version=PACKAGE_VERSION,
+        package_version=package_version(),
         integration_contract_versions=(INTEGRATION_CONTRACT_VERSION,),
         recognition_plan_versions=(RECOGNITION_PLAN_SCHEMA_VERSION,),
         host_snapshot_versions=(HOST_SNAPSHOT_SCHEMA_VERSION,),

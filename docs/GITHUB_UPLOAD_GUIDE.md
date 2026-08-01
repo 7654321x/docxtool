@@ -46,7 +46,7 @@ pwsh -NoProfile -Command "git ls-remote https://github.com/7654321x/docxtool.git
 
 默认发布以下类型文件：
 
-- 项目文档：`README.md`、`CHANGELOG.md`、`docs/DEPLOY.md`、`docs/API.md`、`docs/SDK.md`、`docs/RECOGNITION_SOURCE_LOCATORS.md`、`docs/HOST_TEXT_V1_GOLDEN.json`、`docs/USER_WPS_VALIDATION.md`、`docs/USER_WPS_VALIDATION_RESULT.md`、`docs/RECOGNITION_ARCHITECTURE.md`、`docs/RECOGNITION_RELEASE.md`、`docs/UPLOAD_MANIFEST.md`、`docs/GITHUB_UPLOAD_GUIDE.md`、`公文格式规范.md`、`AGENTS.md`、`CONVENTIONS.md`
+- 项目文档：`README.md`、`CHANGELOG.md`、`docs/DEPLOY.md`、`docs/API.md`、`docs/SDK.md`、`docs/RECOGNITION_SOURCE_LOCATORS.md`、`docs/HOST_TEXT_V1_GOLDEN.json`、`docs/USER_WPS_VALIDATION.md`、`docs/USER_WPS_VALIDATION_RESULT.md`、`docs/RECOGNITION_ARCHITECTURE.md`、`docs/ARCHITECTURE_DAG.md`、`docs/RECOGNITION_RELEASE.md`、`docs/UPLOAD_MANIFEST.md`、`docs/GITHUB_UPLOAD_GUIDE.md`、`公文格式规范.md`、`AGENTS.md`、`CONVENTIONS.md`
 - 依赖和启动：`requirements.txt`、`requirements.lock`、`requirements-dev.lock`、`run.sh`、`run.ps1`
 - 服务器代理模板：`deploy/nginx-docxtool.conf`
 - 配置：`.env.example`、`.gitignore`、`.gitattributes`、`pytest.ini`、`ruff.toml`、`pyproject.toml`、`.github/workflows/ci.yml`

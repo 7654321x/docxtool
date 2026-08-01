@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.1 - 2026-08-01
+
+- Centralized runtime package version reporting so Web `/version`, SDK manifest, CLI, and wheel metadata stay aligned.
+- Added a Web and SDK architecture DAG document for queue, worker, subprocess, recognition-plan, host-snapshot, and binding boundaries.
+- Added regression tests for version consistency and architecture documentation coverage.
+- Updated the GitHub publish allowlist to include the new runtime version module and DAG documentation.
+
 ## 2.0 - 2026-08-01
 
 - Added `integration-contract-v1` for host-neutral recognition and binding integration.

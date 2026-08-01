@@ -39,7 +39,7 @@ def test_sdk_matches_existing_authoritative_recognition_and_redacts_text(tmp_pat
 
     assert plan.processing_mode == "structural"
     assert plan.recognition_mode == "authoritative"
-    assert plan.package_version == package_version == "2.0"
+    assert plan.package_version == package_version
     assert plan.schema_version == "recognition-plan-v1"
     assert plan.integration_contract_version == "integration-contract-v1"
     assert plan.plan_id

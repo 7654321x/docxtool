@@ -155,7 +155,10 @@ GET /version
 
 响应字段：
 
-- `version`: 应用版本号。
+- `version`: 对外发布包版本，与 `pyproject.toml` / wheel 元数据一致。
+- `package_version`: 与 `version` 相同的显式包版本字段，供监控和宿主集成避免误读。
+- `build_version`: 可选构建标识；未配置时为 `null`，不得当作包版本。
+- `git_revision`: 可选 Git revision；未配置时为 `null`，不得当作包版本。
 - `started_at`: 服务启动时间。
 - `bind_host`: 当前绑定地址。
 - `file_retention_policy`: 用户文件保留策略，当前固定为 `permanent`。

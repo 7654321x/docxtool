@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
-from docxtool import __version__ as PACKAGE_VERSION
+from docxtool.version import package_version
 from docxtool.document.importer import DocxImporter, ParagraphData
 from docxtool.document.recognition.version import (
     RECOGNITION_ENGINE_VERSION,
@@ -330,7 +330,7 @@ def _build_plan(
     return RecognitionPlan(
         schema_version=RECOGNITION_PLAN_SCHEMA_VERSION,
         engine_version=str(report.get("engine_version", RECOGNITION_ENGINE_VERSION)),
-        package_version=PACKAGE_VERSION,
+        package_version=package_version(),
         locator_version=SDK_SOURCE_LOCATOR_VERSION,
         host_text_contract_version=SDK_HOST_TEXT_CONTRACT_VERSION,
         source_sha256=source_sha256,
