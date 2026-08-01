@@ -14,7 +14,6 @@ import os
 import sys
 import json
 import base64
-import binascii
 import multiprocessing as mp
 import uuid
 import time
@@ -39,7 +38,6 @@ from docxtool.security.docx_validator import DocxValidationError, detect_docx_co
 from docxtool.document.style_config import (
     StyleRule, PageSettings, load_rules_and_settings, configure_logging, get_logger,
     make_document_log_path, set_context_log_path, reset_context_log_path,
-    ConfigValidationError, validate_format_config,
 )
 from docxtool.paths import project_path, resource_path, runtime_dir
 from docxtool.storage.database import connect as _db_connect, default_database_path
@@ -53,6 +51,14 @@ from docxtool.web.config import (
     parse_int_env as _parse_int_env,
     resolve_cookie_secure,
 )
+from docxtool.web.client_ip import (
+    client_ip as _client_ip_from_headers,
+    compare_secret as _client_compare_secret,
+    is_ip as _client_is_ip,
+    is_ipv4 as _client_is_ipv4,
+    split_ip_header as _client_split_ip_header,
+    trusted_proxy_source as _client_trusted_proxy_source,
+)
 from docxtool.web.file_utils import (
     content_disposition_filename as _file_content_disposition_filename,
     is_safe_uuid as _file_is_safe_uuid,
@@ -60,6 +66,14 @@ from docxtool.web.file_utils import (
     safe_file_identifier as _file_safe_file_identifier,
     sanitize_filename as _file_sanitize_filename,
     sanitize_internal_error_detail as _file_sanitize_internal_error_detail,
+)
+from docxtool.web.format_request import (
+    FormatConfigRequestError,
+    decode_format_config as _format_decode_format_config,
+    format_config_error as _format_config_error_impl,
+    processing_strategy_from_mode as _format_processing_strategy_from_mode,
+    upload_request_meta as _format_upload_request_meta,
+    validate_requested_processing_mode as _format_validate_requested_processing_mode,
 )
 from docxtool.web.health import (
     dir_writable as _health_dir_writable,
@@ -79,6 +93,38 @@ from docxtool.web.monitoring import (
     normalize_monitor_query as _build_normalize_monitor_query,
     page_count as _monitor_page_count,
     where_sql as _monitor_where_sql,
+)
+from docxtool.web.request_utils import (
+    admin_session_cookie_settings as _request_admin_session_cookie_settings,
+    admin_token_from_query as _request_admin_token_from_query,
+    admin_url as _request_admin_url,
+    cookie_value as _request_cookie_value,
+    csrf_header_value as _request_csrf_header_value,
+    error_payload as _request_error_payload,
+    hidden_input as _request_hidden_input,
+    html_escape as _request_html_escape,
+    json_dumps as _request_json_dumps,
+    parse_json_body as _request_parse_json_body,
+    route_path as _request_route_path,
+)
+from docxtool.web.stream_io import (
+    read_exact as _stream_read_exact,
+    read_exact_to_file as _stream_read_exact_to_file,
+    stream_file as _stream_stream_file,
+)
+from docxtool.web.task_paths import (
+    cleanup_expired_outputs as _task_paths_cleanup_expired_outputs,
+    cleanup_expired_task_records as _task_paths_cleanup_expired_task_records,
+    cleanup_expired_tmp as _task_paths_cleanup_expired_tmp,
+    cleanup_incomplete_upload as _task_paths_cleanup_incomplete_upload,
+    cleanup_output_path as _task_paths_cleanup_output_path,
+    ensure_path_within as _task_paths_ensure_path_within,
+    startup_cleanup as _task_paths_startup_cleanup,
+    task_output_dir as _task_paths_output_dir,
+    task_output_path as _task_paths_output_path,
+    task_tmp_dir as _task_paths_tmp_dir,
+    task_upload_dir as _task_paths_upload_dir,
+    task_upload_input_path as _task_paths_upload_input_path,
 )
 from docxtool.web.time_check import (
     NETWORK_TIME_URLS as _TIME_CHECK_NETWORK_TIME_URLS,
@@ -668,44 +714,29 @@ OUTPUT_DIR = str(runtime_dir("outputs", "OUTPUT_DIR"))
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 def _startup_cleanup():
-    # Accepted user records are permanent. Do not scan or remove files merely
-    # because the service restarted or a document is old.
-    return {"removed": 0, "errors": 0}
+    """兼容旧入口：启动时不删除已接收用户文件，返回 no-op 结果。"""
+    return _task_paths_startup_cleanup()
 
 def _task_tmp_dir(task_id: str) -> str:
-    return os.path.join(RUNTIME_TMP_DIR, task_id)
+    """兼容旧入口：传入任务 ID，返回该任务运行时临时目录。"""
+    return _task_paths_tmp_dir(RUNTIME_TMP_DIR, task_id)
 
 def _task_upload_dir(task_id: str) -> str:
-    return os.path.join(UPLOAD_DIR, task_id)
+    """兼容旧入口：传入任务 ID，返回该任务原件保存目录。"""
+    return _task_paths_upload_dir(UPLOAD_DIR, task_id)
 
 
 def _task_upload_input_path(task_id: str, orig_name: str = "") -> str:
-    safe = _sanitize_filename(orig_name) or "upload.docx"
-    stem, ext = os.path.splitext(safe)
-    if not ext:
-        ext = ".docx"
-    return os.path.join(_task_upload_dir(task_id), f"input{ext}")
+    """兼容旧入口：传入任务 ID 和原文件名，返回保存后的输入文件路径。"""
+    return _task_paths_upload_input_path(UPLOAD_DIR, task_id, orig_name)
 
 def _cleanup_incomplete_upload(task_id: str, extra_path: str = "") -> None:
-    """Remove only a partial upload that never became an accepted document."""
-    paths = []
-    if extra_path:
-        paths.append(extra_path)
-    task_dir = _task_upload_dir(task_id)
-    if task_dir not in paths:
-        paths.append(task_dir)
-    for path in paths:
-        try:
-            if os.path.isdir(path):
-                shutil.rmtree(path, ignore_errors=True)
-            elif os.path.exists(path):
-                os.unlink(path)
-        except Exception:
-            pass
+    """兼容旧入口：删除尚未入库接收的上传半成品。"""
+    _task_paths_cleanup_incomplete_upload(UPLOAD_DIR, task_id, extra_path)
 
 def _cleanup_expired_tmp(now: float = None) -> dict:
-    """Compatibility no-op: automatic expiry is disabled permanently."""
-    return {"removed": 0, "errors": 0}
+    """兼容旧入口：输入文件永久保留，不按时间清理。"""
+    return _task_paths_cleanup_expired_tmp(now)
 
 def _prune_task_cache() -> None:
     with TASKS_LOCK:
@@ -746,47 +777,16 @@ for h in logging.getLogger("docx_tool").handlers:
         h.setLevel(logging.WARNING)
 
 def _read_exact(rfile, length: int, timeout: int = 10) -> bytes:
-    data = b""
-    remaining = length
-    t0 = time.time()
-    while remaining > 0:
-        if time.time() - t0 > timeout:
-            raise TimeoutError("read timeout")
-        chunk = rfile.read(remaining)
-        if not chunk:
-            time.sleep(0.01)
-            continue
-        data += chunk
-        remaining -= len(chunk)
-    return data
+    """兼容旧入口：从请求流读取指定字节数并返回 bytes。"""
+    return _stream_read_exact(rfile, length, timeout)
 
 def _read_exact_to_file(rfile, path: str, length: int, timeout: int = 10, chunk_size: int = UPLOAD_READ_CHUNK_SIZE) -> int:
-    if length <= 0:
-        raise TimeoutError("invalid length")
-    total = 0
-    remaining = length
-    started = time.time()
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "wb") as f:
-        while remaining > 0:
-            if time.time() - started > timeout:
-                raise TimeoutError("read timeout")
-            chunk = rfile.read(min(chunk_size, remaining))
-            if not chunk:
-                time.sleep(0.01)
-                continue
-            f.write(chunk)
-            total += len(chunk)
-            remaining -= len(chunk)
-    return total
+    """兼容旧入口：从请求流读取指定字节数写入文件并返回写入量。"""
+    return _stream_read_exact_to_file(rfile, path, length, timeout, chunk_size)
 
 def _stream_file(path: str, writer, chunk_size: int = 1024 * 1024) -> None:
-    with open(path, "rb") as f:
-        while True:
-            chunk = f.read(chunk_size)
-            if not chunk:
-                break
-            writer.write(chunk)
+    """兼容旧入口：把文件按块写入 HTTP 响应 writer。"""
+    _stream_stream_file(path, writer, chunk_size)
 
 def _allow(ip: str) -> bool:
     now = time.time()
@@ -813,11 +813,8 @@ def _auth_rate_allow(scope: str, key: str, window: int, limit: int) -> tuple[boo
     return True, 0
 
 def _is_ip(value: str) -> bool:
-    try:
-        ipaddress.ip_address(str(value or "").strip())
-        return True
-    except ValueError:
-        return False
+    """兼容旧入口：传入字符串，返回是否为合法 IPv4/IPv6。"""
+    return _client_is_ip(value)
 
 def _is_ip_banned(ip: str) -> bool:
     if not ip:
@@ -1041,28 +1038,20 @@ def _public_recognition_summary(doc_data) -> dict:
     }
 
 def _task_output_dir(task_id: str) -> str:
-    return os.path.join(OUTPUT_DIR, task_id)
+    """兼容旧入口：传入任务 ID，返回该任务输出目录。"""
+    return _task_paths_output_dir(OUTPUT_DIR, task_id)
 
 def _task_output_path(task_id: str) -> str:
-    return os.path.join(_task_output_dir(task_id), "result.docx")
+    """兼容旧入口：传入任务 ID，返回该任务结果 DOCX 路径。"""
+    return _task_paths_output_path(OUTPUT_DIR, task_id)
 
 def _ensure_path_within(base_dir: str, path: str) -> str:
-    base = os.path.abspath(base_dir)
-    candidate = os.path.abspath(path)
-    if os.path.commonpath([base, candidate]) != base:
-        raise ValueError(f"path escapes output directory: {candidate}")
-    return candidate
+    """兼容旧入口：确认目标路径位于指定根目录内并返回绝对路径。"""
+    return _task_paths_ensure_path_within(base_dir, path)
 
 def _cleanup_output_path(path: str) -> None:
-    if not path:
-        return
-    try:
-        if os.path.isdir(path):
-            shutil.rmtree(path, ignore_errors=True)
-        elif os.path.exists(path):
-            os.unlink(path)
-    except Exception:
-        pass
+    """兼容旧入口：删除无效生成输出，不触碰已接收上传原件。"""
+    _task_paths_cleanup_output_path(path)
 
 def _task_processing_options(format_config: dict = None, request_meta: dict = None) -> str:
     payload = {
@@ -1545,12 +1534,12 @@ def _process_task(task_id: str, input_path: str, orig_name: str = "upload.docx",
     # and administrators can inspect the original document later.
 
 def _cleanup_expired_outputs(now: float = None) -> dict:
-    """Compatibility no-op: generated user files are retained permanently."""
-    return {"removed": 0, "errors": 0}
+    """兼容旧入口：生成文件永久保留，不按时间清理。"""
+    return _task_paths_cleanup_expired_outputs(now)
 
 def _cleanup_expired_task_records(now: float = None) -> dict:
-    """Compatibility no-op: task history and its file references are permanent."""
-    return {"removed": 0, "errors": 0}
+    """兼容旧入口：任务记录永久保留，不按时间清理。"""
+    return _task_paths_cleanup_expired_task_records(now)
 
 def _cleaner_loop():
     while True:
@@ -1562,33 +1551,20 @@ def _cleaner_loop():
 threading.Thread(target=_cleaner_loop, daemon=True).start()
 
 def _error_payload(code: str, message: str, field: str = "", reason: str = "") -> dict:
-    payload = {"error": message, "code": code}
-    if field:
-        payload["field"] = field
-    if reason:
-        payload["reason"] = reason
-    return payload
+    """兼容旧入口：传入错误码和消息，返回 API 错误响应字典。"""
+    return _request_error_payload(code, message, field, reason)
 
 def _cookie_value(cookie_header: str, name: str) -> str:
-    for part in str(cookie_header or "").split(";"):
-        if "=" not in part:
-            continue
-        key, value = part.strip().split("=", 1)
-        if key == name:
-            return value
-    return ""
+    """兼容旧入口：从 Cookie 头中读取指定名称的值。"""
+    return _request_cookie_value(cookie_header, name)
 
 def _session_cookie_settings() -> str:
-    parts = [
-        f"{ADMIN_SESSION_COOKIE}={{session_id}}",
-        "HttpOnly",
-        "Path=/",
-        "SameSite=Strict",
-        f"Max-Age={DEFAULT_ADMIN_SESSION_TTL_SECONDS}",
-    ]
-    if COOKIE_SECURE:
-        parts.append("Secure")
-    return "; ".join(parts)
+    """兼容旧入口：根据当前全局配置返回管理员会话 Cookie 模板。"""
+    return _request_admin_session_cookie_settings(
+        ADMIN_SESSION_COOKIE,
+        DEFAULT_ADMIN_SESSION_TTL_SECONDS,
+        secure=COOKIE_SECURE,
+    )
 
 def _anonymous_user_signing_key() -> bytes:
     secret = (PROXY_SECRET or DEFAULT_PROXY_SECRET).encode("utf-8")
@@ -1906,130 +1882,51 @@ def _file_api_authorized(headers, client_address=None) -> bool:
     except ValueError:
         return False
 
-class FormatConfigRequestError(ValueError):
-    def __init__(
-        self,
-        code: str,
-        message: str,
-        *,
-        field: str = "",
-        reason: str = "",
-        status: int = 400,
-    ):
-        self.code = code
-        self.message = message
-        self.field = field
-        self.reason = reason
-        self.status = status
-        super().__init__(f"{code}: {message}")
-
-
 def _format_config_error(code: str, message: str, *, field: str = "", reason: str = "") -> FormatConfigRequestError:
-    return FormatConfigRequestError(
-        code,
-        message,
-        field=field,
-        reason=reason,
-        status=413 if code == "FORMAT_CONFIG_TOO_LARGE" else 400,
-    )
+    """兼容旧入口：传入稳定错误码和安全消息，返回格式配置请求错误。"""
+    return _format_config_error_impl(code, message, field=field, reason=reason)
 
 def _decode_format_config(headers) -> dict:
-    raw = headers.get("X-Format-Config", "") if headers else ""
-    if not raw:
-        return None
-    encoding = (headers.get("X-Format-Config-Encoding", "") if headers else "").strip().lower()
-    if len(raw.encode("ascii", "ignore")) > MAX_FORMAT_CONFIG_HEADER_BYTES:
-        raise _format_config_error("FORMAT_CONFIG_TOO_LARGE", "配置请求头过大", reason="配置请求头过大")
-    if encoding != "base64url-json":
-        raise _format_config_error("FORMAT_CONFIG_INVALID", "不支持的配置编码", reason="不支持的配置编码")
-    try:
-        padding = "=" * (-len(raw) % 4)
-        decoded = base64.urlsafe_b64decode((raw + padding).encode("ascii"))
-    except (binascii.Error, UnicodeEncodeError, ValueError) as exc:
-        raise _format_config_error("FORMAT_CONFIG_INVALID", "配置解码失败", reason="配置解码失败") from exc
-    if len(decoded) > MAX_FORMAT_CONFIG_JSON_BYTES:
-        raise _format_config_error("FORMAT_CONFIG_TOO_LARGE", "配置内容过大", reason="配置内容过大")
-    try:
-        config = json.loads(decoded.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise _format_config_error("FORMAT_CONFIG_INVALID", "配置 JSON 无效", reason="配置 JSON 无效") from exc
-    if not isinstance(config, dict):
-        raise _format_config_error("FORMAT_CONFIG_INVALID", "配置必须是 JSON 对象", reason="配置必须是 JSON 对象")
-    if "styles" not in config or "page" not in config:
-        raise _format_config_error("FORMAT_CONFIG_INVALID", "配置缺少 styles 或 page", reason="配置缺少 styles 或 page")
-    try:
-        return validate_format_config(config)
-    except ConfigValidationError as exc:
-        field = getattr(exc, "field", "")
-        reason = getattr(exc, "reason", "") or "配置无效"
-        message = f"{field}: {reason}" if field else reason
-        raise _format_config_error(exc.code, message, field=field, reason=reason) from exc
-    except ValueError as exc:
-        raise _format_config_error("FORMAT_CONFIG_INVALID", "配置无效", reason="配置无效") from exc
+    """兼容旧入口：解码请求头中的格式配置并返回已验证配置。"""
+    return _format_decode_format_config(
+        headers,
+        max_header_bytes=MAX_FORMAT_CONFIG_HEADER_BYTES,
+        max_json_bytes=MAX_FORMAT_CONFIG_JSON_BYTES,
+    )
 
 def _upload_request_meta(headers) -> dict:
-    return {
-        "processing_mode": headers.get("X-Processing-Mode", "smart") if headers else "smart",
-        "preset_id": headers.get("X-Preset-Id", "") if headers else "",
-        "preset_name": unquote(headers.get("X-Preset-Name", "")) if headers else "",
-        "template_type": headers.get("X-Template-Type", "") if headers else "",
-    }
+    """兼容旧入口：从上传请求头读取处理模式、模板和预设元数据。"""
+    return _format_upload_request_meta(headers)
 
 
 def _processing_strategy_from_mode(value: object) -> str:
-    mode = str(value or "").strip().lower()
-    if not mode:
-        return ""
-    strategy = {
-        "smart": "structural",
-        "structural": "structural",
-        "strict": "strict",
-        "normalize": "normalize",
-    }.get(mode)
-    if not strategy:
-        raise _format_config_error(
-            "PROCESSING_MODE_INVALID",
-            "处理模式仅支持 smart、structural、strict 或 normalize",
-            field="X-Processing-Mode",
-            reason="处理模式无效",
-        )
-    return strategy
+    """兼容旧入口：将外部处理模式映射为内部 processing strategy。"""
+    return _format_processing_strategy_from_mode(value)
 
 
 def _validate_requested_processing_mode(format_config: dict | None, request_meta: dict) -> None:
-    """Validate the documented mode header and prevent silent config conflicts."""
-    requested = _processing_strategy_from_mode(request_meta.get("processing_mode", ""))
-    request_meta["processing_strategy"] = requested or "structural"
-    if not isinstance(format_config, dict):
-        return
-    processing = format_config.get("processing", {})
-    configured = str(processing.get("strategy", "") if isinstance(processing, dict) else "")
-    if configured and requested and configured != requested:
-        raise _format_config_error(
-            "PROCESSING_MODE_CONFLICT",
-            "X-Processing-Mode 与排版配置中的处理模式不一致",
-            field="X-Processing-Mode",
-            reason="处理模式冲突",
-        )
+    """兼容旧入口：校验 header 处理模式与格式配置并写入 request_meta。"""
+    _format_validate_requested_processing_mode(format_config, request_meta)
 
 def _admin_token_from(parsed) -> str:
-    return (parse_qs(parsed.query).get("token") or [""])[0]
+    """兼容旧入口：从 URL 查询参数中读取 legacy 管理员 token。"""
+    return _request_admin_token_from_query(parsed)
 
 def _admin_url(path: str, token: str = "") -> str:
-    return path
+    """兼容旧入口：返回管理页 URL，legacy token 参数不再拼接进链接。"""
+    return _request_admin_url(path, token)
 
 def _admin_hidden_input(token: str = "") -> str:
-    if not token:
-        return ""
-    return f'<input type="hidden" name="token" value="{_html_escape(token)}">'
+    """兼容旧入口：传入 legacy token，返回隐藏 input HTML。"""
+    return _request_hidden_input("token", token)
 
 def _csrf_hidden_input(csrf_token: str = "") -> str:
-    if not csrf_token:
-        return ""
-    return f'<input type="hidden" name="csrf_token" value="{_html_escape(csrf_token)}">'
+    """兼容旧入口：传入 CSRF token，返回隐藏 input HTML。"""
+    return _request_hidden_input("csrf_token", csrf_token)
 
 def _csrf_header_value(headers) -> str:
-    return headers.get(ADMIN_CSRF_HEADER, "") if headers else ""
+    """兼容旧入口：从请求头中读取当前配置的 CSRF token。"""
+    return _request_csrf_header_value(headers, ADMIN_CSRF_HEADER)
 
 def _admin_cookie_header(session_id: str) -> str:
     cookie = _session_cookie_settings()
@@ -2043,22 +1940,16 @@ def _validate_admin_csrf(headers, cookie_header: str = "") -> bool:
     return bool(csrf_header and hmac.compare_digest(csrf_header, session.get("csrf_token", "")))
 
 def _route_path(path: str) -> str:
-    path = path or ""
-    return path[4:] if path.startswith("/api/") else path
+    """兼容旧入口：归一化 Worker 转发路径。"""
+    return _request_route_path(path)
 
 def _json_dumps(obj: dict) -> str:
-    return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+    """兼容旧入口：把响应对象序列化为紧凑 JSON 字符串。"""
+    return _request_json_dumps(obj)
 
 def _parse_json_body(body: bytes) -> dict:
-    if not body:
-        return {}
-    try:
-        parsed = json.loads(body.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ValueError("JSON_INVALID: 请求体不是有效的 JSON") from exc
-    if not isinstance(parsed, dict):
-        raise ValueError("JSON_INVALID: 请求体必须是 JSON 对象")
-    return parsed
+    """兼容旧入口：解析 UTF-8 JSON 请求体并要求顶层为对象。"""
+    return _request_parse_json_body(body)
 
 def _normalize_template_name(name: str) -> str:
     cleaned = _re.sub(r"\s+", " ", str(name or "")).strip()
@@ -2581,20 +2472,20 @@ def _content_disposition_filename(filename: str) -> str:
     return _file_content_disposition_filename(filename)
 
 def _trusted_proxy_source(client_address) -> bool:
-    if not TRUST_PROXY_HEADERS:
-        return False
-    if not client_address:
-        return False
-    ip = str(client_address[0] or "").strip()
-    if not ip:
-        return False
-    return ip in TRUSTED_PROXY_IPS
+    """兼容旧入口：判断 socket 来源是否允许提供代理 IP 头。"""
+    return _client_trusted_proxy_source(
+        client_address,
+        trust_proxy_headers=TRUST_PROXY_HEADERS,
+        trusted_proxy_ips=TRUSTED_PROXY_IPS,
+    )
 
 def _compare_secret(value: str, secret: str) -> bool:
-    return bool(value) and bool(secret) and hmac.compare_digest(value, secret)
+    """兼容旧入口：常量时间比较请求密钥和配置密钥。"""
+    return _client_compare_secret(value, secret)
 
 def _html_escape(text: str) -> str:
-    return html.escape(str(text or ""))
+    """兼容旧入口：转义任意文本用于 HTML 输出。"""
+    return _request_html_escape(text)
 
 def _redact_sensitive_log(text: str) -> str:
     value = str(text or "")
@@ -2607,32 +2498,21 @@ def _redact_sensitive_log(text: str) -> str:
     return value
 
 def _split_ip_header(value: str):
-    return [p.strip() for p in str(value or "").split(",") if p.strip()]
+    """兼容旧入口：拆分代理 IP 请求头为候选列表。"""
+    return _client_split_ip_header(value)
 
 def _is_ipv4(value: str) -> bool:
-    try:
-        return isinstance(ipaddress.ip_address(value.strip()), ipaddress.IPv4Address)
-    except ValueError:
-        return False
+    """兼容旧入口：传入字符串，返回是否为合法 IPv4。"""
+    return _client_is_ipv4(value)
 
 def _client_ip(headers, client_address) -> str:
-    """Return the actual client IP only when the request came from a trusted proxy."""
-    client_ip = client_address[0] if client_address else ""
-    if not _trusted_proxy_source(client_address):
-        return client_ip
-
-    candidates = []
-    for name in ("X-Forwarded-For", "X-Real-IP", "CF-Connecting-IP"):
-        candidates.extend(_split_ip_header(headers.get(name, "")))
-    if client_ip:
-        candidates.append(client_ip)
-    for ip in candidates:
-        if _is_ipv4(ip):
-            return ip
-    for ip in candidates:
-        if _is_ip(ip):
-            return ip
-    return client_ip
+    """兼容旧入口：从可信代理头和 socket 地址解析真实客户端 IP。"""
+    return _client_ip_from_headers(
+        headers,
+        client_address,
+        trust_proxy_headers=TRUST_PROXY_HEADERS,
+        trusted_proxy_ips=TRUSTED_PROXY_IPS,
+    )
 
 
 class Handler(BaseHTTPRequestHandler):

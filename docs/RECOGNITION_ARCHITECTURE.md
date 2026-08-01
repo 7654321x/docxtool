@@ -13,6 +13,10 @@ DOCX 块抽取 -> 统一特征 -> 文档模式 -> 候选提供器 -> 硬约束 -
 `src/docxtool/web/config.py`。该模块只消费配置值并返回解析结果，不读写数据库、不启动
 worker，也不触碰 DOCX 识别链路。
 
+可信代理来源、代理 IP 头解析、IPv4/IPv6 校验和常量时间密钥比较已迁移到
+`src/docxtool/web/client_ip.py`。该模块只根据调用方传入的 headers、socket 地址和代理配置
+返回客户端 IP 或布尔判断，不访问请求处理器、数据库、任务队列或 DOCX 识别链路。
+
 健康检查、readiness、版本信息和启动 URL payload 已迁移到 `src/docxtool/web/health.py`。
 `web.app` 只注入当前数据库检查、运行目录、队列计数和版本配置，继续保留旧私有入口。
 
@@ -21,6 +25,22 @@ worker，也不触碰 DOCX 识别链路。
 
 文件名清理、排版结果下载名、`Content-Disposition` 和内部错误脱敏已迁移到
 `src/docxtool/web/file_utils.py`。该模块只处理字符串，不读取或写入用户文件。
+
+上传接口的 `X-Format-Config` 解码、格式配置校验、预设元数据读取和处理模式冲突检查
+已迁移到 `src/docxtool/web/format_request.py`。该模块只处理 headers 和配置对象，
+复用现有格式配置校验规则，不读取任务表、不入队，也不执行 DOCX 识别。
+
+HTTP 路径归一、Cookie 取值、CSRF 头读取、管理页隐藏字段、紧凑 JSON 和 HTML 转义
+已迁移到 `src/docxtool/web/request_utils.py`。该模块只处理请求头、字节和字符串，
+不访问数据库、不读取运行目录，也不参与识别或排版。
+
+HTTP 请求体定长读取、上传内容写入文件和结果文件流输出已迁移到
+`src/docxtool/web/stream_io.py`。该模块只处理调用方传入的流、路径和 writer，
+不判断任务状态、不生成文件名，也不参与 DOCX 导入、识别或渲染。
+
+任务临时目录、上传原件目录、输出目录、路径越界校验和永久保留清理钩子已迁移到
+`src/docxtool/web/task_paths.py`。该模块只计算路径和删除未完成上传或无效输出，
+不读取任务表、不改变已接收原件/成功结果/任务记录的永久保留策略。
 
 启动时区提示、HTTP Date 解析和北京网络时间校验已迁移到
 `src/docxtool/web/time_check.py`。`web.app` 仅保留旧私有入口，主启动流程继续使用相同提示行。
