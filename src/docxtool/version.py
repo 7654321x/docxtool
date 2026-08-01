@@ -10,13 +10,13 @@ from __future__ import annotations
 
 from importlib import metadata
 
-_SOURCE_VERSION = "2.1"
+_SOURCE_VERSION = "2.2"
 
 
 def package_version() -> str:
     """返回对外展示的 DocxTool 包版本。
 
-    返回值只表达发布版本，例如 ``2.1``。构建日期、Git revision、协议版本
+    返回值只表达发布版本，例如 ``2.2``。构建日期、Git revision、协议版本
     和识别引擎版本都不是包版本，应在调用方使用独立字段承载。
     """
     try:

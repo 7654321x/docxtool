@@ -155,6 +155,38 @@ def test_organization_label_and_content_stay_in_one_sdk_block(tmp_path) -> None:
     assert blocks[0].locator_verified
 
 
+def test_inline_salutation_and_body_split_without_specific_name(tmp_path) -> None:
+    source = tmp_path / "salutation-inline-body.docx"
+    text = "各位代表、同志们：现在开始说明本次会议安排。"
+    document = Document()
+    document.add_paragraph(text)
+    document.save(source)
+
+    plan = recognize_docx(source, recognition_mode="authoritative", include_text=True)
+    blocks = [block for block in plan.blocks if block.physical_paragraph_index == 0]
+
+    assert [block.type_id for block in blocks] == ["addressing", "body"]
+    assert [block.recognized_text for block in blocks] == [
+        "各位代表、同志们：", "现在开始说明本次会议安排。",
+    ]
+    assert all(block.locator_verified for block in blocks)
+
+
+def test_inline_organization_label_and_body_is_not_split(tmp_path) -> None:
+    source = tmp_path / "organization-inline-body.docx"
+    text = "某某研究院：现将有关情况说明如下。"
+    document = Document()
+    document.add_paragraph(text)
+    document.save(source)
+
+    plan = recognize_docx(source, recognition_mode="authoritative", include_text=True)
+    blocks = [block for block in plan.blocks if block.physical_paragraph_index == 0]
+
+    assert len(blocks) == 1
+    assert blocks[0].type_id == "body"
+    assert blocks[0].recognized_text == text
+
+
 def test_attachment_note_is_not_split_as_a_short_label() -> None:
     source = "附件：1.基本情况"
 

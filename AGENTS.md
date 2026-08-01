@@ -97,6 +97,12 @@ pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m pytest tests/test_struct
 40. 触发场景：源 DOCX 的自动列表编号可能只存在于 `w:numPr`，不出现在段落文本中。短独立段若保留 `@lvl_N`、高加粗比例且旧导入链已识别为对应标题，authoritative decoder 不得被普通正文候选覆盖；超过 40 字的列表继承正文不按该规则升级。批处理必须对比源结构线索与输出类型，报告“源标题线索数/未保留数”，只记录段落号、类型、证据和文字哈希，不记录完整正文。
 41. 触发场景：附件说明、落款单位和落款日期在源文档中交错，或被无内容空段隔开时，非 strict 导出必须整理为“附件说明及附件项 → 落款单位 → 日期”，并删除该尾部块内部无结构含义的空段。若同一物理段落包含“编号标题 + 正文 + 多个软换行 + 末行落款单位”，且下一物理段落首个可见行是日期，也必须在标题/正文拆分后继续拆出落款单位，不能让标题正文分支吞掉尾部结构。识别到落款单位和日期后，最终渲染计划必须保证二者相邻；批处理报告“落款连续性问题数”，附件不得出现在二者之间。
 42. 触发场景：讲话稿开头和正文结尾都出现独立称呼时，开场称呼继续使用“称呼”配置的段前 1 行；一旦正文流已经开始，后续 `addressing`（例如文末再次称呼）段前、段后均强制为 0，不得因共用 `DCT-Recipient` 样式再次产生空一行。源段落中的连续手动空行仍按结构拆分规则清理。修改后至少运行 `tests/test_engine_heading_spacing.py tests/test_processing_flags.py tests/test_segment_boundaries.py`，并复排讲话专项稿检查最终 OOXML 的 `w:beforeLines`。
+43. 触发场景：冒号结构不得在 importer、特征提取、候选和解码器中各自维护不同规则。统一由 `recognition/colon.py` 输出结构证据：文首独立标签可成为主送机关候选，明确称呼加冒号后接正文可拆为 `addressing + body`，正文区机构标签和解释性冒号正文保持正文或正文标签，责任单位、联系人等结构字段走键值候选。标题编号重复、倒序、跳号或缺少父标题时，最终类型可按最高综合分应用，但必须进入 `review` 并记录 `HEADING_SEQUENCE_CONFLICT`；不得通过具体单位、人名或完整句子白名单修复。修改后至少运行：
+
+```pwsh
+pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m pytest -q tests/test_colon_structure.py tests/test_recognition_decoder.py tests/test_segment_boundaries.py"
+pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m ruff check src tests scripts"
+```
 
 ## 可移动服务器部署
 

@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.2 - 2026-08-01
+
+- Added shared colon-structure evidence for recipients, salutations, body labels, key-value fields, and explanatory prose.
+- Strengthened front-matter/body boundaries and heading-family consistency checks for duplicate, reversed, skipped, or orphaned numbering.
+- Separated likely heading application from review certainty so conflicted numbered headings can still be applied while surfacing `HEADING_SEQUENCE_CONFLICT`.
+- Added regression coverage for generalized colon structures, inline salutation/body splits, organization labels, structural key-value fields, and heading-sequence review.
+- Updated recognition architecture docs, collaboration rules, and GitHub publish allowlist for the new recognition module.
+
 ## 2.1 - 2026-08-01
 
 - Centralized runtime package version reporting so Web `/version`, SDK manifest, CLI, and wheel metadata stay aligned.

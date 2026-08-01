@@ -32,6 +32,44 @@ _TITLE_STYLE_NAMES = frozenset({"title", "标题", "subtitle", "副标题"})
 _HEADING_STYLE_NAMES = frozenset({"heading1", "标题1", "heading2", "标题2", "heading3", "标题3", "heading4", "标题4"})
 _TITLE_LEGACY_TYPES = frozenset({"title", "title_cont", "subtitle", "title2"})
 _TITLE_META_TYPES = frozenset({"role_name", "author_line", "date_line", "addressing", "meeting_line", "location_line"})
+_CIRCLED_ORDINALS = {char: index for index, char in enumerate("①②③④⑤⑥⑦⑧⑨⑩", 1)}
+_CN_DIGITS = {
+    "零": 0, "〇": 0, "○": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4,
+    "五": 5, "六": 6, "七": 7, "八": 8, "九": 9,
+}
+
+
+def _cn_ordinal(value: str) -> int | None:
+    text = value.strip()
+    if not text:
+        return None
+    if text == "十":
+        return 10
+    if "十" in text:
+        left, _, right = text.partition("十")
+        tens = _CN_DIGITS.get(left, 1) if left else 1
+        ones = _CN_DIGITS.get(right, 0) if right else 0
+        return tens * 10 + ones
+    total = 0
+    for char in text:
+        digit = _CN_DIGITS.get(char)
+        if digit is None:
+            return None
+        total = total * 10 + digit
+    return total or None
+
+
+def _numbering_ordinal(feature: ParagraphFeatures) -> int | None:
+    prefix = str(feature.numbering_prefix or "").strip()
+    if not prefix or prefix.startswith("@"):
+        return None
+    if prefix in _CIRCLED_ORDINALS:
+        return _CIRCLED_ORDINALS[prefix]
+    value = re.sub(r"^[（(]\s*|\s*[）)]$", "", prefix)
+    value = re.sub(r"[、.．]+$", "", value).strip()
+    if value.isdigit():
+        return int(value)
+    return _cn_ordinal(value)
 
 
 def _style_name(value: str) -> str:
@@ -46,6 +84,12 @@ def _body_like(feature: ParagraphFeatures) -> bool:
         return True
     if feature.heading_shape_level:
         return False
+    if (
+        feature.ends_with_sentence_punctuation
+        and not feature.is_centered
+        and feature.text_length >= 12
+    ):
+        return True
     return feature.text_length >= 34 and feature.ends_with_sentence_punctuation
 
 
@@ -256,6 +300,10 @@ def analyze_document_context(features: list[ParagraphFeatures]) -> DocumentConte
                 front_positions.append(cursor)
                 cursor += 1
                 continue
+            if item.recipient_match:
+                front_positions.append(cursor)
+                cursor += 1
+                break
             break
 
     body_start = None
@@ -272,7 +320,8 @@ def analyze_document_context(features: list[ParagraphFeatures]) -> DocumentConte
         if not item.compact_text:
             continue
         if item.recipient_match:
-            body_start, body_reason = position, "recipient"
+            body_start = position + 1 if position + 1 < count else position
+            body_reason = "recipient-following-body" if body_start != position else "recipient"
             break
         if _body_like(item):
             body_start, body_reason = position, "body-paragraph"
@@ -298,9 +347,29 @@ def analyze_document_context(features: list[ParagraphFeatures]) -> DocumentConte
         HeadingFamily(level, tuple(positions), tuple(supported.get(level, ())))
         for level, positions in sorted(by_level.items())
     )
+    parent_positions_by_level = {level: tuple(positions) for level, positions in by_level.items()}
     for family in families:
+        previous_ordinal = None
+        seen_ordinals: dict[int, int] = {}
         for position in family.positions:
             evidence = [f"numbered-heading-level-{family.level}"]
+            ordinal = _numbering_ordinal(features[position])
+            if ordinal is not None:
+                if ordinal in seen_ordinals:
+                    evidence.append("numbering-duplicate")
+                elif previous_ordinal is None and ordinal > 1:
+                    evidence.append("numbering-starts-after-one")
+                elif previous_ordinal is not None and ordinal < previous_ordinal:
+                    evidence.append("numbering-reverse")
+                elif previous_ordinal is not None and ordinal > previous_ordinal + 1:
+                    evidence.append("numbering-gap")
+                seen_ordinals[ordinal] = position
+                previous_ordinal = ordinal
+            if family.level > 1:
+                parent_level = family.level - 1
+                parents = parent_positions_by_level.get(parent_level, ())
+                if not any(parent < position for parent in parents):
+                    evidence.append("missing-parent-heading")
             if family.count >= 2:
                 evidence.append("parallel-heading-family")
             if position in family.supported_positions:

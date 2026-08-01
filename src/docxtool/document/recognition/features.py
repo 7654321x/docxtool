@@ -7,41 +7,21 @@ import re
 import unicodedata
 from typing import Any
 
+from .colon import (
+    MEETING_KEY_VALUE_LABELS,
+    analyze_colon_structure,
+    is_organization_label,
+    is_standalone_addressing_text,
+)
 from .model import DocumentModeDecision, DocumentMode
 
 
 DISPATCH_RE = re.compile(r"^(?P<issuer>[\u4e00-\u9fffA-Za-z0-9]{0,16})(?:〔|\[)(?P<year>\d{4})(?:〕|\])\s*(?P<number>\d+)\s*号$")
 DATE_RE = re.compile(r"^(?:19|20)\d{2}年\s*\d{1,2}月\s*\d{1,2}日$")
 NUMBERING_RE = re.compile(r"^(?P<prefix>(?:[一二三四五六七八九十百千万零〇]{1,5}[、.．]+|[（(][一二三四五六七八九十百千万零〇]{1,5}[）)]|\d{1,2}[.．、]+|[（(]\d{1,2}[）)]|[①②③④⑤⑥⑦⑧⑨⑩]))(?P<body>.*)$")
-KEY_VALUE_RE = re.compile(r"^(?P<label>[^:：]{1,24})(?P<separator>[:：])(?P<value>.*)$")
-MEETING_LABELS = frozenset({"时间", "地点", "主持", "记录", "出席", "缺席", "列席", "参会", "参加", "议题", "议定事项", "会议名称", "会议时间", "会议地点"})
+MEETING_LABELS = MEETING_KEY_VALUE_LABELS
 SOURCE_NOTE_RE = re.compile(r"^(?:来源|注|说明|备注)\s*[:：]")
 ATTACHMENT_RE = re.compile(r"^附件\s*[:：]")
-RECIPIENT_RE = re.compile(r"^[\u4e00-\u9fffA-Za-z0-9、，,（）()\s]{2,40}[:：]$")
-STANDALONE_ADDRESSING_RE = re.compile(
-    r"^(?:"
-    r"各位[\u4e00-\u9fff、，,]{1,18}"
-    r"|同志们"
-    r"|(?:尊敬的)?[\u4e00-\u9fff·]{1,6}"
-    r"(?:书记|主席|主任|部长|局长|处长|科长|司长|厅长|市长|县长|区长|"
-    r"镇长|乡长|院长|校长|政委|组长|队长|秘书长|委员|常委|经理|总监|"
-    r"老师|教授|同志|先生|女士)"
-    r")[：:！!]$"
-)
-ORGANIZATION_LABEL_SUFFIX_RE = re.compile(
-    r"(?:学院|学校|大学|公司|集团|委员会|政府|办公室|中心|协会|学会|医院|"
-    r"研究院|研究所|园区|社区|街道|机关|党委|党组|党支部|团委|工会|商会|"
-    r"局|厅|处|科|院|所|乡|镇)$"
-)
-
-
-def is_standalone_addressing_text(value: str) -> bool:
-    return bool(STANDALONE_ADDRESSING_RE.fullmatch(re.sub(r"\s+", "", value or "")))
-
-
-def is_organization_label(value: str) -> bool:
-    compact = re.sub(r"\s+", "", value or "").rstrip("：:")
-    return bool(compact and ORGANIZATION_LABEL_SUFFIX_RE.search(compact))
 
 
 class BlockKind(str):
@@ -122,6 +102,17 @@ class ParagraphFeatures:
     bold_char_ratio: float = 0.0
     italic_char_ratio: float = 0.0
     explicitly_formatted_char_ratio: float = 0.0
+    colon_kind: str = "none"
+    colon_label: str | None = None
+    colon_value: str | None = None
+    colon_at_end: bool = False
+    colon_value_sentence_like: bool = False
+    colon_label_organization: bool = False
+    colon_standalone_addressing: bool = False
+    colon_inline_addressing_body: bool = False
+    colon_key_value_candidate: bool = False
+    colon_body_label_candidate: bool = False
+    colon_explanatory_body: bool = False
 
 
 def normalize_text(value: str) -> str:
@@ -197,14 +188,13 @@ def extract_features(block: DocumentBlock, previous: DocumentBlock | None = None
             level = 4 if inner and inner[0].isdigit() else 2
         elif prefix[0].isdigit():
             level = 3
-    # A key-value line is a single visible line.  Collapsing manual line
-    # breaks first turns a date followed by “附件：...” into a fabricated
-    # label/value pair and can steal an entire document tail.
+    # A key-value line is a single visible line.  Shared colon analysis keeps
+    # explanatory prose such as “主要原因如下：……” out of field-label logic.
     has_line_break = "\n" in raw or "\r" in raw
-    kv = None if has_line_break else KEY_VALUE_RE.fullmatch(content)
-    label = re.sub(r"\s+", "", kv.group("label")) if kv else None
-    value = kv.group("value") if kv else None
-    if label and label in MEETING_LABELS:
+    colon = analyze_colon_structure(content if not has_line_break else raw)
+    label = colon.label if (not has_line_break and colon.key_value_candidate) else None
+    value = colon.value if label else None
+    if label and colon.meeting_label:
         kv_level = 0
     else:
         kv_level = level
@@ -213,10 +203,10 @@ def extract_features(block: DocumentBlock, previous: DocumentBlock | None = None
     return ParagraphFeatures(
         block.index, block.paragraph_index if block.paragraph_index is not None else -1,
         raw, normalized, compact, prefix, kv_level, content,
-        label if kv else None, value if kv else None, kv.group("separator") if kv else None,
-        prefix if kv and label in MEETING_LABELS else None,
+        label, value, colon.separator if label else None,
+        prefix if label and colon.meeting_label else None,
         bool(dispatch), dispatch.groupdict() if dispatch else None,
-        bool(DATE_RE.fullmatch(compact)), bool(RECIPIENT_RE.fullmatch(normalized)) and (not bool(kv) or label not in MEETING_LABELS),
+        bool(DATE_RE.fullmatch(compact)), bool(colon.recipient_candidate),
         bool(ATTACHMENT_RE.match(compact)), bool(len(compact) <= 16 and not re.search(r"[。！？]", compact)),
         bool(SOURCE_NOTE_RE.match(compact)), level,
         0.8 if level and len(content) <= 40 else 0.2,
@@ -228,6 +218,11 @@ def extract_features(block: DocumentBlock, previous: DocumentBlock | None = None
         block.dominant_font_name, block.weighted_font_size, block.max_font_size,
         block.min_font_size, block.bold_char_ratio, block.italic_char_ratio,
         block.explicitly_formatted_char_ratio,
+        colon.kind, colon.label or None, colon.value or None, colon.colon_at_end,
+        colon.value_sentence_like, colon.organization_label,
+        colon.standalone_addressing, colon.inline_addressing_body,
+        colon.key_value_candidate, colon.body_label_candidate,
+        colon.explanatory_body_candidate,
     )
 
 

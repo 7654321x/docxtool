@@ -12,9 +12,11 @@ DOCX 块抽取 -> 统一特征 -> 文档模式 -> 候选提供器 -> 硬约束 -
 `src/docxtool/document/recognition/` 包含识别层：
 
 - `features.py`：保留原文的块模型和共享特征。表格、图片、空段和分页标记不会被静默丢弃。
+- `colon.py`：共享冒号结构分析，只输出标签、值、称呼形态、机构形态、解释性正文等事实，不直接返回最终类型。
 - `model.py`：`DocumentMode`、`SectionKind`、`ParagraphType` 三层模型。
 - `candidates.py`：结构、键值、编号、语义、旧分类器和样式候选提供器。旧分类结果只作为兼容候选。
-- `decoder.py`：硬结构否决和宽度可配置的确定性 Beam Search；默认宽度为 12。
+- `global_context.py`：文首结构、正文边界和同级标题族的全文只读分析。
+- `decoder.py`：硬结构否决、标题序列冲突复核和宽度可配置的确定性 Beam Search；默认宽度为 12。
 - `compatibility.py`：内部段落类型到旧渲染 `type_id` 的唯一映射边界。
 - `validators.py`：有限结构序列校验。
 - `diagnostics.py`：只输出结构信息，不输出源文档正文、OOXML 或敏感字段。
@@ -27,6 +29,9 @@ DOCX 块抽取 -> 统一特征 -> 文档模式 -> 候选提供器 -> 硬约束 -
 - 签发日期或来源说明后的独立规划、方案、报告等标题可识别为被印发文件标题。
 - 非 `REPORT` 模式不会设置 `report_first_sentence_bold`。
 - Docxtool 自身样式不能单独否决文本结构，幂等复跑保留相同类型和诊断结果。
+- 冒号结构统一由 `colon.py` 生成证据；文首可形成主送机关或称呼候选，正文区的机构标签优先作为正文标签，解释性冒号正文不会被键值字段规则吞掉。
+- 行内“称呼：正文”可在结构拆分层拆成 `addressing + body`；“机构名称：正文内容”保持一个正文段，避免仅凭冒号拆段。
+- 标题编号会结合全文标题族判断重复、倒序、跳号、缺失父标题等冲突；最可能类型仍可应用，但必须进入 `review` 并输出 `HEADING_SEQUENCE_CONFLICT`。
 
 ## 诊断
 

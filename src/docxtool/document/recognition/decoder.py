@@ -27,6 +27,13 @@ _HEADING_TYPES = frozenset({
     ParagraphType.HEADING_3,
     ParagraphType.HEADING_4,
 })
+_HEADING_CONFLICT_EVIDENCE = frozenset({
+    "numbering-duplicate",
+    "numbering-reverse",
+    "numbering-gap",
+    "missing-parent-heading",
+    "numbering-starts-after-one",
+})
 _STRUCTURE_SENSITIVE_TYPES = frozenset({
     ParagraphType.MAIN_TITLE,
     ParagraphType.TITLE_CONTINUATION,
@@ -228,7 +235,10 @@ def _review_evidence(selected: Candidate | None, features, legacy_type_id: str, 
         evidence.append("hard-structure")
     elif selected.paragraph_type in _HEADING_TYPES and features.heading_shape_level:
         evidence.append("explicit-numbering")
-        if (
+        if any(item in context_evidence for item in _HEADING_CONFLICT_EVIDENCE):
+            strength = max(strength, 0.58)
+            evidence.append("heading-sequence-conflict")
+        elif (
             selected.paragraph_type == ParagraphType.HEADING_1
             and "parallel-heading-family" not in context_evidence
             and "nested-heading-support" not in context_evidence
@@ -296,11 +306,15 @@ def _review_assessment(
     type_changed = bool(compatible and compatible != legacy_type_id)
     sensitive_change = bool(selected and selected.paragraph_type in _STRUCTURE_SENSITIVE_TYPES)
     close_competition = margin is not None and margin < config.review_margin
+    heading_conflict = bool(context_evidence and any(item in context_evidence for item in _HEADING_CONFLICT_EVIDENCE))
     reasons: list[str] = []
 
     if mapping_failed:
         reasons.append("TYPE_MAPPING_FAILED")
         level = "critical_review"
+    elif heading_conflict:
+        reasons.append("HEADING_SEQUENCE_CONFLICT")
+        level = "review"
     elif type_changed and not direct_evidence and sensitive_change:
         reasons.extend(("LEGACY_TYPE_CONFLICT", "STRUCTURE_SENSITIVE_CHANGE"))
         level = "critical_review"

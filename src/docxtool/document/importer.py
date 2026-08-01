@@ -28,6 +28,7 @@ from docxtool.document.recognition.features import (
     is_organization_label,
     is_standalone_addressing_text,
 )
+from docxtool.document.recognition.colon import analyze_colon_structure
 from docxtool.document.recognition.version import RECOGNITION_VERSION_TAG
 from docxtool.document.source_tape import SourceTape, canonicalize_text, utf16_length
 from docxtool.document.effective_format import (
@@ -259,6 +260,19 @@ def _segment_boundary_candidates(
         return ()
     text = source[start:end]
     candidates = []
+    colon = analyze_colon_structure(text)
+    if colon.inline_addressing_body and colon.separator_index is not None:
+        boundary = start + colon.separator_index + 1
+        body_start, body_end = _trim_source_span(source, boundary, end)
+        if body_start < body_end:
+            candidates.append(SegmentBoundaryCandidate(
+                raw_start=start,
+                raw_end=boundary,
+                left_type_hint="addressing",
+                right_type_hint="body",
+                confidence=0.98,
+                evidence=("INLINE_ADDRESSING_COLON", "VISIBLE_BODY_AFTER_COLON"),
+            ))
     period_index = text.find("。")
     if period_index >= 0:
         boundary = start + period_index + 1

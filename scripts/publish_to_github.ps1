@@ -169,6 +169,7 @@ $requiredFiles = @(
     "src/docxtool/document/letterhead_config.py",
     "src/docxtool/document/recognition/__init__.py",
     "src/docxtool/document/recognition/candidates.py",
+    "src/docxtool/document/recognition/colon.py",
     "src/docxtool/document/recognition/compatibility.py",
     "src/docxtool/document/recognition/config.py",
     "src/docxtool/document/recognition/decoder.py",

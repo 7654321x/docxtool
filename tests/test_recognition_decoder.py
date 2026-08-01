@@ -290,6 +290,91 @@ def test_organization_label_with_inline_content_is_not_a_key_value() -> None:
     assert paragraph.meta["recognition_section"] == "body"
 
 
+def test_front_recipient_is_structural_without_legacy_metadata() -> None:
+    recipient = _paragraph("某某学院：", "body", 1)
+    data = _document(
+        _paragraph("关于开展专项调研的通知", "body", 0, alignment="CENTER"),
+        recipient,
+        _paragraph("现将有关事项通知如下，请结合实际抓好落实。", "body", 2),
+    )
+
+    apply_recognition(data)
+
+    assert recipient.type_id == "addressing"
+    assert data.recognition_diagnostics["document_context"]["body_start"] == 2
+    assert "front-recipient" in recipient.meta["recognition_evidence"]
+
+
+def test_explanatory_colon_sentence_remains_body_not_key_value() -> None:
+    paragraph = _paragraph("主要原因如下：第一阶段已经完成。", "body", 2)
+    data = _document(
+        _paragraph("工作情况", "title", 0, alignment="CENTER"),
+        _paragraph("前段正文已经开始，并完整说明有关工作情况。", "body", 1),
+        paragraph,
+    )
+
+    apply_recognition(data)
+
+    assert paragraph.type_id == "body"
+    assert paragraph.meta["recognition_section"] == "body"
+    assert "colon-explanatory-body" in paragraph.meta["recognition_evidence"]
+
+
+def test_structural_key_value_generalizes_after_label_rewording() -> None:
+    first = _paragraph("责任单位：综合管理部门", "body", 2)
+    second = _paragraph("联系人：张某", "body", 3)
+    data = _document(
+        _paragraph("工作情况", "title", 0, alignment="CENTER"),
+        _paragraph("前段正文已经开始，并完整说明有关工作情况。", "body", 1),
+        first,
+        second,
+    )
+
+    apply_recognition(data)
+
+    assert [first.type_id, second.type_id] == ["responsibility_line", "responsibility_line"]
+    assert "explicit-label" in first.meta["recognition_evidence"]
+    assert "explicit-label" in second.meta["recognition_evidence"]
+
+
+def test_duplicate_heading_sequence_is_applied_but_marked_for_review() -> None:
+    duplicate = _paragraph("一、重复编号标题", "body", 4)
+    data = _document(
+        _paragraph("工作情况", "title", 0, alignment="CENTER"),
+        _paragraph("现将有关情况报告如下，供审阅。", "body", 1),
+        _paragraph("一、持续夯实基层基础", "body", 2),
+        _paragraph("持续完善责任体系，确保各项部署落实到位。", "body", 3),
+        duplicate,
+        _paragraph("后续正文对该标题展开具体说明，并列举工作安排、责任分工和落实要求，确保形成完整支撑。", "body", 5),
+    )
+
+    apply_recognition(data)
+
+    assert duplicate.type_id == "heading1"
+    diagnostic = data.recognition_diagnostics["paragraphs"][4]
+    assert diagnostic["review_level"] == "review"
+    assert "HEADING_SEQUENCE_CONFLICT" in diagnostic["review_reasons"]
+    assert "numbering-duplicate" in diagnostic["heading_context_evidence"]
+
+
+def test_orphan_deep_heading_is_not_confirmed_without_parent_context() -> None:
+    orphan = _paragraph("1.缺少父级的三级标题", "body", 2)
+    data = _document(
+        _paragraph("工作情况", "title", 0, alignment="CENTER"),
+        _paragraph("前段正文已经开始，并完整说明有关工作情况。", "body", 1),
+        orphan,
+        _paragraph("后续正文对该段展开具体说明，并形成足够的正文支撑材料。", "body", 3),
+    )
+
+    apply_recognition(data)
+
+    diagnostic = data.recognition_diagnostics["paragraphs"][2]
+    assert "heading3" in diagnostic["candidate_types"]
+    assert "missing-parent-heading" in diagnostic["heading_context_evidence"]
+    assert diagnostic["review_level"] == "review"
+    assert "HEADING_SEQUENCE_CONFLICT" in diagnostic["review_reasons"]
+
+
 def test_short_bold_source_list_heading_survives_core_body_candidate() -> None:
     paragraph = _paragraph(
         "企业在订单班的重视度和投入上主动性不足",

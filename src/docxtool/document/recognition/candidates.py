@@ -100,6 +100,14 @@ class StructuralCandidateProvider:
                 hard=True,
                 section_hint=SectionKind.RECIPIENT,
             ))
+        if features.colon_inline_addressing_body:
+            result.append(Candidate(
+                ParagraphType.ADDRESSING,
+                0.98,
+                self.name,
+                ("inline-addressing-boundary",),
+                section_hint=SectionKind.RECIPIENT,
+            ))
         elif (
             features.recipient_match
             and context.document_context is not None
@@ -110,6 +118,22 @@ class StructuralCandidateProvider:
             )
         ):
             result.append(Candidate(ParagraphType.RECIPIENT, 0.95, self.name, ("front-recipient",), hard=True, section_hint=SectionKind.RECIPIENT))
+        if (
+            features.colon_explanatory_body
+            or (
+                features.colon_body_label_candidate
+                and context.document_context is not None
+                and not context.document_context.before_body(context.index)
+            )
+        ):
+            result.append(Candidate(
+                ParagraphType.BODY,
+                0.98,
+                self.name,
+                ("colon-explanatory-body" if features.colon_explanatory_body else "body-organization-label",),
+                hard=True,
+                section_hint=SectionKind.BODY,
+            ))
         if features.attachment_note_match:
             result.append(Candidate(ParagraphType.ATTACHMENT_NOTE, 0.97, self.name, ("attachment-note",), hard=True, section_hint=SectionKind.ATTACHMENT_NOTE))
         return result
@@ -155,15 +179,37 @@ class NumberingCandidateProvider:
         family = global_context.heading_family(position)
         score = 0.72
         evidence = list(global_context.heading_reasons(position) or (f"heading-level-{features.heading_shape_level}",))
+        if features.heading_semantic_score >= 0.8:
+            score += 0.08
+            evidence.append("explicit-numbering-shape")
         if family and family.count >= 2:
             score += 0.18
         if family and position in family.supported_positions:
             score += 0.06
         if not global_context.before_body(position):
             score += 0.18
-        if global_context.before_body(position) and not (family and family.count >= 2):
-            # A solitary numbered first line competes with a document title;
-            # it is no longer promoted solely because Word called it Heading 1.
+        if any(
+            item in evidence
+            for item in (
+                "numbering-duplicate",
+                "numbering-reverse",
+                "numbering-gap",
+                "missing-parent-heading",
+                "numbering-starts-after-one",
+            )
+        ):
+            # Sequence conflicts reduce certainty, but an explicit numbering
+            # shape should stay available as the best type when structure
+            # supports it.  The decoder turns the same evidence into review.
+            score -= 0.06
+        if (
+            global_context.before_body(position)
+            and features.heading_shape_level == 1
+            and not (family and family.count >= 2)
+        ):
+            # A solitary first-level numbered first line competes with a
+            # document title.  Explicit lower-level shapes remain structural
+            # candidates and are reviewed through heading conflict evidence.
             score -= 0.22
             evidence.append("pre-body-heading-penalty")
         return [Candidate(
