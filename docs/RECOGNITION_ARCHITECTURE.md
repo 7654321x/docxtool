@@ -63,6 +63,13 @@ CSRF 校验已迁移到 `src/docxtool/web/user_auth.py`。该模块通过调用�
 健康检查、readiness、版本信息和启动 URL payload 已迁移到 `src/docxtool/web/health.py`。
 `web.app` 只注入当前数据库检查、运行目录、队列计数和版本配置，继续保留旧私有入口。
 
+健康检查、readiness 和版本路由响应发送已迁移到 `src/docxtool/web/health_route_handlers.py`。
+该模块只消费 handler facade 和 payload 构造回调，不执行实际 readiness 检查、不访问任务或 DOCX。
+
+前端首页和管理员登录页的路由响应发送已迁移到 `src/docxtool/web/page_route_handlers.py`。
+该模块只消费 handler facade、首页读取回调和登录页渲染回调，不校验管理员、不读取数据库，
+也不触碰 DOCX 识别链路。
+
 后台维护线程的定时唤醒逻辑已迁移到 `src/docxtool/web/maintenance.py`。在永久保留策略下，
 该模块只负责兼容既有维护线程入口，不删除用户原件、输出、日志或任务记录，也不触碰 DOCX
 识别链路。
@@ -78,9 +85,25 @@ Web SQLite 建表、旧表补列、兼容索引和默认模板 seed 编排已迁
 `src/docxtool/web/monitoring_pages.py`。该模块只消费调用方传入的统计数据、CSRF 片段和
 IP 查询回调，不直接访问数据库、任务队列、HTTP handler 或 DOCX 识别链路。
 
+管理员监控仪表盘整页 HTML 拼装已迁移到 `src/docxtool/web/monitor_dashboard_page.py`。
+该模块只消费调用方传入的统计数据、运行状态和局部 HTML 片段，不查询数据库、不读取
+任务表，也不触碰 DOCX 识别链路。
+
+管理员监控首页和统计 JSON 路由响应已迁移到 `src/docxtool/web/monitor_route_handlers.py`。
+该模块只消费 handler facade、管理员鉴权回调、统计查询回调和 HTML 渲染回调，不直接
+访问 SQLite、不读取任务表，也不触碰 DOCX 识别链路。
+
 任务执行边界选择和后台 worker 线程启动已迁移到 `src/docxtool/web/task_worker.py`。该模块
 只根据调用方传入的主线程判断、direct/subprocess runner 和记录回调编排任务执行，不导入、
 识别或导出 DOCX，也不持有数据库连接。
+
+已校验上传任务的 queued 记录写入、内存队列写入和 worker 通知顺序已迁移到
+`src/docxtool/web/task_queue.py`。该模块只消费任务容器、锁、记录写入和队列信息回调，
+不执行 DOCX 识别、排版或导出。
+
+DOCX 上传请求的限流、请求配置解析、临时落盘、安全校验、复杂度提示和任务入队编排已
+迁移到 `src/docxtool/web/upload_route_handlers.py`。该模块只消费 handler facade 和调用方注入的
+路径、校验、队列、响应构造回调，不直接执行 DOCX 识别、规范化或渲染。
 
 匿名 owner 的任务归属、私人模板归属和重名模板导入改名已迁移到
 `src/docxtool/web/owner_migration.py`。该模块只处理调用方传入的 SQLite 连接或连接器，
@@ -101,6 +124,14 @@ JSON 序列化函数工作，不处理 HTTP 路由、不解析请求体，也不
 预设模板列表、详情、创建、更新和删除的路由处理已迁移到
 `src/docxtool/web/preset_route_handlers.py`。该模块只消费 handler facade、principal 回调和
 preset store 回调，不直接访问 SQLite、不解析底层请求流，也不参与 DOCX 识别或渲染。
+
+管理员、文件 API 和模板修改路由中的“先鉴权、再转发动作”逻辑已迁移到
+`src/docxtool/web/protected_route_handlers.py`。该模块只消费调用方传入的鉴权回调和动作回调，
+不直接读取请求体、不访问数据库，也不触碰 DOCX 识别链路。
+
+管理员、文件 API 和 preset 修改路由的鉴权响应、错误写回和兼容上下文保存已迁移到
+`src/docxtool/web/route_authorization.py`。该模块只消费 handler facade、已解析 URL、鉴权回调
+和错误构造回调，不直接访问数据库、不读取请求流，也不触碰 DOCX 识别链路。
 
 上传限流、认证限流、IP 封禁、IP 活动查询和上传次数限制设置已迁移到
 `src/docxtool/web/rate_limits.py`。该模块通过调用方注入的 SQLite 连接器和锁访问任务、
@@ -127,6 +158,10 @@ preset store 回调，不直接访问 SQLite、不解析底层请求流，也不
 HTTP handler 的 GET/POST/PUT/DELETE 路由动作分派已迁移到
 `src/docxtool/web/handler_dispatch.py`。该模块只根据路由匹配结果调用 handler facade 方法，
 不直接连接数据库、不读取请求体，也不触碰 DOCX 识别链路。
+
+HTTP handler 的安全响应头、CORS 响应头、OPTIONS 预检响应和方法入口分派已迁移到
+`src/docxtool/web/handler_lifecycle.py`。该模块只消费 handler facade、路径规范化回调和
+路由分派回调，不处理具体业务、数据库或 DOCX。
 
 HTTP handler 的文本、JSON、跳转和错误响应发送已迁移到
 `src/docxtool/web/handler_responses.py`。该模块只消费 handler 对象、响应内容和响应头回调，

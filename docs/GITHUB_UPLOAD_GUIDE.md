@@ -51,6 +51,13 @@ pwsh -NoProfile -Command "git ls-remote https://github.com/7654321x/docxtool.git
 - 服务器代理模板：`deploy/nginx-docxtool.conf`
 - 配置：`.env.example`、`.gitignore`、`.gitattributes`、`pytest.ini`、`ruff.toml`、`pyproject.toml`、`.github/workflows/ci.yml`
 - 后端、排版核心和 SDK：`server.py`、`src/docxtool/**/*.py`、`src/docxtool/resources/config/default-format.json`、`src/docxtool/resources/schemas/*.json`，其中管理员请求上下文和 POST CSRF 辅助位于 `src/docxtool/web/admin_access.py`，管理员监控动作参数解析位于 `src/docxtool/web/admin_actions.py`，管理员监控动作处理位于 `src/docxtool/web/admin_route_handlers.py`，管理员 session 路由处理位于 `src/docxtool/web/admin_session_routes.py`，管理员表单解析位于 `src/docxtool/web/admin_forms.py`，管理员静态页面位于 `src/docxtool/web/admin_pages.py`，用户认证响应辅助位于 `src/docxtool/web/auth_payloads.py`，普通用户认证路由处理位于 `src/docxtool/web/auth_route_handlers.py`，Web 建表和迁移位于 `src/docxtool/web/database_schema.py`，文件 API 授权位于 `src/docxtool/web/file_api_auth.py`，前端首页读取位于 `src/docxtool/web/frontend_pages.py`，HTTP handler 路由动作分派位于 `src/docxtool/web/handler_dispatch.py`，HTTP handler 响应发送位于 `src/docxtool/web/handler_responses.py`，日志脱敏位于 `src/docxtool/web/log_redaction.py`，后台维护线程入口位于 `src/docxtool/web/maintenance.py`，监控页面局部渲染位于 `src/docxtool/web/monitoring_pages.py`，预设模板路由处理位于 `src/docxtool/web/preset_route_handlers.py`，请求参数合并位于 `src/docxtool/web/request_params.py`，响应编码和错误体辅助位于 `src/docxtool/web/responses.py`，兼容路由匹配位于 `src/docxtool/web/routing.py`，服务启动编排位于 `src/docxtool/web/server_runtime.py`，任务状态/下载/日志路由处理位于 `src/docxtool/web/task_route_handlers.py`，任务执行边界和后台 worker 启动位于 `src/docxtool/web/task_worker.py`
+- 监控首页和统计接口路由响应发送位于 `src/docxtool/web/monitor_route_handlers.py`；前端首页和管理员登录页路由响应发送位于 `src/docxtool/web/page_route_handlers.py`；健康检查路由响应发送位于 `src/docxtool/web/health_route_handlers.py`。
+- 管理员监控仪表盘整页 HTML 渲染位于 `src/docxtool/web/monitor_dashboard_page.py`。
+- HTTP handler 响应头、OPTIONS 和方法入口分派位于 `src/docxtool/web/handler_lifecycle.py`。
+- 管理员、文件 API 和模板修改路由的鉴权转发位于 `src/docxtool/web/protected_route_handlers.py`。
+- 管理员、文件 API 和 preset 修改路由的鉴权响应位于 `src/docxtool/web/route_authorization.py`。
+- DOCX 上传限流、落盘、安全校验和任务入队编排位于 `src/docxtool/web/upload_route_handlers.py`。
+- 已校验上传任务的 queued 记录和内存队列入队位于 `src/docxtool/web/task_queue.py`。
 - 脚本：`scripts/generate_secrets.py`、`scripts/benchmark_recognition.py`、`scripts/compare_recognition_runs.py`、`scripts/analyze_end_format.py`、`scripts/analyze_letterhead_batch.py`、`scripts/batch_test_docx.py`、`scripts/generate_005_format_fixtures.py`、`scripts/normalize_correct_template_role_spacing.py`、`scripts/migrate_legacy_database.ps1`、`scripts/publish_to_github.ps1`
 - 前端和 Cloudflare Pages：`resources/frontend/pages/index.html`、`resources/frontend/pages/_worker.js`
 - 运行目录占位：`var/data/.gitkeep`、`var/logs/.gitkeep`、`var/outputs/.gitkeep`、`var/runtime/.gitkeep`

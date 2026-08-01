@@ -86,20 +86,27 @@ https://github.com/7654321x/docxtool.git
 | `src/docxtool/web/format_request.py` | 上传格式配置和处理模式解析 | 只处理 headers 和格式配置对象，不执行任务 |
 | `src/docxtool/web/frontend_pages.py` | 前端首页资源定位和读取 | 只读取打包 HTML 文本，不处理 HTTP 响应或 DOCX |
 | `src/docxtool/web/handler_dispatch.py` | HTTP handler 路由动作分派 | 只调用 handler facade 方法，不直接执行 DOCX 或数据库逻辑 |
+| `src/docxtool/web/handler_lifecycle.py` | HTTP handler 响应头、OPTIONS 和方法入口分派 | 只消费 handler facade 和路由分派回调，不处理业务 |
 | `src/docxtool/web/handler_responses.py` | HTTP handler 响应发送辅助 | 只写文本、JSON、跳转和错误响应，不处理路由或任务 |
 | `src/docxtool/web/health.py` | 健康检查、readiness、版本和启动 URL payload | 只组装只读状态，不处理 HTTP 路由 |
+| `src/docxtool/web/health_route_handlers.py` | 健康检查、readiness 和版本路由响应发送 | 只调用 payload 回调并写 JSON，不执行实际检查或任务逻辑 |
 | `src/docxtool/web/log_redaction.py` | 管理员日志敏感字段脱敏 | 只处理传入日志文本，不读取日志文件或任务表 |
 | `src/docxtool/web/maintenance.py` | 后台维护线程兼容入口 | 永久保留策略下只定时唤醒，不删除用户数据 |
 | `src/docxtool/web/monitoring.py` | 监控页查询、分页和链接辅助 | 只处理分页参数和 URL，不读写数据库 |
+| `src/docxtool/web/monitor_dashboard_page.py` | 管理员监控仪表盘整页 HTML 渲染 | 只消费统计数据和局部片段，不查询数据库或任务表 |
 | `src/docxtool/web/monitoring_pages.py` | 管理员监控分页、IP 明细和任务日志 HTML 渲染 | 只消费统计数据、任务行数据和查询回调，不访问数据库或 DOCX |
+| `src/docxtool/web/monitor_route_handlers.py` | 管理员监控首页和统计接口路由处理 | 通过 handler facade 和注入回调处理响应，不直接读写数据库 |
 | `src/docxtool/web/owner_migration.py` | 匿名 owner 任务和私人模板迁移 | 只处理传入连接或连接器，不处理路由和识别链路 |
+| `src/docxtool/web/page_route_handlers.py` | 前端首页和管理员登录页路由响应发送 | 只消费页面读取或渲染回调，不读取数据库或任务 |
 | `src/docxtool/web/preset_config.py` | 预设模板名称、ID、格式配置和 API 行数据归一化 | 不读写数据库，只处理模板配置对象 |
 | `src/docxtool/web/preset_defaults.py` | 默认公文模板配置、默认功能开关和官方模板 seed | 通过注入样式、页面、连接和时间函数工作 |
 | `src/docxtool/web/preset_route_handlers.py` | 预设模板路由处理 | 通过 handler facade、principal 和 store 回调处理 API 响应 |
 | `src/docxtool/web/preset_store.py` | 预设模板数据库读写 | 通过注入连接器和配置校验函数执行 CRUD，不处理 HTTP |
+| `src/docxtool/web/protected_route_handlers.py` | 受保护路由鉴权转发 | 只消费鉴权回调和动作回调，不直接读写数据库或处理 DOCX |
 | `src/docxtool/web/rate_limits.py` | 上传限流、认证限流、IP 封禁和上传次数限制 | 通过注入的数据库连接器处理任务、设置和封禁表 |
 | `src/docxtool/web/request_utils.py` | HTTP 路径、Cookie、CSRF、JSON 和 HTML 辅助 | 只处理请求头、字节和字符串，不读写数据库 |
 | `src/docxtool/web/request_params.py` | query、JSON body 和表单 body 参数合并 | 只消费 URL、方法、请求头和 body 读取函数 |
+| `src/docxtool/web/route_authorization.py` | 路由鉴权响应和兼容上下文保存 | 只消费 handler facade 和鉴权回调，不直接访问数据库或 DOCX |
 | `src/docxtool/web/responses.py` | 文本/JSON 响应编码和错误体辅助 | 只返回 bytes、响应头元组或错误 dict |
 | `src/docxtool/web/routing.py` | Web 路由匹配辅助 | 只返回动作名称和资源 ID，不执行鉴权或业务处理 |
 | `src/docxtool/web/secrets.py` | Web 管理密钥和代理密钥加载、弱密钥校验 | 只处理环境映射和密钥字符串 |
@@ -107,6 +114,7 @@ https://github.com/7654321x/docxtool.git
 | `src/docxtool/web/stream_io.py` | HTTP 上传读取和下载流输出辅助 | 只处理流、路径和 writer，不判断任务状态 |
 | `src/docxtool/web/task_cache.py` | 内存任务缓存裁剪辅助 | 只处理任务有序映射和容量配置 |
 | `src/docxtool/web/task_paths.py` | 任务路径和永久保留清理钩子 | 只计算路径，清理未完成上传或无效输出 |
+| `src/docxtool/web/task_queue.py` | 已校验任务入队 | 只写 queued 记录、内存队列和任务缓存，不执行 DOCX |
 | `src/docxtool/web/task_records.py` | 任务排队、处理中和终态数据库记录 | 只写任务表状态字段，不维护队列或执行 DOCX |
 | `src/docxtool/web/task_recovery.py` | 启动时未完成任务恢复为中断 | 只更新任务状态，不重启任务或执行 DOCX |
 | `src/docxtool/web/task_route_handlers.py` | 任务状态、下载和日志路由处理 | 通过 handler facade、任务映射和数据库回调发送响应 |
@@ -114,6 +122,7 @@ https://github.com/7654321x/docxtool.git
 | `src/docxtool/web/task_statistics.py` | 任务结果统计、按日汇总和监控聚合查询 | 只读写统计字段，不生成 HTML 或执行 DOCX |
 | `src/docxtool/web/task_state.py` | 任务计数、队列位置、公开状态和识别摘要 | 只处理传入的任务/队列容器和脱敏摘要，不直接访问路由 |
 | `src/docxtool/web/task_worker.py` | 任务执行边界选择和后台 worker 启动 | 只编排 direct/subprocess runner 和线程启动，不执行识别规则 |
+| `src/docxtool/web/upload_route_handlers.py` | DOCX 上传限流、落盘、校验和任务入队 | 只编排上传请求，不执行 DOCX 识别或导出 |
 | `src/docxtool/web/time_check.py` | 启动时区和网络时间校验辅助 | 只生成启动提示，不影响服务启动流程 |
 | `src/docxtool/web/user_auth.py` | 普通用户 session、登录 cookie、principal 和 CSRF 校验 | 通过注入的数据库连接器和匿名身份解析函数工作 |
 | `src/docxtool/sdk/` | 面向第三方的只读识别 SDK | 返回脱敏结构计划，不操作宿主文档 |

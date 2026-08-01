@@ -2,6 +2,7 @@
 
 ## 2.3 - 2026-08-01
 
+- Split Web request lifecycle, authorization, upload, monitor, page, health, and task-queue orchestration into focused modules while keeping `web/app.py` as the compatibility facade.
 - Fixed authoritative recognition ownership so tail normalization no longer reclassifies body paragraphs after recognition.
 - Weakened legacy importer influence so it cannot hard-veto front metadata, headings, signature dates, or attachment decisions.
 - Made Beam Search diagnostics come from the final winning path instead of a temporary best prefix.
