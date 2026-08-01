@@ -13,6 +13,14 @@ DOCX 块抽取 -> 统一特征 -> 文档模式 -> 候选提供器 -> 硬约束 -
 `src/docxtool/web/config.py`。该模块只消费配置值并返回解析结果，不读写数据库、不启动
 worker，也不触碰 DOCX 识别链路。
 
+管理员 session 创建、刷新、删除、legacy 管理 token 提取、管理员请求上下文和 CSRF 校验
+已迁移到 `src/docxtool/web/admin_auth.py`。该模块通过调用方注入的 SQLite 连接器、锁和
+密钥配置工作，不处理 HTTP 路由、不生成页面，也不触碰 DOCX 识别链路。
+
+匿名用户 owner cookie 的签名、解析、Set-Cookie 头和匿名模板接口 Origin 校验已迁移到
+`src/docxtool/web/anonymous_identity.py`。该模块只处理传入的 headers、cookie 字符串、
+时间函数和密钥配置，不访问用户表、任务表或 DOCX 识别链路。
+
 可信代理来源、代理 IP 头解析、IPv4/IPv6 校验和常量时间密钥比较已迁移到
 `src/docxtool/web/client_ip.py`。该模块只根据调用方传入的 headers、socket 地址和代理配置
 返回客户端 IP 或布尔判断，不访问请求处理器、数据库、任务队列或 DOCX 识别链路。
@@ -22,6 +30,14 @@ worker，也不触碰 DOCX 识别链路。
 
 监控页的分页查询、页数计算和链接生成已迁移到 `src/docxtool/web/monitoring.py`。
 该模块只处理 query dict、URL 和 SQL 片段字符串，不读取任务表，也不生成监控页面 HTML。
+
+预设模板名称、模板 ID、格式配置归一化和 preset 行数据脱敏已迁移到
+`src/docxtool/web/preset_config.py`。该模块只校验配置对象并返回 API 结构，不直接读写数据库、
+不执行任务，也不改变 DOCX 识别和排版规则。
+
+上传限流、认证限流、IP 封禁、IP 活动查询和上传次数限制设置已迁移到
+`src/docxtool/web/rate_limits.py`。该模块通过调用方注入的 SQLite 连接器和锁访问任务、
+设置与封禁表，不处理 HTTP 响应，也不触碰 DOCX 导入、识别或渲染链路。
 
 文件名清理、排版结果下载名、`Content-Disposition` 和内部错误脱敏已迁移到
 `src/docxtool/web/file_utils.py`。该模块只处理字符串，不读取或写入用户文件。
@@ -41,6 +57,10 @@ HTTP 请求体定长读取、上传内容写入文件和结果文件流输出已
 任务临时目录、上传原件目录、输出目录、路径越界校验和永久保留清理钩子已迁移到
 `src/docxtool/web/task_paths.py`。该模块只计算路径和删除未完成上传或无效输出，
 不读取任务表、不改变已接收原件/成功结果/任务记录的永久保留策略。
+
+任务计数、队列位置、公开任务状态脱敏、识别审核摘要和任务处理选项 JSON 已迁移到
+`src/docxtool/web/task_state.py`。该模块只消费调用方传入的任务字典、队列容器和数据库加载器，
+不直接连接数据库、不处理 HTTP 路由，也不读取 DOCX 正文。
 
 启动时区提示、HTTP Date 解析和北京网络时间校验已迁移到
 `src/docxtool/web/time_check.py`。`web.app` 仅保留旧私有入口，主启动流程继续使用相同提示行。

@@ -28,7 +28,7 @@ import shutil
 import re as _re
 from queue import Empty
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
-from collections import Counter, OrderedDict
+from collections import OrderedDict
 from urllib.parse import unquote, urlparse, parse_qs, quote
 
 from docxtool.document.importer import DocxImporter
@@ -58,6 +58,28 @@ from docxtool.web.client_ip import (
     is_ipv4 as _client_is_ipv4,
     split_ip_header as _client_split_ip_header,
     trusted_proxy_source as _client_trusted_proxy_source,
+)
+from docxtool.web.anonymous_identity import (
+    anonymous_template_origin_allowed as _anon_template_origin_allowed,
+    anonymous_user_cookie_clear_header as _anon_cookie_clear_header,
+    anonymous_user_cookie_header as _anon_cookie_header,
+    anonymous_user_from_headers as _anon_user_from_headers,
+    anonymous_user_signature as _anon_user_signature,
+    anonymous_user_signing_key as _anon_user_signing_key,
+    create_anonymous_user as _anon_create_user,
+    parse_anonymous_user as _anon_parse_user,
+)
+from docxtool.web.admin_auth import (
+    admin_authorized as _admin_auth_authorized,
+    admin_request_context as _admin_auth_request_context,
+    admin_session_from_headers as _admin_auth_session_from_headers,
+    create_admin_session as _admin_auth_create_session,
+    delete_admin_session as _admin_auth_delete_session,
+    get_admin_session as _admin_auth_get_session,
+    legacy_admin_token_from as _admin_auth_legacy_token_from,
+    now_unix as _admin_auth_now_unix,
+    prune_expired_admin_sessions as _admin_auth_prune_expired_sessions,
+    validate_admin_csrf as _admin_auth_validate_csrf,
 )
 from docxtool.web.file_utils import (
     content_disposition_filename as _file_content_disposition_filename,
@@ -94,6 +116,27 @@ from docxtool.web.monitoring import (
     page_count as _monitor_page_count,
     where_sql as _monitor_where_sql,
 )
+from docxtool.web.preset_config import (
+    normalize_template_id as _preset_normalize_template_id,
+    normalize_template_name as _preset_normalize_template_name,
+    preset_row_to_dict as _preset_row_to_dict_impl,
+    validate_template_config as _preset_validate_template_config,
+)
+from docxtool.web.rate_limits import (
+    allow as _rate_allow,
+    auth_rate_allow as _rate_auth_rate_allow,
+    ban_ip as _rate_ban_ip,
+    banned_ips as _rate_banned_ips,
+    ip_activity as _rate_ip_activity,
+    ip_upload_count as _rate_ip_upload_count,
+    is_ip_banned as _rate_is_ip_banned,
+    limit_settings as _rate_limit_settings,
+    save_limit_settings as _rate_save_limit_settings,
+    settings_get as _rate_settings_get,
+    settings_set as _rate_settings_set,
+    unban_ip as _rate_unban_ip,
+    upload_limit_exceeded as _rate_upload_limit_exceeded,
+)
 from docxtool.web.request_utils import (
     admin_session_cookie_settings as _request_admin_session_cookie_settings,
     admin_token_from_query as _request_admin_token_from_query,
@@ -125,6 +168,15 @@ from docxtool.web.task_paths import (
     task_tmp_dir as _task_paths_tmp_dir,
     task_upload_dir as _task_paths_upload_dir,
     task_upload_input_path as _task_paths_upload_input_path,
+)
+from docxtool.web.task_state import (
+    active_count as _task_state_active_count,
+    public_recognition_summary as _task_state_public_recognition_summary,
+    public_task_state as _task_state_public_task_state,
+    queued_count as _task_state_queued_count,
+    task_load as _task_state_task_load,
+    task_processing_options as _task_state_processing_options,
+    task_queue_info as _task_state_queue_info,
 )
 from docxtool.web.time_check import (
     NETWORK_TIME_URLS as _TIME_CHECK_NETWORK_TIME_URLS,
@@ -789,188 +841,116 @@ def _stream_file(path: str, writer, chunk_size: int = 1024 * 1024) -> None:
     _stream_stream_file(path, writer, chunk_size)
 
 def _allow(ip: str) -> bool:
-    now = time.time()
-    with RATE_LOCK:
-        last = RATE_LIMIT.get(ip, 0)
-        if now - last < RATE_WINDOW:
-            return False
-        RATE_LIMIT[ip] = now
-        return True
+    """兼容旧入口：传入 IP，返回普通上传限流是否允许。"""
+    return _rate_allow(ip, rate_limit=RATE_LIMIT, rate_lock=RATE_LOCK, rate_window=RATE_WINDOW)
 
 
 def _auth_rate_allow(scope: str, key: str, window: int, limit: int) -> tuple[bool, int]:
-    now = time.time()
-    bucket_key = f"{scope}:{key}"
-    with RATE_LOCK:
-        values = [stamp for stamp in AUTH_RATE_LIMIT.get(bucket_key, []) if now - stamp < window]
-        if len(values) >= limit:
-            return False, max(1, int(window - (now - values[0])))
-        values.append(now)
-        AUTH_RATE_LIMIT[bucket_key] = values
-        AUTH_RATE_LIMIT.move_to_end(bucket_key)
-        while len(AUTH_RATE_LIMIT) > 4096:
-            AUTH_RATE_LIMIT.popitem(last=False)
-    return True, 0
+    """兼容旧入口：传入作用域、键、窗口和次数，返回是否允许及等待秒数。"""
+    return _rate_auth_rate_allow(
+        scope,
+        key,
+        window,
+        limit,
+        auth_rate_limit=AUTH_RATE_LIMIT,
+        rate_lock=RATE_LOCK,
+    )
 
 def _is_ip(value: str) -> bool:
     """兼容旧入口：传入字符串，返回是否为合法 IPv4/IPv6。"""
     return _client_is_ip(value)
 
 def _is_ip_banned(ip: str) -> bool:
-    if not ip:
-        return False
-    with _SQL_LOCK:
-        conn = _sql()
-        row = conn.execute("SELECT 1 FROM banned_ips WHERE ip=?", (ip,)).fetchone()
-        conn.close()
-    return row is not None
+    """兼容旧入口：传入 IP，返回是否已被管理后台封禁。"""
+    return _rate_is_ip_banned(ip, connect=_sql, sql_lock=_SQL_LOCK)
 
 def _ban_ip(ip: str, reason: str = "") -> None:
-    if not _is_ip(ip):
-        raise ValueError("invalid ip")
-    with _SQL_LOCK:
-        conn = _sql()
-        conn.execute("""INSERT INTO banned_ips(ip, reason, created_at)
-                        VALUES(?,?,datetime('now','localtime'))
-                        ON CONFLICT(ip) DO UPDATE SET
-                        reason=excluded.reason, created_at=excluded.created_at""",
-                     (ip, reason or "manual"))
-        conn.commit()
-        conn.close()
+    """兼容旧入口：传入 IP 和原因，写入封禁记录。"""
+    _rate_ban_ip(ip, reason, connect=_sql, sql_lock=_SQL_LOCK)
 
 def _unban_ip(ip: str) -> None:
-    with _SQL_LOCK:
-        conn = _sql()
-        conn.execute("DELETE FROM banned_ips WHERE ip=?", (ip,))
-        conn.commit()
-        conn.close()
+    """兼容旧入口：传入 IP，删除封禁记录。"""
+    _rate_unban_ip(ip, connect=_sql, sql_lock=_SQL_LOCK)
 
 def _banned_ips():
-    with _SQL_LOCK:
-        conn = _sql()
-        rows = conn.execute("SELECT * FROM banned_ips ORDER BY created_at DESC").fetchall()
-        conn.close()
-    return [dict(r) for r in rows]
+    """兼容旧入口：不传参数，返回封禁 IP 字典列表。"""
+    return _rate_banned_ips(connect=_sql, sql_lock=_SQL_LOCK)
 
 def _ip_activity(ip: str, limit: int = 100):
-    with _SQL_LOCK:
-        conn = _sql()
-        rows = conn.execute("""SELECT * FROM tasks WHERE ip=?
-                               ORDER BY created_at DESC, done_at DESC
-                               LIMIT ?""", (ip, limit)).fetchall()
-        conn.close()
-    return [dict(r) for r in rows]
+    """兼容旧入口：传入 IP 和数量上限，返回该 IP 最近任务列表。"""
+    return _rate_ip_activity(ip, limit, connect=_sql, sql_lock=_SQL_LOCK)
 
 def _ip_upload_count(ip: str, window_seconds: int = 0) -> int:
-    with _SQL_LOCK:
-        conn = _sql()
-        if window_seconds and window_seconds > 0:
-            row = conn.execute("""SELECT COUNT(*) as c FROM tasks
-                                  WHERE ip=? AND created_at>=datetime('now','localtime', ?)""",
-                               (ip, f"-{int(window_seconds)} seconds")).fetchone()
-        else:
-            row = conn.execute("SELECT COUNT(*) as c FROM tasks WHERE ip=?", (ip,)).fetchone()
-        conn.close()
-    return int(row["c"] if row else 0)
+    """兼容旧入口：传入 IP 和窗口秒数，返回窗口内上传任务数量。"""
+    return _rate_ip_upload_count(ip, window_seconds, connect=_sql, sql_lock=_SQL_LOCK)
 
 def _upload_limit_exceeded(ip: str) -> bool:
-    settings = _limit_settings()
-    if not settings["enabled"]:
-        return False
-    return _ip_upload_count(ip, settings["window_seconds"]) >= settings["count"]
+    """兼容旧入口：传入 IP，返回是否超过上传次数限制。"""
+    return _rate_upload_limit_exceeded(
+        ip,
+        connect=_sql,
+        sql_lock=_SQL_LOCK,
+        default_window_seconds=DEFAULT_UPLOAD_LIMIT_WINDOW_SECONDS,
+        default_count=DEFAULT_UPLOAD_LIMIT_COUNT,
+    )
 
 def _settings_get(key: str, default: str = "") -> str:
-    with _SQL_LOCK:
-        conn = _sql()
-        row = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
-        conn.close()
-    return row["value"] if row else default
+    """兼容旧入口：传入设置键和默认值，返回 settings 表字符串值。"""
+    return _rate_settings_get(key, default, connect=_sql, sql_lock=_SQL_LOCK)
 
 def _settings_set(key: str, value: str) -> None:
-    with _SQL_LOCK:
-        conn = _sql()
-        conn.execute("""INSERT INTO settings(key,value) VALUES(?,?)
-                        ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
-                     (key, str(value)))
-        conn.commit()
-        conn.close()
+    """兼容旧入口：传入设置键值，写入 settings 表。"""
+    _rate_settings_set(key, value, connect=_sql, sql_lock=_SQL_LOCK)
 
 def _limit_settings() -> dict:
-    enabled = _settings_get("upload_limit_enabled", "0") == "1"
-    try:
-        window_seconds = int(_settings_get("upload_limit_window_seconds", str(DEFAULT_UPLOAD_LIMIT_WINDOW_SECONDS)))
-    except ValueError:
-        window_seconds = DEFAULT_UPLOAD_LIMIT_WINDOW_SECONDS
-    try:
-        count = int(_settings_get("upload_limit_count", str(DEFAULT_UPLOAD_LIMIT_COUNT)))
-    except ValueError:
-        count = DEFAULT_UPLOAD_LIMIT_COUNT
-    return {
-        "enabled": enabled,
-        "window_seconds": max(1, window_seconds),
-        "count": max(1, count),
-    }
+    """兼容旧入口：不传参数，返回上传频率限制配置。"""
+    return _rate_limit_settings(
+        connect=_sql,
+        sql_lock=_SQL_LOCK,
+        default_window_seconds=DEFAULT_UPLOAD_LIMIT_WINDOW_SECONDS,
+        default_count=DEFAULT_UPLOAD_LIMIT_COUNT,
+    )
 
 def _save_limit_settings(enabled: bool, window_seconds: int, count: int) -> None:
-    _settings_set("upload_limit_enabled", "1" if enabled else "0")
-    _settings_set("upload_limit_window_seconds", str(max(1, int(window_seconds))))
-    _settings_set("upload_limit_count", str(max(1, int(count))))
+    """兼容旧入口：传入开关、窗口和次数，保存上传频率限制配置。"""
+    _rate_save_limit_settings(enabled, window_seconds, count, connect=_sql, sql_lock=_SQL_LOCK)
 
 def _active_count() -> int:
-    with TASKS_LOCK:
-        return sum(1 for t in TASKS.values() if t.get("status") == "processing")
+    """兼容旧入口：不传参数，返回当前正在处理的任务数量。"""
+    return _task_state_active_count(TASKS, TASKS_LOCK)
 
 def _queued_count() -> int:
-    with QUEUE_COND:
-        return len(TASK_QUEUE)
+    """兼容旧入口：不传参数，返回当前排队任务数量。"""
+    return _task_state_queued_count(TASK_QUEUE, QUEUE_COND)
 
 def _task_load() -> int:
-    return _active_count() + _queued_count()
+    """兼容旧入口：不传参数，返回处理中和排队中的总任务负载。"""
+    return _task_state_task_load(TASKS, TASKS_LOCK, TASK_QUEUE, QUEUE_COND)
 
 def _task_queue_info(task_id: str) -> dict:
-    with QUEUE_COND:
-        ids = list(TASK_QUEUE.keys())
-    if task_id not in ids:
-        return {"queue_position": 0, "queue_ahead": 0, "message": ""}
-    idx = ids.index(task_id)
-    return {
-        "queue_position": idx + 1,
-        "queue_ahead": idx,
-        "message": f"排队中，前方还有 {idx} 个任务",
-    }
+    """兼容旧入口：传入任务 ID，返回该任务当前队列位置。"""
+    return _task_state_queue_info(task_id, TASK_QUEUE, QUEUE_COND)
+
+
+def _load_public_task_from_db(task_id: str, owner_id: str = "") -> dict:
+    """传入任务 ID 和所有者 ID，从数据库读取公开状态所需的任务行。"""
+    with _SQL_LOCK:
+        conn = _sql()
+        row = conn.execute("SELECT * FROM tasks WHERE id=? AND owner_id=?", (task_id, owner_id)).fetchone()
+        conn.close()
+    return dict(row) if row else {}
 
 def _public_task_state(task_id: str, owner_id: str = "") -> dict:
-    with TASKS_LOCK:
-        task = dict(TASKS.get(task_id, {}))
-    if task and owner_id and task.get("owner_id", "") != owner_id:
-        task = {}
-    if not task:
-        with _SQL_LOCK:
-            conn = _sql()
-            row = conn.execute("SELECT * FROM tasks WHERE id=? AND owner_id=?", (task_id, owner_id)).fetchone()
-            conn.close()
-        if not row:
-            return {}
-        task = dict(row)
-    for key in (
-        "output", "output_path", "output_dir", "download_name", "error",
-        "error_message", "internal_error_detail", "log_path", "client_ip", "ip", "ua",
-    ):
-        task.pop(key, None)
-    status = task.get("status", "")
-    if status == "queued":
-        task.update(_task_queue_info(task_id))
-    elif status == "processing":
-        task.update({"queue_position": 0, "queue_ahead": 0, "message": "正在排版"})
-    elif status == "done":
-        task.update({"queue_position": 0, "queue_ahead": 0, "message": "排版完成"})
-    elif status in ("error", "timeout", "failed"):
-        task.update({"queue_position": 0, "queue_ahead": 0, "message": "排版失败"})
-    elif status == "interrupted":
-        task.update({"queue_position": 0, "queue_ahead": 0, "message": "任务已中断"})
-    elif status == "expired":
-        task.update({"queue_position": 0, "queue_ahead": 0, "message": "任务已过期"})
-    return task
+    """兼容旧入口：传入任务 ID 和所有者 ID，返回脱敏后的公开任务状态。"""
+    return _task_state_public_task_state(
+        task_id,
+        owner_id,
+        tasks=TASKS,
+        tasks_lock=TASKS_LOCK,
+        task_queue=TASK_QUEUE,
+        queue_cond=QUEUE_COND,
+        load_task=_load_public_task_from_db,
+    )
 
 
 def _safe_file_identifier(filename: str) -> str:
@@ -984,58 +964,8 @@ def _sanitize_internal_error_detail(value: object, limit: int = 500) -> str:
 
 
 def _public_recognition_summary(doc_data) -> dict:
-    diagnostics = getattr(doc_data, "recognition_diagnostics", {}) or {}
-    paragraphs = [item for item in diagnostics.get("paragraphs", []) if isinstance(item, dict)]
-    type_counts = Counter(str(item.get("final_type", "") or "unknown") for item in paragraphs)
-    level_counts = Counter(str(item.get("review_level", "confirmed") or "confirmed") for item in paragraphs)
-    review_items = []
-    for item in paragraphs:
-        review_level = str(item.get("review_level", "review" if item.get("needs_review") else "confirmed"))
-        if review_level not in {"review", "critical_review"}:
-            continue
-        review_items.append({
-            "paragraph_index": int(item.get("paragraph_index", -1)),
-            "legacy_type": str(item.get("legacy_type", "")),
-            "recognized_type": str(item.get("recognized_type", "")),
-            "final_type": str(item.get("final_type", "")),
-            # Keep the historical key for compatible clients; it now exposes
-            # the user-facing review certainty instead of the raw softmax.
-            "confidence": float(item.get("review_confidence", item.get("recognition_confidence", 0.0)) or 0.0),
-            "review_level": review_level,
-            "candidate_margin": item.get("candidate_margin"),
-            "reason_codes": [str(value) for value in item.get("review_reasons", [])],
-            "evidence_summary": [str(value) for value in item.get("evidence_summary", [])],
-        })
-    context = diagnostics.get("document_context", {})
-    if not isinstance(context, dict):
-        context = {}
-    public_context = {
-        "front_matter_count": len(context.get("front_matter_positions", []) or []),
-        "body_start": context.get("body_start"),
-        "body_start_reason": str(context.get("body_start_reason", "") or ""),
-        "heading_families": [
-            {
-                "level": int(item.get("level", 0) or 0),
-                "count": int(item.get("count", 0) or 0),
-                "supported_count": int(item.get("supported_count", 0) or 0),
-            }
-            for item in context.get("heading_families", [])
-            if isinstance(item, dict)
-        ],
-    }
-    return {
-        "recognition_mode": str(diagnostics.get("recognition_mode", "authoritative")),
-        "result_applied": bool(diagnostics.get("result_applied", True)),
-        "paragraph_count": len(paragraphs),
-        "needs_review_count": len(review_items),
-        "critical_review_count": level_counts.get("critical_review", 0),
-        "review_count": level_counts.get("review", 0),
-        "confirmed_count": level_counts.get("confirmed", 0),
-        "info_count": level_counts.get("info", 0),
-        "type_counts": dict(sorted(type_counts.items())),
-        "review_items": review_items,
-        "document_context": public_context,
-    }
+    """兼容旧入口：传入文档数据对象，返回不含正文的识别摘要。"""
+    return _task_state_public_recognition_summary(doc_data)
 
 def _task_output_dir(task_id: str) -> str:
     """兼容旧入口：传入任务 ID，返回该任务输出目录。"""
@@ -1054,19 +984,8 @@ def _cleanup_output_path(path: str) -> None:
     _task_paths_cleanup_output_path(path)
 
 def _task_processing_options(format_config: dict = None, request_meta: dict = None) -> str:
-    payload = {
-        "request_meta": request_meta or {},
-        "features": {},
-    }
-    if isinstance(format_config, dict):
-        payload["features"] = {
-            "format_config_present": True,
-            "style_count": len(format_config.get("styles", []) or []),
-        }
-    try:
-        return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-    except Exception:
-        return ""
+    """兼容旧入口：传入格式配置和请求元数据，返回任务处理选项 JSON。"""
+    return _task_state_processing_options(format_config, request_meta)
 
 def _mark_task_processing(task_id: str) -> None:
     now = _now_local()
@@ -1567,92 +1486,66 @@ def _session_cookie_settings() -> str:
     )
 
 def _anonymous_user_signing_key() -> bytes:
-    secret = (PROXY_SECRET or DEFAULT_PROXY_SECRET).encode("utf-8")
-    return hmac.new(secret, b"docxtool-anonymous-user-v1", hashlib.sha256).digest()
+    """兼容旧入口：不传参数，返回匿名用户 cookie 签名派生密钥。"""
+    return _anon_user_signing_key(PROXY_SECRET, DEFAULT_PROXY_SECRET)
 
 def _anonymous_user_signature(payload: str) -> str:
-    digest = hmac.new(_anonymous_user_signing_key(), payload.encode("ascii"), hashlib.sha256).digest()
-    return base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+    """兼容旧入口：传入 payload，返回匿名用户 cookie 的签名字符串。"""
+    return _anon_user_signature(payload, proxy_secret=PROXY_SECRET, default_proxy_secret=DEFAULT_PROXY_SECRET)
 
 def _create_anonymous_user(now: int = None) -> dict:
-    issued_at = _now_unix() if now is None else int(now)
-    owner_id = f"usr_{uuid.uuid4().hex}"
-    payload = f"v1.{issued_at}.{owner_id}"
-    token = f"{payload}.{_anonymous_user_signature(payload)}"
-    return {
-        "owner_id": owner_id,
-        "token": token,
-        "issued_at": issued_at,
-        "expires_at": issued_at + ANONYMOUS_USER_COOKIE_MAX_AGE,
-    }
+    """兼容旧入口：传入可选当前时间，返回新的匿名 owner 身份。"""
+    return _anon_create_user(
+        _now_unix() if now is None else int(now),
+        max_age=ANONYMOUS_USER_COOKIE_MAX_AGE,
+        proxy_secret=PROXY_SECRET,
+        default_proxy_secret=DEFAULT_PROXY_SECRET,
+    )
 
 def _parse_anonymous_user(token: str, now: int = None) -> dict:
-    parts = str(token or "").strip().split(".")
-    if len(parts) != 4 or parts[0] != "v1":
-        return {}
-    version, issued_raw, owner_id, signature = parts
-    if not _re.fullmatch(r"usr_[0-9a-f]{32}", owner_id):
-        return {}
-    try:
-        issued_at = int(issued_raw)
-    except (TypeError, ValueError):
-        return {}
-    current = _now_unix() if now is None else int(now)
-    if issued_at > current + 300 or current - issued_at > ANONYMOUS_USER_COOKIE_MAX_AGE:
-        return {}
-    payload = f"{version}.{issued_at}.{owner_id}"
-    expected = _anonymous_user_signature(payload)
-    if not signature or not hmac.compare_digest(signature, expected):
-        return {}
-    return {
-        "owner_id": owner_id,
-        "token": token,
-        "issued_at": issued_at,
-        "expires_at": issued_at + ANONYMOUS_USER_COOKIE_MAX_AGE,
-    }
+    """兼容旧入口：传入匿名 token 和可选当前时间，返回校验后的身份或空字典。"""
+    return _anon_parse_user(
+        token,
+        _now_unix() if now is None else int(now),
+        max_age=ANONYMOUS_USER_COOKIE_MAX_AGE,
+        proxy_secret=PROXY_SECRET,
+        default_proxy_secret=DEFAULT_PROXY_SECRET,
+    )
 
 def _anonymous_user_cookie_header(token: str) -> str:
-    parts = [
-        f"{ANONYMOUS_USER_COOKIE}={token}",
-        "HttpOnly",
-        "Path=/",
-        "SameSite=Lax",
-        f"Max-Age={ANONYMOUS_USER_COOKIE_MAX_AGE}",
-    ]
-    if COOKIE_SECURE:
-        parts.append("Secure")
-    return "; ".join(parts)
+    """兼容旧入口：传入匿名 token，返回设置匿名身份的 Set-Cookie 值。"""
+    return _anon_cookie_header(
+        token,
+        cookie_name=ANONYMOUS_USER_COOKIE,
+        max_age=ANONYMOUS_USER_COOKIE_MAX_AGE,
+        secure=COOKIE_SECURE,
+    )
 
 
 def _anonymous_user_cookie_clear_header() -> str:
-    parts = [f"{ANONYMOUS_USER_COOKIE}=", "HttpOnly", "Path=/", "SameSite=Lax", "Max-Age=0"]
-    if COOKIE_SECURE:
-        parts.append("Secure")
-    return "; ".join(parts)
+    """兼容旧入口：不传参数，返回清除匿名身份 cookie 的 Set-Cookie 值。"""
+    return _anon_cookie_clear_header(cookie_name=ANONYMOUS_USER_COOKIE, secure=COOKIE_SECURE)
 
 def _anonymous_user_from_headers(headers, cookie_header: str = "") -> tuple[dict, str]:
-    token = _cookie_value(cookie_header, ANONYMOUS_USER_COOKIE)
-    if not token and headers:
-        token = _cookie_value(headers.get("Cookie", ""), ANONYMOUS_USER_COOKIE)
-    identity = _parse_anonymous_user(token)
-    if identity:
-        return identity, ""
-    identity = _create_anonymous_user()
-    return identity, _anonymous_user_cookie_header(identity["token"])
+    """兼容旧入口：传入请求头和 Cookie 头，返回匿名身份和可能的新 Cookie。"""
+    return _anon_user_from_headers(
+        headers,
+        cookie_header,
+        cookie_name=ANONYMOUS_USER_COOKIE,
+        max_age=ANONYMOUS_USER_COOKIE_MAX_AGE,
+        proxy_secret=PROXY_SECRET,
+        default_proxy_secret=DEFAULT_PROXY_SECRET,
+        now=_now_unix,
+        secure=COOKIE_SECURE,
+    )
 
 def _anonymous_template_origin_allowed(headers) -> bool:
-    origin = str(headers.get("Origin", "") if headers else "").strip().rstrip("/")
-    if not origin:
-        return False
-    if FRONTEND_ORIGIN:
-        return hmac.compare_digest(origin, FRONTEND_ORIGIN)
-    parsed = urlparse(origin)
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-        return False
-    request_host = str(headers.get("Host", "") if headers else "").strip().lower()
-    if request_host and parsed.netloc.lower() == request_host:
-        return True
-    return _is_local_origin_host(parsed.hostname)
+    """兼容旧入口：传入请求头，返回匿名模板接口的 Origin 是否允许。"""
+    return _anon_template_origin_allowed(
+        headers,
+        frontend_origin=FRONTEND_ORIGIN,
+        is_local_origin_host=_is_local_origin_host,
+    )
 
 
 def _user_session_hash(token: str) -> str:
@@ -1777,15 +1670,17 @@ def _migrate_anonymous_resources(anonymous_id: str, user_id: str) -> None:
         conn.close()
 
 def _now_unix() -> int:
-    return int(time.time())
+    """兼容旧入口：不传参数，返回当前 Unix 秒级时间戳。"""
+    return _admin_auth_now_unix()
 
 def _prune_expired_admin_sessions(conn=None) -> None:
+    """兼容旧入口：传入可选数据库连接，删除过期管理员会话。"""
     own = False
     if conn is None:
         own = True
         conn = _sql()
     try:
-        conn.execute("DELETE FROM admin_sessions WHERE expires_at <= ?", (_now_unix(),))
+        _admin_auth_prune_expired_sessions(conn, now=_now_unix())
         if own:
             conn.commit()
     finally:
@@ -1793,78 +1688,57 @@ def _prune_expired_admin_sessions(conn=None) -> None:
             conn.close()
 
 def _create_admin_session(user_agent: str = "", remote_ip: str = "") -> dict:
-    session_id = uuid.uuid4().hex
-    csrf_token = uuid.uuid4().hex + uuid.uuid4().hex
-    now = _now_unix()
-    expires_at = now + DEFAULT_ADMIN_SESSION_TTL_SECONDS
-    with _SQL_LOCK:
-        conn = _sql()
-        _prune_expired_admin_sessions(conn)
-        conn.execute(
-            """INSERT INTO admin_sessions
-               (session_id, csrf_token, user_agent, remote_ip, created_at, last_seen_at, expires_at)
-               VALUES (?,?,?,?,?,?,?)""",
-            (session_id, csrf_token, user_agent or "", remote_ip or "", now, now, expires_at),
-        )
-        conn.commit()
-        conn.close()
-    return {"session_id": session_id, "csrf_token": csrf_token, "expires_at": expires_at}
+    """兼容旧入口：传入 UA 和远端 IP，创建管理员 session 并返回 token 信息。"""
+    return _admin_auth_create_session(
+        user_agent,
+        remote_ip,
+        connect=_sql,
+        sql_lock=_SQL_LOCK,
+        ttl_seconds=DEFAULT_ADMIN_SESSION_TTL_SECONDS,
+        now_func=_now_unix,
+    )
 
 def _get_admin_session(session_id: str) -> dict:
-    session_id = str(session_id or "").strip()
-    if not session_id:
-        return {}
-    with _SQL_LOCK:
-        conn = _sql()
-        _prune_expired_admin_sessions(conn)
-        row = conn.execute("SELECT * FROM admin_sessions WHERE session_id=?", (session_id,)).fetchone()
-        if row:
-            now = _now_unix()
-            conn.execute("UPDATE admin_sessions SET last_seen_at=?, expires_at=? WHERE session_id=?",
-                         (now, now + DEFAULT_ADMIN_SESSION_TTL_SECONDS, session_id))
-            conn.commit()
-        conn.close()
-    return dict(row) if row else {}
+    """兼容旧入口：传入 session ID，返回有效管理员会话或空字典。"""
+    return _admin_auth_get_session(
+        session_id,
+        connect=_sql,
+        sql_lock=_SQL_LOCK,
+        ttl_seconds=DEFAULT_ADMIN_SESSION_TTL_SECONDS,
+        now_func=_now_unix,
+    )
 
 def _delete_admin_session(session_id: str) -> None:
-    session_id = str(session_id or "").strip()
-    if not session_id:
-        return
-    with _SQL_LOCK:
-        conn = _sql()
-        conn.execute("DELETE FROM admin_sessions WHERE session_id=?", (session_id,))
-        conn.commit()
-        conn.close()
+    """兼容旧入口：传入 session ID，删除管理员会话。"""
+    _admin_auth_delete_session(session_id, connect=_sql, sql_lock=_SQL_LOCK)
 
 def _legacy_admin_token_from(parsed, headers, cookie_header: str = "") -> str:
-    qs = parse_qs(parsed.query)
-    token = (qs.get("token") or [""])[0]
-    if token:
-        return token
-    header_token = headers.get("X-Admin-Token", "") if headers else ""
-    if header_token:
-        return header_token
-    cookie_token = _cookie_value(cookie_header, "admin_token")
-    return cookie_token
+    """兼容旧入口：传入 URL、请求头和 Cookie，返回 legacy 管理 token。"""
+    return _admin_auth_legacy_token_from(parsed, headers, cookie_header)
 
 def _admin_authorized(parsed, headers, cookie_header: str = "") -> bool:
-    token = _legacy_admin_token_from(parsed, headers, cookie_header)
-    return bool(token and hmac.compare_digest(token, ADMIN_TOKEN))
+    """兼容旧入口：传入请求上下文，返回 legacy 管理 token 是否有效。"""
+    return _admin_auth_authorized(parsed, headers, cookie_header, admin_token=ADMIN_TOKEN)
 
 def _admin_session_from_headers(headers, cookie_header: str = "") -> dict:
-    cookie_value = _cookie_value(cookie_header, ADMIN_SESSION_COOKIE)
-    if not cookie_value and headers:
-        cookie_value = _cookie_value(headers.get("Cookie", ""), ADMIN_SESSION_COOKIE)
-    return _get_admin_session(cookie_value)
+    """兼容旧入口：传入请求头和 Cookie，返回当前管理员 session。"""
+    return _admin_auth_session_from_headers(
+        headers,
+        cookie_header,
+        cookie_name=ADMIN_SESSION_COOKIE,
+        get_session=_get_admin_session,
+    )
 
 def _admin_request_context(parsed, headers, cookie_header: str = "") -> dict:
-    session = _admin_session_from_headers(headers, cookie_header)
-    if session:
-        return {"authorized": True, "session": session, "legacy_token": False}
-    token = _legacy_admin_token_from(parsed, headers, cookie_header)
-    if token and hmac.compare_digest(token, ADMIN_TOKEN):
-        return {"authorized": True, "session": {}, "legacy_token": True}
-    return {"authorized": False, "session": {}, "legacy_token": False}
+    """兼容旧入口：传入请求上下文，返回管理员授权上下文。"""
+    return _admin_auth_request_context(
+        parsed,
+        headers,
+        cookie_header,
+        cookie_name=ADMIN_SESSION_COOKIE,
+        admin_token=ADMIN_TOKEN,
+        get_session=_get_admin_session,
+    )
 
 def _file_api_authorized(headers, client_address=None) -> bool:
     header_token = headers.get("X-Proxy-Secret", "") if headers else ""
@@ -1933,11 +1807,14 @@ def _admin_cookie_header(session_id: str) -> str:
     return cookie.format(session_id=session_id)
 
 def _validate_admin_csrf(headers, cookie_header: str = "") -> bool:
-    session = _admin_session_from_headers(headers, cookie_header)
-    if not session:
-        return False
-    csrf_header = _csrf_header_value(headers)
-    return bool(csrf_header and hmac.compare_digest(csrf_header, session.get("csrf_token", "")))
+    """兼容旧入口：传入请求头和 Cookie，返回管理员 CSRF 校验是否通过。"""
+    return _admin_auth_validate_csrf(
+        headers,
+        cookie_header,
+        cookie_name=ADMIN_SESSION_COOKIE,
+        csrf_header_name=ADMIN_CSRF_HEADER,
+        get_session=_get_admin_session,
+    )
 
 def _route_path(path: str) -> str:
     """兼容旧入口：归一化 Worker 转发路径。"""
@@ -1952,94 +1829,20 @@ def _parse_json_body(body: bytes) -> dict:
     return _request_parse_json_body(body)
 
 def _normalize_template_name(name: str) -> str:
-    cleaned = _re.sub(r"\s+", " ", str(name or "")).strip()
-    if not cleaned:
-        raise ValueError("TEMPLATE_NAME_REQUIRED: 模板名称不能为空")
-    if len(cleaned) > 80:
-        raise ValueError("TEMPLATE_NAME_TOO_LONG: 模板名称不能超过 80 个字符")
-    return cleaned
+    """兼容旧入口：传入模板名称，返回压缩空白后的合法名称。"""
+    return _preset_normalize_template_name(name)
 
 def _normalize_template_id(value: str) -> str:
-    cleaned = _re.sub(r"[^A-Za-z0-9._-]+", "_", str(value or "").strip())
-    cleaned = cleaned.strip("._-")
-    if not cleaned:
-        raise ValueError("TEMPLATE_ID_INVALID: 模板 ID 无效")
-    if len(cleaned) > 80:
-        raise ValueError("TEMPLATE_ID_TOO_LONG: 模板 ID 不能超过 80 个字符")
-    return cleaned
+    """兼容旧入口：传入模板 ID，返回只含安全字符的模板 ID。"""
+    return _preset_normalize_template_id(value)
 
 def _validate_template_config(config_obj: dict) -> dict:
-    if not isinstance(config_obj, dict):
-        raise ValueError("TEMPLATE_CONFIG_INVALID: config_json 必须是 JSON 对象")
-    rules, settings, features = load_rules_and_settings(config_obj)
-    styles = []
-    for rule in rules:
-        styles.append({
-            "name": rule.level_name,
-            "font": rule.font,
-            "size": rule.font_size_label,
-            "bold": rule.bold,
-            "pattern": rule.numbering_pattern,
-            "lang": rule.language,
-            "indent": rule.first_line_indent,
-            "align": rule.alignment,
-            "spacing_before": rule.spacing_before,
-            "spacing_after": rule.spacing_after,
-            "left_indent": rule.left_indent,
-            "right_indent": rule.right_indent,
-            "page_break_before": rule.page_break_before,
-        })
-    normalized = {
-        "schema_version": int(config_obj.get("schema_version", 1) or 1),
-        "styles": styles,
-        "page": {
-            "width_cm": settings.page_width_cm,
-            "height_cm": settings.page_height_cm,
-            "margin_top_cm": settings.margin_top_cm,
-            "margin_bottom_cm": settings.margin_bottom_cm,
-            "margin_left_cm": settings.margin_left_cm,
-            "margin_right_cm": settings.margin_right_cm,
-            "lines_per_page": settings.lines_per_page,
-            "chars_per_line": settings.chars_per_line,
-            "line_spacing_pt": settings.line_spacing_value,
-            "space_before_line": settings.space_before_line,
-            "space_after_line": settings.space_after_line,
-            "grid_alignment": settings.grid_alignment,
-        },
-        "features": {
-            "numbered_bold_enabled": bool(features.get("numbered_bold_enabled", True)),
-            "punctuation_enabled": bool(features.get("punctuation_enabled", True)),
-        },
-    }
-    for key in (
-        "punctuation",
-        "classification",
-        "numbering",
-        "page_number",
-        "signature_block",
-        "table_format",
-        "cleanup",
-    ):
-        normalized[key] = features.get(key, _core_feature_config_defaults()[key])
-    for key in ("mode", "processing_mode", "preset_id", "preset_name", "template_type", "source", "output_suffix", "global"):
-        if key in config_obj:
-            normalized[key] = config_obj[key]
-    return normalized
+    """兼容旧入口：传入模板配置对象，返回归一化后的可持久化配置。"""
+    return _preset_validate_template_config(config_obj, core_feature_defaults=_core_feature_config_defaults())
 
 def _preset_row_to_dict(row, include_config: bool = False) -> dict:
-    data = dict(row)
-    data["is_system"] = bool(data.get("is_system"))
-    data["is_default"] = bool(data.get("is_default"))
-    data["visibility"] = data.get("visibility") or "public"
-    data.pop("owner_id", None)
-    if include_config:
-        try:
-            data["config_json"] = json.loads(data.get("config_json") or "{}")
-        except json.JSONDecodeError:
-            data["config_json"] = {}
-    else:
-        data.pop("config_json", None)
-    return data
+    """兼容旧入口：传入数据库行和配置开关，返回 API 用模板字典。"""
+    return _preset_row_to_dict_impl(row, include_config)
 
 def _list_presets(owner_id: str = "") -> list:
     with _SQL_LOCK:
