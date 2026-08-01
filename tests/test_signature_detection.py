@@ -117,6 +117,21 @@ class SignatureDetectionTest(unittest.TestCase):
                 self.assertEqual(data.paragraphs[-1].type_id, "sign_date")
                 self.assertEqual(data.paragraphs[-1].text, "2025年10月15日")
 
+    def test_signature_org_uses_generic_suffix_and_tail_date_not_name_list(self):
+        for agency in ("星河治理委员会", "蓝图协同专班", "青云服务中心"):
+            with self.subTest(agency=agency):
+                data = self._load_lines([
+                    "总题目",
+                    "一、一级标题",
+                    "这里是正文内容这里是正文内容这里是正文内容。",
+                    agency,
+                    "2025年十月15日",
+                ])
+
+                self.assertEqual(data.paragraphs[-2].type_id, "sign_org")
+                self.assertEqual(data.paragraphs[-2].text, agency)
+                self.assertEqual(data.paragraphs[-1].type_id, "sign_date")
+
     def test_long_role_and_name_line_is_detected_in_head_area(self):
         data = self._load_lines([
             "2026年度测试材料",

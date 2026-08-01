@@ -231,6 +231,26 @@ class ProcessingFlagsTest(unittest.TestCase):
             self.assertEqual(label.type_id, "body")
             self.assertTrue(label.meta.get("no_indent"))
 
+    def test_smart_mode_mid_body_attachment_keyword_stays_body(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "mid-body-attachment-keyword.docx"
+            document = Document()
+            document.add_paragraph("工作情况", style="Title")
+            document.add_paragraph("前段正文已经开始，并完整说明有关工作情况。")
+            document.add_paragraph("附件：材料清单")
+            document.add_paragraph("后续正文继续说明材料另行发送，不进入附件说明区。")
+            document.save(source)
+
+            rules, _, features = load_rules_and_settings({"mode": "smart"})
+            data = DocxImporter().load(str(source), rules, features=features)
+            paragraph = next(item for item in data.paragraphs if item.text == "附件：材料清单")
+
+            self.assertEqual(paragraph.type_id, "body")
+            self.assertEqual(
+                paragraph.meta.get("recognition_evidence"),
+                ["attachment-keyword-without-tail-context", "hard-structure", "legacy-reclassified"],
+            )
+
     def test_smart_mode_recovers_speech_title_and_soft_line_body_from_heading_style(self):
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "speech.docx"

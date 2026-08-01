@@ -179,6 +179,46 @@ def test_dispatch_has_multiple_candidates_before_hard_veto():
     assert "title_continuation" in candidate_types
 
 
+def test_authoritative_can_disable_core_and_legacy_candidates() -> None:
+    paragraph = _paragraph(
+        "国发〔2026〕23号",
+        "title",
+        0,
+        classification_kind="body",
+        classification_confidence=0.95,
+    )
+    data = _document(paragraph)
+
+    apply_recognition(
+        data,
+        RecognitionConfig(
+            mode="authoritative",
+            enable_core_candidates=False,
+            enable_legacy_candidates=False,
+        ),
+    )
+
+    assert paragraph.type_id == "dispatch_number"
+    trace = data.recognition_diagnostics["candidate_trace"][0]["candidates"]
+    assert {item["source"] for item in trace}.isdisjoint({"core", "legacy"})
+
+
+def test_unverified_legacy_attachment_note_does_not_force_final_type() -> None:
+    paragraph = _paragraph("相关附件另行发送，后续仍继续说明正文事项。", "attachment_note", 1)
+    data = _document(
+        _paragraph("前段正文已经开始，并完整说明有关工作情况。", "body", 0),
+        paragraph,
+        _paragraph("后一段正文继续说明工作安排。", "body", 2),
+    )
+
+    apply_recognition(data)
+
+    assert paragraph.type_id == "body"
+    diagnostic = data.recognition_diagnostics["paragraphs"][1]
+    assert diagnostic["legacy_type"] == "attachment_note"
+    assert diagnostic["final_type"] == "body"
+
+
 def test_previous_title_changes_ambiguous_centered_line_decision():
     after_title = _document(
         _paragraph("主标题", "title", 0),
@@ -337,6 +377,92 @@ def test_structural_key_value_generalizes_after_label_rewording() -> None:
     assert "explicit-label" in second.meta["recognition_evidence"]
 
 
+def test_mid_body_attachment_keyword_is_body_not_hard_attachment_note() -> None:
+    paragraph = _paragraph("附件：材料清单", "body", 2)
+    data = _document(
+        _paragraph("工作情况", "title", 0, alignment="CENTER"),
+        _paragraph("前段正文已经开始，并完整说明有关工作情况。", "body", 1),
+        paragraph,
+        _paragraph("后续正文继续说明材料将另行发送。", "body", 3),
+    )
+
+    apply_recognition(data)
+
+    assert paragraph.type_id == "body"
+    candidates = data.recognition_diagnostics["candidate_trace"][2]["candidates"]
+    attachment = next(item for item in candidates if item["type"] == "attachment_note")
+    assert attachment["hard"] is False
+    assert "attachment-keyword-without-tail-context" in paragraph.meta["recognition_evidence"]
+
+
+def test_empty_attachment_keyword_without_items_stays_body() -> None:
+    paragraph = _paragraph("附件：", "body", 2)
+    data = _document(
+        _paragraph("工作情况", "title", 0, alignment="CENTER"),
+        _paragraph("前段正文已经开始，并完整说明有关工作情况。", "body", 1),
+        paragraph,
+    )
+
+    apply_recognition(data)
+
+    assert paragraph.type_id == "body"
+
+
+def test_tail_attachment_note_and_items_are_confirmed_by_context() -> None:
+    note = _paragraph("附件：1.材料清单", "body", 2)
+    item = _paragraph("2.补充材料", "body", 3)
+    sign_org = _paragraph("星河治理委员会", "body", 4)
+    sign_date = _paragraph("2026年7月20日", "body", 5)
+    data = _document(
+        _paragraph("工作情况", "title", 0, alignment="CENTER"),
+        _paragraph("前段正文已经开始，并完整说明有关工作情况。", "body", 1),
+        note,
+        item,
+        sign_org,
+        sign_date,
+    )
+
+    apply_recognition(data)
+
+    assert [item.type_id for item in data.paragraphs[2:]] == [
+        "attachment_note", "attachment_note_item", "sign_org", "sign_date",
+    ]
+    note_candidates = data.recognition_diagnostics["candidate_trace"][2]["candidates"]
+    attachment = next(item for item in note_candidates if item["type"] == "attachment_note")
+    assert attachment["hard"] is True
+    assert "attachment-tail-context" in attachment["evidence"]
+
+
+def test_signature_org_uses_generic_tail_context_without_name_list() -> None:
+    sign_org = _paragraph("星河治理委员会", "body", 2)
+    sign_date = _paragraph("2026年7月20日", "body", 3)
+    data = _document(
+        _paragraph("工作情况", "title", 0, alignment="CENTER"),
+        _paragraph("前段正文已经开始，并完整说明有关工作情况。", "body", 1),
+        sign_org,
+        sign_date,
+    )
+
+    apply_recognition(data)
+
+    assert [sign_org.type_id, sign_date.type_id] == ["sign_org", "sign_date"]
+    assert sign_org.text == "星河治理委员会"
+    assert "signature-tail-context" in sign_org.meta["recognition_evidence"]
+
+
+def test_body_unit_mention_is_not_signature_org_without_tail_context() -> None:
+    paragraph = _paragraph("星河治理委员会持续推进相关工作，阶段性成效已经形成。", "body", 1)
+    data = _document(
+        _paragraph("工作情况", "title", 0, alignment="CENTER"),
+        paragraph,
+        _paragraph("后续正文继续说明工作安排。", "body", 2),
+    )
+
+    apply_recognition(data)
+
+    assert paragraph.type_id == "body"
+
+
 def test_duplicate_heading_sequence_is_applied_but_marked_for_review() -> None:
     duplicate = _paragraph("一、重复编号标题", "body", 4)
     data = _document(
@@ -355,6 +481,74 @@ def test_duplicate_heading_sequence_is_applied_but_marked_for_review() -> None:
     assert diagnostic["review_level"] == "review"
     assert "HEADING_SEQUENCE_CONFLICT" in diagnostic["review_reasons"]
     assert "numbering-duplicate" in diagnostic["heading_context_evidence"]
+
+
+def test_child_heading_numbering_resets_under_new_parent_scope() -> None:
+    first_child = _paragraph("（一）第一章下的子标题", "body", 3)
+    second_child = _paragraph("（一）第二章下的子标题", "body", 6)
+    data = _document(
+        _paragraph("工作情况", "title", 0, alignment="CENTER"),
+        _paragraph("现将有关情况报告如下，供审阅。", "body", 1),
+        _paragraph("一、第一部分", "body", 2),
+        first_child,
+        _paragraph("正文对第一章子标题展开说明。", "body", 4),
+        _paragraph("二、第二部分", "body", 5),
+        second_child,
+        _paragraph("正文对第二章子标题展开说明。", "body", 7),
+    )
+
+    apply_recognition(data)
+
+    assert [first_child.type_id, second_child.type_id] == ["heading2", "heading2"]
+    second_diagnostic = data.recognition_diagnostics["paragraphs"][6]
+    assert "numbering-duplicate" not in second_diagnostic["heading_context_evidence"]
+    assert second_diagnostic["review_level"] not in {"review", "critical_review"}
+    h2_families = [
+        item for item in data.recognition_diagnostics["document_context"]["heading_families"]
+        if item["level"] == 2
+    ]
+    assert [item["parent_scope"] for item in h2_families] == [[2], [5]]
+
+
+def test_duplicate_child_heading_in_same_parent_scope_is_reviewed() -> None:
+    duplicate = _paragraph("（一）同一父标题下重复的子标题", "body", 5)
+    data = _document(
+        _paragraph("工作情况", "title", 0, alignment="CENTER"),
+        _paragraph("现将有关情况报告如下，供审阅。", "body", 1),
+        _paragraph("一、第一部分", "body", 2),
+        _paragraph("（一）第一个子标题", "body", 3),
+        _paragraph("正文对第一个子标题展开说明。", "body", 4),
+        duplicate,
+        _paragraph("正文对重复子标题展开说明。", "body", 6),
+    )
+
+    apply_recognition(data)
+
+    assert duplicate.type_id == "heading2"
+    diagnostic = data.recognition_diagnostics["paragraphs"][5]
+    assert "numbering-duplicate" in diagnostic["heading_context_evidence"]
+    assert "HEADING_SEQUENCE_CONFLICT" in diagnostic["review_reasons"]
+
+
+def test_deep_heading_cannot_borrow_parent_from_previous_h1_scope() -> None:
+    orphan = _paragraph("1.缺少当前父级的三级标题", "body", 7)
+    data = _document(
+        _paragraph("工作情况", "title", 0, alignment="CENTER"),
+        _paragraph("现将有关情况报告如下，供审阅。", "body", 1),
+        _paragraph("一、第一部分", "body", 2),
+        _paragraph("（一）第一章子标题", "body", 3),
+        _paragraph("1.第一章三级标题", "body", 4),
+        _paragraph("正文对第一章三级标题展开说明。", "body", 5),
+        _paragraph("二、第二部分", "body", 6),
+        orphan,
+        _paragraph("正文对孤立三级标题展开说明。", "body", 8),
+    )
+
+    apply_recognition(data)
+
+    diagnostic = data.recognition_diagnostics["paragraphs"][7]
+    assert "missing-parent-heading" in diagnostic["heading_context_evidence"]
+    assert "HEADING_SEQUENCE_CONFLICT" in diagnostic["review_reasons"]
 
 
 def test_orphan_deep_heading_is_not_confirmed_without_parent_context() -> None:
@@ -636,6 +830,24 @@ def test_dispatch_variants_are_stable_after_nfkc():
         data = _document(paragraph)
         apply_recognition(data)
         assert paragraph.type_id == "dispatch_number", text
+
+
+def test_front_matter_scan_skips_empty_and_caption_placeholders() -> None:
+    prefix = [_paragraph("", "body", index) for index in range(14)]
+    caption = _paragraph("图1 工作流程", "__object_caption__", 14)
+    title = _paragraph("关于推进基层治理工作的通知", "body", 15, alignment="CENTER")
+    recipient = _paragraph("各有关单位：", "body", 16)
+    body = _paragraph("现将有关事项通知如下，请结合实际抓好落实。", "body", 17)
+    data = _document(*prefix, caption, title, recipient, body)
+
+    apply_recognition(data)
+
+    assert title.type_id == "title"
+    assert recipient.type_id == "addressing"
+    context = data.recognition_diagnostics["document_context"]
+    assert 15 in context["front_matter_positions"]
+    assert context["front_scan_reason"] == "body-boundary"
+    assert context["body_start"] == 17
 
 
 def test_key_value_and_source_variants_do_not_promote_numbering():

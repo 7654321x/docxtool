@@ -13,7 +13,6 @@
 from __future__ import annotations
 
 import copy
-from difflib import SequenceMatcher
 import hashlib
 import os
 import re
@@ -1166,19 +1165,9 @@ _SIGN_ORG_NEGATIVE_STARTS = ("以上", "请", "现将", "特此", "有关", "此
 _SIGN_ORG_SUFFIX_RE = re.compile(
     r"(?:委员会|工作委员会|人民政府|人民法院|人民检察院|代表大会|"
     r"办公室|街道办事处|领导小组|工作组|党组|党委|政府|政协|人大|"
-    r"总工会|局|厅|部|院|处|科|办|镇|乡)$"
+    r"总工会|专班|小组|集团|公司|协会|学会|商会|医院|学院|学校|"
+    r"大学|研究院|研究所|中心|局|厅|部|院|处|科|办|镇|乡)$"
 )
-_COMMON_SIGNATURE_ORG_NAMES = frozenset({
-    "党委办公室", "党政办公室", "区委办", "县委办", "市委办", "省政府办公厅",
-    "政府办公室", "区政府办", "县政府办", "市政府办", "政协办公室", "政协办",
-    "人大常委会办公室", "人大办", "组织部", "宣传部", "统战部", "政法委",
-    "纪委监委", "发展和改革局", "发改局", "财政局", "教育局", "公安局",
-    "民政局", "司法局", "人力资源和社会保障局", "人社局", "自然资源局",
-    "生态环境局", "住房和城乡建设局", "住建局", "交通运输局", "农业农村局",
-    "商务局", "文化广电旅游局", "卫生健康局", "卫健局", "应急管理局", "应急局",
-    "审计局", "市场监督管理局", "市场监管局", "统计局", "机关事务管理局",
-    "人民法院", "人民检察院", "总工会", "团委", "妇联", "残联",
-})
 
 def _is_body_context(ctx) -> bool:
     return ctx.last_structural_type in ("body", "addressing",
@@ -1242,29 +1231,6 @@ def _norm_sign_org(text: str) -> str:
     return re.sub(r'^\s*[一二三四五六七八九十百]+、\s*', '', text or "", count=1).strip()
 
 
-def _looks_like_common_signature_org(text: str) -> bool:
-    """Recognize common agency names and small copy/paste variations safely.
-
-    This is recognition evidence only.  A matched abbreviation such as
-    ``区政协办`` is never expanded in the generated document because the full
-    issuing authority cannot be inferred safely from a local abbreviation.
-    """
-    value = re.sub(r"\s+", "", text or "")
-    if not value:
-        return False
-    if any(value.endswith(name) for name in _COMMON_SIGNATURE_ORG_NAMES):
-        return True
-    for name in _COMMON_SIGNATURE_ORG_NAMES:
-        max_size = min(len(value), len(name), 8)
-        for size in range(max_size, 2, -1):
-            suffix = value[-size:]
-            if (
-                SequenceMatcher(None, suffix, name[:size]).ratio() >= 0.86
-                or SequenceMatcher(None, suffix, name[-size:]).ratio() >= 0.86
-            ):
-                return True
-    return False
-
 def _record_structural(ctx, type_id: str, text: str) -> None:
     ctx.last_structural_type = type_id
     ctx.last_structural_text = (text or "").strip()
@@ -1293,7 +1259,7 @@ def _looks_like_sign_org(text: str, next_text: str, ctx) -> bool:
         return False
     if not _SIGN_DATE_RE2.match(next_text or ""):
         return False
-    return bool(_SIGN_ORG_SUFFIX_RE.search(t) or _looks_like_common_signature_org(t))
+    return bool(_SIGN_ORG_SUFFIX_RE.search(t))
 
 def _heading_has_inline_body(text: str) -> bool:
     period_pos = (text or "").find("。")
@@ -1591,7 +1557,7 @@ def _is_tail_signature_org_text(text: str) -> bool:
         2 <= len(value) <= 40
         and not value.startswith(_SIGN_ORG_NEGATIVE_STARTS)
         and not any(mark in value for mark in "。；;：:")
-        and (_SIGN_ORG_SUFFIX_RE.search(value) or _looks_like_common_signature_org(value))
+        and bool(_SIGN_ORG_SUFFIX_RE.search(value))
     )
 
 
@@ -1727,12 +1693,22 @@ def _normalize_tail_structures(
             tail_date = index
             break
 
-    note_index = next(
-        (index for index in raw_notes if index < first_marker and (
-            tail_date is None or abs(index - tail_date) <= 12
-        )),
-        None,
-    )
+    note_index = None
+    for index in raw_notes:
+        if index >= first_marker:
+            continue
+        following_plain = [
+            position for position in plain_indexes
+            if index < position < first_marker
+        ]
+        next_is_item = bool(
+            following_plain
+            and _ATT_ITEM_RE.match(_tail_source_text(paragraphs[following_plain[0]]))
+        )
+        near_tail_date = tail_date is not None and abs(index - tail_date) <= 12
+        if near_tail_date or next_is_item:
+            note_index = index
+            break
     item_indexes = []
     if note_index is not None:
         item_indexes = [
@@ -3136,19 +3112,19 @@ class DocxImporter:
         ]
         if strict_preservation:
             self._record_strict_normalization_suggestions(data)
-        elif structural_preservation:
-            _normalize_tail_structures(data.paragraphs, normalize_text=False)
-        else:
-            _normalize_tail_structures(data.paragraphs)
-            self._reorder_attachment_note_before_signature(data.paragraphs)
-            self._assign_numbering(data.paragraphs, rules)
-            self._merge_siblings(data.paragraphs)
-            self._record_applied_normalization_changes(data, before_normalization)
         self._apply_core_classification(data, features)
         from dataclasses import replace
         from docxtool.document.recognition.config import DEFAULT_CONFIG
 
         apply_recognition(data, replace(DEFAULT_CONFIG, mode=recognition_mode))
+        if structural_preservation:
+            _normalize_tail_structures(data.paragraphs, normalize_text=False)
+        elif not strict_preservation:
+            _normalize_tail_structures(data.paragraphs)
+            self._reorder_attachment_note_before_signature(data.paragraphs)
+            self._assign_numbering(data.paragraphs, rules)
+            self._merge_siblings(data.paragraphs)
+            self._record_applied_normalization_changes(data, before_normalization)
         # (old classification loop removed — replaced by flat_lines single pass above)
 
         if structural_preservation and numbering_enabled:

@@ -103,6 +103,12 @@ pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m pytest tests/test_struct
 pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m pytest -q tests/test_colon_structure.py tests/test_recognition_decoder.py tests/test_segment_boundaries.py"
 pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m ruff check src tests scripts"
 ```
+44. 触发场景：正文中部独立出现“附件：...”不能仅凭关键词进入附件说明区；必须同时具备正文已开始、接近尾部、后接附件项/附件页/落款日期等共享上下文证据。落款单位不得依赖具体机构名单或相似度，只能由文尾位置、后接日期、独立短行、无正文标点和通用组织形态组合确认；标题编号重复、跳号和缺父标题必须按最近父标题作用域判断，不同一级标题下的“（一）”应合法重置。修改后至少运行：
+
+```pwsh
+pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m pytest -q tests/test_recognition_decoder.py tests/test_processing_flags.py tests/test_signature_detection.py tests/test_importer_heading_flow.py tests/test_segment_boundaries.py tests/test_audit_hardening.py"
+pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m ruff check src tests scripts"
+```
 
 ## 可移动服务器部署
 

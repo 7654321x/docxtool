@@ -106,28 +106,36 @@ def test_authoritative_writes_recipient_signature_date_and_attachment_note() -> 
     sign_org = _paragraph(
         "测试市人民政府办公室",
         "body",
-        0,
+        1,
         classification_kind="signature_org",
         classification_confidence=0.95,
     )
     sign_date = _paragraph(
         "2026年7月20日",
         "body",
-        1,
+        2,
         classification_kind="signature_date",
         classification_confidence=0.95,
     )
-    signature = _document(sign_org, sign_date)
+    signature = _document(
+        _paragraph("前段正文已经开始，并完整说明有关工作情况。", "body", 0),
+        sign_org,
+        sign_date,
+    )
     apply_recognition(signature)
 
     recipient = _document(_paragraph("各有关单位：", "body"))
-    attachment = _document(_paragraph("附件：1.测试材料", "body"))
+    attachment = _document(
+        _paragraph("前段正文已经开始，并完整说明有关工作情况。", "body", 0),
+        _paragraph("附件：1.测试材料", "body", 1),
+        _paragraph("2.补充材料", "body", 2),
+    )
     apply_recognition(recipient)
     apply_recognition(attachment)
 
-    assert [item.type_id for item in signature.paragraphs] == ["sign_org", "sign_date"]
+    assert [item.type_id for item in signature.paragraphs[-2:]] == ["sign_org", "sign_date"]
     assert recipient.paragraphs[0].type_id == "addressing"
-    assert attachment.paragraphs[0].type_id == "attachment_note"
+    assert [item.type_id for item in attachment.paragraphs[-2:]] == ["attachment_note", "attachment_note_item"]
 
 
 def test_parenthesized_arabic_number_is_heading_four_not_heading_two() -> None:

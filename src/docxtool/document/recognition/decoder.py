@@ -109,9 +109,26 @@ def _extra_candidates(block: DocumentBlock, features, context: _Context, previou
     return result
 
 
-def _candidates(block: DocumentBlock, features, context: _Context, previous_features, lookahead=()) -> list[Candidate]:
+def _provider_enabled(provider, config: RecognitionConfig) -> bool:
+    if provider.name == "core":
+        return config.enable_core_candidates
+    if provider.name == "legacy":
+        return config.enable_legacy_candidates
+    return True
+
+
+def _candidates(
+    block: DocumentBlock,
+    features,
+    context: _Context,
+    previous_features,
+    lookahead=(),
+    config: RecognitionConfig | None = None,
+) -> list[Candidate]:
     result: list[Candidate] = []
     for provider in DEFAULT_PROVIDERS:
+        if config is not None and not _provider_enabled(provider, config):
+            continue
         result.extend(provider.propose(block, features, context))
     result.extend(_extra_candidates(block, features, context, previous_features, lookahead))
     # One provider may emit the same type more than once. Keep its strongest,
@@ -147,6 +164,11 @@ def _transition(previous: ParagraphType | None, current: Candidate, previous_sec
         return 0.05
     if previous_section == SectionKind.SIGNATURE and current.section_hint == SectionKind.BODY:
         return -0.08
+    if (
+        current.section_hint == SectionKind.HEADER
+        and "front-position" in current.evidence
+    ):
+        return 0.0
     if previous_section in {SectionKind.BODY, SectionKind.SIGNATURE, SectionKind.ATTACHMENT_NOTE, SectionKind.ATTACHMENT_BODY} and current.section_hint in {SectionKind.HEADER, SectionKind.DISPATCH_META}:
         return -0.40
     if mode == DocumentMode.MEETING_MINUTES and current.paragraph_type == ParagraphType.MEETING_META:
@@ -369,13 +391,13 @@ def apply_recognition(data: Any, config: RecognitionConfig | None = None) -> Non
         boundary_before = boundary_prefix[block.index] > boundary_prefix[boundary_start]
         trace_context = _Context(mode, beams[0].types[-1] if beams[0].types else None, pos, boundary_before, document_context)
         lookahead = extracted[pos + 1:pos + 9]
-        trace_options = _limit_candidates(_candidates(block, features, trace_context, previous_features, lookahead), config)
+        trace_options = _limit_candidates(_candidates(block, features, trace_context, previous_features, lookahead, config), config)
         candidate_summary[features.paragraph_index] = tuple(trace_options)
         if config.enable_diagnostics:
             candidate_trace.append({"paragraph_index": features.paragraph_index, "candidate_count": len(trace_options), "candidates": [{"type": item.paragraph_type.value, "score": item.score, "source": item.source, "hard": item.hard, "evidence": item.evidence, "vetoes": sorted(value.value for value in item.vetoes)} for item in trace_options], "boundary_before": boundary_before})
         for beam in beams:
             context = _Context(mode, beam.types[-1] if beam.types else None, pos, boundary_before, document_context)
-            options = _limit_candidates(_candidates(block, features, context, previous_features, lookahead), config)
+            options = _limit_candidates(_candidates(block, features, context, previous_features, lookahead, config), config)
             hard_types = {item.paragraph_type for item in options if item.hard}
             for candidate in options:
                 if hard_types and candidate.paragraph_type not in hard_types:

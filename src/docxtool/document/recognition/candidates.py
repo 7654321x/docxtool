@@ -21,6 +21,11 @@ _EMPTY_KEY_VALUE_LABELS = frozenset({
     "责任单位", "责任人", "联系人", "联系电话", "联系地址",
     "承办单位", "牵头单位", "配合单位", "时间", "地点",
 })
+_STRUCTURE_CONTEXT_TYPES = {
+    ParagraphType.ATTACHMENT_NOTE,
+    ParagraphType.ATTACHMENT_NOTE_ITEM,
+    ParagraphType.SIGNATURE_ORG,
+}
 
 
 @dataclass(frozen=True)
@@ -69,6 +74,67 @@ def _section_hint_for_type(paragraph_type: ParagraphType) -> SectionKind:
     return SectionKind.BODY
 
 
+def _body_like_candidate(features: ParagraphFeatures) -> bool:
+    if not features.compact_text:
+        return False
+    if features.dispatch_number_match or features.date_match or features.heading_shape_level:
+        return False
+    return bool(
+        (features.ends_with_sentence_punctuation and features.text_length >= 12)
+        or features.text_length >= 34
+    )
+
+
+def _context_evidence_for(
+    paragraph_type: ParagraphType,
+    features: ParagraphFeatures,
+    context: CandidateContext,
+) -> tuple[str, ...]:
+    document_context = context.document_context
+    if document_context is None:
+        return ()
+    if paragraph_type == ParagraphType.ATTACHMENT_NOTE:
+        return document_context.attachment_note_reasons(context.index)
+    if paragraph_type == ParagraphType.ATTACHMENT_NOTE_ITEM:
+        return document_context.attachment_item_reasons(context.index)
+    if paragraph_type == ParagraphType.SIGNATURE_ORG:
+        return document_context.signature_org_reasons(context.index)
+    if paragraph_type == ParagraphType.SIGNATURE_DATE and features.date_match:
+        return ("date-shape",)
+    return ()
+
+
+def _soften_unverified_structure(
+    paragraph_type: ParagraphType,
+    score: float,
+    evidence: str,
+    features: ParagraphFeatures,
+    context: CandidateContext,
+) -> tuple[float, str]:
+    if paragraph_type not in _STRUCTURE_CONTEXT_TYPES:
+        return score, evidence
+    if _context_evidence_for(paragraph_type, features, context):
+        return score, evidence
+    return min(score, 0.44), f"{evidence}-unverified-context"
+
+
+def _soften_legacy_body_in_front_context(
+    paragraph_type: ParagraphType,
+    score: float,
+    evidence: str,
+    context: CandidateContext,
+) -> tuple[float, str]:
+    if paragraph_type != ParagraphType.BODY or context.document_context is None:
+        return score, evidence
+    if (
+        context.index in context.document_context.front_positions
+        or context.document_context.title_score(context.index) >= 0.44
+        or context.document_context.front_metadata_kind(context.index)
+    ):
+        return min(score, 0.42), f"{evidence}-weak-front-context"
+    return score, evidence
+
+
 class StructuralCandidateProvider:
     name = "structural"
 
@@ -91,6 +157,19 @@ class StructuralCandidateProvider:
             result.append(Candidate(ParagraphType.DISPATCH_NUMBER, 1.0, self.name, ("dispatch-number",), hard=True, section_hint=SectionKind.DISPATCH_META))
         if features.date_match:
             result.append(Candidate(ParagraphType.SIGNATURE_DATE, 0.85, self.name, ("date-shape",), section_hint=SectionKind.SIGNATURE))
+        signature_evidence = (
+            context.document_context.signature_org_reasons(context.index)
+            if context.document_context is not None else ()
+        )
+        if signature_evidence:
+            result.append(Candidate(
+                ParagraphType.SIGNATURE_ORG,
+                0.97,
+                self.name,
+                signature_evidence,
+                hard=True,
+                section_hint=SectionKind.SIGNATURE,
+            ))
         if is_standalone_addressing_text(features.normalized_text):
             result.append(Candidate(
                 ParagraphType.ADDRESSING,
@@ -135,7 +214,56 @@ class StructuralCandidateProvider:
                 section_hint=SectionKind.BODY,
             ))
         if features.attachment_note_match:
-            result.append(Candidate(ParagraphType.ATTACHMENT_NOTE, 0.97, self.name, ("attachment-note",), hard=True, section_hint=SectionKind.ATTACHMENT_NOTE))
+            attachment_evidence = (
+                context.document_context.attachment_note_reasons(context.index)
+                if context.document_context is not None else ()
+            )
+            if attachment_evidence:
+                result.append(Candidate(
+                    ParagraphType.ATTACHMENT_NOTE,
+                    0.98,
+                    self.name,
+                    attachment_evidence,
+                    hard=True,
+                    section_hint=SectionKind.ATTACHMENT_NOTE,
+                ))
+            else:
+                result.append(Candidate(
+                    ParagraphType.ATTACHMENT_NOTE,
+                    0.52,
+                    self.name,
+                    ("attachment-keyword-unverified-context",),
+                    section_hint=SectionKind.ATTACHMENT_NOTE,
+                ))
+                result.append(Candidate(
+                    ParagraphType.BODY,
+                    0.94,
+                    self.name,
+                    ("attachment-keyword-without-tail-context",),
+                    hard=True,
+                    section_hint=SectionKind.BODY,
+                ))
+        attachment_item_evidence = (
+            context.document_context.attachment_item_reasons(context.index)
+            if context.document_context is not None else ()
+        )
+        if attachment_item_evidence:
+            result.append(Candidate(
+                ParagraphType.ATTACHMENT_NOTE_ITEM,
+                0.97,
+                self.name,
+                attachment_item_evidence,
+                hard=True,
+                section_hint=SectionKind.ATTACHMENT_NOTE,
+            ))
+        if _body_like_candidate(features):
+            result.append(Candidate(
+                ParagraphType.BODY,
+                0.82,
+                self.name,
+                ("body-prose-shape",),
+                section_hint=SectionKind.BODY,
+            ))
         return result
 
 
@@ -368,11 +496,13 @@ class CoreCandidateProvider:
             score = float(meta.get("classification_confidence", 0.6))
         except (TypeError, ValueError):
             score = 0.6
+        score, evidence = _soften_unverified_structure(kind, max(0.0, min(score, 0.95)), "core-classifier", features, context)
+        score, evidence = _soften_legacy_body_in_front_context(kind, score, evidence, context)
         return [Candidate(
             kind,
-            max(0.0, min(score, 0.95)),
+            score,
             self.name,
-            ("core-classifier",),
+            (evidence,),
             section_hint=_section_hint_for_type(kind),
         )]
 
@@ -427,6 +557,8 @@ class LegacyCandidateProvider:
         }
         score = 0.55 if paragraph_type in weak else 0.88
         evidence = "legacy-importer-weak" if paragraph_type in weak else "legacy-importer"
+        score, evidence = _soften_unverified_structure(paragraph_type, score, evidence, features, context)
+        score, evidence = _soften_legacy_body_in_front_context(paragraph_type, score, evidence, context)
         if (
             paragraph_type == ParagraphType.TITLE_CONTINUATION
             and context.previous_type == ParagraphType.DISPATCH_NUMBER

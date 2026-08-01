@@ -16,6 +16,8 @@ class RecognitionConfig:
     legacy_score: float = 0.55
     external_style_score: float = 0.18
     docxtool_style_score: float = 0.08
+    enable_core_candidates: bool = True
+    enable_legacy_candidates: bool = True
     enable_diagnostics: bool = True
     text_preview_length: int = 12
     unknown_render_type: str = "warn_body"
