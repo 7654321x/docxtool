@@ -118,6 +118,28 @@ DOCX 上传请求的限流、请求配置解析、临时落盘、安全校验、
 `src/docxtool/document/importing/`。这些模块只读取 python-docx 段落对象和 OOXML 物理事实，
 不决定最终段落类型；`document/importer.py` 继续作为兼容编排入口调用它们。
 
+表格、图片、题注、已有版头和页眉页脚关系的导出期源对象保留已迁移到
+`src/docxtool/document/engine/preservation.py`。该模块只消费 Renderer 已确认需要透传的
+源 OOXML 对象、关系复制器和样式复制器，负责关系迁移、外部关系净化和题注间距归零；
+不读取 Importer 状态、不参与段落识别，也不改变最终 `type_id`。
+
+分节页面尺寸、横向页边距旋转、`docGrid` 计算、段落/正文 `sectPr` 替换和奇偶页不同设置保留
+已迁移到 `src/docxtool/document/engine/sections.py`。该模块只消费页面配置、源分节 XML 和
+Renderer 关系复制器，不读取文档识别上下文，也不改变段落顺序或最终类型。
+
+全局页面设置、documentDefaults、Normal 样式、Word 兼容网格开关也收口在
+`src/docxtool/document/engine/sections.py`；旧页脚 PAGE 域兼容写入迁移到
+`src/docxtool/document/engine/header_footer.py`。这些模块只修改输出 DOCX 的页面和页脚 XML，
+不参与识别、规范化或结构重排。
+
+段落内部 run 样式复制、片段写入、inline token 恢复和普通正文冗余分页符清理已迁移到
+`src/docxtool/document/engine/inline.py`。该模块只处理 Renderer 已决定输出的行内内容，
+不执行软换行拆段、不判断结构类型，也不改写可见文字顺序。
+
+中英文字体写入、数字/拉丁字母字体拆分和上标格式化后处理已迁移到
+`src/docxtool/document/engine/typography.py`。该模块只处理已生成段落 run 的显示属性，
+不参与段落类型判断、编号规范化或文字重排。
+
 匿名 owner 的任务归属、私人模板归属和重名模板导入改名已迁移到
 `src/docxtool/web/owner_migration.py`。该模块只处理调用方传入的 SQLite 连接或连接器，
 不创建用户、不校验密码、不处理 HTTP 路由，也不读取或修改 DOCX 识别链路。
