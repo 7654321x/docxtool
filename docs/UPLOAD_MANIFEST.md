@@ -76,7 +76,9 @@ https://github.com/7654321x/docxtool.git
 | `src/docxtool/web/file_utils.py` | 文件名、下载头和错误脱敏辅助 | 不读写磁盘，只处理字符串 |
 | `src/docxtool/web/format_request.py` | 上传格式配置和处理模式解析 | 只处理 headers 和格式配置对象，不执行任务 |
 | `src/docxtool/web/health.py` | 健康检查、readiness、版本和启动 URL payload | 只组装只读状态，不处理 HTTP 路由 |
+| `src/docxtool/web/maintenance.py` | 后台维护线程兼容入口 | 永久保留策略下只定时唤醒，不删除用户数据 |
 | `src/docxtool/web/monitoring.py` | 监控页查询、分页和链接辅助 | 只处理分页参数和 URL，不读写数据库 |
+| `src/docxtool/web/monitoring_pages.py` | 管理员监控分页、IP 明细和任务日志 HTML 渲染 | 只消费统计数据、任务行数据和查询回调，不访问数据库或 DOCX |
 | `src/docxtool/web/owner_migration.py` | 匿名 owner 任务和私人模板迁移 | 只处理传入连接或连接器，不处理路由和识别链路 |
 | `src/docxtool/web/preset_config.py` | 预设模板名称、ID、格式配置和 API 行数据归一化 | 不读写数据库，只处理模板配置对象 |
 | `src/docxtool/web/preset_defaults.py` | 默认公文模板配置、默认功能开关和官方模板 seed | 通过注入样式、页面、连接和时间函数工作 |
@@ -92,6 +94,7 @@ https://github.com/7654321x/docxtool.git
 | `src/docxtool/web/task_result.py` | 终态任务结果同步收口 | 同步统计、内存状态、失败清理和脱敏日志，不执行 DOCX |
 | `src/docxtool/web/task_statistics.py` | 任务结果统计、按日汇总和监控聚合查询 | 只读写统计字段，不生成 HTML 或执行 DOCX |
 | `src/docxtool/web/task_state.py` | 任务计数、队列位置、公开状态和识别摘要 | 只处理传入的任务/队列容器和脱敏摘要，不直接访问路由 |
+| `src/docxtool/web/task_worker.py` | 任务执行边界选择和后台 worker 启动 | 只编排 direct/subprocess runner 和线程启动，不执行识别规则 |
 | `src/docxtool/web/time_check.py` | 启动时区和网络时间校验辅助 | 只生成启动提示，不影响服务启动流程 |
 | `src/docxtool/web/user_auth.py` | 普通用户 session、登录 cookie、principal 和 CSRF 校验 | 通过注入的数据库连接器和匿名身份解析函数工作 |
 | `src/docxtool/sdk/` | 面向第三方的只读识别 SDK | 返回脱敏结构计划，不操作宿主文档 |

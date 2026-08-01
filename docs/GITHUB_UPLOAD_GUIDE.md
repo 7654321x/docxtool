@@ -50,7 +50,7 @@ pwsh -NoProfile -Command "git ls-remote https://github.com/7654321x/docxtool.git
 - 依赖和启动：`requirements.txt`、`requirements.lock`、`requirements-dev.lock`、`run.sh`、`run.ps1`
 - 服务器代理模板：`deploy/nginx-docxtool.conf`
 - 配置：`.env.example`、`.gitignore`、`.gitattributes`、`pytest.ini`、`ruff.toml`、`pyproject.toml`、`.github/workflows/ci.yml`
-- 后端、排版核心和 SDK：`server.py`、`src/docxtool/**/*.py`、`src/docxtool/resources/config/default-format.json`、`src/docxtool/resources/schemas/*.json`，其中 Web 建表和迁移位于 `src/docxtool/web/database_schema.py`
+- 后端、排版核心和 SDK：`server.py`、`src/docxtool/**/*.py`、`src/docxtool/resources/config/default-format.json`、`src/docxtool/resources/schemas/*.json`，其中 Web 建表和迁移位于 `src/docxtool/web/database_schema.py`，后台维护线程入口位于 `src/docxtool/web/maintenance.py`，监控页面局部渲染位于 `src/docxtool/web/monitoring_pages.py`，任务执行边界和后台 worker 启动位于 `src/docxtool/web/task_worker.py`
 - 脚本：`scripts/generate_secrets.py`、`scripts/benchmark_recognition.py`、`scripts/compare_recognition_runs.py`、`scripts/analyze_end_format.py`、`scripts/analyze_letterhead_batch.py`、`scripts/batch_test_docx.py`、`scripts/generate_005_format_fixtures.py`、`scripts/normalize_correct_template_role_spacing.py`、`scripts/migrate_legacy_database.ps1`、`scripts/publish_to_github.ps1`
 - 前端和 Cloudflare Pages：`resources/frontend/pages/index.html`、`resources/frontend/pages/_worker.js`
 - 运行目录占位：`var/data/.gitkeep`、`var/logs/.gitkeep`、`var/outputs/.gitkeep`、`var/runtime/.gitkeep`

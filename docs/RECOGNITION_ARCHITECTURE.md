@@ -33,12 +33,24 @@ CSRF 校验已迁移到 `src/docxtool/web/user_auth.py`。该模块通过调用�
 健康检查、readiness、版本信息和启动 URL payload 已迁移到 `src/docxtool/web/health.py`。
 `web.app` 只注入当前数据库检查、运行目录、队列计数和版本配置，继续保留旧私有入口。
 
+后台维护线程的定时唤醒逻辑已迁移到 `src/docxtool/web/maintenance.py`。在永久保留策略下，
+该模块只负责兼容既有维护线程入口，不删除用户原件、输出、日志或任务记录，也不触碰 DOCX
+识别链路。
+
 Web SQLite 建表、旧表补列、兼容索引和默认模板 seed 编排已迁移到
 `src/docxtool/web/database_schema.py`。该模块通过调用方注入的连接工厂、线程锁和 seed
 函数工作，不持有 HTTP 处理器、不维护任务队列，也不触碰 DOCX 识别、规范化或渲染链路。
 
 监控页的分页查询、页数计算和链接生成已迁移到 `src/docxtool/web/monitoring.py`。
 该模块只处理 query dict、URL 和 SQL 片段字符串，不读取任务表，也不生成监控页面 HTML。
+
+管理员监控页面中的分页、状态标签、IP 明细和任务日志 HTML 渲染已迁移到
+`src/docxtool/web/monitoring_pages.py`。该模块只消费调用方传入的统计数据、CSRF 片段和
+IP 查询回调，不直接访问数据库、任务队列、HTTP handler 或 DOCX 识别链路。
+
+任务执行边界选择和后台 worker 线程启动已迁移到 `src/docxtool/web/task_worker.py`。该模块
+只根据调用方传入的主线程判断、direct/subprocess runner 和记录回调编排任务执行，不导入、
+识别或导出 DOCX，也不持有数据库连接。
 
 匿名 owner 的任务归属、私人模板归属和重名模板导入改名已迁移到
 `src/docxtool/web/owner_migration.py`。该模块只处理调用方传入的 SQLite 连接或连接器，
