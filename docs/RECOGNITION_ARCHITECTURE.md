@@ -17,6 +17,12 @@ worker，也不触碰 DOCX 识别链路。
 已迁移到 `src/docxtool/web/admin_auth.py`。该模块通过调用方注入的 SQLite 连接器、锁和
 密钥配置工作，不处理 HTTP 路由、不生成页面，也不触碰 DOCX 识别链路。
 
+管理员登录表单字段解析已迁移到 `src/docxtool/web/admin_forms.py`。该模块只处理已经读取
+到内存中的 URL 编码表单 bytes，不读取 HTTP 流、不校验密钥，也不创建管理员 session。
+
+管理员登录页 HTML 渲染已迁移到 `src/docxtool/web/admin_pages.py`。该模块只返回静态页面
+字符串，不读取请求体、不校验管理员密钥，也不访问任务、数据库或 DOCX。
+
 匿名用户 owner cookie 的签名、解析、Set-Cookie 头和匿名模板接口 Origin 校验已迁移到
 `src/docxtool/web/anonymous_identity.py`。该模块只处理传入的 headers、cookie 字符串、
 时间函数和密钥配置，不访问用户表、任务表或 DOCX 识别链路。
@@ -72,12 +78,23 @@ JSON 序列化函数工作，不处理 HTTP 路由、不解析请求体，也不
 `src/docxtool/web/rate_limits.py`。该模块通过调用方注入的 SQLite 连接器和锁访问任务、
 设置与封禁表，不处理 HTTP 响应，也不触碰 DOCX 导入、识别或渲染链路。
 
+文件 API 的代理密钥和本机调试访问授权已迁移到 `src/docxtool/web/file_api_auth.py`。该模块
+只根据调用方传入的 headers、socket client_address、生产模式和密钥比较函数返回布尔值，
+不读取文件、不访问数据库，也不使用 Host 头证明本机来源。
+
 文件名清理、排版结果下载名、`Content-Disposition` 和内部错误脱敏已迁移到
 `src/docxtool/web/file_utils.py`。该模块只处理字符串，不读取或写入用户文件。
+
+管理员日志展示前的敏感字段脱敏已迁移到 `src/docxtool/web/log_redaction.py`。该模块只处理
+调用方传入的日志文本，不读取日志文件、不接触 Cookie 对象，也不访问任务表或 DOCX 内容。
 
 上传接口的 `X-Format-Config` 解码、格式配置校验、预设元数据读取和处理模式冲突检查
 已迁移到 `src/docxtool/web/format_request.py`。该模块只处理 headers 和配置对象，
 复用现有格式配置校验规则，不读取任务表、不入队，也不执行 DOCX 识别。
+
+前端首页 HTML 的资源定位和读取已迁移到 `src/docxtool/web/frontend_pages.py`。该模块只读取
+打包后的 `resources/frontend/pages/index.html` 文本，不处理 HTTP 响应、不访问任务队列，
+也不参与 DOCX 识别或导出。
 
 HTTP 路径归一、Cookie 取值、CSRF 头读取、管理页隐藏字段、紧凑 JSON 和 HTML 转义
 已迁移到 `src/docxtool/web/request_utils.py`。该模块只处理请求头、字节和字符串，

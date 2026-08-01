@@ -1,5 +1,6 @@
 from docxtool.web import app as server
 from docxtool.web.health import (
+    database_ready,
     health_payload,
     ready_payload,
     server_bind_address,
@@ -62,7 +63,59 @@ def test_version_payload_helper_preserves_public_contract() -> None:
     assert payload["processing"] == 1
 
 
+def test_database_ready_executes_probe_and_closes_connection() -> None:
+    """数据库探活模块传入连接器和锁后，应执行 SELECT 并关闭连接。"""
+    lock = _NoopLock()
+    conn = _ProbeConnection()
+
+    assert database_ready(connect=lambda: conn, sql_lock=lock) is True
+    assert conn.executed_sql == "SELECT 1"
+    assert conn.closed is True
+    assert lock.entered is True
+
+
+def test_database_ready_returns_false_on_probe_error() -> None:
+    """数据库探活模块遇到连接或查询异常时，应返回 False 而不抛出。"""
+    assert database_ready(connect=lambda: (_ for _ in ()).throw(RuntimeError("boom")), sql_lock=_NoopLock()) is False
+    assert database_ready(connect=lambda: _ProbeConnection(raise_on_execute=True), sql_lock=_NoopLock()) is False
+
+
 def test_startup_helpers_match_app_facade() -> None:
     """启动地址模块传入 host 和 port 后，应与 web.app 兼容入口保持一致。"""
     assert server_bind_address(server.BIND_HOST, server.PORT) == server._server_bind_address()
     assert startup_urls(server.BIND_HOST, server.PORT) == server._startup_urls()
+
+
+class _NoopLock:
+    """测试锁记录进入状态，模拟应用层 SQL 锁上下文。"""
+
+    def __init__(self) -> None:
+        self.entered = False
+
+    def __enter__(self):
+        self.entered = True
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        return False
+
+
+class _ProbeConnection:
+    """测试连接记录执行 SQL 和关闭状态，模拟 SQLite 连接对象。"""
+
+    def __init__(self, *, raise_on_execute: bool = False) -> None:
+        self.raise_on_execute = raise_on_execute
+        self.executed_sql = ""
+        self.closed = False
+
+    def execute(self, sql: str):
+        self.executed_sql = sql
+        if self.raise_on_execute:
+            raise RuntimeError("query failed")
+        return self
+
+    def fetchone(self):
+        return (1,)
+
+    def close(self) -> None:
+        self.closed = True

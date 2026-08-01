@@ -19,13 +19,18 @@
 - `server.py`：兼容入口，调用 `src/docxtool/web/app.py`。
 - `src/docxtool/web/app.py`：Web 服务、上传下载、任务队列、管理后台、健康检查。
 - `src/docxtool/web/admin_auth.py`：管理员会话、legacy token、管理员请求上下文和 CSRF 校验辅助。
+- `src/docxtool/web/admin_forms.py`：管理员登录表单字段解析辅助。
+- `src/docxtool/web/admin_pages.py`：管理员登录页等静态 HTML 页面渲染辅助。
 - `src/docxtool/web/anonymous_identity.py`：匿名用户 owner cookie 签名、解析和来源校验辅助。
 - `src/docxtool/web/client_ip.py`：可信代理、客户端 IP、IP 头和密钥比较辅助。
 - `src/docxtool/web/config.py`：Web 环境变量、前端来源、Cookie Secure 和 CORS 响应头解析。
 - `src/docxtool/web/database_schema.py`：Web SQLite 建表、轻量迁移和默认数据初始化编排。
+- `src/docxtool/web/file_api_auth.py`：文件 API 代理密钥和本机调试访问授权辅助。
 - `src/docxtool/web/file_utils.py`：文件名清理、下载响应头和错误详情脱敏辅助。
 - `src/docxtool/web/format_request.py`：上传请求的格式配置、预设元数据和处理模式解析。
+- `src/docxtool/web/frontend_pages.py`：打包前端首页 HTML 的定位和读取辅助。
 - `src/docxtool/web/health.py`：健康检查、readiness、版本信息和启动地址 payload。
+- `src/docxtool/web/log_redaction.py`：管理员日志展示前的敏感字段脱敏辅助。
 - `src/docxtool/web/maintenance.py`：永久保留策略下的后台维护线程兼容入口。
 - `src/docxtool/web/monitoring.py`：监控页查询参数、分页和链接生成辅助。
 - `src/docxtool/web/monitoring_pages.py`：管理员监控分页、IP 明细和任务日志 HTML 渲染辅助。

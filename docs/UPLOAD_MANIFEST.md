@@ -69,13 +69,18 @@ https://github.com/7654321x/docxtool.git
 | `src/docxtool/web/__init__.py` | Web 包入口 |
 | `src/docxtool/web/app.py` | Web 服务入口、上传下载、任务队列、管理后台、健康检查 |
 | `src/docxtool/web/admin_auth.py` | 管理员 session、legacy token 和 CSRF 校验 | 通过注入的数据库连接器和密钥配置工作 |
+| `src/docxtool/web/admin_forms.py` | 管理员登录表单解析 | 只处理 URL 编码表单 bytes，不校验密钥或创建 session |
+| `src/docxtool/web/admin_pages.py` | 管理员登录页 HTML 渲染 | 只返回静态页面字符串，不校验密钥或访问任务 |
 | `src/docxtool/web/anonymous_identity.py` | 匿名 owner cookie 签名、解析和来源校验 | 不读写数据库，只处理 headers、cookie 和密钥配置 |
 | `src/docxtool/web/client_ip.py` | 可信代理、客户端 IP 和密钥比较辅助 | 只处理 headers、socket 地址和代理配置 |
 | `src/docxtool/web/config.py` | Web 环境和 CORS 配置解析 | 不读写数据库、不处理请求体，供 `web.app` 兼容入口调用 |
 | `src/docxtool/web/database_schema.py` | Web SQLite 建表、旧库轻量迁移和默认数据初始化编排 | 通过注入连接器、锁和 seed 函数工作，不处理 HTTP 或 DOCX |
+| `src/docxtool/web/file_api_auth.py` | 文件 API 代理密钥和本机调试授权 | 只消费请求头、客户端地址和密钥比较函数，不读取文件 |
 | `src/docxtool/web/file_utils.py` | 文件名、下载头和错误脱敏辅助 | 不读写磁盘，只处理字符串 |
 | `src/docxtool/web/format_request.py` | 上传格式配置和处理模式解析 | 只处理 headers 和格式配置对象，不执行任务 |
+| `src/docxtool/web/frontend_pages.py` | 前端首页资源定位和读取 | 只读取打包 HTML 文本，不处理 HTTP 响应或 DOCX |
 | `src/docxtool/web/health.py` | 健康检查、readiness、版本和启动 URL payload | 只组装只读状态，不处理 HTTP 路由 |
+| `src/docxtool/web/log_redaction.py` | 管理员日志敏感字段脱敏 | 只处理传入日志文本，不读取日志文件或任务表 |
 | `src/docxtool/web/maintenance.py` | 后台维护线程兼容入口 | 永久保留策略下只定时唤醒，不删除用户数据 |
 | `src/docxtool/web/monitoring.py` | 监控页查询、分页和链接辅助 | 只处理分页参数和 URL，不读写数据库 |
 | `src/docxtool/web/monitoring_pages.py` | 管理员监控分页、IP 明细和任务日志 HTML 渲染 | 只消费统计数据、任务行数据和查询回调，不访问数据库或 DOCX |

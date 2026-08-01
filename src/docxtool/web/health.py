@@ -25,6 +25,20 @@ def dir_writable(path: str) -> bool:
         return False
 
 
+def database_ready(*, connect: Callable[[], Any], sql_lock) -> bool:
+    """传入数据库连接工厂和锁，返回 SQLite 是否可执行基础查询。"""
+    try:
+        with sql_lock:
+            conn = connect()
+            try:
+                conn.execute("SELECT 1").fetchone()
+            finally:
+                conn.close()
+        return True
+    except Exception:
+        return False
+
+
 def ready_payload(
     *,
     database_check: Callable[[], bool],

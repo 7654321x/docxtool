@@ -22,9 +22,7 @@ import socket
 import threading
 import logging
 import html
-import ipaddress
 import shutil
-import re as _re
 from queue import Empty
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from collections import OrderedDict
@@ -38,7 +36,7 @@ from docxtool.document.style_config import (
     StyleRule, PageSettings, load_rules_and_settings, configure_logging, get_logger,
     make_document_log_path, set_context_log_path, reset_context_log_path,
 )
-from docxtool.paths import project_path, resource_path, runtime_dir
+from docxtool.paths import project_path, runtime_dir
 from docxtool.storage.database import connect as _db_connect, default_database_path
 from docxtool.auth import hash_password, verify_password, validate_password, validate_username
 from docxtool.version import package_version
@@ -82,6 +80,8 @@ from docxtool.web.admin_auth import (
     prune_expired_admin_sessions as _admin_auth_prune_expired_sessions,
     validate_admin_csrf as _admin_auth_validate_csrf,
 )
+from docxtool.web.admin_forms import parse_admin_login_token as _admin_forms_parse_login_token
+from docxtool.web.admin_pages import render_admin_login_html as _admin_pages_render_login_html
 from docxtool.web.file_utils import (
     content_disposition_filename as _file_content_disposition_filename,
     is_safe_uuid as _file_is_safe_uuid,
@@ -90,6 +90,7 @@ from docxtool.web.file_utils import (
     sanitize_filename as _file_sanitize_filename,
     sanitize_internal_error_detail as _file_sanitize_internal_error_detail,
 )
+from docxtool.web.file_api_auth import file_api_authorized as _file_auth_authorized
 from docxtool.web.format_request import (
     FormatConfigRequestError,
     decode_format_config as _format_decode_format_config,
@@ -98,7 +99,9 @@ from docxtool.web.format_request import (
     upload_request_meta as _format_upload_request_meta,
     validate_requested_processing_mode as _format_validate_requested_processing_mode,
 )
+from docxtool.web.frontend_pages import load_frontend_index_html as _frontend_load_index_html
 from docxtool.web.health import (
+    database_ready as _health_database_ready,
     dir_writable as _health_dir_writable,
     health_payload as _build_health_payload,
     ready_payload as _build_ready_payload,
@@ -107,6 +110,7 @@ from docxtool.web.health import (
     version_payload as _build_version_payload,
 )
 from docxtool.web.maintenance import cleaner_loop as _maintenance_cleaner_loop
+from docxtool.web.log_redaction import redact_sensitive_log as _log_redact_sensitive_log
 from docxtool.web.monitoring import (
     DEFAULT_MONITOR_PAGE_SIZE,
     MAX_MONITOR_PAGE_SIZE,
@@ -1307,20 +1311,14 @@ def _admin_request_context(parsed, headers, cookie_header: str = "") -> dict:
     )
 
 def _file_api_authorized(headers, client_address=None) -> bool:
-    header_token = headers.get("X-Proxy-Secret", "") if headers else ""
-    if _compare_secret(header_token, PROXY_SECRET):
-        return True
-    # In production, Nginx also appears as a local peer. Do not let that
-    # trusted-proxy topology turn a direct public request into an authorized
-    # file API call; only the Worker-injected secret is sufficient.
-    if PRODUCTION_MODE:
-        return False
-    if not client_address:
-        return False
-    try:
-        return ipaddress.ip_address(str(client_address[0])).is_loopback
-    except ValueError:
-        return False
+    """兼容旧入口：传入请求头和客户端地址，返回文件 API 是否授权。"""
+    return _file_auth_authorized(
+        headers,
+        client_address,
+        proxy_secret=PROXY_SECRET,
+        production_mode=PRODUCTION_MODE,
+        compare_secret=_compare_secret,
+    )
 
 def _format_config_error(code: str, message: str, *, field: str = "", reason: str = "") -> FormatConfigRequestError:
     """兼容旧入口：传入稳定错误码和安全消息，返回格式配置请求错误。"""
@@ -1489,14 +1487,7 @@ def _dir_writable(path: str) -> bool:
 
 def _database_ready() -> bool:
     """无需传入数据，返回当前 SQLite 连接是否可执行基础查询。"""
-    try:
-        with _SQL_LOCK:
-            conn = _sql()
-            conn.execute("SELECT 1").fetchone()
-            conn.close()
-        return True
-    except Exception:
-        return False
+    return _health_database_ready(connect=_sql, sql_lock=_SQL_LOCK)
 
 def _ready_payload() -> dict:
     """兼容旧私有入口，无需传入数据，返回服务 readiness payload。"""
@@ -1697,14 +1688,8 @@ def _html_escape(text: str) -> str:
     return _request_html_escape(text)
 
 def _redact_sensitive_log(text: str) -> str:
-    value = str(text or "")
-    for name in ("ADMIN_TOKEN", "PROXY_SECRET", "Authorization", "Proxy-Authorization", "Cookie", "Set-Cookie"):
-        value = _re.sub(
-            rf"(?im)^({name}\s*[:=]\s*).+$",
-            r"\1[REDACTED]",
-            value,
-        )
-    return value
+    """兼容旧入口：传入日志文本，返回隐藏认证字段后的日志字符串。"""
+    return _log_redact_sensitive_log(text)
 
 def _split_ip_header(value: str):
     """兼容旧入口：拆分代理 IP 请求头为候选列表。"""
@@ -1872,31 +1857,14 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
 
     def _serve_html(self):
-        candidates = [
-            str(resource_path("frontend", "pages", "index.html")),
-        ]
-        p = next((path for path in candidates if os.path.exists(path)), candidates[-1])
-        try:
-            with open(p, "r", encoding="utf-8") as f:
-                self._text(f.read(), "text/html")
-        except FileNotFoundError:
+        body = _frontend_load_index_html()
+        if body is None:
             self.send_error(404)
+            return
+        self._text(body, "text/html")
 
     def _serve_admin_login(self):
-        body = """<!doctype html>
-<html lang="zh-CN">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>管理员登录 · 公文智能排版</title>
-<style>
-:root{--bg:#07101f;--panel:#0d1a2e;--line:rgba(160,181,215,.18);--text:#edf4ff;--muted:#8fa2be;--gold:#f6c85f}
-*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;font-family:"Microsoft YaHei","Noto Sans CJK SC","PingFang SC",sans-serif;background:radial-gradient(circle at 25% 20%,rgba(66,100,150,.16),transparent 32%),var(--bg);color:var(--text)}
-.workspace{width:min(920px,100%);display:grid;grid-template-columns:minmax(0,1.05fr) minmax(340px,.75fr);border:1px solid var(--line);border-radius:14px;overflow:hidden;background:rgba(7,16,31,.86);box-shadow:0 28px 80px rgba(0,0,0,.35)}
-.intro{padding:52px 48px;background:linear-gradient(145deg,rgba(18,36,61,.94),rgba(9,23,40,.94));border-right:1px solid var(--line)}.mark{width:46px;height:46px;display:grid;place-items:center;border-radius:11px;background:linear-gradient(135deg,#f6c85f,#e89c3a);color:#152238;font-size:22px;font-weight:900;margin-bottom:28px}.eyebrow{color:var(--gold);font-size:11px;letter-spacing:.13em;margin-bottom:10px}h1{font-size:29px;margin:0 0 13px}.intro p{max-width:38ch;color:#a9bad1;line-height:1.8;font-size:14px;margin:0}.status{display:grid;gap:10px;margin-top:34px}.status span{display:flex;align-items:center;gap:9px;color:#8fa2be;font-size:12px}.status i{width:7px;height:7px;border-radius:50%;background:#55d6a0}
-.login{padding:48px 40px;background:rgba(9,21,37,.92);display:flex;flex-direction:column;justify-content:center}.login h2{font-size:18px;margin:0 0 6px}.login>p{color:var(--muted);font-size:12px;line-height:1.7;margin:0 0 24px}label{display:block;color:#b9c9df;font-size:12px;font-weight:700;margin-bottom:8px}input{width:100%;height:44px;border:1px solid var(--line);border-radius:8px;background:#071426;color:#fff;padding:0 12px;font-size:14px;outline:none}input:focus{border-color:rgba(246,200,95,.5);box-shadow:0 0 0 4px rgba(246,200,95,.08)}button{width:100%;height:44px;margin-top:15px;border:1px solid rgba(246,200,95,.42);border-radius:8px;background:rgba(246,200,95,.14);color:#ffe7a4;font-weight:800;cursor:pointer}button:hover{background:rgba(246,200,95,.22)}.hint{font-size:11px;color:#6f85a4;margin-top:14px;line-height:1.65}.back{display:inline-block;color:#9bc8ff;font-size:11px;margin-top:18px;text-decoration:none}
-@media(max-width:760px){.workspace{grid-template-columns:1fr}.intro{padding:30px;border-right:0;border-bottom:1px solid var(--line)}.intro p,.status{display:none}.mark{margin-bottom:18px}.login{padding:30px}}
-</style></head>
-<body><main class="workspace"><section class="intro"><div class="mark">文</div><div class="eyebrow">DOCXTOOL ADMIN</div><h1>公文排版工作台</h1><p>集中查看任务状态、运行指标、访问安全和服务配置。管理员会话通过安全 Cookie 建立。</p><div class="status"><span><i></i>后端服务已连接</span><span><i></i>管理员会话受保护</span></div></section><section class="login"><h2>管理员登录</h2><p>输入服务器配置的管理员密钥，登录后进入运行工作台。</p><form method="post" action="/admin/login"><label for="admin_token">管理员密钥</label><input id="admin_token" name="admin_token" type="password" autocomplete="current-password" required autofocus><button type="submit">进入工作台</button></form><div class="hint">密钥仅用于建立当前管理员会话，不会写入页面地址。</div><a class="back" href="/">返回公文排版工具</a></section></main></body></html>"""
-        self._text(body, "text/html")
+        self._text(_admin_pages_render_login_html(), "text/html")
 
     def _admin_context_or_default(self):
         return getattr(self, "_admin_context", {"authorized": False, "session": {}, "legacy_token": False})
@@ -1924,13 +1892,7 @@ class Handler(BaseHTTPRequestHandler):
     def _handle_admin_login(self):
         length = int(self.headers.get("Content-Length", 0) or 0)
         body = _read_exact(self.rfile, length) if length > 0 else b""
-        params = {}
-        if body:
-            try:
-                params = {k: (v[-1] if isinstance(v, list) and v else v) for k, v in parse_qs(body.decode("utf-8")).items()}
-            except Exception:
-                params = {}
-        token = str(params.get("admin_token") or params.get("token") or "").strip()
+        token = _admin_forms_parse_login_token(body)
         if not token:
             self._json_error("INVALID_LOGIN", "请输入管理员密钥", 400)
             return
