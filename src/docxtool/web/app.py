@@ -68,6 +68,12 @@ from docxtool.web.anonymous_identity import (
     create_anonymous_user as _anon_create_user,
     parse_anonymous_user as _anon_parse_user,
 )
+from docxtool.web.auth_payloads import (
+    auth_me_data as _auth_payloads_me_data,
+    auth_me_extra_headers as _auth_payloads_me_extra_headers,
+    auth_success_data as _auth_payloads_success_data,
+    is_json_content_type as _auth_payloads_is_json_content_type,
+)
 from docxtool.web.admin_auth import (
     admin_authorized as _admin_auth_authorized,
     admin_request_context as _admin_auth_request_context,
@@ -79,6 +85,17 @@ from docxtool.web.admin_auth import (
     now_unix as _admin_auth_now_unix,
     prune_expired_admin_sessions as _admin_auth_prune_expired_sessions,
     validate_admin_csrf as _admin_auth_validate_csrf,
+)
+from docxtool.web.admin_access import (
+    admin_context_or_default as _admin_access_context_or_default,
+    admin_post_csrf_allowed as _admin_access_post_csrf_allowed,
+    csrf_token_from_admin_context as _admin_access_csrf_token,
+)
+from docxtool.web.admin_actions import (
+    ban_reason_from_params as _admin_actions_ban_reason,
+    ip_from_action_params as _admin_actions_ip_from_params,
+    query_ip_from_parsed_url as _admin_actions_query_ip,
+    upload_limit_values_from_params as _admin_actions_upload_limit_values,
 )
 from docxtool.web.admin_forms import parse_admin_login_token as _admin_forms_parse_login_token
 from docxtool.web.admin_pages import render_admin_login_html as _admin_pages_render_login_html
@@ -182,6 +199,14 @@ from docxtool.web.request_utils import (
     json_dumps as _request_json_dumps,
     parse_json_body as _request_parse_json_body,
     route_path as _request_route_path,
+)
+from docxtool.web.request_params import request_params as _request_params_from_parts
+from docxtool.web.responses import (
+    auth_error_body as _responses_auth_error_body,
+    json_response_bytes as _responses_json_bytes,
+    normalize_extra_headers as _responses_normalize_extra_headers,
+    retry_after_headers as _responses_retry_after_headers,
+    text_response_bytes as _responses_text_bytes,
 )
 from docxtool.web.secrets import (
     load_secret as _secrets_load_secret,
@@ -1867,16 +1892,10 @@ class Handler(BaseHTTPRequestHandler):
         self._text(_admin_pages_render_login_html(), "text/html")
 
     def _admin_context_or_default(self):
-        return getattr(self, "_admin_context", {"authorized": False, "session": {}, "legacy_token": False})
+        return _admin_access_context_or_default(getattr(self, "_admin_context", None))
 
     def _admin_csrf_token(self, parsed=None) -> str:
-        ctx = self._admin_context_or_default()
-        session = ctx.get("session") or {}
-        if session.get("csrf_token"):
-            return session["csrf_token"]
-        if ctx.get("legacy_token"):
-            return ""
-        return ""
+        return _admin_access_csrf_token(self._admin_context_or_default())
 
     def _handle_admin_session(self):
         session = _admin_session_from_headers(self.headers, self.headers.get("Cookie", ""))
@@ -1928,9 +1947,7 @@ class Handler(BaseHTTPRequestHandler):
             return False
         params = self._request_params(parsed)
         self._request_params_cache = params
-        csrf_value = str(params.get("csrf_token") or _csrf_header_value(self.headers) or "").strip()
-        session = ctx.get("session") or {}
-        if not session or not csrf_value or not hmac.compare_digest(csrf_value, session.get("csrf_token", "")):
+        if not _admin_access_post_csrf_allowed(ctx, params, self.headers, csrf_header_name=ADMIN_CSRF_HEADER):
             self._json_error("CSRF_INVALID", "CSRF 校验失败", 403)
             return False
         return True
@@ -1969,8 +1986,7 @@ class Handler(BaseHTTPRequestHandler):
         if not _auth_origin_allowed(self.headers):
             self._json_error("ORIGIN_INVALID", "请求来源不被允许", 403)
             return None
-        content_type = (self.headers.get("Content-Type", "") or "").split(";", 1)[0].strip().lower()
-        if content_type != "application/json":
+        if not _auth_payloads_is_json_content_type(self.headers):
             self._json_error("CONTENT_TYPE_INVALID", "请求必须使用 application/json", 415)
             return None
         payload = self._request_params(urlparse(self.path))
@@ -1978,15 +1994,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def _handle_auth_me(self):
         principal = _principal(self.headers, self.client_address)
-        data = {"authenticated": bool(principal.get("authenticated")), "user": None, "csrf_token": None}
-        if principal.get("authenticated"):
-            data["user"] = {"id": principal["user_id"], "username": principal["username"], "display_name": principal.get("display_name", "")}
-            data["csrf_token"] = principal.get("csrf_token")
-        extra = []
-        if principal.get("cookie"):
-            extra.append(("Set-Cookie", principal["cookie"]))
-        if principal.get("invalid_user_session"):
-            extra.append(("Set-Cookie", _user_cookie_header("", clear=True)))
+        data = _auth_payloads_me_data(principal)
+        extra = _auth_payloads_me_extra_headers(principal, clear_user_cookie_header=_user_cookie_header("", clear=True))
         self._json({"ok": True, "data": data}, extra_headers=extra)
 
     def _handle_auth_register(self):
@@ -2026,7 +2035,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._json_error("REGISTER_FAILED", "注册失败", 500)
             return
         session = _create_user_session(user_id, self.headers.get("User-Agent", ""), self.client_address[0] if self.client_address else "")
-        self._json({"ok": True, "data": {"user": {"id": user_id, "username": display, "display_name": display}, "csrf_token": session["csrf_token"]}}, 201, [
+        self._json({"ok": True, "data": _auth_payloads_success_data(user_id, display, display, session["csrf_token"])}, 201, [
             ("Set-Cookie", _user_cookie_header(session["token"])),
             ("Set-Cookie", _anonymous_user_cookie_clear_header()),
         ])
@@ -2070,7 +2079,7 @@ class Handler(BaseHTTPRequestHandler):
         _migrate_anonymous_resources(principal.get("owner_id", ""), row["id"])
         session = _create_user_session(row["id"], self.headers.get("User-Agent", ""), self.client_address[0] if self.client_address else "")
         remember_me = _parse_bool(str(payload.get("remember_me", "true")), True)
-        self._json({"ok": True, "data": {"user": {"id": row["id"], "username": row["username"], "display_name": row["display_name"]}, "csrf_token": session["csrf_token"]}}, extra_headers=[
+        self._json({"ok": True, "data": _auth_payloads_success_data(row["id"], row["username"], row["display_name"], session["csrf_token"])}, extra_headers=[
             ("Set-Cookie", _user_cookie_header(session["token"], persistent=remember_me)),
             ("Set-Cookie", _anonymous_user_cookie_clear_header()),
         ])
@@ -2285,35 +2294,15 @@ class Handler(BaseHTTPRequestHandler):
         cached = getattr(self, "_request_params_cache", None)
         if cached is not None:
             return cached
-        params = {k: (v[-1] if isinstance(v, list) and v else v) for k, v in parse_qs(parsed.query, keep_blank_values=True).items()}
-        if self.command not in ("POST", "PUT", "DELETE"):
-            return params
-        try:
-            length = int(self.headers.get("Content-Length", 0) or 0)
-        except ValueError:
-            length = 0
-        if length <= 0:
-            return params
-        body = _read_exact(self.rfile, length)
-        if not body:
-            return params
-        content_type = (self.headers.get("Content-Type", "") or "").split(";", 1)[0].strip().lower()
-        try:
-            if content_type == "application/json":
-                body_params = _parse_json_body(body)
-                for key, value in body_params.items():
-                    params[key] = value
-            else:
-                body_params = parse_qs(body.decode("utf-8"), keep_blank_values=True)
-                for key, value in body_params.items():
-                    params[key] = value[-1] if isinstance(value, list) and value else value
-        except Exception:
-            return params
-        return params
+        return _request_params_from_parts(
+            parsed,
+            self.command,
+            self.headers,
+            lambda length: _read_exact(self.rfile, length),
+        )
 
     def _query_ip(self, parsed):
-        qs = parse_qs(parsed.query)
-        return (qs.get("ip") or qs.get("addr") or [""])[0].strip()
+        return _admin_actions_query_ip(parsed)
 
     def _handle_ip_detail(self, parsed):
         ip = self._query_ip(parsed)
@@ -2324,18 +2313,18 @@ class Handler(BaseHTTPRequestHandler):
 
     def _handle_ban(self, parsed):
         params = self._request_params(parsed)
-        ip = (params.get("ip") or params.get("addr") or "").strip()
+        ip = _admin_actions_ip_from_params(params)
         if not _is_ip(ip):
             self._json_error("INVALID_IP", "无效的 IP", 400)
             return
-        reason = str(params.get("reason") or "monitor")[:120]
+        reason = _admin_actions_ban_reason(params)
         _ban_ip(ip, reason)
         logger.warning(f"[Security] ip banned: {ip} reason={reason}")
         self._redirect("/monitor")
 
     def _handle_unban(self, parsed):
         params = self._request_params(parsed)
-        ip = (params.get("ip") or params.get("addr") or "").strip()
+        ip = _admin_actions_ip_from_params(params)
         if not _is_ip(ip):
             self._json_error("INVALID_IP", "无效的 IP", 400)
             return
@@ -2345,15 +2334,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def _handle_limit(self, parsed):
         params = self._request_params(parsed)
-        enabled = str(params.get("enabled") or "0") == "1"
-        try:
-            window_seconds = int(params.get("window_seconds") or DEFAULT_UPLOAD_LIMIT_WINDOW_SECONDS)
-        except ValueError:
-            window_seconds = DEFAULT_UPLOAD_LIMIT_WINDOW_SECONDS
-        try:
-            count = int(params.get("count") or DEFAULT_UPLOAD_LIMIT_COUNT)
-        except ValueError:
-            count = DEFAULT_UPLOAD_LIMIT_COUNT
+        enabled, window_seconds, count = _admin_actions_upload_limit_values(
+            params,
+            default_window_seconds=DEFAULT_UPLOAD_LIMIT_WINDOW_SECONDS,
+            default_count=DEFAULT_UPLOAD_LIMIT_COUNT,
+        )
         _save_limit_settings(enabled, window_seconds, count)
         logger.warning(
             f"[Security] upload limit settings updated: enabled={enabled} "
@@ -2480,48 +2465,33 @@ class Handler(BaseHTTPRequestHandler):
         self._text(body, "text/html")
 
     def _text(self, body: str, mime: str, status: int = 200, extra_headers=None):
-        data = body.encode("utf-8")
+        data = _responses_text_bytes(body)
         self.send_response(status)
         self.send_header("Content-Type", f"{mime}; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
-        if extra_headers:
-            if isinstance(extra_headers, dict):
-                items = extra_headers.items()
-            else:
-                items = extra_headers
-            for key, value in items:
-                self.send_header(key, value)
+        for key, value in _responses_normalize_extra_headers(extra_headers):
+            self.send_header(key, value)
         self._set_cors_headers()
         self._set_security_headers()
         self.end_headers()
         self.wfile.write(data)
 
     def _json(self, obj: dict, status: int = 200, extra_headers=None):
-        data = json.dumps(obj, ensure_ascii=False, default=str).encode("utf-8")
+        data = _responses_json_bytes(obj)
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
-        if extra_headers:
-            if isinstance(extra_headers, dict):
-                items = extra_headers.items()
-            else:
-                items = extra_headers
-            for key, value in items:
-                self.send_header(key, value)
+        for key, value in _responses_normalize_extra_headers(extra_headers):
+            self.send_header(key, value)
         self._set_cors_headers()
         self._set_security_headers()
         self.end_headers()
         self.wfile.write(data)
 
     def _json_error(self, code: str, message: str, status: int, *, field: str = "", reason: str = "", retry_after: int = 0):
-        headers = [("Retry-After", str(retry_after))] if retry_after else None
+        headers = _responses_retry_after_headers(retry_after)
         if _route_path(urlparse(self.path).path).startswith("/auth/"):
-            error = {"code": code, "message": message}
-            if field:
-                error["field"] = field
-            if reason:
-                error["reason"] = reason
-            self._json({"ok": False, "error": error}, status, extra_headers=headers)
+            self._json(_responses_auth_error_body(code, message, field=field, reason=reason), status, extra_headers=headers)
             return
         self._json(_error_payload(code, message, field=field, reason=reason), status, extra_headers=headers)
 

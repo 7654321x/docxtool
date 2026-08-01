@@ -23,9 +23,21 @@ worker，也不触碰 DOCX 识别链路。
 管理员登录页 HTML 渲染已迁移到 `src/docxtool/web/admin_pages.py`。该模块只返回静态页面
 字符串，不读取请求体、不校验管理员密钥，也不访问任务、数据库或 DOCX。
 
+管理员请求上下文默认值、页面 CSRF token 提取和管理员 POST CSRF 校验已迁移到
+`src/docxtool/web/admin_access.py`。该模块只消费调用方已解析出的管理员上下文、请求参数和
+请求头，不创建管理员 session、不读取数据库、不处理 HTTP 路由，也不触碰 DOCX 识别链路。
+
+管理员监控页 IP 查询、封禁原因和上传限制表单参数解析已迁移到
+`src/docxtool/web/admin_actions.py`。该模块只处理 URL query 和已解析参数字典，不读写封禁表、
+设置表或任务表，也不生成 HTTP 响应。
+
 匿名用户 owner cookie 的签名、解析、Set-Cookie 头和匿名模板接口 Origin 校验已迁移到
 `src/docxtool/web/anonymous_identity.py`。该模块只处理传入的 headers、cookie 字符串、
 时间函数和密钥配置，不访问用户表、任务表或 DOCX 识别链路。
+
+用户认证接口的 JSON Content-Type 判断、公开用户 data、`/auth/me` data 和附加 Cookie 头组装
+已迁移到 `src/docxtool/web/auth_payloads.py`。该模块只消费调用方传入的 headers、principal、
+用户字段和 cookie 字符串，不访问数据库、不校验密码，也不处理 HTTP 路由。
 
 普通用户登录 session 哈希、登录 Cookie、用户 session 查询/刷新/删除、统一 principal 和
 CSRF 校验已迁移到 `src/docxtool/web/user_auth.py`。该模块通过调用方注入的 SQLite 连接器、
@@ -99,6 +111,14 @@ JSON 序列化函数工作，不处理 HTTP 路由、不解析请求体，也不
 HTTP 路径归一、Cookie 取值、CSRF 头读取、管理页隐藏字段、紧凑 JSON 和 HTML 转义
 已迁移到 `src/docxtool/web/request_utils.py`。该模块只处理请求头、字节和字符串，
 不访问数据库、不读取运行目录，也不参与识别或排版。
+
+query、JSON body 和 URL 编码表单 body 的请求参数合并已迁移到
+`src/docxtool/web/request_params.py`。该模块只消费已解析 URL、HTTP 方法、请求头和调用方传入的
+请求体读取函数，不直接访问 socket、数据库、任务队列或 DOCX。
+
+HTTP 文本/JSON 响应编码、附加响应头归一化、`Retry-After` 头和认证接口错误响应体已迁移到
+`src/docxtool/web/responses.py`。该模块只返回 bytes、响应头元组或错误 dict，不直接写
+socket、不设置 CORS/安全头，也不访问数据库或 DOCX。
 
 Web 管理密钥、代理密钥的环境读取和弱密钥启动校验已迁移到
 `src/docxtool/web/secrets.py`。该模块只处理环境映射和密钥字符串，不访问数据库、不处理 HTTP

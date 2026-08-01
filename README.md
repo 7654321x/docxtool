@@ -18,10 +18,13 @@
 
 - `server.py`：兼容入口，调用 `src/docxtool/web/app.py`。
 - `src/docxtool/web/app.py`：Web 服务、上传下载、任务队列、管理后台、健康检查。
+- `src/docxtool/web/admin_access.py`：管理员请求上下文、页面 CSRF token 和 POST CSRF 校验辅助。
+- `src/docxtool/web/admin_actions.py`：管理员监控页 IP、封禁原因和上传限制表单参数解析辅助。
 - `src/docxtool/web/admin_auth.py`：管理员会话、legacy token、管理员请求上下文和 CSRF 校验辅助。
 - `src/docxtool/web/admin_forms.py`：管理员登录表单字段解析辅助。
 - `src/docxtool/web/admin_pages.py`：管理员登录页等静态 HTML 页面渲染辅助。
 - `src/docxtool/web/anonymous_identity.py`：匿名用户 owner cookie 签名、解析和来源校验辅助。
+- `src/docxtool/web/auth_payloads.py`：用户认证接口 Content-Type 判断、响应体和 Cookie 响应头组装辅助。
 - `src/docxtool/web/client_ip.py`：可信代理、客户端 IP、IP 头和密钥比较辅助。
 - `src/docxtool/web/config.py`：Web 环境变量、前端来源、Cookie Secure 和 CORS 响应头解析。
 - `src/docxtool/web/database_schema.py`：Web SQLite 建表、轻量迁移和默认数据初始化编排。
@@ -40,6 +43,8 @@
 - `src/docxtool/web/preset_store.py`：预设模板列表、详情、创建、更新和删除的数据库读写辅助。
 - `src/docxtool/web/rate_limits.py`：上传限流、认证限流、IP 封禁和上传次数限制辅助。
 - `src/docxtool/web/request_utils.py`：HTTP 路径、Cookie、CSRF、JSON 和 HTML 转义辅助。
+- `src/docxtool/web/request_params.py`：query、JSON body 和表单 body 请求参数合并辅助。
+- `src/docxtool/web/responses.py`：HTTP 文本/JSON 响应编码、附加头和认证错误体辅助。
 - `src/docxtool/web/secrets.py`：Web 管理密钥和代理密钥加载、弱密钥启动校验辅助。
 - `src/docxtool/web/stream_io.py`：HTTP 请求体定长读取、上传落盘和下载文件流输出辅助。
 - `src/docxtool/web/task_cache.py`：内存任务缓存裁剪辅助。
