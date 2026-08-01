@@ -23,12 +23,13 @@ from .models import (
     BoundRecognitionBlock,
     HostParagraph,
     HostSnapshot,
+    HostSnapshotSummary,
     PhysicalParagraphBinding,
     RecognitionBinding,
     RecognitionBlock,
     RecognitionPlan,
-    recognition_plan_from_dict,
 )
+from .validation import host_snapshot_from_dict, recognition_plan_from_dict
 
 
 def _sha256(value: str) -> str:
@@ -78,6 +79,16 @@ class _PhysicalGroup:
 def _coerce_snapshot(value: HostSnapshot | Mapping[str, Any]) -> HostSnapshot:
     if isinstance(value, HostSnapshot):
         return value
+    if isinstance(value, HostSnapshotSummary):
+        raise BindingError(
+            "HostSnapshotSummary 不能用于绑定",
+            details={"path": "$", "object_kind": "HostSnapshotSummary"},
+        )
+    if isinstance(value, Mapping) and value.get("summary_type") == "host-snapshot-summary-v1":
+        raise BindingError(
+            "HostSnapshotSummary 不能用于绑定",
+            details={"path": "$.summary_type", "object_kind": "HostSnapshotSummary"},
+        )
     return HostSnapshot.from_dict(value, allow_legacy=True)
 
 
@@ -196,6 +207,13 @@ def _bound(
     plan_id: str = "",
     snapshot: Optional[HostSnapshot] = None,
 ) -> BoundRecognitionBlock:
+    if status == "unresolved":
+        host = None
+        host_index = None
+        start = None
+        end = None
+        canonical_start = None
+        canonical_end = None
     preconditions = {}
     if host is not None and snapshot is not None and status in {"confirmed", "review"}:
         fragment = host.tape.raw_slice_utf16(start or 0, end or 0) if start is not None and end is not None else ""
@@ -238,6 +256,8 @@ def _bound(
 def bind_recognition_plan(
     plan: RecognitionPlan | Mapping[str, Any],
     host_snapshot: HostSnapshot | Mapping[str, Any],
+    *,
+    strict: bool = False,
 ) -> RecognitionBinding:
     """Bind a plan to a local host snapshot without calling any editor API.
 
@@ -245,8 +265,24 @@ def bind_recognition_plan(
     Word integrations must translate them only after their own API snapshot is
     verified, and must skip any block whose status is not ``confirmed``.
     """
-    plan = _coerce_plan(plan)
-    snapshot = _coerce_snapshot(host_snapshot)
+    if isinstance(host_snapshot, HostSnapshotSummary) or (
+        isinstance(host_snapshot, Mapping) and host_snapshot.get("summary_type") == "host-snapshot-summary-v1"
+    ):
+        raise BindingError(
+            "HostSnapshotSummary 不能用于绑定",
+            details={"path": "$.summary_type", "object_kind": "HostSnapshotSummary"},
+        )
+    plan = plan if isinstance(plan, RecognitionPlan) else recognition_plan_from_dict(plan, strict=strict)
+    snapshot = host_snapshot if isinstance(host_snapshot, HostSnapshot) else host_snapshot_from_dict(
+        host_snapshot,
+        strict=strict,
+    )
+    if plan.schema_version != "recognition-plan-v1":
+        raise UnsupportedContractError(
+            "不支持的识别计划 Schema",
+            code="UNSUPPORTED_SCHEMA_VERSION",
+            details={"path": "plan.schema_version"},
+        )
     if plan.integration_contract_version and plan.integration_contract_version != "integration-contract-v1":
         raise UnsupportedContractError(
             "不支持的识别计划协议版本",

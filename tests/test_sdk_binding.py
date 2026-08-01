@@ -27,6 +27,38 @@ def _write_document(path: Path, paragraphs: list[str]) -> None:
     document.save(path)
 
 
+def _snapshot(paragraphs: list[dict] | list[str], *, snapshot_id: str = "snap-1") -> dict:
+    items = []
+    for ordinal, value in enumerate(paragraphs):
+        if isinstance(value, dict):
+            raw_text = value["raw_text"]
+            host_index = value.get("host_paragraph_index", ordinal)
+        else:
+            raw_text = value
+            host_index = ordinal
+        items.append({
+            "host_paragraph_id": "main:{0:06d}".format(host_index),
+            "host_paragraph_index": host_index,
+            "story_id": "main",
+            "story_type": "main",
+            "story_paragraph_index": ordinal,
+            "section_index": 0,
+            "is_in_table": False,
+            "raw_text": raw_text,
+        })
+    return {
+        "schema_version": "host-snapshot-v1",
+        "integration_contract_version": "integration-contract-v1",
+        "snapshot_id": snapshot_id,
+        "document_identity": "local-only",
+        "document_revision": "rev-1",
+        "host": {"kind": "test-host"},
+        "text_contract_version": "host-text-v1",
+        "offset_encoding": "utf16_code_unit",
+        "paragraphs": items,
+    }
+
+
 def test_source_tape_keeps_utf16_and_canonical_boundaries_reversible() -> None:
     raw = "甲\u00a0😀\r\nＢ"
     tape = SourceTape.from_text(raw)
@@ -140,16 +172,12 @@ def test_host_binding_uses_monotonic_order_and_handles_shifted_paragraphs(tmp_pa
     _write_document(source, ["重复段落", "一、总体要求。正文内容不少于五个字。", "重复段落"])
     plan = recognize_docx(source, recognition_mode="legacy")
 
-    binding = bind_recognition_plan(plan, {
-        "host_type": "test-host",
-        "document_identity": "local-only",
-        "paragraphs": [
-            {"host_paragraph_index": 9, "raw_text": "额外段落"},
-            {"host_paragraph_index": 10, "raw_text": "重复段落"},
-            {"host_paragraph_index": 11, "raw_text": "一、总体要求。正文内容不少于五个字。"},
-            {"host_paragraph_index": 12, "raw_text": "重复段落"},
-        ],
-    })
+    binding = bind_recognition_plan(plan, _snapshot([
+        {"host_paragraph_index": 9, "raw_text": "额外段落"},
+        {"host_paragraph_index": 10, "raw_text": "重复段落"},
+        {"host_paragraph_index": 11, "raw_text": "一、总体要求。正文内容不少于五个字。"},
+        {"host_paragraph_index": 12, "raw_text": "重复段落"},
+    ]))
 
     assert all(item.binding_status == "confirmed" for item in binding.blocks)
     assert [item.host_paragraph_index for item in binding.blocks] == [10, 11, 11, 12]
@@ -163,10 +191,7 @@ def test_host_binding_maps_canonical_text_to_host_raw_text_without_reusing_offse
     _write_document(source, ["正文\u00a0内容😀"])
     plan = recognize_docx(source, recognition_mode="legacy")
 
-    binding = bind_recognition_plan(plan, {
-        "host_type": "test-host",
-        "paragraphs": [{"raw_text": "正文 内容😀"}],
-    })
+    binding = bind_recognition_plan(plan, _snapshot(["正文 内容😀"]))
 
     assert binding.blocks[0].binding_status == "review"
     assert binding.host_text_contract_version == HOST_TEXT_CONTRACT_VERSION
@@ -181,15 +206,12 @@ def test_ambiguous_repeat_only_blocks_its_own_physical_paragraph_group(tmp_path:
     _write_document(source, ["唯一开头", "重复内容", "唯一结尾"])
     plan = recognize_docx(source, recognition_mode="legacy")
 
-    binding = bind_recognition_plan(plan, {
-        "host_type": "test-host",
-        "paragraphs": [
-            {"host_paragraph_index": 10, "raw_text": "唯一开头"},
-            {"host_paragraph_index": 11, "raw_text": "重复内容"},
-            {"host_paragraph_index": 12, "raw_text": "重复内容"},
-            {"host_paragraph_index": 13, "raw_text": "唯一结尾"},
-        ],
-    })
+    binding = bind_recognition_plan(plan, _snapshot([
+        {"host_paragraph_index": 10, "raw_text": "唯一开头"},
+        {"host_paragraph_index": 11, "raw_text": "重复内容"},
+        {"host_paragraph_index": 12, "raw_text": "重复内容"},
+        {"host_paragraph_index": 13, "raw_text": "唯一结尾"},
+    ]))
 
     assert [item.binding_status for item in binding.blocks] == ["confirmed", "unresolved", "confirmed"]
     assert [item.host_paragraph_index for item in binding.blocks] == [10, None, 13]
@@ -206,13 +228,7 @@ def test_repeated_paragraphs_with_distinct_contexts_remain_confirmed(tmp_path: P
     _write_document(source, ["文首", "重复内容", "中间锚点", "重复内容", "文末"])
     plan = recognize_docx(source, recognition_mode="legacy")
 
-    binding = bind_recognition_plan(plan, {
-        "host_type": "test-host",
-        "paragraphs": [
-            {"raw_text": "文首"}, {"raw_text": "重复内容"}, {"raw_text": "中间锚点"},
-            {"raw_text": "重复内容"}, {"raw_text": "文末"},
-        ],
-    })
+    binding = bind_recognition_plan(plan, _snapshot(["文首", "重复内容", "中间锚点", "重复内容", "文末"]))
 
     assert all(item.binding_status == "confirmed" for item in binding.blocks)
     assert all(item.status == "matched_unique" for item in binding.physical_paragraphs)
@@ -223,10 +239,7 @@ def test_host_binding_refuses_ambiguous_duplicate_occurrences(tmp_path: Path) ->
     _write_document(source, ["相同内容"])
     plan = recognize_docx(source, recognition_mode="legacy")
 
-    binding = bind_recognition_plan(plan, {
-        "host_type": "test-host",
-        "paragraphs": [{"raw_text": "相同内容"}, {"raw_text": "相同内容"}],
-    })
+    binding = bind_recognition_plan(plan, _snapshot(["相同内容", "相同内容"]))
 
     assert binding.blocks[0].binding_status == "unresolved"
     assert "SOURCE_OCCURRENCE_AMBIGUOUS" in binding.blocks[0].binding_warnings
@@ -237,7 +250,7 @@ def test_sdk_cli_can_bind_a_local_snapshot_without_default_text_output(tmp_path:
     output = tmp_path / "plan.json"
     snapshot = tmp_path / "snapshot.json"
     _write_document(source, ["普通正文内容"])
-    snapshot.write_text(json.dumps({"host_type": "test-host", "paragraphs": [{"raw_text": "普通正文内容"}]}), encoding="utf-8")
+    snapshot.write_text(json.dumps(_snapshot(["普通正文内容"]), ensure_ascii=False), encoding="utf-8")
 
     assert sdk_main([str(source), "--host-snapshot", str(snapshot), "--output", str(output)]) == 0
     payload = json.loads(output.read_text(encoding="utf-8"))

@@ -31,6 +31,8 @@ from .constants import (
 )
 from .errors import InvalidRequestError, RecognitionInputError, RecognitionSdkError
 from .models import RecognitionBlock, RecognitionPlan, RecognitionRequest, ReviewItem, mapping_digest
+from .validation import recognition_request_from_dict
+
 _SPECIAL_KIND_BY_TYPE = {
     "__table__": "table",
     "__image__": "image",
@@ -347,6 +349,17 @@ def _build_plan(
 _UNSET = object()
 
 
+def _legacy_bool(value: Any, *, default: bool, path: str) -> bool:
+    if value is _UNSET:
+        return default
+    if isinstance(value, bool):
+        return value
+    raise InvalidRequestError(
+        "布尔参数必须为 true 或 false",
+        details={"path": path, "actual_type": type(value).__name__},
+    )
+
+
 def _request_from_legacy(
     *,
     processing_mode: Any,
@@ -361,8 +374,8 @@ def _request_from_legacy(
         recognition_mode="authoritative" if recognition_mode is _UNSET else str(recognition_mode),
         format_config=None if format_config is _UNSET else format_config,
         feature_overrides=None if features is _UNSET else features,
-        include_text=False if include_text is _UNSET else bool(include_text),
-        include_raw_text=False if include_raw_text is _UNSET else bool(include_raw_text),
+        include_text=_legacy_bool(include_text, default=False, path="include_text"),
+        include_raw_text=_legacy_bool(include_raw_text, default=False, path="include_raw_text"),
     )
 
 
@@ -386,7 +399,7 @@ def _resolve_request(
     )
     if request is None:
         return legacy
-    resolved = request if isinstance(request, RecognitionRequest) else RecognitionRequest.from_dict(request)
+    resolved = request if isinstance(request, RecognitionRequest) else recognition_request_from_dict(request)
     comparisons = {
         "processing_mode": processing_mode,
         "recognition_mode": recognition_mode,

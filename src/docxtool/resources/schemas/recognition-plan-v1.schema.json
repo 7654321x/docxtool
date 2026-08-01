@@ -78,7 +78,7 @@
       "properties": {
         "start": { "type": ["integer", "null"], "minimum": 0 },
         "end": { "type": ["integer", "null"], "minimum": 0 },
-        "coordinate_system": { "type": "string", "minLength": 1 },
+        "coordinate_system": { "enum": ["source_raw_text", "source_canonical_text"] },
         "encoding": { "const": "utf16_code_unit" }
       },
       "additionalProperties": false

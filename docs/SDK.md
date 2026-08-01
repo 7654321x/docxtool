@@ -16,12 +16,29 @@ pip install dist/docxtool-*.whl
 ## Python 调用
 
 ```python
-from docxtool.sdk import recognize_docx
+from docxtool.sdk import (
+    RecognitionRequest,
+    recognition_request_from_dict,
+    validate_recognition_request,
+    recognize_docx,
+)
 
+payload = {
+    "schema_version": "recognition-request-v1",
+    "processing_mode": "structural",
+    "recognition_mode": "authoritative",
+    "include_text": False,
+    "include_raw_text": False,
+    "format_config": None,
+    "feature_overrides": None,
+}
+report = validate_recognition_request(payload)
+if not report.valid:
+    raise ValueError(report.to_dict())
+request = recognition_request_from_dict(payload)
 plan = recognize_docx(
     "input.docx",
-    processing_mode="structural",
-    recognition_mode="authoritative",
+    request=request,
 )
 print(plan.to_dict())
 ```
@@ -72,7 +89,8 @@ print(plan.to_dict())
 `segment_count_total`、`segment_count_located` 和 `segment_count_confirmed`
 确认片段组完整；任一片段未确认时不得直接一键写入。
 
-默认不返回文字。仅本机受控链路可使用 `include_text=True` 返回
+默认不返回文字。`include_text` 和 `include_raw_text` 必须是 JSON boolean；
+字符串 `"true"`、`"false"`、数字 `0/1`、数组或对象都会被拒绝。仅本机受控链路可使用 `include_text=True` 返回
 `recognized_text` 与 canonical 片段；`include_raw_text=True` 会额外返回
 原始片段，可能包含敏感正文，调用方不得写入普通日志或上传到网络。
 
@@ -86,10 +104,25 @@ from docxtool.sdk import bind_recognition_plan, recognize_docx
 
 plan = recognize_docx("snapshot.docx")
 binding = bind_recognition_plan(plan, {
-    "host_type": "wps",
+    "schema_version": "host-snapshot-v1",
+    "integration_contract_version": "integration-contract-v1",
+    "snapshot_id": "local-snapshot-1",
     "document_identity": "optional-local-id",
+    "document_revision": "optional-revision",
+    "host": {"kind": "wps"},
+    "text_contract_version": "host-text-v1",
+    "offset_encoding": "utf16_code_unit",
     "paragraphs": [
-        {"host_paragraph_index": 0, "raw_text": "当前物理段落文字"},
+        {
+            "host_paragraph_id": "main:000000",
+            "host_paragraph_index": 0,
+            "story_id": "main",
+            "story_type": "main",
+            "story_paragraph_index": 0,
+            "section_index": 0,
+            "is_in_table": False,
+            "raw_text": "当前物理段落文字"
+        },
     ],
 })
 ```
@@ -100,6 +133,8 @@ occurrence 及同段逻辑片段顺序交叉验证。结果为：
 - `confirmed`：可以由宿主进一步转换为自身 Range；
 - `review`：仅可供人工预览；
 - `unresolved`：必须跳过，不能猜测段落或 Range。
+
+绑定状态和动作是固定组合：`confirmed` 必须是 `verify_host_range` 且包含宿主段落 ID、raw/canonical span、片段哈希和写入前置条件；`review` 必须是 `preview_only`；`unresolved` 必须是 `skip`，且不得携带可执行宿主 span。
 
 `host_raw_start_utf16` / `host_raw_end_utf16` 只描述传入快照的 `raw_text`，
 同样不是 WPS Range 坐标。WPS 端必须再次验证当前段落文本后才能换算和
@@ -151,9 +186,11 @@ docxtool-recognize input.docx --mode structural --output recognition-plan.json
 docxtool-sdk manifest
 docxtool-sdk recognize --source input.docx --request request.json --output plan.json
 docxtool-sdk bind --plan plan.json --snapshot snapshot.json --output binding.json
+docxtool-sdk validate --kind recognition-request --input request.json
 docxtool-sdk validate --kind recognition-plan --input plan.json
 docxtool-sdk validate --kind host-snapshot --input snapshot.json
 docxtool-sdk validate --kind recognition-binding --input binding.json
+docxtool-sdk summarize-snapshot --snapshot snapshot.json --output snapshot-summary.json
 ```
 
 所有新命令都使用统一 envelope：
@@ -168,6 +205,26 @@ docxtool-sdk validate --kind recognition-binding --input binding.json
 {"ok": false, "error": {"schema_version": "sdk-error-v1", "code": "INVALID_HOST_SNAPSHOT", "message": "简短错误", "retryable": false, "details": {"path": "snapshot_id"}}}
 ```
 
+## ValidationReport
+
+`validate_recognition_request()`、`validate_recognition_plan()`、
+`validate_host_snapshot()` 和 `validate_recognition_binding()` 返回
+`ValidationReport`：
+
+```json
+{
+  "valid": false,
+  "errors": [
+    {"code": "INVALID_HOST_SNAPSHOT", "path": "$.paragraphs[0].raw_text", "severity": "error", "detail": {"path": "$.paragraphs[0].raw_text", "validator": "type"}}
+  ],
+  "warnings": []
+}
+```
+
+每个问题只包含稳定错误码、JSON 路径、严重级别和白名单详情，不返回正文、绝对路径或 traceback。`strict=False` 允许未知扩展字段并给 warning；`strict=True` 拒绝未知字段。
+
+`summarize_host_snapshot()` / `docxtool-sdk summarize-snapshot` 只输出脱敏计数摘要，不含 `raw_text`，也不能传给 `bind_recognition_plan()`。
+
 ## Integration Contract v1
 
 公共跨语言协议为 `integration-contract-v1`，由以下对象组成：
@@ -177,6 +234,8 @@ docxtool-sdk validate --kind recognition-binding --input binding.json
 - `RecognitionPlan`
 - `HostSnapshot`
 - `RecognitionBinding`
+- `ValidationReport`
+- `HostSnapshotSummary`
 - `SdkError`
 
 JSON Schema 是正式协议来源，随 wheel 安装在：
@@ -203,9 +262,10 @@ locator、host-text 和 offset encoding 版本。
 `block_index`、`host_paragraph_index`、`source_paragraph_index` 继续作为兼容字段保留，
 但不能作为长期唯一标识。
 
-`plan_id` 由来源文件 SHA-256、协议版本、识别模式和配置摘要确定性生成，不含路径
-或正文。`block_id` 由 `plan_id`、物理段落组、片段序号和片段哈希生成。`snapshot_id`
-由宿主生成；旧输入缺失时 SDK 仅为兼容绑定合成临时 ID，但正式 v1 schema 校验会拒绝。
+`plan_id` 由来源文件 SHA-256、协议版本、识别引擎、包版本、locator、host-text、
+offset encoding、识别模式和配置摘要确定性生成，不含路径或正文。`block_id` 由
+`plan_id`、物理段落组、片段序号和片段哈希生成。`binding_id` 会随快照、状态、
+span、片段哈希或写入前置条件变化。`snapshot_id` 和 `host_paragraph_id` 由宿主生成。
 
 ## Binding Preconditions
 

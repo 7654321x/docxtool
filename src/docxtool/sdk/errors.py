@@ -6,13 +6,33 @@ from typing import Any, Dict, Mapping, Optional
 
 from .constants import SDK_ERROR_SCHEMA_VERSION
 
+_DETAIL_ALLOWLIST = {
+    "actual_type",
+    "code",
+    "count",
+    "expected",
+    "field",
+    "index",
+    "issue_code",
+    "object_kind",
+    "path",
+    "reason",
+    "recommended_action",
+    "schema_name",
+    "schema_version",
+    "severity",
+    "status",
+    "supported",
+    "validator",
+}
+
 
 def _redacted_details(details: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
     if not details:
         return {}
     safe = {}
     for key, value in details.items():
-        if key in {"text", "raw_text", "recognized_text", "raw_fragment_text", "canonical_fragment_text"}:
+        if key not in _DETAIL_ALLOWLIST:
             continue
         if isinstance(value, (str, int, float, bool)) or value is None:
             safe[str(key)] = value

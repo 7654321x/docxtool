@@ -9,15 +9,19 @@ implementation.
 1. Export or save the currently open document as a temporary local DOCX snapshot.
 2. Call `docxtool-sdk recognize --source snapshot.docx --output plan.json`.
 3. Build a `host-snapshot-v1` object from the current editor paragraphs.
-4. Call `docxtool-sdk bind --plan plan.json --snapshot snapshot.json --output binding.json`.
-5. For each `confirmed` block, locate the host paragraph by `host_paragraph_id`.
-6. Re-read the current host paragraph text and validate binding preconditions.
-7. Create a real host Range for the raw span.
-8. Read the Range text back, hash raw/canonical fragment text, and compare with
+4. Validate both JSON files with `docxtool-sdk validate`.
+5. Optionally write a text-free `docxtool-sdk summarize-snapshot` report for UI
+   diagnostics; never pass that summary to binding.
+6. Call `docxtool-sdk bind --plan plan.json --snapshot snapshot.json --output binding.json`.
+7. For each `confirmed` block, locate the host paragraph by `host_paragraph_id`.
+8. Re-read the current host paragraph text and validate binding preconditions.
+9. Create a real host Range for the raw span.
+10. Read the Range text back, hash raw/canonical fragment text, and compare with
    preconditions.
-9. Apply formatting only after every check passes.
+11. Apply formatting only after every check passes.
 
-`review` blocks are preview-only. `unresolved` blocks are skipped.
+`review` blocks are preview-only. `unresolved` blocks are skipped and must not
+carry executable host spans.
 
 ## WPS JS Pseudocode
 

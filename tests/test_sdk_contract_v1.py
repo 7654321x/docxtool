@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from dataclasses import replace
 
 import pytest
 from docx import Document
@@ -9,12 +10,16 @@ from docx import Document
 from docxtool.sdk import (
     DocxToolSdkError,
     InvalidHostSnapshotError,
+    InvalidRequestError,
     RecognitionRequest,
     bind_recognition_plan,
+    get_json_schema,
     get_sdk_manifest,
     host_snapshot_from_dict,
     load_json_schema,
+    recognition_request_from_dict,
     recognition_plan_from_dict,
+    summarize_host_snapshot,
     recognize_docx,
     validate_host_snapshot,
     validate_recognition_binding,
@@ -65,7 +70,10 @@ def test_manifest_and_schema_files_are_public_and_valid() -> None:
     assert manifest["schema_version"] == "sdk-manifest-v1"
     assert manifest["integration_contract_versions"] == ["integration-contract-v1"]
     assert "host_snapshot_binding" in manifest["capabilities"]
-    assert validate_sdk_manifest(manifest)["package_version"] == "2.0"
+    assert manifest["binding_scope"]["supported_story_types"] == ["main"]
+    assert manifest["binding_scope"]["tables"] == "excluded"
+    assert validate_sdk_manifest(manifest).valid
+    assert get_json_schema("recognition-request")["title"]
     for schema_version in SCHEMA_FILENAMES:
         schema = load_json_schema(schema_version)
         assert schema["$schema"].startswith("https://json-schema.org/")
@@ -86,8 +94,8 @@ def test_recognition_request_supports_round_trip_and_raw_text_implies_text() -> 
 
     assert request.include_text is True
     assert request.include_raw_text is True
-    assert validate_recognition_request(request).to_dict() == request.to_dict()
-    assert RecognitionRequest.from_dict(request.to_dict()).to_dict() == request.to_dict()
+    assert validate_recognition_request(request).valid
+    assert recognition_request_from_dict(request.to_dict()).to_dict() == request.to_dict()
 
 
 def test_recognition_plan_round_trip_schema_validation_and_privacy(tmp_path: Path) -> None:
@@ -95,7 +103,8 @@ def test_recognition_plan_round_trip_schema_validation_and_privacy(tmp_path: Pat
     _write_document(source, ["一、总体要求。正文内容不少于五个字。"])
 
     plan = recognize_docx(source, recognition_mode="legacy")
-    payload = validate_recognition_plan(plan).to_dict()
+    assert validate_recognition_plan(plan).valid
+    payload = plan.to_dict()
     restored = recognition_plan_from_dict(json.loads(json.dumps(payload, ensure_ascii=False)))
 
     assert restored.plan_id == plan.plan_id
@@ -107,32 +116,36 @@ def test_recognition_plan_round_trip_schema_validation_and_privacy(tmp_path: Pat
 
 def test_host_snapshot_v1_validation_rejects_missing_and_duplicate_ids() -> None:
     valid = _snapshot("普通正文")
-    snapshot = validate_host_snapshot(valid)
+    report = validate_host_snapshot(valid)
+    snapshot = host_snapshot_from_dict(valid)
 
+    assert report.valid
     assert snapshot.snapshot_id == "snap-1"
     assert snapshot.paragraphs[0].host_paragraph_id == "main:000000"
 
     missing_snapshot_id = dict(valid)
     missing_snapshot_id.pop("snapshot_id")
+    report = validate_host_snapshot(missing_snapshot_id)
+    assert not report.valid
+    assert report.errors[0].code == "INVALID_HOST_SNAPSHOT"
     with pytest.raises(InvalidHostSnapshotError, match="snapshot_id"):
-        validate_host_snapshot(missing_snapshot_id)
+        host_snapshot_from_dict(missing_snapshot_id)
 
     duplicate = dict(valid)
     duplicate["paragraphs"] = [dict(valid["paragraphs"][0]), dict(valid["paragraphs"][0])]
     duplicate["paragraphs"][1]["host_paragraph_index"] = 1
-    with pytest.raises(InvalidHostSnapshotError, match="host_paragraph_id"):
-        validate_host_snapshot(duplicate)
+    report = validate_host_snapshot(duplicate)
+    assert not report.valid
+    assert report.errors[0].code == "INVALID_HOST_SNAPSHOT"
 
 
-def test_legacy_host_snapshot_is_upgraded_for_binding_but_not_schema_validation() -> None:
+def test_legacy_host_snapshot_is_rejected_by_public_binding_contract() -> None:
     legacy = {"host_type": "wps", "paragraphs": [{"raw_text": "普通正文"}]}
-    upgraded = host_snapshot_from_dict(legacy)
 
-    assert upgraded.schema_version == "host-snapshot-v1"
-    assert upgraded.snapshot_id
-    assert upgraded.paragraphs[0].host_paragraph_id == "main:000000"
+    report = validate_host_snapshot(legacy)
+    assert not report.valid
     with pytest.raises(InvalidHostSnapshotError):
-        validate_host_snapshot(legacy)
+        host_snapshot_from_dict(legacy)
 
 
 def test_binding_is_host_neutral_and_contains_preconditions(tmp_path: Path) -> None:
@@ -144,7 +157,8 @@ def test_binding_is_host_neutral_and_contains_preconditions(tmp_path: Path) -> N
     bindings = []
     for kind in ("wps", "microsoft-word", "test-host"):
         binding = bind_recognition_plan(plan.to_dict(), _snapshot(raw, kind=kind, snapshot_id="same-snap"))
-        bindings.append(validate_recognition_binding(binding).to_dict())
+        assert validate_recognition_binding(binding).valid
+        bindings.append(binding.to_dict())
 
     first_blocks = bindings[0]["blocks"]
     for payload in bindings[1:]:
@@ -173,6 +187,126 @@ def test_different_snapshots_produce_different_binding_ids(tmp_path: Path) -> No
     second = bind_recognition_plan(plan, _snapshot("普通正文内容", snapshot_id="snap-b"))
 
     assert first.binding_id != second.binding_id
+
+
+def test_binding_id_changes_when_target_span_status_or_preconditions_change(tmp_path: Path) -> None:
+    source = tmp_path / "source.docx"
+    _write_document(source, ["普通正文内容"])
+    plan = recognize_docx(source, recognition_mode="legacy")
+    binding = bind_recognition_plan(plan, _snapshot("普通正文内容", snapshot_id="snap-a"))
+    block = binding.blocks[0]
+
+    shifted = replace(binding, binding_id="", blocks=(replace(
+        block,
+        host_raw_end_utf16=(block.host_raw_end_utf16 or 0) + 1,
+    ),))
+    reviewed = replace(binding, binding_id="", blocks=(replace(
+        block,
+        binding_status="review",
+        recommended_action="preview_only",
+    ),))
+    changed_hash = replace(binding, binding_id="", blocks=(replace(
+        block,
+        preconditions={**dict(block.preconditions), "raw_fragment_sha256": "a" * 64},
+    ),))
+
+    assert shifted.binding_id != binding.binding_id
+    assert reviewed.binding_id != binding.binding_id
+    assert changed_hash.binding_id != binding.binding_id
+
+
+def test_request_boolean_contract_rejects_strings_and_cli_uses_same_code(tmp_path: Path) -> None:
+    source = tmp_path / "source.docx"
+    request_path = tmp_path / "request.json"
+    output_path = tmp_path / "output.json"
+    _write_document(source, ["普通正文内容"])
+    request = RecognitionRequest().to_dict()
+    request["include_text"] = "false"
+    request_path.write_text(json.dumps(request, ensure_ascii=False), encoding="utf-8")
+
+    report = validate_recognition_request(request)
+    assert not report.valid
+    assert report.errors[0].code == "INVALID_RECOGNITION_REQUEST"
+    with pytest.raises(InvalidRequestError):
+        recognition_request_from_dict(request)
+    with pytest.raises(InvalidRequestError):
+        recognize_docx(source, include_text="false")
+
+    assert sdk_cli(["recognize", "--source", str(source), "--request", str(request_path), "--output", str(output_path)]) == 2
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == report.errors[0].code
+
+
+def test_strict_mode_rejects_unknown_fields_but_non_strict_warns() -> None:
+    request = RecognitionRequest().to_dict()
+    request["extension_note"] = "ignored"
+
+    non_strict = validate_recognition_request(request)
+    strict = validate_recognition_request(request, strict=True)
+
+    assert non_strict.valid
+    assert non_strict.warnings[0].path == "$.extension_note"
+    assert not strict.valid
+    assert strict.errors[0].path == "$.extension_note"
+
+
+def test_review_items_follow_block_id_when_blocks_are_reordered(tmp_path: Path) -> None:
+    source = tmp_path / "source.docx"
+    _write_document(source, ["第一段", "第二段"])
+    plan = recognize_docx(source, recognition_mode="legacy")
+    payload = plan.to_dict()
+    payload["blocks"] = list(reversed(payload["blocks"]))
+    target = payload["blocks"][0]
+    payload["review_items"] = [{
+        "block_id": target["block_id"],
+        "block_index": 0,
+        "source_paragraph_index": target.get("source_paragraph_index"),
+        "final_type": target["semantic"]["type_id"],
+        "level": "review",
+        "confidence": 0.5,
+        "reasons": ["TEST_REORDER"],
+        "evidence": [],
+    }]
+
+    restored = recognition_plan_from_dict(payload)
+
+    assert restored.review_items[0].block_id == target["block_id"]
+    assert restored.review_items[0].block_index == target["block_index"]
+
+
+def test_binding_state_invariants_are_validated(tmp_path: Path) -> None:
+    source = tmp_path / "source.docx"
+    _write_document(source, ["普通正文内容"])
+    plan = recognize_docx(source, recognition_mode="legacy")
+    payload = bind_recognition_plan(plan, _snapshot("普通正文内容")).to_dict()
+
+    invalid_action = json.loads(json.dumps(payload, ensure_ascii=False))
+    invalid_action["blocks"][0]["binding"]["recommended_action"] = "skip"
+    assert not validate_recognition_binding(invalid_action).valid
+
+    unresolved = json.loads(json.dumps(payload, ensure_ascii=False))
+    unresolved["blocks"][0]["binding"]["status"] = "unresolved"
+    unresolved["blocks"][0]["binding"]["recommended_action"] = "skip"
+    assert not validate_recognition_binding(unresolved).valid
+
+    review = json.loads(json.dumps(payload, ensure_ascii=False))
+    review["blocks"][0]["binding"]["status"] = "review"
+    review["blocks"][0]["binding"]["recommended_action"] = "verify_host_range"
+    assert not validate_recognition_binding(review).valid
+
+
+def test_host_snapshot_summary_is_text_free_and_not_bindable(tmp_path: Path) -> None:
+    source = tmp_path / "source.docx"
+    _write_document(source, ["普通正文内容"])
+    plan = recognize_docx(source, recognition_mode="legacy")
+    summary = summarize_host_snapshot(host_snapshot_from_dict(_snapshot("普通正文内容"))).to_dict()
+
+    assert "raw_text" not in json.dumps(summary, ensure_ascii=False)
+    assert summary["bindable"] is False
+    assert not validate_host_snapshot(summary).valid
+    with pytest.raises(DocxToolSdkError):
+        bind_recognition_plan(plan, summary)
 
 
 def test_cli_manifest_recognize_bind_and_validate_round_trip(tmp_path: Path) -> None:
@@ -215,6 +349,17 @@ def test_cli_manifest_recognize_bind_and_validate_round_trip(tmp_path: Path) -> 
     ]) == 0
     assert json.loads(validate_output.read_text(encoding="utf-8"))["data"]["valid"] is True
 
+    assert sdk_cli([
+        "summarize-snapshot",
+        "--snapshot",
+        str(snapshot_output),
+        "--output",
+        str(validate_output),
+    ]) == 0
+    summary = json.loads(validate_output.read_text(encoding="utf-8"))["data"]
+    assert summary["summary_type"] == "host-snapshot-summary-v1"
+    assert "raw_text" not in json.dumps(summary, ensure_ascii=False)
+
 
 def test_error_payload_matches_public_schema() -> None:
     error = DocxToolSdkError(
@@ -226,4 +371,4 @@ def test_error_payload_matches_public_schema() -> None:
 
     assert "raw_text" not in payload["details"]
     assert payload["code"] == "SOURCE_TEXT_HASH_MISMATCH"
-    assert validate_sdk_error(payload)["schema_version"] == "sdk-error-v1"
+    assert validate_sdk_error(payload).valid

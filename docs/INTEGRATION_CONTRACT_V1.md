@@ -14,7 +14,9 @@ files, or control an editor undo stack.
 - `RecognitionRequest`: input options for `recognize_docx`.
 - `RecognitionPlan`: source DOCX recognition output.
 - `HostSnapshot`: local editor paragraph text snapshot.
+- `HostSnapshotSummary`: text-free diagnostic summary, not bindable.
 - `RecognitionBinding`: host-neutral paragraph and fragment binding output.
+- `ValidationReport`: schema and semantic validation result.
 - `SdkError`: stable error object for Python and CLI callers.
 
 JSON Schema files are installed with the wheel under
@@ -36,6 +38,10 @@ schema, not the protocol authority.
 
 Hosts must call `get_sdk_manifest()` or `docxtool-sdk manifest` before assuming
 a wheel supports a specific schema or capability.
+
+The manifest declares the binding scope. Version 2.0 binds only `main` story
+paragraphs and excludes table paragraphs; host adapters must not infer header,
+footer, comment, text frame, or table range support from the recognition output.
 
 ## Two Stages
 
@@ -61,10 +67,26 @@ binding = bind_recognition_plan(plan, host_snapshot)
 The binding stage can run later, in another process, by loading `plan.to_dict()`
 from JSON. It does not require the source DOCX again.
 
+Every Mapping input follows this order before execution:
+
+1. JSON Schema validation.
+2. Cross-field semantic validation.
+3. Dataclass deserialization.
+4. Recognition or binding execution.
+
+`validate_recognition_request`, `validate_recognition_plan`,
+`validate_host_snapshot`, and `validate_recognition_binding` return
+`ValidationReport` with `valid`, `errors`, and `warnings`. Each issue contains a
+stable code, JSON path, severity, and allowlisted detail. `strict=False` permits
+unknown non-critical extension fields as warnings; `strict=True` rejects unknown
+fields and unsupported legacy upgrades.
+
 ## Stable IDs
 
-`plan_id` is deterministic from source hash, protocol versions, recognition mode
-and request/config digest. It never contains a file path or document text.
+`plan_id` is deterministic from source hash, protocol versions, recognition
+engine, package version, locator version, host text contract, offset encoding,
+recognition mode and request/config digest. It never contains a file path or
+document text.
 
 `block_id` is deterministic inside one plan. It is derived from `plan_id`,
 `physical_group_id`, segment index, fragment hashes and semantic type.
@@ -133,6 +155,17 @@ Recommended actions are fixed:
 
 `verify_host_range` does not mean "write immediately".
 
+The field combinations are part of the protocol:
+
+- `confirmed` must include a non-empty `host_paragraph_id`, raw/canonical host
+  spans, paragraph and fragment hashes, and write preconditions.
+- `review` must use `preview_only`.
+- `unresolved` must use `skip` and must not carry executable host spans or
+  preconditions.
+
+`binding_id` changes when the snapshot, binding status, host paragraph, raw or
+canonical span, fragment hash, or write precondition changes.
+
 ## Preconditions
 
 Each confirmed block includes:
@@ -164,6 +197,9 @@ usernames, cookies, tokens, database paths or logs. `include_text` and
 local memory or local IPC chain and must not be uploaded or written to ordinary
 logs.
 
+`HostSnapshotSummary` intentionally omits `raw_text` and cannot be passed to the
+binding API. It is only for UI diagnostics and logging-safe counts.
+
 ## Errors
 
 Python exceptions and CLI errors share `sdk-error-v1`. Stable codes include:
@@ -184,4 +220,5 @@ Python exceptions and CLI errors share `sdk-error-v1`. Stable codes include:
 - `SEGMENT_GROUP_INCOMPLETE`
 
 Error details must use IDs, indexes, hashes and JSON paths. They must not include
-document text.
+document text, absolute local paths or tracebacks. Unknown exceptions are mapped
+to stable SDK error envelopes before they reach ordinary callers.

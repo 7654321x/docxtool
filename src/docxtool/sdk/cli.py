@@ -11,13 +11,16 @@ from typing import Any, Mapping, Optional, Sequence
 from .binding import bind_recognition_plan
 from .errors import DocxToolSdkError
 from .manifest import get_sdk_manifest
-from .models import RecognitionRequest, recognition_plan_from_dict
+from .models import RecognitionRequest, summarize_host_snapshot
 from .recognition import recognize_docx
 from .validation import (
+    host_snapshot_from_dict,
+    recognition_request_from_dict,
     validate_host_snapshot,
     validate_recognition_binding,
     validate_recognition_plan,
     validate_sdk_manifest,
+    validate_recognition_request,
 )
 
 
@@ -50,7 +53,7 @@ def _error(exc: BaseException) -> dict:
         payload = {
             "schema_version": "sdk-error-v1",
             "code": getattr(exc, "code", "INVALID_RECOGNITION_REQUEST"),
-            "message": str(exc),
+            "message": "SDK 请求处理失败",
             "retryable": False,
             "details": {},
         }
@@ -102,21 +105,30 @@ def _sdk_parser() -> argparse.ArgumentParser:
     recognize.add_argument("--source", required=True, type=Path)
     recognize.add_argument("--request", type=Path, help="RecognitionRequest JSON; defaults to v1 defaults")
     recognize.add_argument("--output", "-o", type=Path)
+    recognize.add_argument("--strict", action="store_true", help="Reject unknown extension fields.")
 
     bind = subparsers.add_parser("bind", help="Bind a saved RecognitionPlan to a HostSnapshot.")
     bind.add_argument("--plan", required=True, type=Path)
     bind.add_argument("--snapshot", required=True, type=Path)
     bind.add_argument("--output", "-o", type=Path)
+    bind.add_argument("--strict", action="store_true", help="Reject unknown extension fields.")
 
     validate = subparsers.add_parser("validate", help="Validate a public SDK JSON object.")
     validate.add_argument("--kind", required=True, choices=(
         "manifest",
+        "recognition-request",
         "recognition-plan",
         "host-snapshot",
         "recognition-binding",
     ))
     validate.add_argument("--input", required=True, type=Path)
     validate.add_argument("--output", "-o", type=Path)
+    validate.add_argument("--strict", action="store_true", help="Reject unknown extension fields.")
+
+    summary = subparsers.add_parser("summarize-snapshot", help="Write a text-free HostSnapshot summary.")
+    summary.add_argument("--snapshot", required=True, type=Path)
+    summary.add_argument("--output", "-o", type=Path)
+    summary.add_argument("--strict", action="store_true", help="Reject unknown extension fields.")
     return parser
 
 
@@ -127,26 +139,38 @@ def sdk_main(argv: Optional[Sequence[str]] = None) -> int:
             _write_payload(_ok(get_sdk_manifest().to_dict()), args.output)
             return 0
         if args.command == "recognize":
-            request = RecognitionRequest.from_dict(_json_read(args.request)) if args.request else RecognitionRequest()
+            request = (
+                recognition_request_from_dict(_data_or_payload(_json_read(args.request)), strict=args.strict)
+                if args.request else RecognitionRequest()
+            )
             plan = recognize_docx(args.source, request=request)
             _write_payload(_ok(plan.to_dict()), args.output)
             return 0
         if args.command == "bind":
-            plan = recognition_plan_from_dict(_data_or_payload(_json_read(args.plan)))
-            binding = bind_recognition_plan(plan, _data_or_payload(_json_read(args.snapshot)))
+            binding = bind_recognition_plan(
+                _data_or_payload(_json_read(args.plan)),
+                _data_or_payload(_json_read(args.snapshot)),
+                strict=args.strict,
+            )
             _write_payload(_ok(binding.to_dict()), args.output)
             return 0
         if args.command == "validate":
             payload = _data_or_payload(_json_read(args.input))
             if args.kind == "manifest":
-                data = validate_sdk_manifest(payload)
+                report = validate_sdk_manifest(payload, strict=args.strict)
+            elif args.kind == "recognition-request":
+                report = validate_recognition_request(payload, strict=args.strict)
             elif args.kind == "recognition-plan":
-                data = validate_recognition_plan(payload).to_dict()
+                report = validate_recognition_plan(payload, strict=args.strict)
             elif args.kind == "host-snapshot":
-                data = validate_host_snapshot(payload).to_dict(include_text=False)
+                report = validate_host_snapshot(payload, strict=args.strict)
             else:
-                data = validate_recognition_binding(payload).to_dict()
-            _write_payload(_ok({"valid": True, "kind": args.kind, "object": data}), args.output)
+                report = validate_recognition_binding(payload, strict=args.strict)
+            _write_payload(_ok({"kind": args.kind, **report.to_dict()}), args.output)
+            return 0 if report.valid else 1
+        if args.command == "summarize-snapshot":
+            snapshot = host_snapshot_from_dict(_data_or_payload(_json_read(args.snapshot)), strict=args.strict)
+            _write_payload(_ok(summarize_host_snapshot(snapshot).to_dict()), args.output)
             return 0
     except (OSError, TypeError, ValueError, DocxToolSdkError) as exc:
         _write_payload(_error(exc), getattr(args, "output", None))
@@ -158,7 +182,9 @@ def sdk_main(argv: Optional[Sequence[str]] = None) -> int:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """Universal entry point with legacy recognize compatibility."""
     arguments = list(argv if argv is not None else sys.argv[1:])
-    if not arguments or arguments[0] in {"manifest", "recognize", "bind", "validate", "-h", "--help"}:
+    if not arguments or arguments[0] in {
+        "manifest", "recognize", "bind", "validate", "summarize-snapshot", "-h", "--help"
+    }:
         return sdk_main(arguments)
     return recognize_main(arguments)
 

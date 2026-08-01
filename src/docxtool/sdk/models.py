@@ -17,7 +17,6 @@ from .constants import (
     RECOGNITION_PLAN_SCHEMA_VERSION,
     RECOGNITION_REQUEST_SCHEMA_VERSION,
     RECOMMENDED_ACTIONS,
-    SDK_MANIFEST_SCHEMA_VERSION,
     SOURCE_LOCATOR_VERSION,
     STORY_TYPES,
     PROCESSING_MODES,
@@ -56,8 +55,15 @@ def _optional_int(value: Any) -> Optional[int]:
     return value if isinstance(value, int) else None
 
 
-def _bool(value: Any, default: bool = False) -> bool:
-    return bool(default if value is None else value)
+def _bool(value: Any, default: bool = False, *, path: str = "") -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    raise InvalidRequestError(
+        "字段必须是 JSON boolean",
+        details={"path": path or "$", "actual_type": type(value).__name__},
+    )
 
 
 def _review_status(level: str, locator_status: str = "confirmed") -> str:
@@ -82,6 +88,7 @@ class SdkManifest:
     host_text_contract_versions: Tuple[str, ...]
     offset_encodings: Tuple[str, ...]
     capabilities: Tuple[str, ...]
+    binding_scope: Mapping[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -95,6 +102,90 @@ class SdkManifest:
             "host_text_contract_versions": list(self.host_text_contract_versions),
             "offset_encodings": list(self.offset_encodings),
             "capabilities": list(self.capabilities),
+            "binding_scope": dict(self.binding_scope),
+        }
+
+
+@dataclass(frozen=True)
+class ValidationIssue:
+    """One non-sensitive protocol validation issue."""
+
+    code: str
+    path: str
+    severity: str
+    detail: Mapping[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "code": self.code,
+            "path": self.path or "$",
+            "severity": self.severity,
+            "detail": dict(self.detail),
+        }
+
+
+@dataclass(frozen=True)
+class ValidationReport:
+    """Public validation result returned by validate_* helpers."""
+
+    valid: bool
+    errors: Tuple[ValidationIssue, ...] = ()
+    warnings: Tuple[ValidationIssue, ...] = ()
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "valid": self.valid,
+            "errors": [issue.to_dict() for issue in self.errors],
+            "warnings": [issue.to_dict() for issue in self.warnings],
+        }
+
+
+@dataclass(frozen=True)
+class HostStorySummary:
+    story_id: str
+    story_type: str
+    paragraph_count: int
+    table_paragraph_count: int
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "story_id": self.story_id,
+            "story_type": self.story_type,
+            "paragraph_count": self.paragraph_count,
+            "table_paragraph_count": self.table_paragraph_count,
+        }
+
+
+@dataclass(frozen=True)
+class HostSnapshotSummary:
+    """Text-free snapshot summary for diagnostics only; not bindable."""
+
+    summary_type: str
+    snapshot_id: str
+    integration_contract_version: str
+    text_contract_version: str
+    offset_encoding: str
+    host_type: str
+    document_identity: Optional[str]
+    document_revision: Optional[str]
+    paragraph_count: int
+    table_paragraph_count: int
+    story_summaries: Tuple[HostStorySummary, ...]
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "summary_type": self.summary_type,
+            "snapshot_id": self.snapshot_id,
+            "integration_contract_version": self.integration_contract_version,
+            "text_contract_version": self.text_contract_version,
+            "offset_encoding": self.offset_encoding,
+            "host": {"kind": self.host_type},
+            "document_identity": self.document_identity,
+            "document_revision": self.document_revision,
+            "paragraph_count": self.paragraph_count,
+            "table_paragraph_count": self.table_paragraph_count,
+            "story_summaries": [item.to_dict() for item in self.story_summaries],
+            "bindable": False,
         }
 
 
@@ -154,8 +245,8 @@ class RecognitionRequest:
             schema_version=str(value.get("schema_version", RECOGNITION_REQUEST_SCHEMA_VERSION)),
             processing_mode=str(value.get("processing_mode", "structural") or "structural"),
             recognition_mode=str(value.get("recognition_mode", "authoritative") or "authoritative"),
-            include_text=_bool(value.get("include_text")),
-            include_raw_text=_bool(value.get("include_raw_text")),
+            include_text=_bool(value.get("include_text"), path="include_text"),
+            include_raw_text=_bool(value.get("include_raw_text"), path="include_raw_text"),
             format_config=value.get("format_config"),
             feature_overrides=value.get("feature_overrides"),
         )
@@ -526,19 +617,25 @@ class RecognitionPlan:
             self.source_sha256,
             self.integration_contract_version,
             self.schema_version,
+            self.engine_version,
+            self.package_version,
+            self.locator_version,
+            self.host_text_contract_version,
+            OFFSET_ENCODING,
             self.processing_mode,
             self.recognition_mode,
             self.request_digest,
         )
         blocks = tuple(block.with_ids(plan_id) for block in self.blocks)
-        review_by_block_index = {item.block_index: item for item in self.review_items}
+        block_by_id = {block.block_id: block for block in blocks}
+        block_by_index = {block.block_index: block for block in blocks}
         review_items = []
         for item in self.review_items:
-            block = blocks[item.block_index] if 0 <= item.block_index < len(blocks) else None
+            block = block_by_id.get(item.block_id) if item.block_id else block_by_index.get(item.block_index)
             review_items.append(
                 ReviewItem(
                     block_id=item.block_id or (block.block_id if block else ""),
-                    block_index=item.block_index,
+                    block_index=block.block_index if block else item.block_index,
                     source_paragraph_index=item.source_paragraph_index,
                     final_type=item.final_type,
                     level=item.level,
@@ -549,7 +646,7 @@ class RecognitionPlan:
             )
         object.__setattr__(self, "plan_id", plan_id)
         object.__setattr__(self, "blocks", blocks)
-        if review_by_block_index:
+        if self.review_items:
             object.__setattr__(self, "review_items", tuple(review_items))
 
     def to_dict(self) -> Dict[str, Any]:
@@ -711,6 +808,15 @@ class HostParagraph:
                 "host_paragraph_index 必须为非负整数",
                 details={"path": "paragraphs[{0}].host_paragraph_index".format(ordinal)},
             )
+        is_in_table = value.get("is_in_table", False)
+        if not isinstance(is_in_table, bool):
+            raise InvalidHostSnapshotError(
+                "is_in_table 必须是 JSON boolean",
+                details={
+                    "path": "paragraphs[{0}].is_in_table".format(ordinal),
+                    "actual_type": type(is_in_table).__name__,
+                },
+            )
         return cls(
             host_paragraph_id=str(value.get("host_paragraph_id", "") or ""),
             host_paragraph_index=index,
@@ -719,7 +825,7 @@ class HostParagraph:
             story_type=str(value.get("story_type", "main") or "main"),
             story_paragraph_index=_optional_int(value.get("story_paragraph_index")),
             section_index=_optional_int(value.get("section_index")),
-            is_in_table=bool(value.get("is_in_table", False)),
+            is_in_table=is_in_table,
         )
 
 
@@ -1032,7 +1138,37 @@ class RecognitionBinding:
             self.source_sha256,
             self.document_identity,
             self.document_revision,
-            [(item.block_id, item.binding_status, item.host_paragraph_id) for item in self.blocks],
+            self.host_type,
+            self.host_text_contract_version,
+            self.offset_encoding,
+            [
+                (
+                    item.block_id,
+                    item.binding_status,
+                    item.recommended_action,
+                    item.host_paragraph_id,
+                    item.host_paragraph_index,
+                    item.story_id,
+                    item.story_type,
+                    item.host_raw_start_utf16,
+                    item.host_raw_end_utf16,
+                    item.host_canonical_start_utf16,
+                    item.host_canonical_end_utf16,
+                    dict(item.preconditions),
+                )
+                for item in self.blocks
+            ],
+            [
+                (
+                    item.physical_group_id,
+                    item.status,
+                    item.host_paragraph_id,
+                    item.host_paragraph_index,
+                    item.candidate_host_paragraph_ids,
+                    item.warnings,
+                )
+                for item in self.physical_paragraphs
+            ],
         )
         object.__setattr__(self, "binding_id", binding_id)
 
@@ -1135,6 +1271,10 @@ def recognition_plan_from_dict(value: Mapping[str, Any], *, strict: bool = False
     return RecognitionPlan.from_dict(value, strict=strict)
 
 
+def recognition_request_from_dict(value: Mapping[str, Any], *, strict: bool = False) -> RecognitionRequest:
+    return RecognitionRequest.from_dict(value, strict=strict)
+
+
 def host_snapshot_from_dict(
     value: Mapping[str, Any],
     *,
@@ -1146,3 +1286,40 @@ def host_snapshot_from_dict(
 
 def recognition_binding_from_dict(value: Mapping[str, Any], *, strict: bool = False) -> RecognitionBinding:
     return RecognitionBinding.from_dict(value, strict=strict)
+
+
+def summarize_host_snapshot(snapshot: HostSnapshot | Mapping[str, Any]) -> HostSnapshotSummary:
+    value = snapshot if isinstance(snapshot, HostSnapshot) else HostSnapshot.from_dict(
+        snapshot,
+        strict=True,
+        allow_legacy=False,
+    )
+    stories: Dict[Tuple[str, str], list[int]] = {}
+    for paragraph in value.paragraphs:
+        key = (paragraph.story_id, paragraph.story_type)
+        counts = stories.setdefault(key, [0, 0])
+        counts[0] += 1
+        if paragraph.is_in_table:
+            counts[1] += 1
+    story_summaries = tuple(
+        HostStorySummary(
+            story_id=story_id,
+            story_type=story_type,
+            paragraph_count=counts[0],
+            table_paragraph_count=counts[1],
+        )
+        for (story_id, story_type), counts in sorted(stories.items())
+    )
+    return HostSnapshotSummary(
+        summary_type="host-snapshot-summary-v1",
+        snapshot_id=value.snapshot_id,
+        integration_contract_version=value.integration_contract_version,
+        text_contract_version=value.text_contract_version,
+        offset_encoding=value.offset_encoding,
+        host_type=value.host_type,
+        document_identity=value.document_identity,
+        document_revision=value.document_revision,
+        paragraph_count=len(value.paragraphs),
+        table_paragraph_count=sum(1 for item in value.paragraphs if item.is_in_table),
+        story_summaries=story_summaries,
+    )

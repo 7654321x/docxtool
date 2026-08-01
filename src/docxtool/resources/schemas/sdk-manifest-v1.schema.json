@@ -14,7 +14,8 @@
     "source_locator_versions",
     "host_text_contract_versions",
     "offset_encodings",
-    "capabilities"
+    "capabilities",
+    "binding_scope"
   ],
   "properties": {
     "schema_version": { "const": "sdk-manifest-v1" },
@@ -59,6 +60,25 @@
       "items": { "type": "string", "minLength": 1 },
       "minItems": 1,
       "uniqueItems": true
+    },
+    "binding_scope": {
+      "type": "object",
+      "required": ["supported_story_types", "tables", "requires_raw_text", "range_execution"],
+      "properties": {
+        "supported_story_types": {
+          "type": "array",
+          "items": { "const": "main" },
+          "minItems": 1
+        },
+        "excluded_story_types": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "tables": { "const": "excluded" },
+        "requires_raw_text": { "type": "boolean" },
+        "range_execution": { "const": "host_must_verify" }
+      },
+      "additionalProperties": true
     }
   },
   "additionalProperties": true

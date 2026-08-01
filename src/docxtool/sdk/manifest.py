@@ -31,4 +31,11 @@ def get_sdk_manifest() -> SdkManifest:
         host_text_contract_versions=(HOST_TEXT_CONTRACT_VERSION,),
         offset_encodings=(OFFSET_ENCODING,),
         capabilities=CAPABILITIES,
+        binding_scope={
+            "supported_story_types": ["main"],
+            "excluded_story_types": ["header", "footer", "footnote", "endnote", "comment", "text_frame"],
+            "tables": "excluded",
+            "requires_raw_text": True,
+            "range_execution": "host_must_verify",
+        },
     )
