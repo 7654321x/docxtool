@@ -23,8 +23,11 @@
 - `src/docxtool/web/admin_auth.py`：管理员会话、legacy token、管理员请求上下文和 CSRF 校验辅助。
 - `src/docxtool/web/admin_forms.py`：管理员登录表单字段解析辅助。
 - `src/docxtool/web/admin_pages.py`：管理员登录页等静态 HTML 页面渲染辅助。
+- `src/docxtool/web/admin_route_handlers.py`：管理员监控 IP、封禁、解封、限额和兼容清理动作处理辅助。
+- `src/docxtool/web/admin_session_routes.py`：管理员 session 查询、登录和退出路由处理辅助。
 - `src/docxtool/web/anonymous_identity.py`：匿名用户 owner cookie 签名、解析和来源校验辅助。
 - `src/docxtool/web/auth_payloads.py`：用户认证接口 Content-Type 判断、响应体和 Cookie 响应头组装辅助。
+- `src/docxtool/web/auth_route_handlers.py`：普通用户认证状态、注册、登录和退出路由处理辅助。
 - `src/docxtool/web/client_ip.py`：可信代理、客户端 IP、IP 头和密钥比较辅助。
 - `src/docxtool/web/config.py`：Web 环境变量、前端来源、Cookie Secure 和 CORS 响应头解析。
 - `src/docxtool/web/database_schema.py`：Web SQLite 建表、轻量迁移和默认数据初始化编排。
@@ -32,6 +35,8 @@
 - `src/docxtool/web/file_utils.py`：文件名清理、下载响应头和错误详情脱敏辅助。
 - `src/docxtool/web/format_request.py`：上传请求的格式配置、预设元数据和处理模式解析。
 - `src/docxtool/web/frontend_pages.py`：打包前端首页 HTML 的定位和读取辅助。
+- `src/docxtool/web/handler_dispatch.py`：HTTP handler 的 GET/POST/PUT/DELETE 路由动作分派辅助。
+- `src/docxtool/web/handler_responses.py`：HTTP handler 文本、JSON、跳转和错误响应发送辅助。
 - `src/docxtool/web/health.py`：健康检查、readiness、版本信息和启动地址 payload。
 - `src/docxtool/web/log_redaction.py`：管理员日志展示前的敏感字段脱敏辅助。
 - `src/docxtool/web/maintenance.py`：永久保留策略下的后台维护线程兼容入口。
@@ -40,17 +45,21 @@
 - `src/docxtool/web/owner_migration.py`：匿名 owner 的任务和私人模板迁移辅助。
 - `src/docxtool/web/preset_config.py`：预设模板名称、ID、格式配置和 API 行数据归一化辅助。
 - `src/docxtool/web/preset_defaults.py`：默认公文模板配置、默认功能开关和官方模板 seed 辅助。
+- `src/docxtool/web/preset_route_handlers.py`：预设模板列表、详情、创建、更新和删除路由处理辅助。
 - `src/docxtool/web/preset_store.py`：预设模板列表、详情、创建、更新和删除的数据库读写辅助。
 - `src/docxtool/web/rate_limits.py`：上传限流、认证限流、IP 封禁和上传次数限制辅助。
 - `src/docxtool/web/request_utils.py`：HTTP 路径、Cookie、CSRF、JSON 和 HTML 转义辅助。
 - `src/docxtool/web/request_params.py`：query、JSON body 和表单 body 请求参数合并辅助。
 - `src/docxtool/web/responses.py`：HTTP 文本/JSON 响应编码、附加头和认证错误体辅助。
+- `src/docxtool/web/routing.py`：Web 兼容处理器的纯路由匹配和资源 ID 提取辅助。
 - `src/docxtool/web/secrets.py`：Web 管理密钥和代理密钥加载、弱密钥启动校验辅助。
+- `src/docxtool/web/server_runtime.py`：Web 服务启动顺序、启动日志和关闭流程编排辅助。
 - `src/docxtool/web/stream_io.py`：HTTP 请求体定长读取、上传落盘和下载文件流输出辅助。
 - `src/docxtool/web/task_cache.py`：内存任务缓存裁剪辅助。
 - `src/docxtool/web/task_paths.py`：任务上传、输出、临时路径和永久保留清理钩子。
 - `src/docxtool/web/task_records.py`：任务排队、处理中和终态的数据库记录写入辅助。
 - `src/docxtool/web/task_recovery.py`：服务启动时将未完成任务标记为中断的恢复辅助。
+- `src/docxtool/web/task_route_handlers.py`：任务状态、DOCX 下载和任务日志路由处理辅助。
 - `src/docxtool/web/task_result.py`：终态任务结果的数据库、内存状态和日志同步收口。
 - `src/docxtool/web/task_statistics.py`：任务结果统计写入、监控计数和 IP 聚合查询辅助。
 - `src/docxtool/web/task_state.py`：任务计数、队列位置、公开任务状态和识别摘要脱敏。

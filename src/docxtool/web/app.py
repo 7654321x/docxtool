@@ -84,6 +84,13 @@ from docxtool.web.auth_payloads import (
     auth_validation_error_from_exception as _auth_payloads_validation_error_from_exception,
     ok_data_response as _auth_payloads_ok_data_response,
 )
+from docxtool.web.auth_route_handlers import (
+    handle_auth_login as _auth_route_handle_login,
+    handle_auth_logout as _auth_route_handle_logout,
+    handle_auth_me as _auth_route_handle_me,
+    handle_auth_register as _auth_route_handle_register,
+    read_auth_json_request as _auth_route_read_json_request,
+)
 from docxtool.web.admin_auth import (
     admin_authorized as _admin_auth_authorized,
     admin_request_context as _admin_auth_request_context,
@@ -107,14 +114,22 @@ from docxtool.web.admin_access import (
     csrf_token_from_admin_context as _admin_access_csrf_token,
 )
 from docxtool.web.admin_actions import (
-    ban_reason_from_params as _admin_actions_ban_reason,
-    is_post_only_action_path as _admin_actions_is_post_only_path,
-    ip_from_action_params as _admin_actions_ip_from_params,
     query_ip_from_parsed_url as _admin_actions_query_ip,
-    upload_limit_values_from_params as _admin_actions_upload_limit_values,
 )
 from docxtool.web.admin_forms import parse_admin_login_token as _admin_forms_parse_login_token
 from docxtool.web.admin_pages import render_admin_login_html as _admin_pages_render_login_html
+from docxtool.web.admin_route_handlers import (
+    handle_ban as _admin_route_handle_ban,
+    handle_cleanup as _admin_route_handle_cleanup,
+    handle_ip_detail as _admin_route_handle_ip_detail,
+    handle_limit as _admin_route_handle_limit,
+    handle_unban as _admin_route_handle_unban,
+)
+from docxtool.web.admin_session_routes import (
+    handle_admin_login as _admin_session_route_handle_login,
+    handle_admin_logout as _admin_session_route_handle_logout,
+    handle_admin_session as _admin_session_route_handle_session,
+)
 from docxtool.web.file_utils import (
     content_disposition_filename as _file_content_disposition_filename,
     is_safe_uuid as _file_is_safe_uuid,
@@ -133,6 +148,18 @@ from docxtool.web.format_request import (
     validate_requested_processing_mode as _format_validate_requested_processing_mode,
 )
 from docxtool.web.frontend_pages import load_frontend_index_html as _frontend_load_index_html
+from docxtool.web.handler_dispatch import (
+    dispatch_delete as _dispatch_delete,
+    dispatch_get as _dispatch_get,
+    dispatch_post as _dispatch_post,
+    dispatch_put as _dispatch_put,
+)
+from docxtool.web.handler_responses import (
+    send_json_error_response as _handler_send_json_error_response,
+    send_json_response as _handler_send_json_response,
+    send_redirect_response as _handler_send_redirect_response,
+    send_text_response as _handler_send_text_response,
+)
 from docxtool.web.health import (
     database_ready as _health_database_ready,
     dir_writable as _health_dir_writable,
@@ -192,6 +219,13 @@ from docxtool.web.preset_store import (
     list_presets as _preset_store_list,
     update_preset as _preset_store_update,
 )
+from docxtool.web.preset_route_handlers import (
+    handle_preset_create as _preset_route_handle_create,
+    handle_preset_delete as _preset_route_handle_delete,
+    handle_preset_detail as _preset_route_handle_detail,
+    handle_preset_update as _preset_route_handle_update,
+    handle_presets_list as _preset_route_handle_list,
+)
 from docxtool.web.rate_limits import (
     allow as _rate_allow,
     auth_rate_allow as _rate_auth_rate_allow,
@@ -230,19 +264,12 @@ from docxtool.web.responses import (
     incomplete_upload_error as _responses_incomplete_upload_error,
     internal_server_error as _responses_internal_server_error,
     invalid_task_id_error as _responses_invalid_task_id_error,
-    json_error_body as _responses_json_error_body,
-    json_response_headers as _responses_json_headers,
-    json_response_bytes as _responses_json_bytes,
     log_not_found_error as _responses_log_not_found_error,
     optional_set_cookie_headers as _responses_optional_set_cookie_headers,
     queue_full_error as _responses_queue_full_error,
     queued_upload_body as _responses_queued_upload_body,
-    redirect_headers as _responses_redirect_headers,
-    retry_after_headers as _responses_retry_after_headers,
     security_headers as _responses_security_headers,
     task_not_found_error as _responses_task_not_found_error,
-    text_response_headers as _responses_text_headers,
-    text_response_bytes as _responses_text_bytes,
     upload_failed_error as _responses_upload_failed_error,
     upload_file_too_large_error as _responses_upload_file_too_large_error,
     upload_ip_banned_error as _responses_upload_ip_banned_error,
@@ -250,6 +277,7 @@ from docxtool.web.responses import (
     upload_rate_limited_error as _responses_upload_rate_limited_error,
     upload_timeout_error as _responses_upload_timeout_error,
 )
+from docxtool.web.server_runtime import run_http_service as _runtime_run_http_service
 from docxtool.web.secrets import (
     load_secret as _secrets_load_secret,
     validate_required_secrets as _secrets_validate_required,
@@ -279,6 +307,11 @@ from docxtool.web.task_records import (
     record_task_queued as _task_records_record_queued,
 )
 from docxtool.web.task_recovery import recover_inflight_tasks_on_startup as _task_recovery_recover_inflight
+from docxtool.web.task_route_handlers import (
+    handle_download as _task_route_handle_download,
+    handle_log as _task_route_handle_log,
+    handle_status as _task_route_handle_status,
+)
 from docxtool.web.task_result import record_task_result as _task_result_record
 from docxtool.web.task_worker import (
     run_task_with_execution_boundary as _task_worker_run_with_boundary,
@@ -1803,126 +1836,22 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
         path = _route_path(parsed.path)
-        if path == "/" or path == "/index.html":
-            self._serve_html()
-        elif path == "/admin/login":
-            self._serve_admin_login()
-        elif path == "/admin/session":
-            self._handle_admin_session()
-        elif path == "/health":
-            self._json(_health_payload())
-        elif path == "/ready":
-            ready = _ready_payload()
-            self._json(ready, 200 if ready.get("ok") else 503)
-        elif path == "/version":
-            self._json(_version_payload())
-        elif path == "/auth/me":
-            self._handle_auth_me()
-        elif path == "/stats":
-            if not self._require_admin(parsed):
-                return
-            self._json(get_sql_stats(_monitor_query_from(parsed)))
-        elif path == "/monitor":
-            if not self._require_admin(parsed):
-                return
-            ctx = self._admin_context_or_default()
-            if ctx.get("legacy_token") and not ctx.get("session"):
-                session = _create_admin_session(self.headers.get("User-Agent", ""), self.client_address[0] if self.client_address else "")
-                self._redirect("/monitor", extra_headers=[("Set-Cookie", _admin_cookie_header(session["session_id"]))])
-                return
-            query = _monitor_query_from(parsed)
-            self._text(_monitor_html(get_sql_stats(query), self._admin_csrf_token(parsed)), "text/html")
-        elif path == "/ip":
-            if not self._require_admin(parsed):
-                return
-            self._handle_ip_detail(parsed)
-        elif _admin_actions_is_post_only_path(path):
-            self.send_error(405)
-        elif path == "/presets":
-            self._handle_presets_list()
-        elif (preset_id := _prefixed_route_tail(path, "/presets/")) is not None:
-            self._handle_preset_detail(preset_id)
-        elif (task_id := _prefixed_route_last_segment(path, "/status/", "/api/status/")) is not None:
-            if not self._require_file_api():
-                return
-            self._handle_status(task_id)
-        elif (file_id := _prefixed_route_last_segment(path, "/download/", "/api/download/")) is not None:
-            if not self._require_file_api():
-                return
-            self._handle_download(file_id)
-        elif (task_id := _prefixed_route_last_segment(path, "/log/")) is not None:
-            if not self._require_admin(parsed):
-                return
-            self._handle_log(task_id)
-        else:
-            self.send_error(404)
+        _dispatch_get(self, parsed, path)
 
     def do_POST(self):
         parsed = urlparse(self.path)
         path = _route_path(parsed.path)
-        if path == "/upload":
-            if not self._require_file_api():
-                return
-            self._handle_upload_raw()
-        elif path == "/auth/register":
-            self._handle_auth_register()
-        elif path == "/auth/login":
-            self._handle_auth_login()
-        elif path == "/auth/logout":
-            self._handle_auth_logout()
-        elif path == "/admin/login":
-            self._handle_admin_login()
-        elif path == "/admin/logout":
-            self._handle_admin_logout()
-        elif path == "/ban":
-            if not self._require_admin_post(parsed):
-                return
-            self._handle_ban(parsed)
-        elif path == "/unban":
-            if not self._require_admin_post(parsed):
-                return
-            self._handle_unban(parsed)
-        elif path == "/limit":
-            if not self._require_admin_post(parsed):
-                return
-            self._handle_limit(parsed)
-        elif path == "/cleanup":
-            if not self._require_admin_post(parsed):
-                return
-            self._handle_cleanup(parsed)
-        elif path == "/presets":
-            if not self._require_preset_mutation(parsed):
-                return
-            self._handle_preset_create()
-        elif (preset_id := _prefixed_route_tail(path, "/presets/")) is not None:
-            if not self._require_preset_mutation(parsed):
-                return
-            self._handle_preset_update(preset_id)
-        else:
-            self.send_error(404)
+        _dispatch_post(self, parsed, path)
 
     def do_PUT(self):
-        path = _route_path(urlparse(self.path).path)
-        if path == "/upload":
-            if not self._require_file_api():
-                return
-            self._handle_upload_raw()
-        elif (preset_id := _prefixed_route_tail(path, "/presets/")) is not None:
-            if not self._require_preset_mutation(urlparse(self.path)):
-                return
-            self._handle_preset_update(preset_id)
-        else:
-            self.send_error(404)
+        parsed = urlparse(self.path)
+        path = _route_path(parsed.path)
+        _dispatch_put(self, parsed, path)
 
     def do_DELETE(self):
-        path = _route_path(urlparse(self.path).path)
-        if (preset_id := _prefixed_route_tail(path, "/presets/")) is not None:
-            parsed = urlparse(self.path)
-            if not self._require_preset_mutation(parsed):
-                return
-            self._handle_preset_delete(preset_id)
-        else:
-            self.send_error(404)
+        parsed = urlparse(self.path)
+        path = _route_path(parsed.path)
+        _dispatch_delete(self, parsed, path)
 
     def _serve_html(self):
         body = _frontend_load_index_html()
@@ -1934,6 +1863,112 @@ class Handler(BaseHTTPRequestHandler):
     def _serve_admin_login(self):
         self._text(_admin_pages_render_login_html(), "text/html")
 
+    def _handle_health(self):
+        """无需传入数据，发送健康检查 JSON 响应并返回 None。"""
+        self._json(_health_payload())
+
+    def _handle_ready(self):
+        """无需传入数据，发送 readiness JSON 响应并返回 None。"""
+        ready = _ready_payload()
+        self._json(ready, 200 if ready.get("ok") else 503)
+
+    def _handle_version(self):
+        """无需传入数据，发送版本信息 JSON 响应并返回 None。"""
+        self._json(_version_payload())
+
+    def _handle_stats(self, parsed):
+        """传入已解析 URL，通过管理员鉴权后发送监控统计 JSON。"""
+        if not self._require_admin(parsed):
+            return
+        self._json(get_sql_stats(_monitor_query_from(parsed)))
+
+    def _handle_monitor(self, parsed):
+        """传入已解析 URL，通过管理员鉴权后发送监控 HTML 或刷新 session。"""
+        if not self._require_admin(parsed):
+            return
+        ctx = self._admin_context_or_default()
+        if ctx.get("legacy_token") and not ctx.get("session"):
+            session = _create_admin_session(
+                self.headers.get("User-Agent", ""),
+                self.client_address[0] if self.client_address else "",
+            )
+            self._redirect("/monitor", extra_headers=[("Set-Cookie", _admin_cookie_header(session["session_id"]))])
+            return
+        query = _monitor_query_from(parsed)
+        self._text(_monitor_html(get_sql_stats(query), self._admin_csrf_token(parsed)), "text/html")
+
+    def _handle_ip_detail_route(self, parsed):
+        """传入已解析 URL，通过管理员鉴权后发送 IP 详情 HTML。"""
+        if not self._require_admin(parsed):
+            return
+        self._handle_ip_detail(parsed)
+
+    def _handle_upload_route(self):
+        """无需传入数据，通过文件 API 鉴权后处理上传请求。"""
+        if not self._require_file_api():
+            return
+        self._handle_upload_raw()
+
+    def _handle_status_route(self, task_id: str):
+        """传入任务 ID，通过文件 API 鉴权后发送任务状态响应。"""
+        if not self._require_file_api():
+            return
+        self._handle_status(task_id)
+
+    def _handle_download_route(self, file_id: str):
+        """传入任务或文件 ID，通过文件 API 鉴权后发送 DOCX 下载响应。"""
+        if not self._require_file_api():
+            return
+        self._handle_download(file_id)
+
+    def _handle_log_route(self, parsed, task_id: str):
+        """传入已解析 URL 和任务 ID，通过管理员鉴权后发送任务日志页面。"""
+        if not self._require_admin(parsed):
+            return
+        self._handle_log(task_id)
+
+    def _handle_ban_route(self, parsed):
+        """传入已解析 URL，通过管理员 POST 鉴权后执行封禁动作。"""
+        if not self._require_admin_post(parsed):
+            return
+        self._handle_ban(parsed)
+
+    def _handle_unban_route(self, parsed):
+        """传入已解析 URL，通过管理员 POST 鉴权后执行解封动作。"""
+        if not self._require_admin_post(parsed):
+            return
+        self._handle_unban(parsed)
+
+    def _handle_limit_route(self, parsed):
+        """传入已解析 URL，通过管理员 POST 鉴权后更新上传限制。"""
+        if not self._require_admin_post(parsed):
+            return
+        self._handle_limit(parsed)
+
+    def _handle_cleanup_route(self, parsed):
+        """传入已解析 URL，通过管理员 POST 鉴权后执行兼容清理入口。"""
+        if not self._require_admin_post(parsed):
+            return
+        self._handle_cleanup(parsed)
+
+    def _handle_preset_create_route(self, parsed):
+        """传入已解析 URL，通过模板变更鉴权后创建 preset。"""
+        if not self._require_preset_mutation(parsed):
+            return
+        self._handle_preset_create()
+
+    def _handle_preset_update_route(self, parsed, preset_id: str):
+        """传入已解析 URL 和模板 ID，通过模板变更鉴权后更新 preset。"""
+        if not self._require_preset_mutation(parsed):
+            return
+        self._handle_preset_update(preset_id)
+
+    def _handle_preset_delete_route(self, parsed, preset_id: str):
+        """传入已解析 URL 和模板 ID，通过模板变更鉴权后删除 preset。"""
+        if not self._require_preset_mutation(parsed):
+            return
+        self._handle_preset_delete(preset_id)
+
     def _admin_context_or_default(self):
         return _admin_access_context_or_default(getattr(self, "_admin_context", None))
 
@@ -1941,30 +1976,35 @@ class Handler(BaseHTTPRequestHandler):
         return _admin_access_csrf_token(self._admin_context_or_default())
 
     def _handle_admin_session(self):
-        session = _admin_session_from_headers(self.headers, self.headers.get("Cookie", ""))
-        if not session:
-            self._json_error("UNAUTHORIZED", "需要管理员权限", 403)
-            return
-        self._json(_admin_access_session_payload(session))
+        """无需传入数据，发送管理员 session JSON 或未授权错误。"""
+        _admin_session_route_handle_session(
+            self,
+            session_from_headers=_admin_session_from_headers,
+            session_payload=_admin_access_session_payload,
+        )
 
     def _handle_admin_login(self):
-        length = int(self.headers.get("Content-Length", 0) or 0)
-        body = _read_exact(self.rfile, length) if length > 0 else b""
-        token = _admin_forms_parse_login_token(body)
-        login_error = _admin_access_login_error(token, ADMIN_TOKEN)
-        if login_error is not None:
-            self._json_error_fields(login_error)
-            return
-        session = _create_admin_session(self.headers.get("User-Agent", ""), self.client_address[0] if self.client_address else "")
-        cookie = _admin_cookie_header(session["session_id"])
-        self._redirect("/monitor", extra_headers=[("Set-Cookie", cookie)])
+        """无需传入数据，读取管理员登录表单并建立 session。"""
+        _admin_session_route_handle_login(
+            self,
+            admin_token=ADMIN_TOKEN,
+            read_exact=_read_exact,
+            parse_login_token=_admin_forms_parse_login_token,
+            login_error=_admin_access_login_error,
+            create_admin_session=_create_admin_session,
+            admin_cookie_header=_admin_cookie_header,
+        )
 
     def _handle_admin_logout(self):
-        session = _admin_session_from_headers(self.headers, self.headers.get("Cookie", ""))
-        if session:
-            _delete_admin_session(session.get("session_id", ""))
-        cookie = _admin_access_logout_cookie_header(ADMIN_SESSION_COOKIE, secure=COOKIE_SECURE)
-        self._redirect("/admin/login", extra_headers=[("Set-Cookie", cookie)])
+        """无需传入数据，删除管理员 session 并跳转登录页。"""
+        _admin_session_route_handle_logout(
+            self,
+            session_from_headers=_admin_session_from_headers,
+            delete_admin_session=_delete_admin_session,
+            logout_cookie_header=_admin_access_logout_cookie_header,
+            cookie_name=ADMIN_SESSION_COOKIE,
+            secure=COOKIE_SECURE,
+        )
 
     def _require_admin(self, parsed) -> bool:
         ctx = _admin_request_context(parsed, self.headers, self.headers.get("Cookie", ""))
@@ -2021,129 +2061,93 @@ class Handler(BaseHTTPRequestHandler):
         self._json_error("PROXY_REQUIRED", "缺少或无效的代理密钥", 403)
         return False
 
+    def _parsed_url(self):
+        """无需传入数据，返回当前请求路径解析后的 URL 对象。"""
+        return urlparse(self.path)
+
     def _auth_json_request(self) -> dict | None:
-        error = _auth_payloads_json_request_error(_auth_origin_allowed(self.headers), self.headers)
-        if error is not None:
-            self._json_error_fields(error)
-            return None
-        payload = self._request_params(urlparse(self.path))
-        return payload if isinstance(payload, dict) else None
+        """无需传入数据，校验并返回认证 JSON 请求参数；失败时发送错误。"""
+        return _auth_route_read_json_request(
+            self,
+            origin_allowed=_auth_origin_allowed,
+            json_request_error=_auth_payloads_json_request_error,
+        )
 
     def _handle_auth_me(self):
-        principal = _principal(self.headers, self.client_address)
-        data = _auth_payloads_me_data(principal)
-        extra = _auth_payloads_me_extra_headers(principal, clear_user_cookie_header=_user_cookie_header("", clear=True))
-        self._json(_auth_payloads_ok_data_response(data), extra_headers=extra)
+        """无需传入数据，发送当前用户登录状态 JSON。"""
+        _auth_route_handle_me(
+            self,
+            principal=_principal,
+            me_data=_auth_payloads_me_data,
+            me_extra_headers=_auth_payloads_me_extra_headers,
+            ok_data_response=_auth_payloads_ok_data_response,
+            user_cookie_header=_user_cookie_header,
+        )
 
     def _handle_auth_register(self):
-        payload = self._auth_json_request()
-        if payload is None:
-            return
-        allowed, retry = _auth_rate_allow("register-ip", _client_ip(self.headers, self.client_address), 3600, 5)
-        rate_error = _auth_payloads_register_rate_limit_error(allowed, retry)
-        if rate_error is not None:
-            self._json_error_fields(rate_error)
-            return
-        try:
-            display, username_norm = validate_username(payload.get("username", ""))
-            password = validate_password(payload.get("password", ""))
-        except ValueError as exc:
-            self._json_error_fields(_auth_payloads_validation_error_from_exception(exc))
-            return
-        anonymous = _principal(self.headers, self.client_address)
-        user_id = f"usr_{uuid.uuid4().hex}"
-        now = _now_unix()
-        conn = None
-        try:
-            with _SQL_LOCK:
-                conn = _sql()
-                conn.execute("BEGIN IMMEDIATE")
-                conn.execute("INSERT INTO users(id,username,username_norm,password_hash,display_name,created_at,updated_at) VALUES (?,?,?,?,?,?,?)", (user_id, display, username_norm, hash_password(password), display, now, now))
-                _migrate_anonymous_owner(conn, anonymous.get("owner_id", ""), user_id)
-                conn.commit()
-                conn.close()
-        except Exception as exc:
-            if conn is not None:
-                conn.rollback()
-                conn.close()
-            self._json_error_fields(_auth_payloads_register_error_from_exception(exc))
-            return
-        session = _create_user_session(user_id, self.headers.get("User-Agent", ""), self.client_address[0] if self.client_address else "")
-        self._json(
-            _auth_payloads_success_response(user_id, display, display, session["csrf_token"]),
-            201,
-            _auth_payloads_session_extra_headers(
-                _user_cookie_header(session["token"]),
-                _anonymous_user_cookie_clear_header(),
-            ),
+        """无需传入数据，注册普通用户并发送认证 JSON 响应。"""
+        _auth_route_handle_register(
+            self,
+            read_json_request=self._auth_json_request,
+            auth_rate_allow=_auth_rate_allow,
+            client_ip=_client_ip,
+            register_rate_limit_error=_auth_payloads_register_rate_limit_error,
+            validate_username=validate_username,
+            validate_password=validate_password,
+            validation_error_from_exception=_auth_payloads_validation_error_from_exception,
+            principal=_principal,
+            new_user_id=lambda: f"usr_{uuid.uuid4().hex}",
+            now_unix=_now_unix,
+            sql_lock=_SQL_LOCK,
+            connect=_sql,
+            hash_password=hash_password,
+            migrate_anonymous_owner=_migrate_anonymous_owner,
+            register_error_from_exception=_auth_payloads_register_error_from_exception,
+            create_user_session=_create_user_session,
+            success_response=_auth_payloads_success_response,
+            session_extra_headers=_auth_payloads_session_extra_headers,
+            user_cookie_header=_user_cookie_header,
+            anonymous_clear_cookie_header=_anonymous_user_cookie_clear_header,
         )
 
     def _handle_auth_login(self):
-        payload = self._auth_json_request()
-        if payload is None:
-            return
-        try:
-            _, username_norm = validate_username(payload.get("username", ""))
-        except ValueError:
-            self._json_error_fields(_auth_payloads_invalid_credentials_error())
-            return
-        ip = _client_ip(self.headers, self.client_address)
-        ip_allowed, ip_retry = _auth_rate_allow("login-ip", ip, 600, 30)
-        name_allowed, name_retry = _auth_rate_allow("login-name", username_norm, 600, 10)
-        rate_error = _auth_payloads_login_rate_limit_error(ip_allowed, ip_retry, name_allowed, name_retry)
-        if rate_error is not None:
-            self._json_error_fields(rate_error)
-            return
-        password = str(payload.get("password", ""))
-        with _SQL_LOCK:
-            conn = _sql()
-            row = conn.execute("SELECT * FROM users WHERE username_norm=?", (username_norm,)).fetchone()
-            conn.close()
-        if not row or not verify_password(row["password_hash"], password)[0]:
-            self._json_error_fields(_auth_payloads_invalid_credentials_error())
-            return
-        if row["status"] != "active":
-            self._json_error_fields(_auth_payloads_account_disabled_error())
-            return
-        _, needs_rehash = verify_password(row["password_hash"], password)
-        with _SQL_LOCK:
-            conn = _sql()
-            now = _now_unix()
-            if needs_rehash:
-                conn.execute("UPDATE users SET password_hash=?, updated_at=? WHERE id=?", (hash_password(password), now, row["id"]))
-            conn.execute("UPDATE users SET last_login_at=? WHERE id=?", (now, row["id"]))
-            conn.commit()
-            conn.close()
-        principal = _principal(self.headers, self.client_address)
-        _migrate_anonymous_resources(principal.get("owner_id", ""), row["id"])
-        session = _create_user_session(row["id"], self.headers.get("User-Agent", ""), self.client_address[0] if self.client_address else "")
-        remember_me = _parse_bool(str(payload.get("remember_me", "true")), True)
-        self._json(
-            _auth_payloads_success_response(row["id"], row["username"], row["display_name"], session["csrf_token"]),
-            extra_headers=_auth_payloads_session_extra_headers(
-                _user_cookie_header(session["token"], persistent=remember_me),
-                _anonymous_user_cookie_clear_header(),
-            ),
+        """无需传入数据，登录普通用户并发送认证 JSON 响应。"""
+        _auth_route_handle_login(
+            self,
+            read_json_request=self._auth_json_request,
+            validate_username=validate_username,
+            invalid_credentials_error=_auth_payloads_invalid_credentials_error,
+            client_ip=_client_ip,
+            auth_rate_allow=_auth_rate_allow,
+            login_rate_limit_error=_auth_payloads_login_rate_limit_error,
+            sql_lock=_SQL_LOCK,
+            connect=_sql,
+            verify_password=verify_password,
+            account_disabled_error=_auth_payloads_account_disabled_error,
+            hash_password=hash_password,
+            now_unix=_now_unix,
+            principal=_principal,
+            migrate_anonymous_resources=_migrate_anonymous_resources,
+            create_user_session=_create_user_session,
+            parse_bool=_parse_bool,
+            success_response=_auth_payloads_success_response,
+            session_extra_headers=_auth_payloads_session_extra_headers,
+            user_cookie_header=_user_cookie_header,
+            anonymous_clear_cookie_header=_anonymous_user_cookie_clear_header,
         )
 
     def _handle_auth_logout(self):
-        origin_error = _auth_payloads_logout_request_error(_auth_origin_allowed(self.headers), False, False)
-        if origin_error is not None:
-            self._json_error_fields(origin_error)
-            return
-        principal = _principal(self.headers, self.client_address)
-        csrf_error = _auth_payloads_logout_request_error(
-            True,
-            bool(principal.get("authenticated")),
-            _auth_csrf_allowed(self.headers, principal),
-        )
-        if csrf_error is not None:
-            self._json_error_fields(csrf_error)
-            return
-        _delete_user_session(self.headers)
-        self._json(
-            _auth_payloads_logout_response(),
-            extra_headers=_auth_payloads_logout_extra_headers(_user_cookie_header("", True)),
+        """无需传入数据，退出普通用户登录并发送 JSON 响应。"""
+        _auth_route_handle_logout(
+            self,
+            origin_allowed=_auth_origin_allowed,
+            logout_request_error=_auth_payloads_logout_request_error,
+            principal=_principal,
+            auth_csrf_allowed=_auth_csrf_allowed,
+            delete_user_session=_delete_user_session,
+            logout_response=_auth_payloads_logout_response,
+            logout_extra_headers=_auth_payloads_logout_extra_headers,
+            user_cookie_header=_user_cookie_header,
         )
 
     def _handle_upload_raw(self):
@@ -2271,64 +2275,45 @@ class Handler(BaseHTTPRequestHandler):
             self._json_error_fields(_responses_internal_server_error())
 
     def _handle_status(self, task_id: str):
-        if not _is_safe_uuid(task_id):
-            self._json_error_fields(_responses_invalid_task_id_error())
-            return
-        principal = _principal(self.headers, self.client_address)
-        task = _public_task_state(task_id, principal["owner_id"])
-        if not task:
-            self._json_error_fields(_responses_task_not_found_error())
-        else:
-            self._json(task)
+        """传入任务 ID，发送公开任务状态或稳定错误响应。"""
+        _task_route_handle_status(
+            self,
+            task_id,
+            is_safe_uuid=_is_safe_uuid,
+            invalid_task_id_error=_responses_invalid_task_id_error,
+            task_not_found_error=_responses_task_not_found_error,
+            principal=_principal,
+            public_task_state=_public_task_state,
+        )
 
     def _handle_download(self, task_id: str):
-        if not _is_safe_uuid(task_id):
-            self._json_error_fields(_responses_invalid_task_id_error())
-            return
-        principal = _principal(self.headers, self.client_address)
-        owner_id = principal["owner_id"]
-        with TASKS_LOCK:
-            task = TASKS.get(task_id)
-            if task and owner_id and task.get("owner_id", "") != owner_id:
-                task = None
-        if not task or task.get("status") != "done":
-            with _SQL_LOCK:
-                conn = _sql()
-                row = conn.execute(
-                    "SELECT status, output_path, output_filename, filename FROM tasks WHERE id=? AND owner_id=?",
-                    (task_id, owner_id),
-            ).fetchone()
-                conn.close()
-            if not row or row["status"] != "done":
-                self._json_error_fields(_responses_file_not_ready_error())
-                return
-            path = row["output_path"] or ""
-            download_name = row["output_filename"] or _safe_download_filename(row["filename"] or "download.docx")
-        else:
-            path = task.get("output_path") or task.get("output") or ""
-            download_name = task.get("download_name") or _safe_download_filename(task.get("filename", "download.docx"))
-        if not path or not os.path.exists(path):
-            self._json_error_fields(_responses_file_expired_error())
-            return
-        try:
-            file_size = os.path.getsize(path)
-        except OSError:
-            self._json_error_fields(_responses_file_expired_error())
-            return
-        self.send_response(200)
-        for key, value in _responses_docx_download_headers(_content_disposition_filename(download_name), file_size):
-            self.send_header(key, value)
-        self._set_cors_headers()
-        self._set_security_headers()
-        self.end_headers()
-        _stream_file(path, self.wfile)
+        """传入任务 ID，发送 DOCX 下载响应或稳定错误响应。"""
+        _task_route_handle_download(
+            self,
+            task_id,
+            is_safe_uuid=_is_safe_uuid,
+            invalid_task_id_error=_responses_invalid_task_id_error,
+            file_not_ready_error=_responses_file_not_ready_error,
+            file_expired_error=_responses_file_expired_error,
+            principal=_principal,
+            tasks=TASKS,
+            tasks_lock=TASKS_LOCK,
+            sql_lock=_SQL_LOCK,
+            connect=_sql,
+            safe_download_filename=_safe_download_filename,
+            content_disposition_filename=_content_disposition_filename,
+            docx_download_headers=_responses_docx_download_headers,
+            stream_file=_stream_file,
+        )
 
     def _redirect(self, target: str, extra_headers=None):
-        self.send_response(303)
-        for key, value in _responses_redirect_headers(target, extra_headers):
-            self.send_header(key, value)
-        self._set_security_headers()
-        self.end_headers()
+        """传入目标地址和可选响应头，按旧行为发送 303 跳转响应。"""
+        _handler_send_redirect_response(
+            self,
+            target=target,
+            security_headers=self._set_security_headers,
+            extra_headers=extra_headers,
+        )
 
     def _request_params(self, parsed) -> dict:
         cached = getattr(self, "_request_params_cache", None)
@@ -2345,170 +2330,124 @@ class Handler(BaseHTTPRequestHandler):
         return _admin_actions_query_ip(parsed)
 
     def _handle_ip_detail(self, parsed):
-        ip = self._query_ip(parsed)
-        if not _is_ip(ip):
-            self._json_error("INVALID_IP", "无效的 IP", 400)
-            return
-        self._text(_ip_detail_html(ip, self._admin_csrf_token(parsed)), "text/html")
+        """传入已解析 URL，发送 IP 详情页面或无效 IP 错误。"""
+        _admin_route_handle_ip_detail(
+            self,
+            parsed,
+            is_ip=_is_ip,
+            render_ip_detail_html=_ip_detail_html,
+        )
 
     def _handle_ban(self, parsed):
-        params = self._request_params(parsed)
-        ip = _admin_actions_ip_from_params(params)
-        if not _is_ip(ip):
-            self._json_error("INVALID_IP", "无效的 IP", 400)
-            return
-        reason = _admin_actions_ban_reason(params)
-        _ban_ip(ip, reason)
-        logger.warning(f"[Security] ip banned: {ip} reason={reason}")
-        self._redirect("/monitor")
+        """传入已解析 URL，执行 IP 封禁动作并跳转监控页。"""
+        _admin_route_handle_ban(self, parsed, is_ip=_is_ip, ban_ip=_ban_ip, logger=logger)
 
     def _handle_unban(self, parsed):
-        params = self._request_params(parsed)
-        ip = _admin_actions_ip_from_params(params)
-        if not _is_ip(ip):
-            self._json_error("INVALID_IP", "无效的 IP", 400)
-            return
-        _unban_ip(ip)
-        logger.warning(f"[Security] ip unbanned: {ip}")
-        self._redirect("/monitor")
+        """传入已解析 URL，执行 IP 解封动作并跳转监控页。"""
+        _admin_route_handle_unban(self, parsed, is_ip=_is_ip, unban_ip=_unban_ip, logger=logger)
 
     def _handle_limit(self, parsed):
-        params = self._request_params(parsed)
-        enabled, window_seconds, count = _admin_actions_upload_limit_values(
-            params,
+        """传入已解析 URL，更新上传限额配置并跳转监控页。"""
+        _admin_route_handle_limit(
+            self,
+            parsed,
             default_window_seconds=DEFAULT_UPLOAD_LIMIT_WINDOW_SECONDS,
             default_count=DEFAULT_UPLOAD_LIMIT_COUNT,
+            save_limit_settings=_save_limit_settings,
+            logger=logger,
         )
-        _save_limit_settings(enabled, window_seconds, count)
-        logger.warning(
-            f"[Security] upload limit settings updated: enabled={enabled} "
-            f"window_seconds={max(1, window_seconds)} count={max(1, count)}"
-        )
-        self._redirect("/monitor")
 
     def _handle_cleanup(self, parsed):
-        # Retain the route for older administrator bookmarks. It deliberately
-        # performs no deletion under the permanent retention policy.
-        logger.info("[Cleaner] manual cleanup skipped: permanent file retention is enabled")
-        self._redirect("/monitor")
+        """传入已解析 URL，执行永久保留策略下的兼容清理入口。"""
+        _admin_route_handle_cleanup(self, logger=logger)
 
     def _handle_presets_list(self):
-        principal = _principal(self.headers, self.client_address)
-        self._json(
-            {"presets": _list_presets(principal["owner_id"])},
-            extra_headers=_responses_optional_set_cookie_headers(principal.get("cookie", "")),
+        """无需传入数据，发送当前 owner 可见 preset 列表。"""
+        _preset_route_handle_list(
+            self,
+            principal=_principal,
+            list_presets=_list_presets,
+            optional_set_cookie_headers=_responses_optional_set_cookie_headers,
         )
 
     def _handle_preset_detail(self, preset_id: str):
-        preset_id = str(preset_id or "").strip()
-        if not preset_id:
-            self._json_error("TEMPLATE_ID_INVALID", "无效的模板 ID", 400)
-            return
-        principal = _principal(self.headers, self.client_address)
-        preset = _get_preset(preset_id, owner_id=principal["owner_id"])
-        if not preset:
-            self._json_error("TEMPLATE_NOT_FOUND", "模板不存在", 404)
-            return
-        self._json(preset, extra_headers=_responses_optional_set_cookie_headers(principal.get("cookie", "")))
+        """传入模板 ID，发送单个 preset 或稳定错误响应。"""
+        _preset_route_handle_detail(
+            self,
+            preset_id,
+            principal=_principal,
+            get_preset=_get_preset,
+            optional_set_cookie_headers=_responses_optional_set_cookie_headers,
+        )
 
     def _handle_preset_create(self):
-        payload = getattr(self, "_request_params_cache", {})
-        try:
-            preset = _insert_preset(
-                payload.get("name", ""),
-                payload.get("description", ""),
-                payload.get("config_json", {}),
-                preset_id=payload.get("id", ""),
-                owner_id=getattr(self, "_preset_owner_id", ""),
-                visibility="public" if getattr(self, "_preset_admin", False) else "private",
-            )
-        except ValueError as exc:
-            self._json_error_fields(_preset_error_from_exception(exc, not_found_status=400))
-            return
-        self._json(preset, 201, extra_headers=_responses_optional_set_cookie_headers(getattr(self, "_preset_cookie_header", "")))
+        """无需传入数据，根据缓存请求参数创建 preset 并发送 JSON。"""
+        _preset_route_handle_create(
+            self,
+            insert_preset=_insert_preset,
+            preset_error_from_exception=_preset_error_from_exception,
+            optional_set_cookie_headers=_responses_optional_set_cookie_headers,
+        )
 
     def _handle_preset_update(self, preset_id: str):
-        payload = getattr(self, "_request_params_cache", {})
-        try:
-            preset = _update_preset(
-                preset_id,
-                payload.get("name", ""),
-                payload.get("description", ""),
-                payload.get("config_json", {}),
-                owner_id=getattr(self, "_preset_owner_id", ""),
-                public_only=getattr(self, "_preset_public_only", True),
-            )
-        except ValueError as exc:
-            self._json_error_fields(_preset_error_from_exception(exc))
-            return
-        self._json(preset, extra_headers=_responses_optional_set_cookie_headers(getattr(self, "_preset_cookie_header", "")))
+        """传入模板 ID，根据缓存请求参数更新 preset 并发送 JSON。"""
+        _preset_route_handle_update(
+            self,
+            preset_id,
+            update_preset=_update_preset,
+            preset_error_from_exception=_preset_error_from_exception,
+            optional_set_cookie_headers=_responses_optional_set_cookie_headers,
+        )
 
     def _handle_preset_delete(self, preset_id: str):
-        try:
-            result = _delete_preset(
-                preset_id,
-                owner_id=getattr(self, "_preset_owner_id", ""),
-                public_only=getattr(self, "_preset_public_only", True),
-            )
-        except ValueError as exc:
-            self._json_error_fields(_preset_error_from_exception(exc))
-            return
-        self._json(result, 200, extra_headers=_responses_optional_set_cookie_headers(getattr(self, "_preset_cookie_header", "")))
+        """传入模板 ID，删除 preset 并发送 JSON 结果。"""
+        _preset_route_handle_delete(
+            self,
+            preset_id,
+            delete_preset=_delete_preset,
+            preset_error_from_exception=_preset_error_from_exception,
+            optional_set_cookie_headers=_responses_optional_set_cookie_headers,
+        )
 
     def _handle_log(self, task_id: str):
-        if not _is_safe_uuid(task_id):
-            self._json_error_fields(_responses_invalid_task_id_error())
-            return
-        path = ""
-        with TASKS_LOCK:
-            task = TASKS.get(task_id)
-            if task:
-                filename = task.get("log_filename", "")
-                if filename:
-                    path = os.path.join(LOG_DIR, filename)
-        with _SQL_LOCK:
-            conn = _sql()
-            row = conn.execute(
-                """SELECT filename, status, duration_ms, error_code, error_message,
-                          created_at, log_path
-                   FROM tasks WHERE id=?""",
-                (task_id,),
-            ).fetchone()
-            conn.close()
-        if not path:
-            path = row["log_path"] if row else ""
-        if not path:
-            self._json_error_fields(_responses_log_not_found_error())
-            return
-        root = os.path.abspath(LOG_DIR)
-        path = os.path.abspath(path)
-        if not path.startswith(root + os.sep) or not os.path.exists(path):
-            self._json_error_fields(_responses_log_not_found_error(expired=True))
-            return
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
-            log_text = _redact_sensitive_log(f.read())
-        body = _pages_render_task_log_html(task_id, row, log_text)
-        self._text(body, "text/html")
+        """传入任务 ID，发送脱敏任务日志页面或稳定错误响应。"""
+        _task_route_handle_log(
+            self,
+            task_id,
+            is_safe_uuid=_is_safe_uuid,
+            invalid_task_id_error=_responses_invalid_task_id_error,
+            log_not_found_error=_responses_log_not_found_error,
+            tasks=TASKS,
+            tasks_lock=TASKS_LOCK,
+            sql_lock=_SQL_LOCK,
+            connect=_sql,
+            log_dir=LOG_DIR,
+            redact_sensitive_log=_redact_sensitive_log,
+            render_task_log_html=_pages_render_task_log_html,
+        )
 
     def _text(self, body: str, mime: str, status: int = 200, extra_headers=None):
-        data = _responses_text_bytes(body)
-        self.send_response(status)
-        for key, value in _responses_text_headers(mime, len(data), extra_headers):
-            self.send_header(key, value)
-        self._set_cors_headers()
-        self._set_security_headers()
-        self.end_headers()
-        self.wfile.write(data)
+        """传入文本、MIME 和状态码，按旧行为发送文本响应。"""
+        _handler_send_text_response(
+            self,
+            body=body,
+            mime=mime,
+            status=status,
+            cors_headers=self._set_cors_headers,
+            security_headers=self._set_security_headers,
+            extra_headers=extra_headers,
+        )
 
     def _json(self, obj: dict, status: int = 200, extra_headers=None):
-        data = _responses_json_bytes(obj)
-        self.send_response(status)
-        for key, value in _responses_json_headers(len(data), extra_headers):
-            self.send_header(key, value)
-        self._set_cors_headers()
-        self._set_security_headers()
-        self.end_headers()
-        self.wfile.write(data)
+        """传入 JSON 对象和状态码，按旧行为发送 JSON 响应。"""
+        _handler_send_json_response(
+            self,
+            obj=obj,
+            status=status,
+            cors_headers=self._set_cors_headers,
+            security_headers=self._set_security_headers,
+            extra_headers=extra_headers,
+        )
 
     def _json_error_fields(self, error: tuple[str, str, int] | tuple[str, str, int, int]):
         """传入错误码、提示、状态码和可选重试秒数，按现有 JSON 错误格式发送响应。"""
@@ -2517,50 +2456,44 @@ class Handler(BaseHTTPRequestHandler):
         self._json_error(code, message, status, retry_after=retry_after)
 
     def _json_error(self, code: str, message: str, status: int, *, field: str = "", reason: str = "", retry_after: int = 0):
-        headers = _responses_retry_after_headers(retry_after)
-        body = _responses_json_error_body(
+        """传入错误字段和状态码，按当前路由类型发送兼容 JSON 错误响应。"""
+        _handler_send_json_error_response(
+            self,
             auth_route=_route_path(urlparse(self.path).path).startswith("/auth/"),
             code=code,
             message=message,
+            status=status,
+            cors_headers=self._set_cors_headers,
+            security_headers=self._set_security_headers,
             field=field,
             reason=reason,
+            retry_after=retry_after,
             legacy_error_body=_error_payload,
         )
-        self._json(body, status, extra_headers=headers)
 
     def log_message(self, fmt, *args):
         pass
 
 
 def main():
-    if any(arg in {"-h", "--help"} for arg in sys.argv[1:]):
-        print("Usage: python server.py")
-        print("   or: python -m docxtool")
-        print("Configure ADMIN_TOKEN and PROXY_SECRET before starting the service.")
-        return
-    _validate_secrets_or_exit()
-    _startup_cleanup()
-    _sql_init()
-    _recover_inflight_tasks_on_startup()
-    _ensure_workers_started()
-    server = ThreadingHTTPServer(_server_bind_address(), Handler)
-    server.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-    urls = _startup_urls()
-    print(f"排版工具:   {urls['tool']}")
-    print(f"管理员登录: {urls['admin_login']}")
-    print(f"监控面板:   登录后访问 {urls['monitor']}")
-    print("鉴权配置:   ADMIN_TOKEN 已设置 | PROXY_SECRET 已设置")
-    print(f"线程池: {MAX_WORKERS} | 队列: {MAX_QUEUE} | 上限: {MAX_SIZE//1048576}MB")
-    print(f"限流: {RATE_WINDOW}s/IP | 文件保留: 永久")
-    for line in _startup_time_check_lines():
-        print(line)
-    print("外网访问:   Cloudflare Pages /api/* -> Nginx 80 -> 127.0.0.1:9527")
-    print("Ctrl+C 停止")
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        print("\n已停止")
-        server.server_close()
+    """兼容旧启动入口，无需传入数据，完成 Web 服务启动编排。"""
+    return _runtime_run_http_service(
+        argv=sys.argv,
+        server_class=ThreadingHTTPServer,
+        handler_class=Handler,
+        bind_address=_server_bind_address,
+        startup_urls=_startup_urls,
+        startup_time_check_lines=_startup_time_check_lines,
+        validate_secrets=_validate_secrets_or_exit,
+        startup_cleanup=_startup_cleanup,
+        init_database=_sql_init,
+        recover_inflight_tasks=_recover_inflight_tasks_on_startup,
+        ensure_workers_started=_ensure_workers_started,
+        max_workers=MAX_WORKERS,
+        max_queue=MAX_QUEUE,
+        max_size=MAX_SIZE,
+        rate_window=RATE_WINDOW,
+    )
 
 if __name__ == "__main__":
     main()
