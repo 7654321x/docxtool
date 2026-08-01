@@ -26,13 +26,17 @@
 - `src/docxtool/web/format_request.py`：上传请求的格式配置、预设元数据和处理模式解析。
 - `src/docxtool/web/health.py`：健康检查、readiness、版本信息和启动地址 payload。
 - `src/docxtool/web/monitoring.py`：监控页查询参数、分页和链接生成辅助。
+- `src/docxtool/web/owner_migration.py`：匿名 owner 的任务和私人模板迁移辅助。
 - `src/docxtool/web/preset_config.py`：预设模板名称、ID、格式配置和 API 行数据归一化辅助。
+- `src/docxtool/web/preset_store.py`：预设模板列表、详情、创建、更新和删除的数据库读写辅助。
 - `src/docxtool/web/rate_limits.py`：上传限流、认证限流、IP 封禁和上传次数限制辅助。
 - `src/docxtool/web/request_utils.py`：HTTP 路径、Cookie、CSRF、JSON 和 HTML 转义辅助。
 - `src/docxtool/web/stream_io.py`：HTTP 请求体定长读取、上传落盘和下载文件流输出辅助。
 - `src/docxtool/web/task_paths.py`：任务上传、输出、临时路径和永久保留清理钩子。
+- `src/docxtool/web/task_records.py`：任务排队、处理中和终态的数据库记录写入辅助。
 - `src/docxtool/web/task_state.py`：任务计数、队列位置、公开任务状态和识别摘要脱敏。
 - `src/docxtool/web/time_check.py`：启动时区和北京网络时间校验提示。
+- `src/docxtool/web/user_auth.py`：普通用户 session、登录 cookie、principal 和 CSRF 校验辅助。
 - `src/docxtool/document/models/`：导入、识别、规范化、渲染和 SDK 共享的稳定文档数据模型。
 - `src/docxtool/document/importer.py`：DOCX 结构识别、段落分类、元数据生成。
 - `src/docxtool/document/segmentation/`：逻辑段 source locator、可见文字守恒和段内格式特征映射。

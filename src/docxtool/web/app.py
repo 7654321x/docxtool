@@ -13,7 +13,6 @@ from __future__ import annotations
 import os
 import sys
 import json
-import base64
 import multiprocessing as mp
 import uuid
 import time
@@ -116,11 +115,22 @@ from docxtool.web.monitoring import (
     page_count as _monitor_page_count,
     where_sql as _monitor_where_sql,
 )
+from docxtool.web.owner_migration import (
+    migrate_anonymous_owner as _owner_migration_migrate_owner,
+    migrate_anonymous_resources as _owner_migration_migrate_resources,
+)
 from docxtool.web.preset_config import (
     normalize_template_id as _preset_normalize_template_id,
     normalize_template_name as _preset_normalize_template_name,
     preset_row_to_dict as _preset_row_to_dict_impl,
     validate_template_config as _preset_validate_template_config,
+)
+from docxtool.web.preset_store import (
+    delete_preset as _preset_store_delete,
+    get_preset as _preset_store_get,
+    insert_preset as _preset_store_insert,
+    list_presets as _preset_store_list,
+    update_preset as _preset_store_update,
 )
 from docxtool.web.rate_limits import (
     allow as _rate_allow,
@@ -169,6 +179,11 @@ from docxtool.web.task_paths import (
     task_upload_dir as _task_paths_upload_dir,
     task_upload_input_path as _task_paths_upload_input_path,
 )
+from docxtool.web.task_records import (
+    mark_task_processing as _task_records_mark_processing,
+    mark_task_terminal as _task_records_mark_terminal,
+    record_task_queued as _task_records_record_queued,
+)
 from docxtool.web.task_state import (
     active_count as _task_state_active_count,
     public_recognition_summary as _task_state_public_recognition_summary,
@@ -177,6 +192,16 @@ from docxtool.web.task_state import (
     task_load as _task_state_task_load,
     task_processing_options as _task_state_processing_options,
     task_queue_info as _task_state_queue_info,
+)
+from docxtool.web.user_auth import (
+    auth_csrf_allowed as _user_auth_csrf_allowed,
+    auth_origin_allowed as _user_auth_origin_allowed,
+    create_user_session as _user_auth_create_session,
+    delete_user_session as _user_auth_delete_session,
+    principal_from_headers as _user_auth_principal_from_headers,
+    user_cookie_header as _user_auth_cookie_header,
+    user_session_from_headers as _user_auth_session_from_headers,
+    user_session_hash as _user_auth_session_hash,
 )
 from docxtool.web.time_check import (
     NETWORK_TIME_URLS as _TIME_CHECK_NETWORK_TIME_URLS,
@@ -582,32 +607,21 @@ def log_sql(task_id, ip, ua, filename, file_size, doc_type,
 
 def record_task_queued(task_id: str, ip: str, ua: str, filename: str, file_size: int = 0,
                        processing_options: str = "", preset_id: str = "", owner_id: str = ""):
-    now = _now_local()
-    with _SQL_LOCK:
-        conn = _sql()
-        conn.execute("""INSERT INTO tasks (id,ip,ua,filename,file_size,doc_type,
-                       paragraphs,headings,body,duration_ms,status,error,
-                       log_filename,log_path,output_dir,output_filename,output_path,
-                       client_ip,original_filename,safe_download_filename,input_size,
-                       processing_options,preset_id,owner_id,
-                       created_at,done_at)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                       ON CONFLICT(id) DO UPDATE SET
-                       ip=excluded.ip, ua=excluded.ua, filename=excluded.filename,
-                       file_size=excluded.file_size, status='queued', error='',
-                       output_dir='', output_filename='', output_path='',
-                       client_ip=excluded.client_ip, original_filename=excluded.original_filename,
-                       safe_download_filename=excluded.safe_download_filename,
-                       input_size=excluded.input_size,
-                       processing_options=excluded.processing_options,
-                       preset_id=excluded.preset_id,
-                       owner_id=excluded.owner_id,
-                       created_at=excluded.created_at, done_at=''""",
-                     (task_id, ip, ua, filename, file_size, "", 0, 0, 0, 0, "queued", "",
-                      "", "", "", "", "", ip, filename, _safe_download_filename(filename), file_size,
-                      processing_options, preset_id, owner_id, now, ""))
-        conn.commit()
-        conn.close()
+    """兼容旧入口：传入任务基础信息，写入或刷新 queued 任务记录。"""
+    _task_records_record_queued(
+        task_id,
+        ip,
+        ua,
+        filename,
+        file_size,
+        processing_options,
+        preset_id,
+        owner_id,
+        connect=_sql,
+        sql_lock=_SQL_LOCK,
+        now_func=_now_local,
+        safe_download_filename=_safe_download_filename,
+    )
 
 def get_sql_stats(query: dict = None):
     query = _normalize_monitor_query(query)
@@ -988,26 +1002,23 @@ def _task_processing_options(format_config: dict = None, request_meta: dict = No
     return _task_state_processing_options(format_config, request_meta)
 
 def _mark_task_processing(task_id: str) -> None:
-    now = _now_local()
-    with _SQL_LOCK:
-        conn = _sql()
-        conn.execute(
-            "UPDATE tasks SET status='processing', started_at=?, error='', done_at='' WHERE id=?",
-            (now, task_id),
-        )
-        conn.commit()
-        conn.close()
+    """兼容旧入口：传入任务 ID，将数据库任务状态标记为处理中。"""
+    _task_records_mark_processing(task_id, connect=_sql, sql_lock=_SQL_LOCK, now_func=_now_local)
 
 def _mark_task_terminal(task_id: str, status: str, error: str = "", output_path: str = "", output_filename: str = "", log_path: str = "", log_filename: str = "") -> None:
-    now = _now_local()
-    with _SQL_LOCK:
-        conn = _sql()
-        conn.execute(
-            "UPDATE tasks SET status=?, error=?, output_path=?, output_filename=?, log_path=?, log_filename=?, done_at=? WHERE id=?",
-            (status, error, output_path, output_filename, log_path, log_filename, now, task_id),
-        )
-        conn.commit()
-        conn.close()
+    """兼容旧入口：传入任务 ID 和终态字段，将数据库任务状态标记为最终状态。"""
+    _task_records_mark_terminal(
+        task_id,
+        status,
+        error,
+        output_path,
+        output_filename,
+        log_path,
+        log_filename,
+        connect=_sql,
+        sql_lock=_SQL_LOCK,
+        now_func=_now_local,
+    )
 
 def _enqueue_task(task_id: str, input_path: str, orig_name: str, ip: str, ua: str,
                   format_config: dict = None, request_meta: dict = None,
@@ -1549,125 +1560,88 @@ def _anonymous_template_origin_allowed(headers) -> bool:
 
 
 def _user_session_hash(token: str) -> str:
-    return hashlib.sha256(str(token).encode("ascii", "ignore")).hexdigest()
+    """兼容旧入口：传入明文 session token，返回数据库存储用哈希。"""
+    return _user_auth_session_hash(token)
 
 
 def _user_cookie_header(token: str, clear: bool = False, persistent: bool = True) -> str:
-    parts = [f"{USER_SESSION_COOKIE}={'' if clear else token}", "HttpOnly", "Path=/", "SameSite=Lax"]
-    if clear:
-        parts.append("Max-Age=0")
-    elif persistent:
-        parts.append(f"Max-Age={USER_SESSION_MAX_AGE}")
-    if COOKIE_SECURE:
-        parts.append("Secure")
-    return "; ".join(parts)
+    """兼容旧入口：传入 token 和清理/持久化开关，返回用户 Set-Cookie 值。"""
+    return _user_auth_cookie_header(
+        token,
+        cookie_name=USER_SESSION_COOKIE,
+        max_age=USER_SESSION_MAX_AGE,
+        secure=COOKIE_SECURE,
+        clear=clear,
+        persistent=persistent,
+    )
 
 
 def _create_user_session(user_id: str, user_agent: str = "", remote_ip: str = "") -> dict:
-    token = base64.urlsafe_b64encode(os.urandom(32)).decode("ascii").rstrip("=")
-    csrf_token = base64.urlsafe_b64encode(os.urandom(32)).decode("ascii").rstrip("=")
-    now = _now_unix()
-    expires = now + USER_SESSION_MAX_AGE
-    with _SQL_LOCK:
-        conn = _sql()
-        conn.execute("DELETE FROM user_sessions WHERE expires_at <= ?", (now,))
-        conn.execute("INSERT INTO user_sessions(session_hash,user_id,csrf_token,created_at,last_seen_at,expires_at,user_agent,remote_ip) VALUES (?,?,?,?,?,?,?,?)",
-                     (_user_session_hash(token), user_id, csrf_token, now, now, expires, user_agent[:300], remote_ip[:80]))
-        conn.commit()
-        conn.close()
-    return {"token": token, "csrf_token": csrf_token, "expires_at": expires}
+    """兼容旧入口：传入用户 ID 和请求信息，创建用户 session 并返回 token 信息。"""
+    return _user_auth_create_session(
+        user_id,
+        user_agent,
+        remote_ip,
+        connect=_sql,
+        sql_lock=_SQL_LOCK,
+        max_age=USER_SESSION_MAX_AGE,
+        now_func=_now_unix,
+    )
 
 
 def _user_session_from_headers(headers) -> dict:
-    token = _cookie_value(headers.get("Cookie", "") if headers else "", USER_SESSION_COOKIE)
-    if not token or len(token) < 32:
-        return {}
-    now = _now_unix()
-    session_hash = _user_session_hash(token)
-    with _SQL_LOCK:
-        conn = _sql()
-        row = conn.execute("SELECT s.*, u.username, u.display_name, u.status FROM user_sessions s JOIN users u ON u.id=s.user_id WHERE s.session_hash=? AND s.expires_at>?", (session_hash, now)).fetchone()
-        if not row or row["status"] != "active":
-            conn.execute("DELETE FROM user_sessions WHERE session_hash=?", (session_hash,))
-            conn.commit()
-        if row and row["status"] == "active" and now - int(row["last_seen_at"] or 0) >= USER_SESSION_REFRESH_SECONDS:
-            conn.execute("UPDATE user_sessions SET last_seen_at=? WHERE session_hash=?", (now, session_hash))
-            conn.commit()
-        conn.close()
-    if not row or row["status"] != "active":
-        return {}
-    return {"user_id": row["user_id"], "owner_id": row["user_id"], "username": row["username"], "display_name": row["display_name"], "csrf_token": row["csrf_token"], "token": token, "expires_at": row["expires_at"]}
+    """兼容旧入口：传入请求头，返回有效用户 session 或空字典。"""
+    return _user_auth_session_from_headers(
+        headers,
+        cookie_name=USER_SESSION_COOKIE,
+        connect=_sql,
+        sql_lock=_SQL_LOCK,
+        refresh_seconds=USER_SESSION_REFRESH_SECONDS,
+        now_func=_now_unix,
+    )
 
 
 def _delete_user_session(headers) -> None:
-    session = _user_session_from_headers(headers)
-    if not session:
-        return
-    with _SQL_LOCK:
-        conn = _sql()
-        conn.execute("DELETE FROM user_sessions WHERE session_hash=?", (_user_session_hash(session["token"]),))
-        conn.commit()
-        conn.close()
+    """兼容旧入口：传入请求头，删除当前用户 session，无返回值。"""
+    _user_auth_delete_session(
+        headers,
+        cookie_name=USER_SESSION_COOKIE,
+        connect=_sql,
+        sql_lock=_SQL_LOCK,
+        refresh_seconds=USER_SESSION_REFRESH_SECONDS,
+        now_func=_now_unix,
+    )
 
 
 def _principal(headers, client_address=None) -> dict:
-    cookie_header = headers.get("Cookie", "") if headers else ""
-    had_user_session_cookie = bool(_cookie_value(cookie_header, USER_SESSION_COOKIE))
-    session = _user_session_from_headers(headers)
-    if session:
-        return {"owner_id": session["user_id"], "authenticated": True, "invalid_user_session": False, **session}
-    identity, cookie = _anonymous_user_from_headers(headers, cookie_header)
-    return {"owner_id": identity["owner_id"], "authenticated": False, "user_id": None, "username": None, "display_name": None, "csrf_token": None, "cookie": cookie,
-            "invalid_user_session": had_user_session_cookie,
-            "has_identity_cookie": bool(_cookie_value(cookie_header, USER_SESSION_COOKIE) or _cookie_value(cookie_header, ANONYMOUS_USER_COOKIE))}
+    """兼容旧入口：传入请求头和可选客户端地址，返回统一用户/匿名 principal。"""
+    return _user_auth_principal_from_headers(
+        headers,
+        user_cookie_name=USER_SESSION_COOKIE,
+        anonymous_cookie_name=ANONYMOUS_USER_COOKIE,
+        get_user_session=_user_session_from_headers,
+        get_anonymous_user=_anonymous_user_from_headers,
+    )
 
 
 def _auth_origin_allowed(headers) -> bool:
-    return _anonymous_template_origin_allowed(headers)
+    """兼容旧入口：传入请求头，返回认证接口 Origin 是否允许。"""
+    return _user_auth_origin_allowed(headers, _anonymous_template_origin_allowed)
 
 
 def _auth_csrf_allowed(headers, principal) -> bool:
-    if not principal.get("authenticated"):
-        return False
-    value = str(headers.get("X-CSRF-Token", "") or "").strip()
-    return bool(value and hmac.compare_digest(value, principal.get("csrf_token", "")))
+    """兼容旧入口：传入请求头和 principal，返回用户 CSRF 是否通过。"""
+    return _user_auth_csrf_allowed(headers, principal, csrf_header_name="X-CSRF-Token")
 
 
 def _migrate_anonymous_owner(conn, anonymous_id: str, user_id: str) -> None:
-    if not _re.fullmatch(r"usr_[0-9a-f]{32}", str(anonymous_id or "")):
-        return
-    conn.execute("UPDATE tasks SET owner_id=? WHERE owner_id=?", (user_id, anonymous_id))
-    existing_names = {
-        str(row["name"]).casefold()
-        for row in conn.execute(
-            "SELECT name FROM presets WHERE owner_id=? AND visibility='private'",
-            (user_id,),
-        ).fetchall()
-    }
-    migrating = conn.execute(
-        "SELECT id,name FROM presets WHERE owner_id=? AND visibility='private' ORDER BY created_at,id",
-        (anonymous_id,),
-    ).fetchall()
-    for row in migrating:
-        original = str(row["name"] or "个人模板")
-        candidate = original
-        suffix = 2
-        while candidate.casefold() in existing_names:
-            candidate = f"{original}（导入 {suffix}）"
-            suffix += 1
-        if candidate != original:
-            conn.execute("UPDATE presets SET name=? WHERE id=?", (candidate, row["id"]))
-        existing_names.add(candidate.casefold())
-    conn.execute("UPDATE presets SET owner_id=? WHERE owner_id=? AND visibility='private'", (user_id, anonymous_id))
+    """兼容旧入口：传入事务连接、匿名 ID 和用户 ID，迁移匿名 owner 资源。"""
+    _owner_migration_migrate_owner(conn, anonymous_id, user_id)
 
 
 def _migrate_anonymous_resources(anonymous_id: str, user_id: str) -> None:
-    with _SQL_LOCK:
-        conn = _sql()
-        conn.execute("BEGIN IMMEDIATE")
-        _migrate_anonymous_owner(conn, anonymous_id, user_id)
-        conn.commit()
-        conn.close()
+    """兼容旧入口：传入匿名 ID 和用户 ID，在独立事务中迁移匿名 owner 资源。"""
+    _owner_migration_migrate_resources(anonymous_id, user_id, connect=_sql, sql_lock=_SQL_LOCK)
 
 def _now_unix() -> int:
     """兼容旧入口：不传参数，返回当前 Unix 秒级时间戳。"""
@@ -1845,155 +1819,73 @@ def _preset_row_to_dict(row, include_config: bool = False) -> dict:
     return _preset_row_to_dict_impl(row, include_config)
 
 def _list_presets(owner_id: str = "") -> list:
-    with _SQL_LOCK:
-        conn = _sql()
-        rows = conn.execute(
-            """SELECT id, name, description, is_system, is_default, visibility,
-                      version, created_at, updated_at
-               FROM presets
-               WHERE is_system=1 OR visibility='public' OR (visibility='private' AND owner_id=?)
-               ORDER BY is_default DESC, is_system DESC, updated_at DESC, name ASC""",
-            (owner_id or "",),
-        ).fetchall()
-        conn.close()
-    return [_preset_row_to_dict(row, include_config=False) for row in rows]
+    """兼容旧入口：传入 owner ID，返回该 owner 可见的模板列表。"""
+    return _preset_store_list(owner_id, connect=_sql, sql_lock=_SQL_LOCK, row_to_dict=_preset_row_to_dict)
 
 def _get_preset(preset_id: str, owner_id: str = "", public_only: bool = False) -> dict:
-    with _SQL_LOCK:
-        conn = _sql()
-        if public_only:
-            row = conn.execute(
-                "SELECT * FROM presets WHERE id=? AND (is_system=1 OR visibility='public')",
-                (preset_id,),
-            ).fetchone()
-        else:
-            row = conn.execute(
-                """SELECT * FROM presets
-                   WHERE id=? AND (is_system=1 OR visibility='public' OR (visibility='private' AND owner_id=?))""",
-                (preset_id, owner_id or ""),
-            ).fetchone()
-        conn.close()
-    if not row:
-        return {}
-    return _preset_row_to_dict(row, include_config=True)
+    """兼容旧入口：传入模板 ID 和 owner ID，返回模板详情或空字典。"""
+    return _preset_store_get(
+        preset_id,
+        owner_id,
+        public_only,
+        connect=_sql,
+        sql_lock=_SQL_LOCK,
+        row_to_dict=_preset_row_to_dict,
+    )
 
 def _insert_preset(name: str, description: str, config_json: dict, is_system: bool = False,
                    is_default: bool = False, preset_id: str = "", owner_id: str = "",
                    visibility: str = "public") -> dict:
-    preset_id = _normalize_template_id(preset_id) if preset_id else f"tpl_{uuid.uuid4().hex[:12]}"
-    name = _normalize_template_name(name)
-    normalized = _validate_template_config(config_json)
-    payload = _json_dumps(normalized)
-    visibility = "private" if visibility == "private" else "public"
-    owner_id = str(owner_id or "").strip() if visibility == "private" else ""
-    if visibility == "private" and not _re.fullmatch(r"usr_[0-9a-f]{32}", owner_id):
-        raise ValueError("TEMPLATE_OWNER_INVALID: 模板所有者无效")
-    now = _now_local()
-    with _SQL_LOCK:
-        conn = _sql()
-        row = conn.execute(
-            """SELECT id FROM presets
-               WHERE lower(name)=lower(?) AND id<>? AND visibility=? AND owner_id=?""",
-            (name, preset_id, visibility, owner_id),
-        ).fetchone()
-        if row:
-            conn.close()
-            raise ValueError("TEMPLATE_NAME_CONFLICT: 已存在同名模板，请先重命名")
-        existing = conn.execute("SELECT * FROM presets WHERE id=?", (preset_id,)).fetchone()
-        if existing:
-            conn.close()
-            raise ValueError("TEMPLATE_ID_CONFLICT: 模板 ID 已存在")
-        conn.execute(
-            """INSERT INTO presets
-               (id, name, description, config_json, is_system, is_default, owner_id, visibility,
-                version, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-            (
-                preset_id,
-                name,
-                description or "",
-                payload,
-                1 if is_system else 0,
-                1 if is_default else 0,
-                owner_id,
-                visibility,
-                1,
-                now,
-                now,
-            ),
-        )
-        conn.commit()
-        conn.close()
-    return _get_preset(preset_id, owner_id=owner_id, public_only=visibility == "public")
+    """兼容旧入口：传入模板字段，插入模板并返回详情。"""
+    return _preset_store_insert(
+        name,
+        description,
+        config_json,
+        is_system,
+        is_default,
+        preset_id,
+        owner_id,
+        visibility,
+        connect=_sql,
+        sql_lock=_SQL_LOCK,
+        normalize_id=_normalize_template_id,
+        normalize_name=_normalize_template_name,
+        validate_config=_validate_template_config,
+        json_dumps=_json_dumps,
+        now_func=_now_local,
+        get_one=_get_preset,
+    )
 
 def _update_preset(preset_id: str, name: str, description: str, config_json: dict,
                    owner_id: str = "", public_only: bool = True) -> dict:
-    preset_id = _normalize_template_id(preset_id)
-    name = _normalize_template_name(name)
-    normalized = _validate_template_config(config_json)
-    payload = _json_dumps(normalized)
-    now = _now_local()
-    with _SQL_LOCK:
-        conn = _sql()
-        if public_only:
-            row = conn.execute(
-                "SELECT * FROM presets WHERE id=? AND (is_system=1 OR visibility='public')",
-                (preset_id,),
-            ).fetchone()
-        else:
-            row = conn.execute(
-                "SELECT * FROM presets WHERE id=? AND visibility='private' AND owner_id=?",
-                (preset_id, owner_id or ""),
-            ).fetchone()
-        if not row:
-            conn.close()
-            raise ValueError("TEMPLATE_NOT_FOUND: 模板不存在")
-        if row["is_system"] and not bool(row["is_default"]):
-            # 系统模板仍允许更新内容，但保留标记
-            pass
-        dup = conn.execute(
-            """SELECT id FROM presets
-               WHERE lower(name)=lower(?) AND id<>? AND visibility=? AND owner_id=?""",
-            (name, preset_id, row["visibility"] or "public", row["owner_id"] or ""),
-        ).fetchone()
-        if dup:
-            conn.close()
-            raise ValueError("TEMPLATE_NAME_CONFLICT: 已存在同名模板，请先重命名")
-        version = int(row["version"] or 1) + 1
-        conn.execute(
-            """UPDATE presets SET
-               name=?, description=?, config_json=?, version=?, updated_at=?
-               WHERE id=?""",
-            (name, description or "", payload, version, now, preset_id),
-        )
-        conn.commit()
-        conn.close()
-    return _get_preset(preset_id, owner_id=owner_id, public_only=public_only)
+    """兼容旧入口：传入模板 ID 和更新字段，更新模板并返回详情。"""
+    return _preset_store_update(
+        preset_id,
+        name,
+        description,
+        config_json,
+        owner_id,
+        public_only,
+        connect=_sql,
+        sql_lock=_SQL_LOCK,
+        normalize_id=_normalize_template_id,
+        normalize_name=_normalize_template_name,
+        validate_config=_validate_template_config,
+        json_dumps=_json_dumps,
+        now_func=_now_local,
+        get_one=_get_preset,
+    )
 
 def _delete_preset(preset_id: str, owner_id: str = "", public_only: bool = True) -> dict:
-    preset_id = _normalize_template_id(preset_id)
-    with _SQL_LOCK:
-        conn = _sql()
-        if public_only:
-            row = conn.execute(
-                "SELECT * FROM presets WHERE id=? AND (is_system=1 OR visibility='public')",
-                (preset_id,),
-            ).fetchone()
-        else:
-            row = conn.execute(
-                "SELECT * FROM presets WHERE id=? AND visibility='private' AND owner_id=?",
-                (preset_id, owner_id or ""),
-            ).fetchone()
-        if not row:
-            conn.close()
-            raise ValueError("TEMPLATE_NOT_FOUND: 模板不存在")
-        if row["is_system"]:
-            conn.close()
-            raise ValueError("TEMPLATE_SYSTEM_LOCKED: 系统模板不能删除")
-        conn.execute("DELETE FROM presets WHERE id=?", (preset_id,))
-        conn.commit()
-        conn.close()
-    return {"deleted": True, "id": preset_id}
+    """兼容旧入口：传入模板 ID 和 owner 限制，删除模板并返回删除结果。"""
+    return _preset_store_delete(
+        preset_id,
+        owner_id,
+        public_only,
+        connect=_sql,
+        sql_lock=_SQL_LOCK,
+        normalize_id=_normalize_template_id,
+    )
 
 def _health_payload() -> dict:
     """兼容旧私有入口，无需传入数据，返回健康检查 payload。"""
