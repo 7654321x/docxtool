@@ -50,6 +50,7 @@ from docxtool.web.config import (
     parse_int_env as _parse_int_env,
     resolve_cookie_secure,
 )
+from docxtool.web.database_schema import initialize_web_database as _schema_initialize_web_database
 from docxtool.web.client_ip import (
     client_ip as _client_ip_from_headers,
     compare_secret as _client_compare_secret,
@@ -58,6 +59,7 @@ from docxtool.web.client_ip import (
     split_ip_header as _client_split_ip_header,
     trusted_proxy_source as _client_trusted_proxy_source,
 )
+from docxtool.web.task_cache import prune_task_cache as _task_cache_prune
 from docxtool.web.anonymous_identity import (
     anonymous_template_origin_allowed as _anon_template_origin_allowed,
     anonymous_user_cookie_clear_header as _anon_cookie_clear_header,
@@ -125,6 +127,11 @@ from docxtool.web.preset_config import (
     preset_row_to_dict as _preset_row_to_dict_impl,
     validate_template_config as _preset_validate_template_config,
 )
+from docxtool.web.preset_defaults import (
+    core_feature_config_defaults as _preset_defaults_core_features,
+    default_preset_config as _preset_defaults_config,
+    seed_default_presets as _preset_defaults_seed,
+)
 from docxtool.web.preset_store import (
     delete_preset as _preset_store_delete,
     get_preset as _preset_store_get,
@@ -160,6 +167,10 @@ from docxtool.web.request_utils import (
     parse_json_body as _request_parse_json_body,
     route_path as _request_route_path,
 )
+from docxtool.web.secrets import (
+    load_secret as _secrets_load_secret,
+    validate_required_secrets as _secrets_validate_required,
+)
 from docxtool.web.stream_io import (
     read_exact as _stream_read_exact,
     read_exact_to_file as _stream_read_exact_to_file,
@@ -183,6 +194,12 @@ from docxtool.web.task_records import (
     mark_task_processing as _task_records_mark_processing,
     mark_task_terminal as _task_records_mark_terminal,
     record_task_queued as _task_records_record_queued,
+)
+from docxtool.web.task_recovery import recover_inflight_tasks_on_startup as _task_recovery_recover_inflight
+from docxtool.web.task_result import record_task_result as _task_result_record
+from docxtool.web.task_statistics import (
+    get_task_statistics as _task_statistics_get,
+    log_task_result as _task_statistics_log_result,
 )
 from docxtool.web.task_state import (
     active_count as _task_state_active_count,
@@ -253,259 +270,24 @@ def _sql():
     return _db_connect(_DB_PATH)
 
 def _sql_init():
-    with _SQL_LOCK:
-        conn = _sql()
-        conn.executescript("""
-            CREATE TABLE IF NOT EXISTS tasks (
-                id TEXT PRIMARY KEY, ip TEXT NOT NULL, ua TEXT DEFAULT '',
-                filename TEXT DEFAULT '', file_size INTEGER DEFAULT 0,
-                doc_type TEXT DEFAULT '', paragraphs INTEGER DEFAULT 0,
-                headings INTEGER DEFAULT 0, body INTEGER DEFAULT 0,
-                duration_ms INTEGER DEFAULT 0, status TEXT DEFAULT 'pending',
-                error TEXT DEFAULT '',
-                log_filename TEXT DEFAULT '', log_path TEXT DEFAULT '',
-                output_dir TEXT DEFAULT '', output_filename TEXT DEFAULT '',
-                output_path TEXT DEFAULT '',
-                created_at TEXT DEFAULT (datetime('now','localtime')),
-                started_at TEXT DEFAULT '',
-                finished_at TEXT DEFAULT '',
-                client_ip TEXT DEFAULT '',
-                error_code TEXT DEFAULT '',
-                error_message TEXT DEFAULT '',
-                progress INTEGER DEFAULT 0,
-                message TEXT DEFAULT '',
-                processing_options TEXT DEFAULT '',
-                preset_id TEXT DEFAULT '',
-                original_filename TEXT DEFAULT '',
-                safe_download_filename TEXT DEFAULT '',
-                input_size INTEGER DEFAULT 0,
-                done_at TEXT DEFAULT ''
-            );
-            CREATE TABLE IF NOT EXISTS daily_stats (
-                date TEXT PRIMARY KEY, total INTEGER DEFAULT 0,
-                done INTEGER DEFAULT 0, error INTEGER DEFAULT 0,
-                total_bytes INTEGER DEFAULT 0, total_ms INTEGER DEFAULT 0,
-                unique_ips INTEGER DEFAULT 0
-            );
-            CREATE TABLE IF NOT EXISTS banned_ips (
-                ip TEXT PRIMARY KEY,
-                reason TEXT DEFAULT '',
-                created_at TEXT DEFAULT (datetime('now','localtime'))
-            );
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT DEFAULT ''
-            );
-            CREATE TABLE IF NOT EXISTS presets (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                description TEXT DEFAULT '',
-                config_json TEXT NOT NULL,
-                is_system INTEGER DEFAULT 0,
-                is_default INTEGER DEFAULT 0,
-                owner_id TEXT DEFAULT '',
-                visibility TEXT DEFAULT 'public',
-                version INTEGER DEFAULT 1,
-                created_at TEXT DEFAULT (datetime('now','localtime')),
-                updated_at TEXT DEFAULT (datetime('now','localtime'))
-            );
-            CREATE TABLE IF NOT EXISTS admin_sessions (
-                session_id TEXT PRIMARY KEY,
-                csrf_token TEXT NOT NULL,
-                user_agent TEXT DEFAULT '',
-                remote_ip TEXT DEFAULT '',
-                created_at INTEGER NOT NULL,
-                last_seen_at INTEGER NOT NULL,
-                expires_at INTEGER NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS users (
-                id TEXT PRIMARY KEY, username TEXT NOT NULL, username_norm TEXT NOT NULL UNIQUE,
-                password_hash TEXT NOT NULL, display_name TEXT NOT NULL DEFAULT '',
-                status TEXT NOT NULL DEFAULT 'active', created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL, last_login_at INTEGER NOT NULL DEFAULT 0
-            );
-            CREATE TABLE IF NOT EXISTS user_sessions (
-                session_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL, csrf_token TEXT NOT NULL,
-                created_at INTEGER NOT NULL, last_seen_at INTEGER NOT NULL,
-                expires_at INTEGER NOT NULL, user_agent TEXT NOT NULL DEFAULT '', remote_ip TEXT NOT NULL DEFAULT ''
-            );
-            CREATE INDEX IF NOT EXISTS idx_tasks_ip ON tasks(ip);
-            CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks(created_at);
-            CREATE INDEX IF NOT EXISTS idx_tasks_ip_created ON tasks(ip, created_at);
-            CREATE INDEX IF NOT EXISTS idx_admin_sessions_expires ON admin_sessions(expires_at);
-        """)
-        cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)").fetchall()}
-        if "log_filename" not in cols:
-            conn.execute("ALTER TABLE tasks ADD COLUMN log_filename TEXT DEFAULT ''")
-        if "log_path" not in cols:
-            conn.execute("ALTER TABLE tasks ADD COLUMN log_path TEXT DEFAULT ''")
-        if "output_dir" not in cols:
-            conn.execute("ALTER TABLE tasks ADD COLUMN output_dir TEXT DEFAULT ''")
-        if "output_filename" not in cols:
-            conn.execute("ALTER TABLE tasks ADD COLUMN output_filename TEXT DEFAULT ''")
-        if "output_path" not in cols:
-            conn.execute("ALTER TABLE tasks ADD COLUMN output_path TEXT DEFAULT ''")
-        if "started_at" not in cols:
-            conn.execute("ALTER TABLE tasks ADD COLUMN started_at TEXT DEFAULT ''")
-        if "finished_at" not in cols:
-            conn.execute("ALTER TABLE tasks ADD COLUMN finished_at TEXT DEFAULT ''")
-        if "client_ip" not in cols:
-            conn.execute("ALTER TABLE tasks ADD COLUMN client_ip TEXT DEFAULT ''")
-        if "error_code" not in cols:
-            conn.execute("ALTER TABLE tasks ADD COLUMN error_code TEXT DEFAULT ''")
-        if "error_message" not in cols:
-            conn.execute("ALTER TABLE tasks ADD COLUMN error_message TEXT DEFAULT ''")
-        if "progress" not in cols:
-            conn.execute("ALTER TABLE tasks ADD COLUMN progress INTEGER DEFAULT 0")
-        if "message" not in cols:
-            conn.execute("ALTER TABLE tasks ADD COLUMN message TEXT DEFAULT ''")
-        if "processing_options" not in cols:
-            conn.execute("ALTER TABLE tasks ADD COLUMN processing_options TEXT DEFAULT ''")
-        if "preset_id" not in cols:
-            conn.execute("ALTER TABLE tasks ADD COLUMN preset_id TEXT DEFAULT ''")
-        if "original_filename" not in cols:
-            conn.execute("ALTER TABLE tasks ADD COLUMN original_filename TEXT DEFAULT ''")
-        if "safe_download_filename" not in cols:
-            conn.execute("ALTER TABLE tasks ADD COLUMN safe_download_filename TEXT DEFAULT ''")
-        if "input_size" not in cols:
-            conn.execute("ALTER TABLE tasks ADD COLUMN input_size INTEGER DEFAULT 0")
-        if "owner_id" not in cols:
-            conn.execute("ALTER TABLE tasks ADD COLUMN owner_id TEXT DEFAULT ''")
-        preset_cols = {r["name"] for r in conn.execute("PRAGMA table_info(presets)").fetchall()}
-        if "is_system" not in preset_cols:
-            conn.execute("ALTER TABLE presets ADD COLUMN is_system INTEGER DEFAULT 0")
-        if "is_default" not in preset_cols:
-            conn.execute("ALTER TABLE presets ADD COLUMN is_default INTEGER DEFAULT 0")
-        if "version" not in preset_cols:
-            conn.execute("ALTER TABLE presets ADD COLUMN version INTEGER DEFAULT 1")
-        if "created_at" not in preset_cols:
-            conn.execute("ALTER TABLE presets ADD COLUMN created_at TEXT DEFAULT (datetime('now','localtime'))")
-        if "updated_at" not in preset_cols:
-            conn.execute("ALTER TABLE presets ADD COLUMN updated_at TEXT DEFAULT (datetime('now','localtime'))")
-        if "owner_id" not in preset_cols:
-            conn.execute("ALTER TABLE presets ADD COLUMN owner_id TEXT DEFAULT ''")
-        if "visibility" not in preset_cols:
-            conn.execute("ALTER TABLE presets ADD COLUMN visibility TEXT DEFAULT 'public'")
-        conn.execute("UPDATE presets SET owner_id='' WHERE owner_id IS NULL")
-        conn.execute("UPDATE presets SET visibility='public' WHERE visibility IS NULL OR visibility=''")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_presets_owner_visibility ON presets(owner_id, visibility)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_owner_created ON tasks(owner_id, created_at)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_user_sessions_expires ON user_sessions(expires_at)")
-        conn.commit()
-        _seed_default_presets(conn)
-        conn.close()
+    """兼容旧私有入口，无需传入数据，初始化 Web SQLite 表并返回 None。"""
+    _schema_initialize_web_database(_sql, _SQL_LOCK, _seed_default_presets)
 
 def _default_preset_config() -> dict:
-    rules = StyleRule.from_config()
-    styles = []
-    for rule in rules:
-        default_rule = StyleRule.default_for_row(rule.row_index)
-        styles.append({
-            "name": rule.level_name,
-            "font": rule.font,
-            "size": rule.font_size_label or default_rule.font_size_label,
-            "bold": rule.bold,
-            "pattern": rule.numbering_pattern,
-            "lang": rule.language,
-            "indent": rule.first_line_indent,
-            "align": rule.alignment,
-            "spacing_before": rule.spacing_before,
-            "spacing_after": rule.spacing_after,
-            "left_indent": rule.left_indent,
-            "right_indent": rule.right_indent,
-            "page_break_before": rule.page_break_before,
-        })
-    settings = PageSettings.from_config()
-    config = {
-        "schema_version": 1,
-        "styles": styles,
-        "page": {
-            "width_cm": settings.page_width_cm,
-            "height_cm": settings.page_height_cm,
-            "margin_top_cm": settings.margin_top_cm,
-            "margin_bottom_cm": settings.margin_bottom_cm,
-            "margin_left_cm": settings.margin_left_cm,
-            "margin_right_cm": settings.margin_right_cm,
-            "lines_per_page": settings.lines_per_page,
-            "chars_per_line": settings.chars_per_line,
-            "line_spacing_pt": settings.line_spacing_value,
-            "space_before_line": settings.space_before_line,
-            "space_after_line": settings.space_after_line,
-            "grid_alignment": settings.grid_alignment,
-        },
-        "features": {
-            "numbered_bold_enabled": True,
-            "punctuation_enabled": True,
-        },
-    }
-    config.update(_core_feature_config_defaults())
-    return config
+    """兼容旧私有入口，无需传入数据，返回默认公文模板配置。"""
+    return _preset_defaults_config(
+        StyleRule.from_config(),
+        PageSettings.from_config(),
+        StyleRule.default_for_row,
+    )
 
 def _core_feature_config_defaults() -> dict:
-    return {
-        "punctuation": {
-            "enabled": False,
-            "mode": "safe",
-            "scope": {"body": True, "tables": False, "headers": False, "footers": False},
-        },
-        "classification": {
-            "enabled": True,
-            "minimum_auto_format_confidence": 0.85,
-        },
-        "numbering": {
-            "enabled": False,
-            "mode": "safe",
-        },
-        "page_number": {
-            "enabled": True,
-            "style": "dash",
-            "position": "outside",
-            "font_name": "宋体",
-            "font_size_pt": 14,
-            "bold": False,
-            "first_page": True,
-            "section_numbering": "continue",
-            "offset_from_text_mm": 7,
-        },
-        "signature_block": {
-            "mode": "without_seal",
-        },
-        "table_format": {
-            "enabled": False,
-            "smart_alignment": False,
-        },
-        "cleanup": {
-            "enabled": False,
-            "mode": "safe",
-        },
-    }
+    """兼容旧私有入口，无需传入数据，返回默认功能开关配置。"""
+    return _preset_defaults_core_features()
 
 def _seed_default_presets(conn):
-    try:
-        row = conn.execute("SELECT 1 FROM presets WHERE id=?", ("official_document",)).fetchone()
-        if row:
-            return
-        config_json = json.dumps(_default_preset_config(), ensure_ascii=False)
-        now = _now_local()
-        conn.execute(
-            """INSERT INTO presets
-               (id, name, description, config_json, is_system, is_default, version, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
-            (
-                "official_document",
-                "党政机关公文格式",
-                "默认公文格式，适合通知、报告、请示、汇报等正式材料。",
-                config_json,
-                1,
-                1,
-                1,
-                now,
-                now,
-            ),
-        )
-        conn.commit()
-    except Exception:
-        conn.rollback()
+    """兼容旧私有入口，传入 SQLite 连接，缺省时插入官方默认模板。"""
+    _preset_defaults_seed(conn, _default_preset_config, _now_local)
 
 def _first_query_value(values: dict, key: str, default=""):
     """兼容旧私有入口，传入查询字典和键名，返回第一个值。"""
@@ -556,54 +338,13 @@ def log_sql(task_id, ip, ua, filename, file_size, doc_type,
             paragraphs, headings, body, duration_ms, status="done", error="",
             log_filename="", log_path="", output_dir="", output_filename="", output_path="",
             processing_options="", preset_id="", error_code="", error_message=""):
-    now = _now_local()
-    today = now[:10]
-    with _SQL_LOCK:
-        conn = _sql()
-        conn.execute("""INSERT INTO tasks (id,ip,ua,filename,file_size,doc_type,
-                       paragraphs,headings,body,duration_ms,status,error,
-                       log_filename,log_path,output_dir,output_filename,output_path,
-                       client_ip,original_filename,safe_download_filename,input_size,
-                       processing_options,preset_id,error_code,error_message,
-                       created_at,done_at)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                       ON CONFLICT(id) DO UPDATE SET
-                       ip=excluded.ip, ua=excluded.ua, filename=excluded.filename,
-                       file_size=excluded.file_size, doc_type=excluded.doc_type,
-                       paragraphs=excluded.paragraphs, headings=excluded.headings,
-                       body=excluded.body, duration_ms=excluded.duration_ms,
-                       status=excluded.status, error=excluded.error,
-                       log_filename=excluded.log_filename, log_path=excluded.log_path,
-                       output_dir=excluded.output_dir, output_filename=excluded.output_filename,
-                       output_path=excluded.output_path,
-                       client_ip=excluded.client_ip,
-                       original_filename=excluded.original_filename,
-                       safe_download_filename=excluded.safe_download_filename,
-                       input_size=excluded.input_size,
-                       processing_options=excluded.processing_options,
-                       preset_id=excluded.preset_id,
-                       error_code=excluded.error_code,
-                       error_message=excluded.error_message,
-                       done_at=excluded.done_at""",
-                      (task_id, ip, ua, filename, file_size, doc_type,
-                       paragraphs, headings, body, duration_ms, status, error,
-                       log_filename, log_path, output_dir, output_filename, output_path,
-                       ip, filename, output_filename, file_size, processing_options, preset_id,
-                       error_code, error_message, now, now))
-        conn.execute("""INSERT INTO daily_stats (date,total,done,error,total_bytes,total_ms)
-                       VALUES (?,1,?,?,?,?)
-                       ON CONFLICT(date) DO UPDATE SET total=total+1,
-                       done=done+?, error=error+?, total_bytes=total_bytes+?,
-                       total_ms=total_ms+?""",
-                     (today, 1 if status == "done" else 0,
-                      1 if status in ("error", "timeout", "failed") else 0, file_size, duration_ms,
-                      1 if status == "done" else 0, 1 if status in ("error", "timeout", "failed") else 0,
-                      file_size, duration_ms))
-        conn.execute("""UPDATE daily_stats SET unique_ips=(
-                       SELECT COUNT(DISTINCT ip) FROM tasks WHERE date(created_at)=?)
-                       WHERE date=?""", (today, today))
-        conn.commit()
-        conn.close()
+    """兼容旧入口：传入任务处理结果，写入任务明细和按日统计。"""
+    _task_statistics_log_result(
+        task_id, ip, ua, filename, file_size, doc_type, paragraphs, headings, body, duration_ms,
+        status, error, log_filename, log_path, output_dir, output_filename, output_path,
+        processing_options, preset_id, error_code, error_message,
+        connect=_sql, sql_lock=_SQL_LOCK, now_func=_now_local,
+    )
 
 def record_task_queued(task_id: str, ip: str, ua: str, filename: str, file_size: int = 0,
                        processing_options: str = "", preset_id: str = "", owner_id: str = ""):
@@ -624,82 +365,14 @@ def record_task_queued(task_id: str, ip: str, ua: str, filename: str, file_size:
     )
 
 def get_sql_stats(query: dict = None):
-    query = _normalize_monitor_query(query)
-    recent_size = query["recent_size"]
-    ip_size = query["ip_size"]
-    with _SQL_LOCK:
-        conn = _sql()
-        total = conn.execute("SELECT COUNT(*) as c FROM tasks").fetchone()["c"]
-        done = conn.execute("SELECT COUNT(*) as c FROM tasks WHERE status='done'").fetchone()["c"]
-        err = conn.execute("SELECT COUNT(*) as c FROM tasks WHERE status IN ('error','timeout','failed','interrupted','expired')").fetchone()["c"]
-        ips = conn.execute("SELECT COUNT(DISTINCT ip) as c FROM tasks").fetchone()["c"]
-        tbytes = conn.execute("SELECT COALESCE(SUM(file_size),0) as c FROM tasks").fetchone()["c"]
-        avg_p = conn.execute("SELECT AVG(paragraphs) as c FROM tasks WHERE status='done'").fetchone()["c"] or 0
-        avg_ms = conn.execute("SELECT AVG(duration_ms) as c FROM tasks WHERE status='done'").fetchone()["c"] or 0
-        recent_pages = _page_count(total, recent_size)
-        recent_page = min(query["recent_page"], recent_pages)
-        recent_offset = (recent_page - 1) * recent_size
-        ip_pages = _page_count(ips, ip_size)
-        ip_page = min(query["ip_page"], ip_pages)
-        ip_offset = (ip_page - 1) * ip_size
-        query["recent_page"] = recent_page
-        query["ip_page"] = ip_page
-        recent = conn.execute(
-            "SELECT * FROM tasks ORDER BY rowid DESC LIMIT ? OFFSET ?",
-            [recent_size, recent_offset],
-        ).fetchall()
-        days = conn.execute("""
-            SELECT date(created_at) as date,
-                   COUNT(*) as total,
-                   SUM(CASE WHEN status='done' THEN 1 ELSE 0 END) as done,
-                   SUM(CASE WHEN status IN ('error','timeout','failed','interrupted','expired') THEN 1 ELSE 0 END) as error
-            FROM tasks
-            GROUP BY date(created_at)
-            ORDER BY date(created_at)
-        """).fetchall()
-        top_rows = conn.execute("""
-            SELECT t.ip, COUNT(*) as c,
-                   SUM(CASE WHEN t.status='done' THEN 1 ELSE 0 END) as done,
-                   SUM(CASE WHEN t.status IN ('error','timeout','failed','interrupted','expired') THEN 1 ELSE 0 END) as error,
-                   MAX(t.created_at) as last,
-                   MAX(t.rowid) as last_rowid
-            FROM tasks t
-            GROUP BY t.ip
-            ORDER BY last_rowid DESC, c DESC
-            LIMIT ? OFFSET ?
-        """, [ip_size, ip_offset]).fetchall()
-        top_ips = []
-        for row in top_rows:
-            item = dict(row)
-            last = conn.execute(
-                "SELECT filename, created_at FROM tasks WHERE ip=? ORDER BY rowid DESC LIMIT 1",
-                [item.get("ip", "")],
-            ).fetchone()
-            item["last_filename"] = last["filename"] if last else ""
-            item["last"] = last["created_at"] if last else item.get("last", "")
-            top_ips.append(item)
-        banned = conn.execute("SELECT * FROM banned_ips ORDER BY created_at DESC").fetchall()
-        conn.close()
-    return {
-        "total": total, "done": done, "error": err, "unique_ips": ips,
-        "total_mb": round(tbytes/1048576, 1),
-        "avg_s": round(avg_ms/1000, 2) if avg_ms else 0,
-        "avg_paragraphs": round(avg_p, 1),
-        "rate": round(done/total*100, 1) if total else 0,
-        "query": query,
-        "recent": [dict(r) for r in recent],
-        "recent_total": total,
-        "recent_page": recent_page,
-        "recent_size": recent_size,
-        "recent_pages": recent_pages,
-        "trend": [dict(d) for d in days],
-        "top_ips": top_ips,
-        "ip_total": ips,
-        "ip_page": ip_page,
-        "ip_size": ip_size,
-        "ip_pages": ip_pages,
-        "banned_ips": [dict(r) for r in banned],
-    }
+    """兼容旧入口：传入监控查询参数，返回任务统计和分页数据。"""
+    return _task_statistics_get(
+        query,
+        connect=_sql,
+        sql_lock=_SQL_LOCK,
+        normalize_query=_normalize_monitor_query,
+        page_count=_page_count,
+    )
 
 PORT = int(os.environ.get("PORT", "9527"))
 BIND_HOST = os.environ.get("BIND_HOST", "127.0.0.1")
@@ -709,8 +382,8 @@ GIT_REVISION = os.environ.get("DOCXTOOL_GIT_REVISION", "").strip()
 STARTED_AT = time.strftime("%Y-%m-%d %H:%M:%S")
 
 def _load_secret(name: str, default: str) -> str:
-    value = os.environ.get(name, default).strip()
-    return value or default
+    """兼容旧私有入口，传入环境变量名和默认值，返回实际密钥字符串。"""
+    return _secrets_load_secret(name, default)
 
 ADMIN_TOKEN = _load_secret("ADMIN_TOKEN", DEFAULT_ADMIN_TOKEN)
 PROXY_SECRET = _load_secret("PROXY_SECRET", DEFAULT_PROXY_SECRET)
@@ -754,16 +427,8 @@ TRUSTED_PROXY_IPS = {
 }
 
 def _validate_secrets_or_exit() -> None:
-    admin = ADMIN_TOKEN.strip()
-    proxy = PROXY_SECRET.strip()
-    if not admin or not proxy:
-        raise SystemExit("[配置错误] ADMIN_TOKEN 和 PROXY_SECRET 不能为空。")
-    if len(admin) < 16 or admin in _WEAK_SECRETS:
-        raise SystemExit("[配置错误] ADMIN_TOKEN 使用了示例/弱密钥，请替换为随机长密钥后再启动。")
-    if len(proxy) < 16 or proxy in _WEAK_SECRETS:
-        raise SystemExit("[配置错误] PROXY_SECRET 使用了示例/弱密钥，请替换为随机长密钥后再启动。")
-    if admin == proxy:
-        raise SystemExit("[配置错误] ADMIN_TOKEN 和 PROXY_SECRET 不能相同。")
+    """兼容旧私有入口，无需传入数据，校验当前 Web 启动密钥。"""
+    _secrets_validate_required(ADMIN_TOKEN, PROXY_SECRET, _WEAK_SECRETS)
 
 RATE_LIMIT = {}
 RATE_LOCK = threading.Lock()
@@ -805,35 +470,13 @@ def _cleanup_expired_tmp(now: float = None) -> dict:
     return _task_paths_cleanup_expired_tmp(now)
 
 def _prune_task_cache() -> None:
+    """兼容旧私有入口，无需传入数据，裁剪内存任务缓存并返回 None。"""
     with TASKS_LOCK:
-        cache_limit = max(1, min(MAX_TASKS, MAX_CACHED_TASKS))
-        if len(TASKS) <= cache_limit:
-            return
-        keep = OrderedDict()
-        recent = list(TASKS.items())
-        active = [(k, v) for k, v in recent if v.get("status") in {"queued", "processing"}]
-        done = [(k, v) for k, v in recent if v.get("status") not in {"queued", "processing"}]
-        ordered = active + done
-        for key, value in ordered[-cache_limit:]:
-            keep[key] = value
-        TASKS.clear()
-        TASKS.update(keep)
+        _task_cache_prune(TASKS, MAX_TASKS, MAX_CACHED_TASKS)
 
 def _recover_inflight_tasks_on_startup() -> int:
-    now = _now_local()
-    with _SQL_LOCK:
-        conn = _sql()
-        rows = conn.execute(
-            "SELECT id, status FROM tasks WHERE status IN ('queued', 'processing')"
-        ).fetchall()
-        if rows:
-            conn.execute(
-                "UPDATE tasks SET status='interrupted', error='服务重启后任务中断', done_at=? WHERE status IN ('queued', 'processing')",
-                (now,),
-            )
-            conn.commit()
-        conn.close()
-    return len(rows)
+    """兼容旧私有入口，无需传入数据，恢复启动前未完成任务并返回数量。"""
+    return _task_recovery_recover_inflight(connect=_sql, sql_lock=_SQL_LOCK, now_func=_now_local)
 
 configure_logging(LOG_DIR, to_file=True)
 logger = get_logger()
@@ -1330,93 +973,24 @@ def _task_process_subprocess(task_id: str, input_path: str, orig_name: str, ip: 
     return result
 
 def _record_task_result(task_id: str, input_path: str, orig_name: str, ip: str, ua: str, result: dict) -> None:
-    status = result.get("status", "error")
-    log_filename = result.get("log_filename", "")
-    log_path = result.get("log_path", "")
-    output_dir = result.get("output_dir", "")
-    output_filename = result.get("output_filename", "")
-    output_path = result.get("output_path", "")
-    file_size = os.path.getsize(input_path) if input_path and os.path.exists(input_path) else 0
-    duration_ms = int(result.get("duration_ms", 0) or 0)
-    error = result.get("error", "") if status != "done" else ""
-    error_code = result.get("error_code", "") if status != "done" else ""
-    error_message = result.get("error_message", error) if status != "done" else ""
-    sql_status = "done" if status == "done" else ("timeout" if status == "timeout" else "error")
-    task_payload = {}
-    with TASKS_LOCK:
-        task_payload = dict(TASKS.get(task_id, {}))
-    processing_options = task_payload.get("processing_options", "")
-    preset_id = task_payload.get("preset_id", "")
-
-    try:
-        log_sql(
-            task_id, ip, ua, orig_name, file_size,
-            result.get("doc_mode", "") if status == "done" else "",
-            int(result.get("paragraphs", 0) or 0),
-            int(result.get("headings", 0) or 0),
-            int(result.get("body", 0) or 0),
-            duration_ms,
-            sql_status,
-            error,
-            log_filename=log_filename,
-            log_path=log_path,
-            output_dir=output_dir,
-            output_filename=output_filename,
-            output_path=output_path,
-            processing_options=processing_options,
-            preset_id=preset_id,
-            error_code=error_code,
-            error_message=error_message,
-        )
-    except Exception:
-        logger.exception(
-            "[Stats] failed to record task=%s file_id=%s",
-            task_id[:8],
-            _safe_file_identifier(orig_name),
-        )
-
-    if status != "done":
-        _cleanup_output_path(_task_output_dir(task_id))
-
-    with TASKS_LOCK:
-        task = TASKS.get(task_id, {})
-        existing_warnings = list(task.get("compatibility_warnings", []) or [])
-        result_warnings = list(result.get("compatibility_warnings", []) or [])
-        task["compatibility_warnings"] = list(dict.fromkeys(existing_warnings + result_warnings))
-        task["status"] = status
-        task["finished_at"] = time.time()
-        task["duration"] = round((duration_ms or 0) / 1000, 2)
-        task["paragraphs"] = int(result.get("paragraphs", 0) or 0)
-        task["log_filename"] = log_filename
-        task["log_url"] = f"/log/{task_id}"
-        task["output_dir"] = output_dir
-        task["output_filename"] = output_filename
-        task["output_path"] = output_path
-        task["download_name"] = output_filename
-        task["safe_download_filename"] = output_filename
-        task["original_filename"] = orig_name
-        task["client_ip"] = ip
-        task["recognition_summary"] = result.get("recognition_summary", {})
-        if status == "done":
-            task["output"] = output_path
-            task["error"] = ""
-            task["error_code"] = ""
-            task["error_message"] = ""
-        else:
-            task["error"] = error
-            task["error_code"] = error_code
-            task["error_message"] = error_message
-        task["time"] = time.time()
-        TASKS[task_id] = task
-    _prune_task_cache()
-
-    if status == "done":
-        logger.info("[Stats] recorded task=%s status=done file_id=%s", task_id[:8], _safe_file_identifier(orig_name))
-        logger.info(f"[Task] {task_id[:8]} done {result.get('duration_s', 0)}s")
-    elif status == "timeout":
-        logger.warning("[Task] %s timeout after %ss file_id=%s", task_id[:8], PROCESS_TIMEOUT, _safe_file_identifier(orig_name))
-    else:
-        logger.warning("[Task] %s failed file_id=%s code=%s", task_id[:8], _safe_file_identifier(orig_name), error_code)
+    """兼容旧私有入口，传入任务结果，统一同步数据库、内存状态和日志。"""
+    _task_result_record(
+        task_id,
+        input_path,
+        orig_name,
+        ip,
+        ua,
+        result,
+        tasks=TASKS,
+        tasks_lock=TASKS_LOCK,
+        log_task_result=log_sql,
+        cleanup_output_path=_cleanup_output_path,
+        task_output_dir=_task_output_dir,
+        prune_task_cache=_prune_task_cache,
+        safe_file_identifier=_safe_file_identifier,
+        logger=logger,
+        process_timeout=PROCESS_TIMEOUT,
+    )
 
 def _worker_loop():
     """Consume queued tasks sequentially inside one daemon worker thread."""

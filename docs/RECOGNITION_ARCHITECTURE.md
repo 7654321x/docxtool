@@ -33,6 +33,10 @@ CSRF 校验已迁移到 `src/docxtool/web/user_auth.py`。该模块通过调用�
 健康检查、readiness、版本信息和启动 URL payload 已迁移到 `src/docxtool/web/health.py`。
 `web.app` 只注入当前数据库检查、运行目录、队列计数和版本配置，继续保留旧私有入口。
 
+Web SQLite 建表、旧表补列、兼容索引和默认模板 seed 编排已迁移到
+`src/docxtool/web/database_schema.py`。该模块通过调用方注入的连接工厂、线程锁和 seed
+函数工作，不持有 HTTP 处理器、不维护任务队列，也不触碰 DOCX 识别、规范化或渲染链路。
+
 监控页的分页查询、页数计算和链接生成已迁移到 `src/docxtool/web/monitoring.py`。
 该模块只处理 query dict、URL 和 SQL 片段字符串，不读取任务表，也不生成监控页面 HTML。
 
@@ -43,6 +47,10 @@ CSRF 校验已迁移到 `src/docxtool/web/user_auth.py`。该模块通过调用�
 预设模板名称、模板 ID、格式配置归一化和 preset 行数据脱敏已迁移到
 `src/docxtool/web/preset_config.py`。该模块只校验配置对象并返回 API 结构，不直接读写数据库、
 不执行任务，也不改变 DOCX 识别和排版规则。
+
+默认公文模板配置、默认功能开关和 `official_document` seed 逻辑已迁移到
+`src/docxtool/web/preset_defaults.py`。该模块只消费调用方传入的样式规则、页面设置、连接和时间函数，
+不处理 HTTP 请求，也不改变 DOCX 识别候选、状态机或渲染规则。
 
 预设模板列表、详情、创建、更新和删除的数据库读写已迁移到
 `src/docxtool/web/preset_store.py`。该模块通过调用方注入的 SQLite 连接器、锁、配置校验函数和
@@ -63,9 +71,16 @@ HTTP 路径归一、Cookie 取值、CSRF 头读取、管理页隐藏字段、紧
 已迁移到 `src/docxtool/web/request_utils.py`。该模块只处理请求头、字节和字符串，
 不访问数据库、不读取运行目录，也不参与识别或排版。
 
+Web 管理密钥、代理密钥的环境读取和弱密钥启动校验已迁移到
+`src/docxtool/web/secrets.py`。该模块只处理环境映射和密钥字符串，不访问数据库、不处理 HTTP
+路由，也不触碰 DOCX 识别链路。
+
 HTTP 请求体定长读取、上传内容写入文件和结果文件流输出已迁移到
 `src/docxtool/web/stream_io.py`。该模块只处理调用方传入的流、路径和 writer，
 不判断任务状态、不生成文件名，也不参与 DOCX 导入、识别或渲染。
+
+内存任务缓存容量裁剪已迁移到 `src/docxtool/web/task_cache.py`。该模块只处理调用方传入的
+任务有序映射和容量配置，不访问数据库、不处理 HTTP 路由，也不执行 DOCX 识别或渲染。
 
 任务临时目录、上传原件目录、输出目录、路径越界校验和永久保留清理钩子已迁移到
 `src/docxtool/web/task_paths.py`。该模块只计算路径和删除未完成上传或无效输出，
@@ -74,6 +89,18 @@ HTTP 请求体定长读取、上传内容写入文件和结果文件流输出已
 任务排队记录、处理中状态和终态字段写入已迁移到 `src/docxtool/web/task_records.py`。
 该模块通过调用方注入的 SQLite 连接器、锁、当前时间函数和下载文件名生成函数工作，
 不维护内存队列、不启动 worker，也不执行 DOCX 导入、识别或渲染。
+
+启动时 queued/processing 任务恢复为 interrupted 的逻辑已迁移到
+`src/docxtool/web/task_recovery.py`。该模块通过调用方注入的连接器、锁和时间函数工作，
+只处理任务终态补记，不启动 worker、不重新排队，也不执行 DOCX 识别或渲染。
+
+终态任务结果的数据库统计写入、失败输出清理、内存任务状态同步和脱敏日志记录已迁移到
+`src/docxtool/web/task_result.py`。该模块通过调用方注入的任务映射、锁、写库回调、清理回调和
+logger 工作，不执行 DOCX 导入、识别或渲染，也不改变处理结果本身。
+
+任务结果统计写入、按日汇总、监控页计数和 IP 聚合查询已迁移到
+`src/docxtool/web/task_statistics.py`。该模块通过调用方注入的连接器、锁、时间函数和分页函数
+工作，不维护内存任务状态、不生成监控 HTML，也不执行 DOCX 识别或渲染。
 
 任务计数、队列位置、公开任务状态脱敏、识别审核摘要和任务处理选项 JSON 已迁移到
 `src/docxtool/web/task_state.py`。该模块只消费调用方传入的任务字典、队列容器和数据库加载器，
