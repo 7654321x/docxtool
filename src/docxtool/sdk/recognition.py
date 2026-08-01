@@ -31,7 +31,7 @@ from .constants import (
 )
 from .errors import InvalidRequestError, RecognitionInputError, RecognitionSdkError
 from .models import RecognitionBlock, RecognitionPlan, RecognitionRequest, ReviewItem, mapping_digest
-from .validation import recognition_request_from_dict
+from .validation import recognition_request_from_dict, validate_recognition_request
 
 _SPECIAL_KIND_BY_TYPE = {
     "__table__": "table",
@@ -399,7 +399,18 @@ def _resolve_request(
     )
     if request is None:
         return legacy
-    resolved = request if isinstance(request, RecognitionRequest) else recognition_request_from_dict(request)
+    if isinstance(request, RecognitionRequest):
+        report = validate_recognition_request(request)
+        if not report.valid:
+            first = report.errors[0]
+            raise InvalidRequestError(
+                "SDK 协议校验失败: {0}".format(first.path),
+                code=first.code,
+                details=first.detail,
+            )
+        resolved = request
+    else:
+        resolved = recognition_request_from_dict(request)
     comparisons = {
         "processing_mode": processing_mode,
         "recognition_mode": recognition_mode,

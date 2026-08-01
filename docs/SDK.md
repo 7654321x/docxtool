@@ -190,6 +190,8 @@ docxtool-sdk validate --kind recognition-request --input request.json
 docxtool-sdk validate --kind recognition-plan --input plan.json
 docxtool-sdk validate --kind host-snapshot --input snapshot.json
 docxtool-sdk validate --kind recognition-binding --input binding.json
+docxtool-sdk validate --kind validation-report --input report.json
+docxtool-sdk validate --kind host-snapshot-summary --input snapshot-summary.json
 docxtool-sdk summarize-snapshot --snapshot snapshot.json --output snapshot-summary.json
 ```
 

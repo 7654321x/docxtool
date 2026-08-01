@@ -17,10 +17,12 @@ from .validation import (
     host_snapshot_from_dict,
     recognition_request_from_dict,
     validate_host_snapshot,
+    validate_host_snapshot_summary,
     validate_recognition_binding,
     validate_recognition_plan,
     validate_sdk_manifest,
     validate_recognition_request,
+    validate_validation_report,
 )
 
 
@@ -119,7 +121,9 @@ def _sdk_parser() -> argparse.ArgumentParser:
         "recognition-request",
         "recognition-plan",
         "host-snapshot",
+        "host-snapshot-summary",
         "recognition-binding",
+        "validation-report",
     ))
     validate.add_argument("--input", required=True, type=Path)
     validate.add_argument("--output", "-o", type=Path)
@@ -164,6 +168,10 @@ def sdk_main(argv: Optional[Sequence[str]] = None) -> int:
                 report = validate_recognition_plan(payload, strict=args.strict)
             elif args.kind == "host-snapshot":
                 report = validate_host_snapshot(payload, strict=args.strict)
+            elif args.kind == "host-snapshot-summary":
+                report = validate_host_snapshot_summary(payload, strict=args.strict)
+            elif args.kind == "validation-report":
+                report = validate_validation_report(payload, strict=args.strict)
             else:
                 report = validate_recognition_binding(payload, strict=args.strict)
             _write_payload(_ok({"kind": args.kind, **report.to_dict()}), args.output)

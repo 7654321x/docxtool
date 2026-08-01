@@ -46,11 +46,11 @@ pwsh -NoProfile -Command "git ls-remote https://github.com/7654321x/docxtool.git
 
 默认发布以下类型文件：
 
-- 项目文档：`README.md`、`CHANGELOG.md`、`docs/DEPLOY.md`、`docs/API.md`、`docs/SDK.md`、`docs/RECOGNITION_SOURCE_LOCATORS.md`、`docs/HOST_TEXT_V1_GOLDEN.json`、`docs/USER_WPS_VALIDATION.md`、`docs/USER_WPS_VALIDATION_RESULT.md`、`docs/RECOGNITION_ARCHITECTURE.md`、`docs/RECOGNITION_RELEASE.md`、`docs/UPLOAD_MANIFEST.md`、`docs/GITHUB_UPLOAD_GUIDE.md`、`公文格式规范.md`、`wps/公文格式规范.md`、`AGENTS.md`、`CONVENTIONS.md`
+- 项目文档：`README.md`、`CHANGELOG.md`、`docs/DEPLOY.md`、`docs/API.md`、`docs/SDK.md`、`docs/RECOGNITION_SOURCE_LOCATORS.md`、`docs/HOST_TEXT_V1_GOLDEN.json`、`docs/USER_WPS_VALIDATION.md`、`docs/USER_WPS_VALIDATION_RESULT.md`、`docs/RECOGNITION_ARCHITECTURE.md`、`docs/RECOGNITION_RELEASE.md`、`docs/UPLOAD_MANIFEST.md`、`docs/GITHUB_UPLOAD_GUIDE.md`、`公文格式规范.md`、`AGENTS.md`、`CONVENTIONS.md`
 - 依赖和启动：`requirements.txt`、`requirements.lock`、`requirements-dev.lock`、`run.sh`、`run.ps1`
 - 服务器代理模板：`deploy/nginx-docxtool.conf`
 - 配置：`.env.example`、`.gitignore`、`.gitattributes`、`pytest.ini`、`ruff.toml`、`pyproject.toml`、`.github/workflows/ci.yml`
-- 后端、排版核心和 SDK：`server.py`、`src/docxtool/**/*.py`、`src/docxtool/resources/config/default-format.json`
+- 后端、排版核心和 SDK：`server.py`、`src/docxtool/**/*.py`、`src/docxtool/resources/config/default-format.json`、`src/docxtool/resources/schemas/*.json`
 - 脚本：`scripts/generate_secrets.py`、`scripts/benchmark_recognition.py`、`scripts/compare_recognition_runs.py`、`scripts/analyze_end_format.py`、`scripts/analyze_letterhead_batch.py`、`scripts/batch_test_docx.py`、`scripts/generate_005_format_fixtures.py`、`scripts/normalize_correct_template_role_spacing.py`、`scripts/migrate_legacy_database.ps1`、`scripts/publish_to_github.ps1`
 - 前端和 Cloudflare Pages：`resources/frontend/pages/index.html`、`resources/frontend/pages/_worker.js`
 - 运行目录占位：`var/data/.gitkeep`、`var/logs/.gitkeep`、`var/outputs/.gitkeep`、`var/runtime/.gitkeep`

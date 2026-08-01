@@ -34,7 +34,6 @@ https://github.com/7654321x/docxtool.git
 | `docs/USER_WPS_VALIDATION.md` | WPS 用户验收步骤 | 仅操作脱敏 fixture |
 | `docs/USER_WPS_VALIDATION_RESULT.md` | WPS 用户验收记录模板 | 初始状态均为未测试 |
 | `公文格式规范.md` | 根目录公文格式规范副本 | 与 WPS 目录规范保持一致，兼容既有链接 |
-| `wps/公文格式规范.md` | 当前公文格式与识别边界说明 | 可交给 WPS 项目或其他 AI 使用 |
 | `docs/UPLOAD_MANIFEST.md` | 本清单 | 上传范围依据 |
 | `docs/GITHUB_UPLOAD_GUIDE.md` | GitHub 发布说明 | 不包含私钥 |
 | `AGENTS.md` | 本地协作规则 | Codex/AI 工作规则 |

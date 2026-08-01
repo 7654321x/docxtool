@@ -31,6 +31,8 @@ schema, not the protocol authority.
 - Recognition plan schema: `recognition-plan-v1`
 - Host snapshot schema: `host-snapshot-v1`
 - Recognition binding schema: `recognition-binding-v1`
+- Validation report schema: `validation-report-v1`
+- Host snapshot summary schema: `host-snapshot-summary-v1`
 - SDK error schema: `sdk-error-v1`
 - Source locator: `source-locator-v2`
 - Host text contract: `host-text-v1`

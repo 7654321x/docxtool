@@ -6,11 +6,14 @@ from dataclasses import replace
 
 import pytest
 from docx import Document
+from jsonschema import Draft202012Validator
 
 from docxtool.sdk import (
     DocxToolSdkError,
     InvalidHostSnapshotError,
+    InvalidRecognitionPlanError,
     InvalidRequestError,
+    RecognitionPlan,
     RecognitionRequest,
     bind_recognition_plan,
     get_json_schema,
@@ -112,6 +115,36 @@ def test_recognition_plan_round_trip_schema_validation_and_privacy(tmp_path: Pat
     assert "正文内容" not in json.dumps(payload, ensure_ascii=False)
     assert payload["blocks"][0]["source_locator"]["raw_span"]["encoding"] == "utf16_code_unit"
     assert payload["blocks"][0]["range_coordinate_system"] == "source_raw_text_utf16"
+
+
+def test_direct_model_from_dict_uses_public_validation(tmp_path: Path) -> None:
+    source = tmp_path / "source.docx"
+    _write_document(source, ["普通正文内容"])
+    plan = recognize_docx(source, recognition_mode="legacy")
+    payload = plan.to_dict()
+    payload["source"]["text_included"] = "false"
+
+    report = validate_recognition_plan(payload)
+
+    assert not report.valid
+    assert report.errors[0].code == "INVALID_RECOGNITION_PLAN"
+    with pytest.raises(InvalidRecognitionPlanError):
+        RecognitionPlan.from_dict(payload)
+
+
+def test_bind_validates_model_instances_before_alignment(tmp_path: Path) -> None:
+    source = tmp_path / "source.docx"
+    raw = "普通正文内容"
+    _write_document(source, [raw])
+    plan = recognize_docx(source, recognition_mode="legacy")
+    tampered = replace(plan, plan_id="plan_tampered")
+
+    report = validate_recognition_plan(tampered)
+
+    assert not report.valid
+    assert any(item.path == "$.plan_id" for item in report.errors)
+    with pytest.raises(InvalidRecognitionPlanError):
+        bind_recognition_plan(tampered, _snapshot(raw))
 
 
 def test_host_snapshot_v1_validation_rejects_missing_and_duplicate_ids() -> None:
@@ -251,6 +284,75 @@ def test_strict_mode_rejects_unknown_fields_but_non_strict_warns() -> None:
     assert strict.errors[0].path == "$.extension_note"
 
 
+def test_strict_mode_recursively_rejects_nested_unknown_fields(tmp_path: Path) -> None:
+    source = tmp_path / "source.docx"
+    raw = "普通正文内容"
+    _write_document(source, [raw])
+    plan = recognize_docx(source, recognition_mode="legacy")
+
+    plan_payload = plan.to_dict()
+    plan_payload["blocks"][0]["source_locator"]["extension_note"] = "ignored"
+    non_strict = validate_recognition_plan(plan_payload)
+    strict = validate_recognition_plan(plan_payload, strict=True)
+    assert non_strict.valid
+    assert any(item.path == "$.blocks[0].source_locator.extension_note" for item in non_strict.warnings)
+    assert not strict.valid
+    assert any(item.path == "$.blocks[0].source_locator.extension_note" for item in strict.errors)
+
+    snapshot_payload = _snapshot(raw)
+    snapshot_payload["paragraphs"][0]["extension_note"] = "ignored"
+    non_strict = validate_host_snapshot(snapshot_payload)
+    strict = validate_host_snapshot(snapshot_payload, strict=True)
+    assert non_strict.valid
+    assert any(item.path == "$.paragraphs[0].extension_note" for item in non_strict.warnings)
+    assert not strict.valid
+    assert any(item.path == "$.paragraphs[0].extension_note" for item in strict.errors)
+
+    binding_payload = bind_recognition_plan(plan, _snapshot(raw)).to_dict()
+    binding_payload["blocks"][0]["preconditions"]["extension_note"] = "ignored"
+    non_strict = validate_recognition_binding(binding_payload)
+    strict = validate_recognition_binding(binding_payload, strict=True)
+    assert non_strict.valid
+    assert any(item.path == "$.blocks[0].preconditions.extension_note" for item in non_strict.warnings)
+    assert not strict.valid
+    assert any(item.path == "$.blocks[0].preconditions.extension_note" for item in strict.errors)
+
+
+def test_stable_ids_are_recomputed_during_validation(tmp_path: Path) -> None:
+    source = tmp_path / "source.docx"
+    raw = "普通正文内容"
+    _write_document(source, [raw])
+    plan = recognize_docx(source, recognition_mode="legacy")
+
+    changed_engine = json.loads(json.dumps(plan.to_dict(), ensure_ascii=False))
+    changed_engine["producer"]["engine_version"] = "changed-engine"
+    assert not validate_recognition_plan(changed_engine).valid
+    assert any(item.path == "$.plan_id" for item in validate_recognition_plan(changed_engine).errors)
+
+    changed_type = json.loads(json.dumps(plan.to_dict(), ensure_ascii=False))
+    changed_type["blocks"][0]["semantic"]["type_id"] = (
+        "body" if changed_type["blocks"][0]["semantic"]["type_id"] != "body" else "title"
+    )
+    assert not validate_recognition_plan(changed_type).valid
+    assert any(item.path == "$.blocks[0].block_id" for item in validate_recognition_plan(changed_type).errors)
+
+    changed_locator_hash = json.loads(json.dumps(plan.to_dict(), ensure_ascii=False))
+    changed_locator_hash["blocks"][0]["source_locator"]["raw_fragment_sha256"] = "a" * 64
+    assert not validate_recognition_plan(changed_locator_hash).valid
+    assert any(item.path == "$.blocks[0].block_id" for item in validate_recognition_plan(changed_locator_hash).errors)
+
+    binding_payload = bind_recognition_plan(plan, _snapshot(raw)).to_dict()
+    changed_span = json.loads(json.dumps(binding_payload, ensure_ascii=False))
+    changed_span["blocks"][0]["host_target"]["raw_span"]["end"] += 1
+    assert not validate_recognition_binding(changed_span).valid
+    assert any(item.path == "$.binding_id" for item in validate_recognition_binding(changed_span).errors)
+
+    changed_precondition = json.loads(json.dumps(binding_payload, ensure_ascii=False))
+    changed_precondition["blocks"][0]["preconditions"]["raw_fragment_sha256"] = "b" * 64
+    assert not validate_recognition_binding(changed_precondition).valid
+    assert any(item.path == "$.binding_id" for item in validate_recognition_binding(changed_precondition).errors)
+
+
 def test_review_items_follow_block_id_when_blocks_are_reordered(tmp_path: Path) -> None:
     source = tmp_path / "source.docx"
     _write_document(source, ["第一段", "第二段"])
@@ -296,6 +398,63 @@ def test_binding_state_invariants_are_validated(tmp_path: Path) -> None:
     assert not validate_recognition_binding(review).valid
 
 
+def test_binding_cross_references_and_summary_are_validated(tmp_path: Path) -> None:
+    source = tmp_path / "source.docx"
+    raw = "普通正文内容"
+    _write_document(source, [raw])
+    plan = recognize_docx(source, recognition_mode="legacy")
+    payload = bind_recognition_plan(plan, _snapshot(raw)).to_dict()
+
+    wrong_plan = json.loads(json.dumps(payload, ensure_ascii=False))
+    wrong_plan["blocks"][0]["preconditions"]["plan_id"] = "plan_other"
+    assert not validate_recognition_binding(wrong_plan).valid
+    assert any(
+        item.path == "$.blocks[0].preconditions.plan_id"
+        for item in validate_recognition_binding(wrong_plan).errors
+    )
+
+    wrong_snapshot = json.loads(json.dumps(payload, ensure_ascii=False))
+    wrong_snapshot["blocks"][0]["preconditions"]["snapshot_id"] = "snap-other"
+    assert not validate_recognition_binding(wrong_snapshot).valid
+    assert any(
+        item.path == "$.blocks[0].preconditions.snapshot_id"
+        for item in validate_recognition_binding(wrong_snapshot).errors
+    )
+
+    wrong_host = json.loads(json.dumps(payload, ensure_ascii=False))
+    wrong_host["blocks"][0]["preconditions"]["host_paragraph_id"] = "main:999999"
+    assert not validate_recognition_binding(wrong_host).valid
+    assert any(
+        item.path == "$.blocks[0].preconditions.host_paragraph_id"
+        for item in validate_recognition_binding(wrong_host).errors
+    )
+
+    duplicate_block = json.loads(json.dumps(payload, ensure_ascii=False))
+    duplicate_block["blocks"].append(json.loads(json.dumps(duplicate_block["blocks"][0], ensure_ascii=False)))
+    duplicate_block["summary"]["total_blocks"] = len(duplicate_block["blocks"])
+    assert not validate_recognition_binding(duplicate_block).valid
+    assert any(
+        item.path == "$.blocks[1].block_id"
+        for item in validate_recognition_binding(duplicate_block).errors
+    )
+
+    dangling_group = json.loads(json.dumps(payload, ensure_ascii=False))
+    dangling_group["blocks"][0]["physical_group_id"] = "pg_missing"
+    assert not validate_recognition_binding(dangling_group).valid
+    assert any(
+        item.path == "$.blocks[0].physical_group_id"
+        for item in validate_recognition_binding(dangling_group).errors
+    )
+
+    summary_tampered = json.loads(json.dumps(payload, ensure_ascii=False))
+    summary_tampered["summary"]["complete_physical_groups"] += 1
+    assert not validate_recognition_binding(summary_tampered).valid
+    assert any(
+        item.path == "$.summary.complete_physical_groups"
+        for item in validate_recognition_binding(summary_tampered).errors
+    )
+
+
 def test_host_snapshot_summary_is_text_free_and_not_bindable(tmp_path: Path) -> None:
     source = tmp_path / "source.docx"
     _write_document(source, ["普通正文内容"])
@@ -307,6 +466,57 @@ def test_host_snapshot_summary_is_text_free_and_not_bindable(tmp_path: Path) -> 
     assert not validate_host_snapshot(summary).valid
     with pytest.raises(DocxToolSdkError):
         bind_recognition_plan(plan, summary)
+
+
+def test_host_snapshot_redacted_to_dict_uses_summary_schema() -> None:
+    snapshot = host_snapshot_from_dict(_snapshot("普通正文内容"))
+    redacted = snapshot.to_dict(include_text=False)
+
+    assert redacted["summary_type"] == "host-snapshot-summary-v1"
+    assert "raw_text" not in json.dumps(redacted, ensure_ascii=False)
+    assert not validate_host_snapshot(redacted).valid
+    Draft202012Validator(get_json_schema("host-snapshot-summary")).validate(redacted)
+
+
+def test_validation_report_and_summary_schema_are_public_and_cli_validates(tmp_path: Path) -> None:
+    snapshot_path = tmp_path / "snapshot.json"
+    summary_path = tmp_path / "summary.json"
+    report_path = tmp_path / "report.json"
+    output_path = tmp_path / "validate.json"
+    snapshot_path.write_text(json.dumps(_snapshot("普通正文内容"), ensure_ascii=False), encoding="utf-8")
+
+    report = validate_recognition_request({"schema_version": "recognition-request-v1", "include_text": "false"})
+    report_path.write_text(json.dumps(report.to_dict(), ensure_ascii=False), encoding="utf-8")
+    Draft202012Validator(get_json_schema("validation-report")).validate(report.to_dict())
+
+    assert sdk_cli([
+        "summarize-snapshot",
+        "--snapshot",
+        str(snapshot_path),
+        "--output",
+        str(summary_path),
+    ]) == 0
+    assert sdk_cli([
+        "validate",
+        "--kind",
+        "host-snapshot-summary",
+        "--input",
+        str(summary_path),
+        "--output",
+        str(output_path),
+    ]) == 0
+    assert json.loads(output_path.read_text(encoding="utf-8"))["data"]["valid"] is True
+
+    assert sdk_cli([
+        "validate",
+        "--kind",
+        "validation-report",
+        "--input",
+        str(report_path),
+        "--output",
+        str(output_path),
+    ]) == 0
+    assert json.loads(output_path.read_text(encoding="utf-8"))["data"]["valid"] is True
 
 
 def test_cli_manifest_recognize_bind_and_validate_round_trip(tmp_path: Path) -> None:

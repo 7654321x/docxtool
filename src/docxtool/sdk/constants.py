@@ -8,6 +8,8 @@ RECOGNITION_REQUEST_SCHEMA_VERSION = "recognition-request-v1"
 RECOGNITION_PLAN_SCHEMA_VERSION = "recognition-plan-v1"
 HOST_SNAPSHOT_SCHEMA_VERSION = "host-snapshot-v1"
 RECOGNITION_BINDING_SCHEMA_VERSION = "recognition-binding-v1"
+VALIDATION_REPORT_SCHEMA_VERSION = "validation-report-v1"
+HOST_SNAPSHOT_SUMMARY_SCHEMA_VERSION = "host-snapshot-summary-v1"
 SDK_ERROR_SCHEMA_VERSION = "sdk-error-v1"
 
 SOURCE_LOCATOR_VERSION = "source-locator-v2"
@@ -28,6 +30,19 @@ STORY_TYPES = (
 )
 BINDING_STATUSES = ("confirmed", "review", "unresolved")
 RECOMMENDED_ACTIONS = ("verify_host_range", "preview_only", "skip")
+BINDING_PRECONDITION_FIELDS = (
+    "plan_id",
+    "snapshot_id",
+    "document_identity",
+    "document_revision",
+    "host_paragraph_id",
+    "host_paragraph_raw_sha256",
+    "host_paragraph_canonical_sha256",
+    "raw_fragment_sha256",
+    "canonical_fragment_sha256",
+    "text_contract_version",
+    "offset_encoding",
+)
 
 CAPABILITIES = (
     "multi_segment_paragraph",
@@ -37,6 +52,8 @@ CAPABILITIES = (
     "local_ambiguity",
     "segment_format_features",
     "east_asia_font_features",
+    "host_snapshot_summary_schema",
+    "validation_report_schema",
     "text_optional_output",
     "json_schema_validation",
 )
@@ -45,7 +62,9 @@ ERROR_CODES = (
     "INVALID_RECOGNITION_REQUEST",
     "INVALID_RECOGNITION_PLAN",
     "INVALID_HOST_SNAPSHOT",
+    "INVALID_HOST_SNAPSHOT_SUMMARY",
     "INVALID_RECOGNITION_BINDING",
+    "INVALID_VALIDATION_REPORT",
     "UNSUPPORTED_INTEGRATION_CONTRACT",
     "UNSUPPORTED_SCHEMA_VERSION",
     "UNSUPPORTED_HOST_TEXT_CONTRACT",
@@ -68,5 +87,7 @@ SCHEMA_FILENAMES = {
     RECOGNITION_PLAN_SCHEMA_VERSION: "recognition-plan-v1.schema.json",
     HOST_SNAPSHOT_SCHEMA_VERSION: "host-snapshot-v1.schema.json",
     RECOGNITION_BINDING_SCHEMA_VERSION: "recognition-binding-v1.schema.json",
+    VALIDATION_REPORT_SCHEMA_VERSION: "validation-report-v1.schema.json",
+    HOST_SNAPSHOT_SUMMARY_SCHEMA_VERSION: "host-snapshot-summary-v1.schema.json",
     SDK_ERROR_SCHEMA_VERSION: "sdk-error-v1.schema.json",
 }

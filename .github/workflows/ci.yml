@@ -43,6 +43,105 @@ jobs:
       - name: Verify package build
         run: python -m build
 
+      - name: Wheel-only smoke test
+        run: |
+          WHEEL="$(ls "$GITHUB_WORKSPACE"/dist/docxtool-*.whl | head -n 1)"
+          python -m venv "$RUNNER_TEMP/docxtool-wheel-smoke"
+          "$RUNNER_TEMP/docxtool-wheel-smoke/bin/python" -m pip install --upgrade pip
+          "$RUNNER_TEMP/docxtool-wheel-smoke/bin/python" -m pip install "$WHEEL"
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/docxtool-wheel-smoke/bin/python" - <<'PY'
+          import json
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          from docx import Document
+
+          from docxtool.sdk import (
+              bind_recognition_plan,
+              get_json_schema,
+              host_snapshot_from_dict,
+              recognize_docx,
+              recognition_plan_from_dict,
+              summarize_host_snapshot,
+              validate_recognition_binding,
+              validate_recognition_plan,
+          )
+
+          work = Path.cwd() / "docxtool-wheel-smoke-data"
+          work.mkdir(exist_ok=True)
+          source = work / "source.docx"
+          document = Document()
+          document.add_paragraph("普通正文内容")
+          document.save(source)
+          for name in (
+              "manifest",
+              "recognition-request",
+              "recognition-plan",
+              "host-snapshot",
+              "recognition-binding",
+              "validation-report",
+              "host-snapshot-summary",
+              "sdk-error",
+          ):
+              get_json_schema(name)
+          plan = recognize_docx(source)
+          restored = recognition_plan_from_dict(plan.to_dict())
+          assert validate_recognition_plan(restored).valid
+          snapshot = {
+              "schema_version": "host-snapshot-v1",
+              "integration_contract_version": "integration-contract-v1",
+              "snapshot_id": "snap-smoke",
+              "document_identity": "doc-smoke",
+              "document_revision": "rev-smoke",
+              "host": {"kind": "test-host"},
+              "text_contract_version": "host-text-v1",
+              "offset_encoding": "utf16_code_unit",
+              "paragraphs": [{
+                  "host_paragraph_id": "main:000000",
+                  "host_paragraph_index": 0,
+                  "story_id": "main",
+                  "story_type": "main",
+                  "story_paragraph_index": 0,
+                  "section_index": 0,
+                  "is_in_table": False,
+                  "raw_text": "普通正文内容",
+              }],
+          }
+          binding = bind_recognition_plan(restored, snapshot)
+          assert validate_recognition_binding(binding).valid
+          summary = summarize_host_snapshot(host_snapshot_from_dict(snapshot)).to_dict()
+          assert summary["summary_type"] == "host-snapshot-summary-v1"
+          snapshot_path = work / "snapshot.json"
+          summary_path = work / "summary.json"
+          report_path = work / "report.json"
+          snapshot_path.write_text(json.dumps(snapshot, ensure_ascii=False), encoding="utf-8")
+          subprocess.run([sys.executable, "-m", "docxtool.sdk.cli", "manifest"], check=True)
+          subprocess.run([
+              sys.executable,
+              "-m",
+              "docxtool.sdk.cli",
+              "summarize-snapshot",
+              "--snapshot",
+              str(snapshot_path),
+              "--output",
+              str(summary_path),
+          ], check=True)
+          subprocess.run([
+              sys.executable,
+              "-m",
+              "docxtool.sdk.cli",
+              "validate",
+              "--kind",
+              "host-snapshot-summary",
+              "--input",
+              str(summary_path),
+              "--output",
+              str(report_path),
+          ], check=True)
+          PY
+
   windows-startup:
     runs-on: windows-latest
     strategy:

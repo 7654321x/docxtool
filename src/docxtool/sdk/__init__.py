@@ -48,11 +48,13 @@ from .validation import (
     recognition_plan_from_dict,
     recognition_request_from_dict,
     validate_host_snapshot,
+    validate_host_snapshot_summary,
     validate_recognition_binding,
     validate_recognition_plan,
     validate_recognition_request,
     validate_sdk_error,
     validate_sdk_manifest,
+    validate_validation_report,
 )
 
 __all__ = [
@@ -95,9 +97,11 @@ __all__ = [
     "recognize_docx",
     "summarize_host_snapshot",
     "validate_host_snapshot",
+    "validate_host_snapshot_summary",
     "validate_recognition_binding",
     "validate_recognition_plan",
     "validate_recognition_request",
     "validate_sdk_error",
     "validate_sdk_manifest",
+    "validate_validation_report",
 ]

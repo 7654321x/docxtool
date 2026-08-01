@@ -7,6 +7,7 @@ from docxtool import __version__ as PACKAGE_VERSION
 from .constants import (
     CAPABILITIES,
     HOST_SNAPSHOT_SCHEMA_VERSION,
+    HOST_SNAPSHOT_SUMMARY_SCHEMA_VERSION,
     HOST_TEXT_CONTRACT_VERSION,
     INTEGRATION_CONTRACT_VERSION,
     OFFSET_ENCODING,
@@ -14,6 +15,7 @@ from .constants import (
     RECOGNITION_PLAN_SCHEMA_VERSION,
     SDK_MANIFEST_SCHEMA_VERSION,
     SOURCE_LOCATOR_VERSION,
+    VALIDATION_REPORT_SCHEMA_VERSION,
 )
 from .models import SdkManifest
 
@@ -27,6 +29,8 @@ def get_sdk_manifest() -> SdkManifest:
         recognition_plan_versions=(RECOGNITION_PLAN_SCHEMA_VERSION,),
         host_snapshot_versions=(HOST_SNAPSHOT_SCHEMA_VERSION,),
         recognition_binding_versions=(RECOGNITION_BINDING_SCHEMA_VERSION,),
+        validation_report_versions=(VALIDATION_REPORT_SCHEMA_VERSION,),
+        host_snapshot_summary_versions=(HOST_SNAPSHOT_SUMMARY_SCHEMA_VERSION,),
         source_locator_versions=(SOURCE_LOCATOR_VERSION,),
         host_text_contract_versions=(HOST_TEXT_CONTRACT_VERSION,),
         offset_encodings=(OFFSET_ENCODING,),

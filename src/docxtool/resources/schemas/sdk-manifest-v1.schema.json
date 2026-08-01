@@ -11,6 +11,8 @@
     "recognition_plan_versions",
     "host_snapshot_versions",
     "recognition_binding_versions",
+    "validation_report_versions",
+    "host_snapshot_summary_versions",
     "source_locator_versions",
     "host_text_contract_versions",
     "offset_encodings",
@@ -38,6 +40,16 @@
     "recognition_binding_versions": {
       "type": "array",
       "items": { "const": "recognition-binding-v1" },
+      "minItems": 1
+    },
+    "validation_report_versions": {
+      "type": "array",
+      "items": { "const": "validation-report-v1" },
+      "minItems": 1
+    },
+    "host_snapshot_summary_versions": {
+      "type": "array",
+      "items": { "const": "host-snapshot-summary-v1" },
       "minItems": 1
     },
     "source_locator_versions": {

@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docxtool.local/schemas/host-snapshot-summary-v1.schema.json",
+  "title": "DocxTool HostSnapshotSummary v1",
+  "description": "Text-free diagnostic summary of a local HostSnapshot; not bindable.",
+  "type": "object",
+  "required": [
+    "summary_type",
+    "snapshot_id",
+    "integration_contract_version",
+    "text_contract_version",
+    "offset_encoding",
+    "host",
+    "document_identity",
+    "document_revision",
+    "paragraph_count",
+    "table_paragraph_count",
+    "story_summaries",
+    "bindable"
+  ],
+  "properties": {
+    "summary_type": { "const": "host-snapshot-summary-v1" },
+    "snapshot_id": { "type": "string", "minLength": 1 },
+    "integration_contract_version": { "const": "integration-contract-v1" },
+    "text_contract_version": { "const": "host-text-v1" },
+    "offset_encoding": { "const": "utf16_code_unit" },
+    "host": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": true
+    },
+    "document_identity": { "type": ["string", "null"] },
+    "document_revision": { "type": ["string", "null"] },
+    "paragraph_count": { "type": "integer", "minimum": 0 },
+    "table_paragraph_count": { "type": "integer", "minimum": 0 },
+    "story_summaries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["story_id", "story_type", "paragraph_count", "table_paragraph_count"],
+        "properties": {
+          "story_id": { "type": "string", "minLength": 1 },
+          "story_type": {
+            "enum": ["main", "header", "footer", "footnote", "endnote", "comment", "text_frame", "unknown"]
+          },
+          "paragraph_count": { "type": "integer", "minimum": 0 },
+          "table_paragraph_count": { "type": "integer", "minimum": 0 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "bindable": { "const": false }
+  },
+  "additionalProperties": false
+}

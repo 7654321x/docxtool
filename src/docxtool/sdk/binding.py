@@ -17,7 +17,7 @@ from docxtool.document.source_tape import (
     SourceTape,
     canonicalize_text,
 )
-from .errors import BindingError, UnsupportedContractError
+from .errors import BindingError, InvalidHostSnapshotError, InvalidRecognitionPlanError, UnsupportedContractError
 
 from .models import (
     BoundRecognitionBlock,
@@ -29,7 +29,34 @@ from .models import (
     RecognitionBlock,
     RecognitionPlan,
 )
-from .validation import host_snapshot_from_dict, recognition_plan_from_dict
+from .validation import (
+    host_snapshot_from_dict,
+    recognition_plan_from_dict,
+    validate_host_snapshot,
+    validate_recognition_plan,
+)
+
+
+def _raise_plan_report(report) -> None:
+    if report.valid:
+        return
+    first = report.errors[0]
+    raise InvalidRecognitionPlanError(
+        "SDK 协议校验失败: {0}".format(first.path),
+        code=first.code,
+        details=first.detail,
+    )
+
+
+def _raise_snapshot_report(report) -> None:
+    if report.valid:
+        return
+    first = report.errors[0]
+    raise InvalidHostSnapshotError(
+        "SDK 协议校验失败: {0}".format(first.path),
+        code=first.code,
+        details=first.detail,
+    )
 
 
 def _sha256(value: str) -> str:
@@ -78,6 +105,7 @@ class _PhysicalGroup:
 
 def _coerce_snapshot(value: HostSnapshot | Mapping[str, Any]) -> HostSnapshot:
     if isinstance(value, HostSnapshot):
+        _raise_snapshot_report(validate_host_snapshot(value))
         return value
     if isinstance(value, HostSnapshotSummary):
         raise BindingError(
@@ -89,11 +117,12 @@ def _coerce_snapshot(value: HostSnapshot | Mapping[str, Any]) -> HostSnapshot:
             "HostSnapshotSummary 不能用于绑定",
             details={"path": "$.summary_type", "object_kind": "HostSnapshotSummary"},
         )
-    return HostSnapshot.from_dict(value, allow_legacy=True)
+    return host_snapshot_from_dict(value)
 
 
 def _coerce_plan(value: RecognitionPlan | Mapping[str, Any]) -> RecognitionPlan:
     if isinstance(value, RecognitionPlan):
+        _raise_plan_report(validate_recognition_plan(value))
         return value
     if isinstance(value, Mapping):
         return recognition_plan_from_dict(value)
@@ -272,11 +301,15 @@ def bind_recognition_plan(
             "HostSnapshotSummary 不能用于绑定",
             details={"path": "$.summary_type", "object_kind": "HostSnapshotSummary"},
         )
-    plan = plan if isinstance(plan, RecognitionPlan) else recognition_plan_from_dict(plan, strict=strict)
-    snapshot = host_snapshot if isinstance(host_snapshot, HostSnapshot) else host_snapshot_from_dict(
-        host_snapshot,
-        strict=strict,
-    )
+    if isinstance(plan, RecognitionPlan):
+        _raise_plan_report(validate_recognition_plan(plan, strict=strict))
+    else:
+        plan = recognition_plan_from_dict(plan, strict=strict)
+    if isinstance(host_snapshot, HostSnapshot):
+        _raise_snapshot_report(validate_host_snapshot(host_snapshot, strict=strict))
+        snapshot = host_snapshot
+    else:
+        snapshot = host_snapshot_from_dict(host_snapshot, strict=strict)
     if plan.schema_version != "recognition-plan-v1":
         raise UnsupportedContractError(
             "不支持的识别计划 Schema",

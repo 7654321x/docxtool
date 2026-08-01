@@ -8,6 +8,7 @@ import json
 from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
 from .constants import (
+    BINDING_PRECONDITION_FIELDS,
     HOST_SNAPSHOT_SCHEMA_VERSION,
     HOST_TEXT_CONTRACT_VERSION,
     INTEGRATION_CONTRACT_VERSION,
@@ -74,6 +75,10 @@ def _review_status(level: str, locator_status: str = "confirmed") -> str:
     return "confirmed"
 
 
+def _stable_preconditions(value: Mapping[str, Any]) -> Dict[str, Any]:
+    return {field: value.get(field) for field in BINDING_PRECONDITION_FIELDS if field in value}
+
+
 @dataclass(frozen=True)
 class SdkManifest:
     """Text-free SDK capability manifest."""
@@ -84,6 +89,8 @@ class SdkManifest:
     recognition_plan_versions: Tuple[str, ...]
     host_snapshot_versions: Tuple[str, ...]
     recognition_binding_versions: Tuple[str, ...]
+    validation_report_versions: Tuple[str, ...]
+    host_snapshot_summary_versions: Tuple[str, ...]
     source_locator_versions: Tuple[str, ...]
     host_text_contract_versions: Tuple[str, ...]
     offset_encodings: Tuple[str, ...]
@@ -98,6 +105,8 @@ class SdkManifest:
             "recognition_plan_versions": list(self.recognition_plan_versions),
             "host_snapshot_versions": list(self.host_snapshot_versions),
             "recognition_binding_versions": list(self.recognition_binding_versions),
+            "validation_report_versions": list(self.validation_report_versions),
+            "host_snapshot_summary_versions": list(self.host_snapshot_summary_versions),
             "source_locator_versions": list(self.source_locator_versions),
             "host_text_contract_versions": list(self.host_text_contract_versions),
             "offset_encodings": list(self.offset_encodings),
@@ -226,6 +235,12 @@ class RecognitionRequest:
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any], *, strict: bool = False) -> "RecognitionRequest":
+        from .validation import recognition_request_from_dict as _validated_request_from_dict
+
+        return _validated_request_from_dict(value, strict=strict)
+
+    @classmethod
+    def _from_dict_unchecked(cls, value: Mapping[str, Any], *, strict: bool = False) -> "RecognitionRequest":
         if not isinstance(value, Mapping):
             raise InvalidRequestError("RecognitionRequest 必须是 JSON 对象")
         known = {
@@ -547,7 +562,10 @@ class RecognitionBlock:
             canonical_end_utf16=_optional_int(canonical_span.get("end", value.get("canonical_end_utf16"))),
             range_start_utf16=_optional_int(value.get("range_start_utf16", raw_span.get("start"))),
             range_end_utf16=_optional_int(value.get("range_end_utf16", raw_span.get("end"))),
-            locator_verified=bool(locator.get("verified", value.get("locator_verified", False))),
+            locator_verified=_bool(
+                locator.get("verified", value.get("locator_verified")),
+                path="source_locator.verified",
+            ),
             source_locator_status=str(locator.get("status", value.get("source_locator_status", "unresolved")) or ""),
             source_locator_evidence=_tuple_str(locator.get("evidence", value.get("source_locator_evidence", ()))),
             source_locator_warnings=_tuple_str(locator.get("warnings", value.get("source_locator_warnings", ()))),
@@ -692,6 +710,12 @@ class RecognitionPlan:
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any], *, strict: bool = False) -> "RecognitionPlan":
+        from .validation import recognition_plan_from_dict as _validated_plan_from_dict
+
+        return _validated_plan_from_dict(value, strict=strict)
+
+    @classmethod
+    def _from_dict_unchecked(cls, value: Mapping[str, Any], *, strict: bool = False) -> "RecognitionPlan":
         if not isinstance(value, Mapping):
             raise InvalidRecognitionPlanError("RecognitionPlan 必须是 JSON 对象")
         if strict and value.get("schema_version") != RECOGNITION_PLAN_SCHEMA_VERSION:
@@ -739,8 +763,8 @@ class RecognitionPlan:
                 )
                 or ""
             ),
-            text_included=bool(source.get("text_included", False)),
-            raw_text_included=bool(source.get("raw_text_included", False)),
+            text_included=_bool(source.get("text_included"), path="source.text_included"),
+            raw_text_included=_bool(source.get("raw_text_included"), path="source.raw_text_included"),
             processing_mode=str(recognition.get("processing_mode", value.get("processing_mode", "")) or ""),
             recognition_mode=str(recognition.get("recognition_mode", value.get("recognition_mode", "")) or ""),
             document_mode=str(recognition.get("document_mode", value.get("document_mode", "unknown")) or ""),
@@ -865,12 +889,11 @@ class HostSnapshot:
         object.__setattr__(self, "snapshot_id", snapshot_id)
 
     def to_dict(self, *, include_text: bool = True) -> Dict[str, Any]:
+        if not include_text:
+            return summarize_host_snapshot(self).to_dict()
         paragraphs = []
         for item in self.paragraphs:
             payload = item.to_dict()
-            if not include_text:
-                payload["raw_text"] = None
-                payload["raw_text_sha256"] = _sha256_text(item.raw_text)
             paragraphs.append(payload)
         return {
             "schema_version": self.schema_version,
@@ -891,6 +914,20 @@ class HostSnapshot:
 
     @classmethod
     def from_dict(
+        cls,
+        value: Mapping[str, Any],
+        *,
+        strict: bool = False,
+        allow_legacy: bool = True,
+    ) -> "HostSnapshot":
+        from .validation import host_snapshot_from_dict as _validated_snapshot_from_dict
+
+        if allow_legacy and isinstance(value, Mapping) and not value.get("schema_version"):
+            return cls._from_dict_unchecked(value, strict=strict, allow_legacy=allow_legacy)
+        return _validated_snapshot_from_dict(value, strict=strict)
+
+    @classmethod
+    def _from_dict_unchecked(
         cls,
         value: Mapping[str, Any],
         *,
@@ -1154,7 +1191,7 @@ class RecognitionBinding:
                     item.host_raw_end_utf16,
                     item.host_canonical_start_utf16,
                     item.host_canonical_end_utf16,
-                    dict(item.preconditions),
+                    _stable_preconditions(item.preconditions),
                 )
                 for item in self.blocks
             ],
@@ -1176,9 +1213,16 @@ class RecognitionBinding:
         confirmed = sum(1 for item in self.blocks if item.binding_status == "confirmed")
         review = sum(1 for item in self.blocks if item.binding_status == "review")
         unresolved = sum(1 for item in self.blocks if item.binding_status == "unresolved")
-        complete_groups = sum(
-            1 for item in self.physical_paragraphs if item.status in {"matched_unique", "matched_review"}
-        )
+        blocks_by_group: Dict[str, list[BoundRecognitionBlock]] = {}
+        for block in self.blocks:
+            blocks_by_group.setdefault(block.physical_group_id, []).append(block)
+        complete_groups = 0
+        for item in self.physical_paragraphs:
+            group_blocks = blocks_by_group.get(item.physical_group_id, ())
+            if item.status in {"matched_unique", "matched_review"} and group_blocks and all(
+                block.binding_status in {"confirmed", "review"} for block in group_blocks
+            ):
+                complete_groups += 1
         incomplete_groups = len(self.physical_paragraphs) - complete_groups
         return {
             "total_blocks": len(self.blocks),
@@ -1216,6 +1260,12 @@ class RecognitionBinding:
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any], *, strict: bool = False) -> "RecognitionBinding":
+        from .validation import recognition_binding_from_dict as _validated_binding_from_dict
+
+        return _validated_binding_from_dict(value, strict=strict)
+
+    @classmethod
+    def _from_dict_unchecked(cls, value: Mapping[str, Any], *, strict: bool = False) -> "RecognitionBinding":
         if not isinstance(value, Mapping):
             raise InvalidRecognitionBindingError("RecognitionBinding 必须是 JSON 对象")
         if strict and value.get("schema_version") != RECOGNITION_BINDING_SCHEMA_VERSION:
@@ -1268,11 +1318,15 @@ class RecognitionBinding:
 
 
 def recognition_plan_from_dict(value: Mapping[str, Any], *, strict: bool = False) -> RecognitionPlan:
-    return RecognitionPlan.from_dict(value, strict=strict)
+    from .validation import recognition_plan_from_dict as _validated_plan_from_dict
+
+    return _validated_plan_from_dict(value, strict=strict)
 
 
 def recognition_request_from_dict(value: Mapping[str, Any], *, strict: bool = False) -> RecognitionRequest:
-    return RecognitionRequest.from_dict(value, strict=strict)
+    from .validation import recognition_request_from_dict as _validated_request_from_dict
+
+    return _validated_request_from_dict(value, strict=strict)
 
 
 def host_snapshot_from_dict(
@@ -1281,11 +1335,38 @@ def host_snapshot_from_dict(
     strict: bool = False,
     allow_legacy: bool = True,
 ) -> HostSnapshot:
-    return HostSnapshot.from_dict(value, strict=strict, allow_legacy=allow_legacy)
+    if allow_legacy and isinstance(value, Mapping) and not value.get("schema_version"):
+        return HostSnapshot._from_dict_unchecked(value, strict=strict, allow_legacy=allow_legacy)
+    from .validation import host_snapshot_from_dict as _validated_snapshot_from_dict
+
+    return _validated_snapshot_from_dict(value, strict=strict)
 
 
 def recognition_binding_from_dict(value: Mapping[str, Any], *, strict: bool = False) -> RecognitionBinding:
-    return RecognitionBinding.from_dict(value, strict=strict)
+    from .validation import recognition_binding_from_dict as _validated_binding_from_dict
+
+    return _validated_binding_from_dict(value, strict=strict)
+
+
+def _recognition_plan_from_dict_unchecked(value: Mapping[str, Any], *, strict: bool = False) -> RecognitionPlan:
+    return RecognitionPlan._from_dict_unchecked(value, strict=strict)
+
+
+def _recognition_request_from_dict_unchecked(value: Mapping[str, Any], *, strict: bool = False) -> RecognitionRequest:
+    return RecognitionRequest._from_dict_unchecked(value, strict=strict)
+
+
+def _host_snapshot_from_dict_unchecked(
+    value: Mapping[str, Any],
+    *,
+    strict: bool = False,
+    allow_legacy: bool = True,
+) -> HostSnapshot:
+    return HostSnapshot._from_dict_unchecked(value, strict=strict, allow_legacy=allow_legacy)
+
+
+def _recognition_binding_from_dict_unchecked(value: Mapping[str, Any], *, strict: bool = False) -> RecognitionBinding:
+    return RecognitionBinding._from_dict_unchecked(value, strict=strict)
 
 
 def summarize_host_snapshot(snapshot: HostSnapshot | Mapping[str, Any]) -> HostSnapshotSummary:
