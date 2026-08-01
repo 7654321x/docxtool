@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
-from typing import Tuple
+from typing import Callable, Iterable, Optional, Tuple
 
 from docxtool.document.effective_format import FORMAT_COVERAGE_CONFIRMED
 from docxtool.document.models import ParagraphFeatures
@@ -237,6 +237,92 @@ def apply_segment_format_features(
     child.italic_char_ratio = child.segment_italic_char_ratio
     child.explicitly_formatted_char_ratio = child.segment_explicit_format_ratio
     child.bold = child.segment_bold_char_ratio >= 0.5
+
+
+def build_segment_features(
+    parent: ParagraphFeatures,
+    start: int,
+    end: int,
+    *,
+    paragraph_index: int,
+    is_new_line: bool = False,
+    inline_lead_bold_func: Optional[Callable[[str, int, int, ParagraphFeatures], bool]] = None,
+) -> ParagraphFeatures:
+    """从父物理段特征构建一个逻辑段特征对象。
+
+    传入数据是父段特征、源文本范围、逻辑段序号、是否来自软换行和可选
+    行内加粗判断回调。返回值是已写入 locator、段内格式和强调标记的
+    `ParagraphFeatures`，不决定最终段落类型。
+    """
+    child = ParagraphFeatures(
+        font_name=parent.font_name,
+        font_size_pt=parent.font_size_pt,
+        bold=parent.bold,
+        alignment=parent.alignment,
+        style_name=parent.style_name,
+        numbering_prefix=parent.numbering_prefix,
+        paragraph_index=paragraph_index,
+        is_new_line=is_new_line,
+        dominant_font_name=parent.dominant_font_name,
+        weighted_font_size=parent.weighted_font_size,
+        max_font_size=parent.max_font_size,
+        min_font_size=parent.min_font_size,
+        bold_char_ratio=parent.bold_char_ratio,
+        italic_char_ratio=parent.italic_char_ratio,
+        explicitly_formatted_char_ratio=parent.explicitly_formatted_char_ratio,
+    )
+    set_source_locator(child, parent, start, end)
+    apply_segment_format_features(child, parent, start, end)
+    if inline_lead_bold_func is not None:
+        child.inline_lead_bold = inline_lead_bold_func(
+            parent.source_physical_text, start, end, parent
+        )
+    return child
+
+
+def build_unresolved_empty_segment_features(
+    parent: ParagraphFeatures,
+    *,
+    paragraph_index: int,
+) -> ParagraphFeatures:
+    """构建空可见文本逻辑段的未解析定位特征。
+
+    传入数据是父物理段特征和逻辑段序号。返回值是保留物理段来源、
+    标记 `SOURCE_RANGE_UNRESOLVED` 的 `ParagraphFeatures`，用于分节或
+    分页符空段占位，不决定最终段落类型。
+    """
+    child = ParagraphFeatures(
+        font_name=parent.font_name,
+        font_size_pt=parent.font_size_pt,
+        bold=parent.bold,
+        alignment=parent.alignment,
+        style_name=parent.style_name,
+        numbering_prefix=parent.numbering_prefix,
+        paragraph_index=paragraph_index,
+    )
+    child.source_physical_paragraph_index = parent.source_physical_paragraph_index
+    child.source_physical_text = parent.source_physical_text
+    child.source_canonical_text = canonicalize_text(parent.source_physical_text)
+    child.source_locator_warnings = ("SOURCE_RANGE_UNRESOLVED",)
+    return child
+
+
+def assign_segment_ordinals(features: Iterable[ParagraphFeatures]) -> None:
+    """为同一物理段拆出的逻辑段写入顺序号和总数。
+
+    传入数据是一组 `ParagraphFeatures`，函数返回 `None` 并原地写入
+    `segment_index` 与 `segment_count`。没有物理段索引的特征会被跳过。
+    """
+    physical_segments: dict[int, list[ParagraphFeatures]] = {}
+    for feature in features:
+        physical_index = feature.source_physical_paragraph_index
+        if physical_index is not None:
+            physical_segments.setdefault(physical_index, []).append(feature)
+    for features_for_physical in physical_segments.values():
+        total = len(features_for_physical)
+        for segment_index, feature in enumerate(features_for_physical):
+            feature.segment_index = segment_index
+            feature.segment_count = total
 
 
 def inherit_source_locator(

@@ -135,12 +135,13 @@ https://github.com/7654321x/docxtool.git
 | `src/docxtool/document/importing/images.py` | 图片和题注物理事实判断 | 只读取段落文本、样式和 OOXML 图片尺寸，不判断最终类型 |
 | `src/docxtool/document/importing/inline_tokens.py` | 行内 token 提取 | 只提取文本、制表符、软换行和分页符，不执行段落分类 |
 | `src/docxtool/document/importing/numbering.py` | 字面编号前缀提取 | 只返回文本开头编号形态，不决定标题层级 |
+| `src/docxtool/document/importing/relationships.py` | 导入前损坏关系修复 | 只在临时副本中删除 `Target="../NULL"` 的 OOXML 关系，不修改原文件和识别结果 |
 | `src/docxtool/document/importing/sections.py` | 分节和页眉页脚关系导入 | 只读取 sectPr 和关系部件，不修改分节布局 |
 | `src/docxtool/document/effective_format.py` | run、样式继承、主题字体的有效格式解析 |
 | `src/docxtool/document/source_tape.py` | 物理段落来源范围与 raw/canonical 坐标映射 |
 | `src/docxtool/document/models/` | 导入链路共享数据模型 | 为 importer、分段和 SDK 兼容入口提供稳定中间结构 |
-| `src/docxtool/document/normalization/` | 导入后的结构归一化 | 当前承载尾部附件、落款、日期顺序修正和诊断同步 |
-| `src/docxtool/document/segmentation/` | 物理段到逻辑段的分段辅助 | 当前承载来源定位、标题正文边界和软换行强结构判断 |
+| `src/docxtool/document/normalization/` | 导入后的结构归一化 | 当前承载基础文本清理、日期/附件/落款显示规范、尾部附件、落款、日期顺序修正和诊断同步 |
+| `src/docxtool/document/segmentation/` | 物理段到逻辑段的分段辅助 | 当前承载来源定位、标题正文边界、段内格式映射、软换行强结构判断和尾部正文候选边界扫描 |
 | `src/docxtool/document/classifier.py` | 文档模式和段落结构分类 |
 | `src/docxtool/document/letterhead_config.py` | 版头配置归一化和安全校验 |
 | `src/docxtool/document/recognition/` | 候选、Beam 解码、诊断、验证和兼容映射 |

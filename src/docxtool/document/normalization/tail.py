@@ -11,47 +11,18 @@ import hashlib
 import re
 from typing import Any, Optional
 
+from docxtool.document.normalization.dates import (
+    is_attachment_page_mark as _is_attachment_page_mark_text,
+    is_sign_date_text as _is_sign_date_text,
+    normalize_attachment_page_mark as _norm_attach_mark,
+    normalize_sign_date as _norm_sign_date,
+)
+from docxtool.document.normalization.signature import normalize_sign_org as _norm_sign_org
 from docxtool.document.recognition.validators import validate_diagnostics
 
 
-_CN_NUM2 = {
-    "零": 0,
-    "〇": 0,
-    "○": 0,
-    "一": 1,
-    "二": 2,
-    "两": 2,
-    "三": 3,
-    "四": 4,
-    "五": 5,
-    "六": 6,
-    "七": 7,
-    "八": 8,
-    "九": 9,
-}
-_CN_YEAR_DIGITS = {
-    "零": "0",
-    "〇": "0",
-    "○": "0",
-    "一": "1",
-    "二": "2",
-    "两": "2",
-    "三": "3",
-    "四": "4",
-    "五": "5",
-    "六": "6",
-    "七": "7",
-    "八": "8",
-    "九": "9",
-}
 _ATT_NOTE_RE = re.compile(r"^\s*附件\s*[:：]\s*(.*)$")
 _ATT_ITEM_RE = re.compile(r"^\s*\d+[.．、]\s*\S+")
-_ATT_PAGE_RE = re.compile(r"^\s*附件\s*([0-9一二三四五六七八九十百千]*)\s*$")
-_SIGN_DATE_RE = re.compile(
-    r"^\s*((?:19|20)\d{2}|[零〇○一二两三四五六七八九]{4})\s*年\s*"
-    r"([0-9]{1,2}|[零〇一二两三四五六七八九十]{1,3})\s*月\s*"
-    r"([0-9]{1,2}|[零〇一二两三四五六七八九十]{1,3})\s*日\s*$"
-)
 _SIGN_ORG_NEGATIVE_STARTS = ("以上", "请", "现将", "特此", "有关", "此")
 _SIGN_ORG_SUFFIX_RE = re.compile(
     r"(?:委员会|工作委员会|人民政府|人民法院|人民检察院|代表大会|"
@@ -59,88 +30,6 @@ _SIGN_ORG_SUFFIX_RE = re.compile(
     r"总工会|专班|小组|集团|公司|协会|学会|商会|医院|学院|学校|"
     r"大学|研究院|研究所|中心|局|厅|部|院|处|科|办|镇|乡)$"
 )
-
-
-def _cn2int(value: str) -> Optional[int]:
-    """Convert Arabic or simple Chinese numerals to int.
-
-    Input is a number string from a date or attachment mark.  The return value
-    is an integer when the text is understood, otherwise ``None``.
-    """
-    if not value:
-        return None
-    text = value.strip()
-    if text.isdigit():
-        return int(text)
-    if text in _CN_NUM2:
-        return _CN_NUM2[text]
-    total = 0
-    current = 0
-    used_unit = False
-    for character in text:
-        if character in _CN_NUM2:
-            current = _CN_NUM2[character]
-            continue
-        unit = {"十": 10, "百": 100, "千": 1000}.get(character)
-        if unit is None:
-            return None
-        used_unit = True
-        total += (current or 1) * unit
-        current = 0
-    return total + current if used_unit else None
-
-
-def _cn_year2int(value: str) -> Optional[int]:
-    """Convert a four-character Chinese year or digit year to int.
-
-    Input is the year capture from a sign-date pattern.  The return value is
-    the numeric year, or ``None`` when the year is not supported.
-    """
-    if not value:
-        return None
-    text = value.strip()
-    if text.isdigit():
-        return int(text)
-    digits = "".join(_CN_YEAR_DIGITS.get(character, "") for character in text)
-    return int(digits) if len(digits) == 4 else None
-
-
-def _norm_sign_date(text: str) -> str:
-    """Normalize a recognized signing date.
-
-    Input is a final ``sign_date`` paragraph text.  The return value is an
-    Arabic-number date when conversion is safe, otherwise the original text.
-    """
-    match = _SIGN_DATE_RE.match(text or "")
-    if not match:
-        return text
-    year = _cn_year2int(match.group(1))
-    month = _cn2int(match.group(2))
-    day = _cn2int(match.group(3))
-    return f"{year}年{month}月{day}日" if month and day else text
-
-
-def _norm_attach_mark(text: str) -> str:
-    """Normalize a recognized attachment page mark.
-
-    Input is a final attachment page marker such as ``附件一``.  The return
-    value is the canonical display text used by the renderer.
-    """
-    match = _ATT_PAGE_RE.match(text or "")
-    if not match:
-        return text
-    number_text = match.group(1)
-    normalized_number = _cn2int(number_text)
-    return f"附件 {normalized_number}" if normalized_number is not None else "附件"
-
-
-def _norm_sign_org(text: str) -> str:
-    """Normalize a recognized signing organization.
-
-    Input is a final ``sign_org`` text.  The return value removes only a leading
-    Chinese heading number prefix and keeps the organization name unchanged.
-    """
-    return re.sub(r"^\s*[一二三四五六七八九十百]+、\s*", "", text or "", count=1).strip()
 
 
 def _contains_colon(text: str) -> bool:
@@ -160,7 +49,7 @@ def _tail_source_text(paragraph: Any) -> str:
 
 def _is_attachment_page_mark(text: str) -> bool:
     """Return whether text is an already recognized attachment-page mark shape."""
-    return bool(_ATT_PAGE_RE.match((text or "").strip()))
+    return _is_attachment_page_mark_text(text)
 
 
 def _is_tail_signature_org_text(text: str) -> bool:
@@ -188,7 +77,7 @@ def _is_tail_structural_text(text: str) -> bool:
     return bool(
         _ATT_NOTE_RE.match(value)
         or _ATT_ITEM_RE.match(value)
-        or _SIGN_DATE_RE.match(value)
+        or _is_sign_date_text(value)
         or _is_attachment_page_mark(value)
         or _is_tail_signature_org_text(value)
     )

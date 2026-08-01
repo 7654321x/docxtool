@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import zipfile
+from xml.etree import ElementTree as ET
+
 from docx import Document
 from docx.enum.text import WD_BREAK
 from docx.oxml import OxmlElement
@@ -22,6 +25,7 @@ from docxtool.document.importing.numbering import (
     heading_style_prefix,
     word_list_level_prefix,
 )
+from docxtool.document.importing.relationships import repair_broken_rels
 from docxtool.document.importing.sections import (
     collect_section_header_footer_parts,
     extract_paragraph_sectPr,
@@ -166,3 +170,42 @@ def test_heading_style_prefix_supports_chinese_and_english_heading_names() -> No
     assert heading_style_prefix("Heading 1") == "@style_heading1"
     assert heading_style_prefix("标题 2") == "@style_heading2"
     assert heading_style_prefix("正文") == ""
+
+
+def test_repair_broken_rels_removes_null_relationship_from_temporary_copy(tmp_path) -> None:
+    """损坏关系修复应返回临时副本，并只删除 Target=../NULL 的关系。"""
+    source = tmp_path / "source.docx"
+    broken = tmp_path / "broken.docx"
+    document = Document()
+    document.add_paragraph("测试正文")
+    document.save(source)
+
+    rel_name = "word/_rels/document.xml.rels"
+    namespace = "http://schemas.openxmlformats.org/package/2006/relationships"
+    with zipfile.ZipFile(source) as input_archive, zipfile.ZipFile(
+        broken, "w", zipfile.ZIP_DEFLATED
+    ) as output_archive:
+        for item in input_archive.infolist():
+            data = input_archive.read(item)
+            if item.filename == rel_name:
+                root = ET.fromstring(data)
+                relationship = ET.SubElement(root, f"{{{namespace}}}Relationship")
+                relationship.set("Id", "rIdBrokenNull")
+                relationship.set(
+                    "Type",
+                    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image",
+                )
+                relationship.set("Target", "../NULL")
+                data = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+            output_archive.writestr(item, data)
+
+    repaired_path = repair_broken_rels(str(broken))
+
+    assert repaired_path != str(broken)
+    assert broken.exists()
+    with zipfile.ZipFile(repaired_path) as archive:
+        repaired_rels = ET.fromstring(archive.read(rel_name))
+    assert all(
+        (relationship.get("Target") or "").replace("\\", "/") != "../NULL"
+        for relationship in repaired_rels
+    )

@@ -34,6 +34,20 @@ from docxtool.document.normalization.tail import (
     normalize_tail_structures as _normalize_tail_structures,
     sync_recognition_consistency as _sync_recognition_consistency,
 )
+from docxtool.document.normalization.dates import (
+    chinese_number_to_int as _normalization_chinese_number_to_int,
+    chinese_year_to_int as _normalization_chinese_year_to_int,
+    is_attachment_page_mark as _normalization_is_attachment_page_mark,
+    is_sign_date_text as _normalization_is_sign_date_text,
+    normalize_attachment_page_mark as _normalization_normalize_attachment_page_mark,
+    normalize_sign_date as _normalization_normalize_sign_date,
+)
+from docxtool.document.normalization.signature import normalize_sign_org as _normalization_normalize_sign_org
+from docxtool.document.normalization.text import (
+    normalize_basic_text as _normalization_normalize_basic_text,
+    normalize_quotes as _normalization_normalize_quotes,
+    to_chinese_punctuation as _normalization_to_chinese_punctuation,
+)
 from docxtool.document.importing.images import (
     contains_visible_image as _contains_visible_image,
     is_object_caption as _is_object_caption,
@@ -55,6 +69,7 @@ from docxtool.document.importing.numbering import (
     heading_style_prefix as _importing_heading_style_prefix,
     word_list_level_prefix as _importing_word_list_level_prefix,
 )
+from docxtool.document.importing.relationships import repair_broken_rels as _repair_broken_rels
 from docxtool.document.recognition import apply_recognition
 from docxtool.document.recognition.colon import (
     analyze_colon_structure,
@@ -65,12 +80,21 @@ from docxtool.document.recognition.version import RECOGNITION_VERSION_TAG
 from docxtool.document.recognition.legacy import DetectionContext, ScoreBoard, ScoreDetail
 from docxtool.document.segmentation.source_locator import (
     apply_segment_format_features as _apply_segment_format_features,
+    assign_segment_ordinals as _assign_segment_ordinals,
+    build_segment_features as _build_segment_features,
+    build_unresolved_empty_segment_features as _build_unresolved_empty_segment_features,
     inherit_source_locator as _inherit_source_locator,
     set_source_locator as _set_source_locator,
     source_line_spans as _source_line_spans,
     trim_source_span as _trim_source_span,
     utf16_length_of as _utf16_length,
     visible_character_count as _visible_character_count,
+)
+from docxtool.document.segmentation.pipeline import (
+    build_logical_span_plan as _build_logical_span_plan,
+)
+from docxtool.document.segmentation.body_tail import (
+    find_last_body_candidate_index as _find_last_body_candidate_index,
 )
 from docxtool.document.segmentation.boundaries import (
     has_format_transition as _seg_has_format_transition,
@@ -83,7 +107,10 @@ from docxtool.document.segmentation.boundaries import (
     validate_numbered_heading_body_split as _seg_validate_numbered_heading_body_split,
     validate_source_span_partition as _seg_validate_source_span_partition,
 )
-from docxtool.document.source_tape import SourceTape, canonicalize_text
+from docxtool.document.segmentation.soft_breaks import (
+    should_split_structural_line_breaks as _seg_should_split_structural_line_breaks,
+)
+from docxtool.document.source_tape import SourceTape
 from docxtool.document.effective_format import (
     resolve_effective_run_format,
 )
@@ -159,7 +186,7 @@ def _is_strong_soft_line_structure(text: str) -> bool:
         text,
         detect_numbering_prefix_func=_detect_numbering_prefix,
         is_standalone_addressing_func=_is_standalone_addressing_text,
-        is_sign_date_func=lambda value: bool(_SIGN_DATE_RE2.match(value or "")),
+        is_sign_date_func=_normalization_is_sign_date_text,
         is_attachment_boundary_func=_is_attachment_boundary,
     )
 
@@ -175,7 +202,7 @@ def _split_structural_tail_after_numbered_heading(
         heading_body_spans,
         next_text,
         is_strong_soft_line_structure_func=_is_strong_soft_line_structure,
-        is_sign_date_func=lambda value: bool(_SIGN_DATE_RE2.match(value or "")),
+        is_sign_date_func=_normalization_is_sign_date_text,
         is_tail_signature_org_func=_is_tail_signature_org_text,
     )
 
@@ -369,19 +396,9 @@ def _detect_numbering_prefix(text: str) -> str:
 # V3 规则引擎 — 19 步优先级 + 独立 scorer + Flow 状态机
 # ═══════════════════════════════════════════════════════════════
 
-# ── 附件 / 落款 结构正则 + 中文数字 ──
-_CN_NUM2 = {"零":0,"〇":0,"○":0,"一":1,"二":2,"两":2,"三":3,"四":4,
-            "五":5,"六":6,"七":7,"八":8,"九":9}
-_CN_YEAR_DIGITS = {"零":"0", "〇":"0", "○":"0", "一":"1", "二":"2", "两":"2",
-                   "三":"3", "四":"4", "五":"5", "六":"6", "七":"7", "八":"8", "九":"9"}
+# ── 附件 / 落款 结构正则 ──
 _ATT_NOTE_RE = re.compile(r'^\s*附件\s*[:：]\s*(.*)$')
 _ATT_ITEM_RE = re.compile(r'^\s*\d+[.．、]\s*\S+')
-_ATT_PAGE_RE = re.compile(r'^\s*附件\s*([0-9一二三四五六七八九十百千]*)\s*$')
-_SIGN_DATE_RE2 = re.compile(
-    r'^\s*((?:19|20)\d{2}|[零〇○一二两三四五六七八九]{4})\s*年\s*'
-    r'([0-9]{1,2}|[零〇一二两三四五六七八九十]{1,3})\s*月\s*'
-    r'([0-9]{1,2}|[零〇一二两三四五六七八九十]{1,3})\s*日\s*$'
-)
 _REPORT_HEADING_STARTS = ("一年来", "五年来")
 _SIGN_ORG_NEGATIVE_STARTS = ("以上", "请", "现将", "特此", "有关", "此")
 _SIGN_ORG_SUFFIX_RE = re.compile(
@@ -392,65 +409,37 @@ _SIGN_ORG_SUFFIX_RE = re.compile(
 )
 
 def _is_body_context(ctx) -> bool:
+    """判断识别上下文是否已经处在正文或正文后结构中。"""
     return ctx.last_structural_type in ("body", "addressing",
         "attachment_note", "attachment_note_item", "attachment_body")
 
 def _cn2int(s: str):
-    if not s:
-        return None
-    s = s.strip()
-    if s.isdigit():
-        return int(s)
-    if s in _CN_NUM2:
-        return _CN_NUM2[s]
-    total = 0
-    current = 0
-    used_unit = False
-    for character in s:
-        if character in _CN_NUM2:
-            current = _CN_NUM2[character]
-            continue
-        unit = {"十": 10, "百": 100, "千": 1000}.get(character)
-        if unit is None:
-            return None
-        used_unit = True
-        total += (current or 1) * unit
-        current = 0
-    return total + current if used_unit else None
+    """兼容旧私有入口，传入数字文本，返回整数或 None。"""
+    return _normalization_chinese_number_to_int(s)
 
 def _cn_year2int(s: str):
-    if not s:
-        return None
-    s = s.strip()
-    if s.isdigit():
-        return int(s)
-    digits = "".join(_CN_YEAR_DIGITS.get(ch, "") for ch in s)
-    return int(digits) if len(digits) == 4 else None
+    """兼容旧私有入口，传入年份文本，返回整数年份或 None。"""
+    return _normalization_chinese_year_to_int(s)
 
 def _norm_sign_date(text: str) -> str:
-    m = _SIGN_DATE_RE2.match(text or "")
-    if not m:
-        return text
-    y, mo, d = _cn_year2int(m.group(1)), _cn2int(m.group(2)), _cn2int(m.group(3))
-    return f"{y}年{mo}月{d}日" if mo and d else text
+    """兼容旧私有入口，传入成文日期文本，返回规范化日期。"""
+    return _normalization_normalize_sign_date(text)
 
 def _norm_attach_mark(text: str) -> str:
-    m = _ATT_PAGE_RE.match(text or "")
-    if not m:
-        return text
-    no = m.group(1)
-    normalized_no = _cn2int(no)
-    return f"附件 {normalized_no}" if normalized_no is not None else "附件"
+    """兼容旧私有入口，传入附件页标识，返回规范化标识。"""
+    return _normalization_normalize_attachment_page_mark(text)
 
 def _is_attachment_page_mark(text: str) -> bool:
-    return bool(_ATT_PAGE_RE.match((text or "").strip()))
+    """传入段落文本，返回是否是附件页标识。"""
+    return _normalization_is_attachment_page_mark(text)
 
 def _is_attachment_boundary(text: str) -> bool:
     t = (text or "").strip()
     return bool(_ATT_NOTE_RE.match(t) or _is_attachment_page_mark(t))
 
 def _norm_sign_org(text: str) -> str:
-    return re.sub(r'^\s*[一二三四五六七八九十百]+、\s*', '', text or "", count=1).strip()
+    """兼容旧私有入口，传入落款单位文本，返回规范化单位名称。"""
+    return _normalization_normalize_sign_org(text)
 
 
 def _record_structural(ctx, type_id: str, text: str) -> None:
@@ -458,6 +447,7 @@ def _record_structural(ctx, type_id: str, text: str) -> None:
     ctx.last_structural_text = (text or "").strip()
 
 def _blocks_independent_sign_date(ctx) -> bool:
+    """判断上一结构文本是否阻止当前日期作为独立尾部日期。"""
     prev = (ctx.last_structural_text or "").strip()
     if not prev:
         return False
@@ -468,6 +458,7 @@ def _blocks_independent_sign_date(ctx) -> bool:
     return _contains_colon(prev)
 
 def _looks_like_sign_org(text: str, next_text: str, ctx) -> bool:
+    """综合上下文、下一段日期和机构形态判断落款单位候选。"""
     t = (text or "").strip()
     if not t or len(t) > 30:
         return False
@@ -475,15 +466,16 @@ def _looks_like_sign_org(text: str, next_text: str, ctx) -> bool:
         return False
     if any(c in t for c in ("。","；",";","：",":")):
         return False
-    if _ATT_NOTE_RE.match(t) or _SIGN_DATE_RE2.match(t):
+    if _ATT_NOTE_RE.match(t) or _normalization_is_sign_date_text(t):
         return False
     if not _is_body_context(ctx):
         return False
-    if not _SIGN_DATE_RE2.match(next_text or ""):
+    if not _normalization_is_sign_date_text(next_text or ""):
         return False
     return bool(_SIGN_ORG_SUFFIX_RE.search(t))
 
 def _heading_has_inline_body(text: str) -> bool:
+    """判断标题文本句号后是否粘连了足够长度的正文。"""
     period_pos = (text or "").find("。")
     return period_pos >= 0 and len(text[period_pos + 1:].strip()) >= 5
 
@@ -507,6 +499,7 @@ def _can_start_attachment_note(ctx) -> bool:
     )
 
 def _is_auto_numbered_item(feats: Optional[ParagraphFeatures]) -> bool:
+    """判断段落特征是否来自 Word 自动列表或标题样式编号。"""
     if not feats or not feats.numbering_prefix:
         return False
     return feats.numbering_prefix.startswith("@lvl_") or feats.numbering_prefix.startswith("@style_")
@@ -520,6 +513,34 @@ _HEADER_ROLE_KEYWORD_RE = re.compile(
 )
 _HEADER_DATE_LINE_RE = re.compile(r"^[（(]\s*(?:19|20)\d{2}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日")
 _OPENING_SPEECH_TITLE_RE = re.compile(r"^在[\u4e00-\u9fffA-Za-z0-9（）()、，,.·\-\s]{3,70}(?:上)?的?讲话$")
+
+
+def _is_structural_key_value_line(text: str) -> bool:
+    """传入一行文本，返回它是否是可作为软换行边界的键值结构。"""
+    return bool(_RESPONSIBILITY_LINE_RE.match(text or "") or _colon_bold_match(text or "") >= 0)
+
+
+def _is_role_name_line(text: str) -> bool:
+    """传入一行文本，返回它是否具备标题区职务姓名行形态。"""
+    value = text or ""
+    return bool(
+        re.fullmatch(r"[\u4e00-\u9fff、，,·]{2,28}\s{2,}[\u4e00-\u9fff·]{2,6}", value)
+        or (
+            re.search(
+                r"主任|书记|主席|部长|局长|处长|科长|市长|县长|区长|镇长|乡长|院长|校长|政委|组长|队长|秘书长|委员|常委|负责人",
+                value,
+            )
+            and re.search(r"\s{2,}", value)
+        )
+    )
+
+
+def _is_header_role_date_pair(role_line: str, date_line: str) -> bool:
+    """传入相邻两行文本，返回是否是文首职务姓名和括号日期组合。"""
+    return bool(
+        _HEADER_ROLE_KEYWORD_RE.search(role_line or "")
+        and _HEADER_DATE_LINE_RE.match(date_line or "")
+    )
 
 
 def _opening_speech_title_text(text: str, ctx) -> str | None:
@@ -545,70 +566,19 @@ def _strip_inferred_speech_numbering(text: str) -> str:
 
 
 def _should_split_structural_line_breaks(parts: list[str], next_text: str) -> bool:
-    """Split manual line breaks when they delimit known document structures."""
-    nonempty = [part.strip() for part in parts if part.strip()]
-    if len(nonempty) < 2:
-        return False
-    if any(_detect_numbering_prefix(part) for part in nonempty[1:]):
-        return True
-    # A numbered heading followed by a manually wrapped body paragraph is a
-    # common copy/paste artefact.  Keep the heading and the real body as two
-    # paragraphs instead of exporting the body with heading formatting.
-    if _detect_numbering_prefix(nonempty[0]) and len(nonempty) >= 2:
-        return True
-    # A leading dispatch number followed by title-area content is an
-    # incomplete letterhead, not a single body paragraph.  Keep each visible
-    # line independent so later letterhead detection can reason over it.
-    if _is_dispatch_number_line(nonempty[0]) and len(nonempty) >= 2:
-        return True
-    key_value_lines = sum(
-        1
-        for part in nonempty
-        if _RESPONSIBILITY_LINE_RE.match(part) or _colon_bold_match(part) >= 0
+    """兼容旧私有入口，传入软换行行文本，返回是否需要拆成逻辑段。"""
+    return _seg_should_split_structural_line_breaks(
+        parts,
+        next_text,
+        detect_numbering_prefix_func=_detect_numbering_prefix,
+        is_dispatch_number_line_func=_is_dispatch_number_line,
+        is_key_value_line_func=_is_structural_key_value_line,
+        is_sign_date_func=_normalization_is_sign_date_text,
+        is_attachment_boundary_func=_is_attachment_boundary,
+        is_tail_signature_org_func=_is_tail_signature_org_text,
+        is_role_name_line_func=_is_role_name_line,
+        is_header_role_date_pair_func=_is_header_role_date_pair,
     )
-    if key_value_lines >= 2:
-        return True
-    if (any(_SIGN_DATE_RE2.match(part) for part in nonempty[:2])
-            and any(_is_attachment_boundary(part) for part in nonempty[1:])):
-        return True
-
-    # A common manually edited tail keeps the issuing organization and date
-    # in one physical paragraph separated only by a soft line break.  Split
-    # that pair before classification; otherwise the whole paragraph falls
-    # through as body text and inherits justified body formatting.
-    if (
-        len(nonempty) == 2
-        and _is_tail_signature_org_text(nonempty[0])
-        and _SIGN_DATE_RE2.match(nonempty[1])
-    ):
-        return True
-
-    # A title block often uses soft line breaks and ends in "职务  姓名".
-    role_line = nonempty[-1]
-    if (re.fullmatch(r"[\u4e00-\u9fff、，,·]{2,28}\s{2,}[\u4e00-\u9fff·]{2,6}", role_line)
-            or (re.search(r"主任|书记|主席|部长|局长|处长|科长|市长|县长|区长|镇长|乡长|院长|校长|政委|组长|队长|秘书长|委员|常委|负责人", role_line)
-                and re.search(r"\s{2,}", role_line))):
-        return True
-
-    # Speech manuscripts commonly put “职务姓名” and a parenthesized meeting
-    # date/place on separate soft lines.  Split this reliable title-block pair
-    # before classification so it cannot inherit the body style.
-    if (
-        len(nonempty) >= 2
-        and _HEADER_ROLE_KEYWORD_RE.search(nonempty[0])
-        and _HEADER_DATE_LINE_RE.match(nonempty[1])
-    ):
-        return True
-
-    # A signature organization may be separated from the final body paragraph
-    # by manual blank lines; the following paragraph supplies the date boundary.
-    next_visible_line = next(
-        (part.strip() for part in (next_text or "").splitlines() if part.strip()),
-        "",
-    )
-    return bool(_SIGN_DATE_RE2.match(next_visible_line)
-                and len(role_line) <= 30
-                and not any(mark in role_line for mark in "。；;：:"))
 
 
 _DISPATCH_NUMBER_LINE_RE = re.compile(
@@ -725,7 +695,7 @@ def detect_structural_type(line: str, next_line: str, ctx,
             return "sign_org", {}, "", fixed
 
     # 4. 成文日期：紧接落款单位之后，自动规范化
-    if ctx.last_structural_type == "sign_org" and _SIGN_DATE_RE2.match(text):
+    if ctx.last_structural_type == "sign_org" and _normalization_is_sign_date_text(text):
         ctx.signature_complete = True
         fixed = _norm_sign_date(text)
         _record_structural(ctx, "sign_date", fixed)
@@ -733,7 +703,7 @@ def detect_structural_type(line: str, next_line: str, ctx,
 
     # 4b. 独立尾部日期：正文后、非附件页内，且后续只接附件边界或已到文末
     if (ctx.has_seen_real_body and not ctx.attachment_page_mode
-            and _SIGN_DATE_RE2.match(text)
+            and _normalization_is_sign_date_text(text)
             and (not next_text or _is_attachment_boundary(next_text))
             and not _blocks_independent_sign_date(ctx)):
         ctx.attachment_note_mode = False
@@ -794,53 +764,18 @@ _NB_FIXED_RE = re.compile(rf'^(?:{"|".join(map(re.escape, NB_FIXED))})') if NB_F
 
 
 def _normalize_text(text: str) -> str:
-    """统一括号 + 去零宽/全角空格（仅中文语境转换括号）。"""
-    text = re.sub(r'\(([\u4e00-\u9fff][^)]*[\u4e00-\u9fff])\)', r'（\1）', text)
-    text = re.sub(r'[\u200b\u3000\u00a0]', '', text)
-    return text
+    """兼容旧私有入口，传入文本并返回基础清理后的文本。"""
+    return _normalization_normalize_basic_text(text)
 
 
 def _to_chinese_punctuation(text: str) -> str:
-    """英文标点 → 中文标点（仅中文语境，避免误伤 URL、时间、金额、缩写）。"""
-    if not text:
-        return text
-    text = re.sub(r'(?<=[\u4e00-\u9fff])[:：]\s*', '：', text)
-    text = re.sub(r'(?<=[\u4e00-\u9fff]),\s*', '，', text)
-    text = re.sub(r'(?<=[\u4e00-\u9fff0-9]);\s*', '；', text)
-    text = re.sub(r'(?<=[\u4e00-\u9fff])\?', '？', text)
-    text = re.sub(r'(?<=[\u4e00-\u9fff])!', '！', text)
-    def full_stop(match):
-        # A malformed first-level heading can use ``二.标题``.  Keep that
-        # structural dot until the heading family is classified and rebuilt;
-        # converting it to a sentence period here destroys the only level cue.
-        prefix = text[:match.start()]
-        if re.fullmatch(r'[一二三四五六七八九十百千零〇]{1,5}', prefix):
-            return '.'
-        return '。'
-
-    text = re.sub(r'(?<=[\u4e00-\u9fff])\.(?=$|[\s\u4e00-\u9fff])', full_stop, text)
-    return text
+    """兼容旧私有入口，传入文本并返回中文语境标点转换结果。"""
+    return _normalization_to_chinese_punctuation(text)
 
 
 def _normalize_quotes(text: str) -> str:
-    """英文引号 → 中文引号。避免误伤英文单词内部的撇号（O'Reilly, don't）。"""
-    if not text:
-        return text
-    # 1. 双单引号作双引号：''text'' → "text"
-    text = re.sub(r"''(?=\S)", '\u201c', text)
-    text = re.sub(r"(?<=\S)''", '\u201d', text)
-    # 2. 半角双引号 → 全角（奇数位左引号，偶数位右引号）
-    parts = text.split('"')
-    if len(parts) > 1:
-        result = [parts[0]]
-        for i in range(1, len(parts)):
-            result.append('\u201c' if i % 2 == 1 else '\u201d')
-            result.append(parts[i])
-        text = ''.join(result)
-    # 3. 半角单引号：只处理中文语境，避免 O'Reilly / don't
-    text = re.sub(r"(?<![A-Za-z])'(?=[\u4e00-\u9fff])", '\u2018', text)
-    text = re.sub(r"(?<=[\u4e00-\u9fff])'(?![A-Za-z])", '\u2019', text)
-    return text
+    """兼容旧私有入口，传入文本并返回中文语境引号转换结果。"""
+    return _normalization_normalize_quotes(text)
 
 
 def _feature_bool(value, default: bool = False) -> bool:
@@ -1537,71 +1472,6 @@ def _key_to_row(key: str) -> int:
 # 导入器
 # ═══════════════════════════════════════════════════════════════
 
-def _repair_broken_rels(filepath: str) -> str:
-    """修复 .docx 中的损坏关系引用（如 Target="../NULL"）。
-
-    常见于 WPS / 在线工具生成的文档。返回修复后的临时文件路径。
-    """
-    import zipfile as _zipfile
-    import tempfile as _tempfile
-    import os as _os
-    from xml.etree import ElementTree as _ET
-
-    def remove_null_relationships(data: bytes) -> tuple[bytes, bool]:
-        root = _ET.fromstring(data)
-        removed = False
-        for relationship in list(root):
-            target = (relationship.get("Target") or "").replace("\\", "/")
-            if target == "../NULL":
-                root.remove(relationship)
-                removed = True
-        if not removed:
-            return data, False
-        return _ET.tostring(root, encoding="utf-8", xml_declaration=True), True
-
-    # 检查是否需要修复
-    need_fix = False
-    try:
-        with _zipfile.ZipFile(filepath, 'r') as z:
-            rels_items = [
-                item for item in z.infolist()
-                if item.filename.replace('\\', '/') == 'word/_rels/document.xml.rels'
-            ]
-            if len(rels_items) == 1:
-                _, need_fix = remove_null_relationships(z.read(rels_items[0]))
-    except Exception:
-        return filepath
-
-    if not need_fix:
-        return filepath
-
-    logger.info("[修复] 检测到损坏引用 Target=\"../NULL\"，自动修复…")
-    tmp = _tempfile.NamedTemporaryFile(
-        delete=False,
-        suffix='.docx',
-        dir=_os.path.dirname(_os.path.abspath(filepath)),
-    )
-    tmp.close()
-
-    try:
-        with _zipfile.ZipFile(filepath, 'r') as zin:
-            with _zipfile.ZipFile(tmp.name, 'w', _zipfile.ZIP_DEFLATED) as zout:
-                for item in zin.infolist():
-                    data = zin.read(item)
-                    if item.filename == 'word/_rels/document.xml.rels':
-                        data, _ = remove_null_relationships(data)
-                    zout.writestr(item, data)
-        logger.info("[修复] 损坏关系已写入任务临时副本")
-        return tmp.name
-    except Exception as e:
-        try:
-            _os.unlink(tmp.name)
-        except OSError:
-            logger.warning("[修复] 临时文件清理失败")
-        logger.warning("[修复] 失败: %s", type(e).__name__)
-        return filepath
-
-
 class DocxImporter:
     """.docx 文件导入器。"""
 
@@ -1779,29 +1649,6 @@ class DocxImporter:
         # 字符串再 find() 回原文，否则重复文字会被绑定到错误 occurrence。
         flat_lines = []  # text / table / image paragraph XML / protected caption XML
 
-        def source_features(parent, start, end, *, is_new_line=False):
-            child = ParagraphFeatures(
-                font_name=parent.font_name, font_size_pt=parent.font_size_pt,
-                bold=parent.bold, alignment=parent.alignment,
-                style_name=parent.style_name,
-                numbering_prefix=parent.numbering_prefix,
-                paragraph_index=len(flat_lines),
-                is_new_line=is_new_line,
-                dominant_font_name=parent.dominant_font_name,
-                weighted_font_size=parent.weighted_font_size,
-                max_font_size=parent.max_font_size,
-                min_font_size=parent.min_font_size,
-                bold_char_ratio=parent.bold_char_ratio,
-                italic_char_ratio=parent.italic_char_ratio,
-                explicitly_formatted_char_ratio=parent.explicitly_formatted_char_ratio,
-            )
-            _set_source_locator(child, parent, start, end)
-            _apply_segment_format_features(child, parent, start, end)
-            child.inline_lead_bold = _has_inline_lead_bold_transition(
-                parent.source_physical_text, start, end, parent
-            )
-            return child
-
         body_region_started = False
         for block_index, block in enumerate(raw_blocks):
             if block[0] != "paragraph":
@@ -1822,15 +1669,10 @@ class DocxImporter:
 
             if not source_spans:
                 if sectPr is not None or has_page_break:
-                    sub_pf = ParagraphFeatures(
-                        font_name=pf.font_name, font_size_pt=pf.font_size_pt,
-                        bold=pf.bold, alignment=pf.alignment, style_name=pf.style_name,
-                        numbering_prefix=pf.numbering_prefix, paragraph_index=len(flat_lines),
+                    sub_pf = _build_unresolved_empty_segment_features(
+                        pf,
+                        paragraph_index=len(flat_lines),
                     )
-                    sub_pf.source_physical_paragraph_index = pf.source_physical_paragraph_index
-                    sub_pf.source_physical_text = source
-                    sub_pf.source_canonical_text = canonicalize_text(source)
-                    sub_pf.source_locator_warnings = ("SOURCE_RANGE_UNRESOLVED",)
                     flat_lines.append(("text", "", sub_pf, [], sectPr))
                 continue
 
@@ -1841,65 +1683,39 @@ class DocxImporter:
                     if following_text:
                         break
 
-            source_lines = [source[start:end] for start, end in source_spans]
-            whole_start, whole_end = _trim_source_span(source, 0, len(source))
-            current_body_region = body_region_started or _source_starts_body_region(source)
-            should_split_inline_heading_body = (
-                structural_preservation
-                and (split_inline_heading_body or has_page_break)
+            span_plan = _build_logical_span_plan(
+                source,
+                source_spans,
+                body_region_started=body_region_started,
+                has_structural_inline=has_structural_inline,
+                has_page_break=has_page_break,
+                structural_preservation=structural_preservation,
+                split_inline_heading_body_enabled=split_inline_heading_body,
+                following_text=following_text,
+                features=pf,
+                source_starts_body_region_func=_source_starts_body_region,
+                split_inline_heading_body_spans_func=_split_inline_heading_body_spans,
+                validate_numbered_heading_body_split_func=_validate_numbered_heading_body_split,
+                should_split_structural_line_breaks_func=_should_split_structural_line_breaks,
+                split_structural_tail_after_numbered_heading_func=_split_structural_tail_after_numbered_heading,
+                validate_source_span_partition_func=_validate_source_span_partition,
             )
-            whole_heading_spans = (
-                _split_inline_heading_body_spans(
-                    source,
-                    whole_start,
-                    whole_end,
-                    pf,
-                    allow_visual_boundary=not current_body_region,
-                )
-                if should_split_inline_heading_body else [(whole_start, whole_end)]
-            )
-            if should_split_inline_heading_body:
-                _validate_numbered_heading_body_split(source, whole_heading_spans, pf)
-            split_soft_lines = (
-                len(source_spans) > 1
-                and _should_split_structural_line_breaks(source_lines, following_text)
-            )
-            split_inline_heading = len(whole_heading_spans) > 1
-
-            if split_inline_heading:
-                # Later run transitions stay inside the one body span.  Only
-                # explicit soft-line structures such as a standalone
-                # salutation may begin another logical block.
-                spans = _split_structural_tail_after_numbered_heading(
-                    source, whole_heading_spans, following_text
-                )
-                preserve_tokens = []
-            elif has_structural_inline and not split_soft_lines:
-                spans = [(whole_start, whole_end)]
-                preserve_tokens = list(inline_tokens) if source[whole_start:whole_end] == source else []
-            else:
-                spans = []
-                for start, end in source_spans:
-                    if should_split_inline_heading_body:
-                        spans.extend(_split_inline_heading_body_spans(
-                            source,
-                            start,
-                            end,
-                            pf,
-                            allow_visual_boundary=not current_body_region,
-                        ))
-                    else:
-                        spans.append((start, end))
-                preserve_tokens = []
-
-            _validate_source_span_partition(source, spans)
+            spans = span_plan.spans
+            preserve_tokens = list(inline_tokens) if span_plan.preserve_inline_tokens else []
 
             for li, (start, end) in enumerate(spans):
                 raw_fragment = source[start:end]
                 line = normalize_text(raw_fragment)
                 if not line:
                     continue
-                sub_pf = source_features(pf, start, end, is_new_line=li > 0)
+                sub_pf = _build_segment_features(
+                    pf,
+                    start,
+                    end,
+                    paragraph_index=len(flat_lines),
+                    is_new_line=li > 0,
+                    inline_lead_bold_func=_has_inline_lead_bold_transition,
+                )
                 sub_pf.numbering_prefix = pf.numbering_prefix if li == 0 else _detect_numbering_prefix(line)
                 sub_pf.segment_numbering_features = sub_pf.numbering_prefix
                 flat_lines.append((
@@ -1907,42 +1723,21 @@ class DocxImporter:
                     preserve_tokens if len(spans) == 1 else [],
                     sectPr if li == len(spans) - 1 else None,
                 ))
-            body_region_started = current_body_region
+            body_region_started = span_plan.current_body_region
 
-        # Segment numbering describes every logical block from the physical
-        # paragraph, including blocks whose source range later proves invalid.
-        # The SDK exposes separate total/located/confirmed counts.
-        physical_segments: Dict[int, List[ParagraphFeatures]] = {}
-        for item in flat_lines:
-            if item[0] != "text":
-                continue
-            feature = item[2]
-            physical_index = feature.source_physical_paragraph_index
-            if physical_index is not None:
-                physical_segments.setdefault(physical_index, []).append(feature)
-        for features_for_physical in physical_segments.values():
-            total = len(features_for_physical)
-            for segment_index, feature in enumerate(features_for_physical):
-                feature.segment_index = segment_index
-                feature.segment_count = total
+        _assign_segment_ordinals(
+            item[2] for item in flat_lines if item[0] == "text"
+        )
 
         ctx = DetectionContext()
-        # 预扫描：找到最后一个正文/标题行的位置，之后的区域视为文档尾部
-        last_body_idx = -1
-        for j in range(len(flat_lines)):
-            line_text = flat_lines[j][1] if flat_lines[j][0] == "text" else ""
-            if not line_text:
-                continue
-            # 排除附件/落款/日期等非正文内容
-            if re.match(r'^附件', line_text):
-                continue
-            if _SIGN_DATE_RE2.match(line_text):
-                continue
-            if re.match(r'^\d+[.．、]', line_text):
-                continue  # 附件条目
-            if _ATT_PAGE_RE.match(line_text):
-                continue  # 附件页标记
-            last_body_idx = j
+        # 预扫描只生成尾部边界事实，后续最终类型仍由识别链路决定。
+        last_body_idx = _find_last_body_candidate_index(
+            [item[1] if item[0] == "text" else "" for item in flat_lines],
+            is_attachment_start_func=lambda text: bool(re.match(r'^附件', text)),
+            is_sign_date_func=_normalization_is_sign_date_text,
+            is_attachment_item_func=lambda text: bool(re.match(r'^\d+[.．、]', text)),
+            is_attachment_page_mark_func=_is_attachment_page_mark,
+        )
         for i, item in enumerate(flat_lines):
             ctx._remaining_has_no_body = (i >= last_body_idx)
             if item[0] == "table":

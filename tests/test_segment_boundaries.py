@@ -14,7 +14,24 @@ from docxtool.document.importer import (
     _validate_source_span_partition,
     _validate_numbered_heading_body_split,
 )
+from docxtool.document.segmentation.soft_breaks import should_split_structural_line_breaks
 from docxtool.sdk import recognize_docx
+
+
+def _soft_break_decision(parts: list[str], next_text: str = "") -> bool:
+    """测试辅助：传入软换行行文本，返回新 Segmenter 的拆分决策。"""
+    return should_split_structural_line_breaks(
+        parts,
+        next_text,
+        detect_numbering_prefix_func=lambda text: "一、" if (text or "").startswith("一、") else "",
+        is_dispatch_number_line_func=lambda text: (text or "").startswith("发〔"),
+        is_key_value_line_func=lambda text: "责任单位：" in (text or ""),
+        is_sign_date_func=lambda text: bool((text or "").strip().endswith("日")),
+        is_attachment_boundary_func=lambda text: (text or "").strip().startswith("附件"),
+        is_tail_signature_org_func=lambda text: (text or "").strip() == "测试单位",
+        is_role_name_line_func=lambda text: "  " in (text or ""),
+        is_header_role_date_pair_func=lambda left, right: "主席" in (left or "") and (right or "").startswith("（"),
+    )
 
 
 def _features_for_visual_boundary(source: str, boundary: int) -> ParagraphFeatures:
@@ -53,6 +70,15 @@ def test_visual_title_terminator_can_split_without_numbering() -> None:
     assert [source[start:end] for start, end in spans] == [
         "关于推进工作的要求。", "各单位应当结合实际认真执行。",
     ]
+
+
+def test_soft_break_decision_uses_structural_evidence_without_final_type() -> None:
+    """软换行决策传入结构证据后，只返回是否拆段，不给出最终段落类型。"""
+    assert _soft_break_decision(["一、标题。", "正文继续说明。"])
+    assert _soft_break_decision(["责任单位：办公室", "责任单位：研究室"])
+    assert _soft_break_decision(["测试单位", "2026年5月1日"])
+    assert _soft_break_decision(["正文结束", "测试单位"], "2026年5月1日")
+    assert not _soft_break_decision(["普通正文第一行", "普通正文第二行"])
 
 
 def test_body_visual_emphasis_does_not_create_a_paragraph_boundary() -> None:
