@@ -71,14 +71,17 @@
 - `src/docxtool/web/task_result.py`：终态任务结果的数据库、内存状态和日志同步收口。
 - `src/docxtool/web/task_statistics.py`：任务结果统计写入、监控计数和 IP 聚合查询辅助。
 - `src/docxtool/web/task_state.py`：任务计数、队列位置、公开任务状态和识别摘要脱敏。
-- `src/docxtool/web/task_worker.py`：任务执行边界选择和后台 worker 线程启动辅助。
+- `src/docxtool/web/task_worker.py`：后台 worker 一次性启动、队列消费、内存处理中状态、子进程入口和超时清理辅助。
 - `src/docxtool/web/upload_route_handlers.py`：DOCX 上传限流、落盘、安全校验和任务入队编排辅助。
 - `src/docxtool/web/time_check.py`：启动时区和北京网络时间校验提示。
 - `src/docxtool/web/user_auth.py`：普通用户 session、登录 cookie、principal 和 CSRF 校验辅助。
+- `src/docxtool/application/process_document.py`：上传 DOCX 任务的应用层导入、识别、导出和结果编排。
 - `src/docxtool/document/models/`：导入、识别、规范化、渲染和 SDK 共享的稳定文档数据模型。
 - `src/docxtool/document/importer.py`：DOCX 结构识别、段落分类、元数据生成。
+- `src/docxtool/document/importing/`：DOCX 物理导入事实辅助，例如图片可见性、题注、行内 token、编号前缀和分节关系。
 - `src/docxtool/document/segmentation/`：逻辑段 source locator、可见文字守恒和段内格式特征映射。
 - `src/docxtool/document/normalization/`：识别完成后的尾部顺序、日期/附件显示规范和诊断一致性处理。
+- `src/docxtool/document/recognition/legacy/`：旧 importer 评分链路的兼容数据模型和后续隔离入口。
 - `src/docxtool/document/style_config.py`：样式规则、页面设置、日志配置。
 - `src/docxtool/document/engine/`：DOCX 导出和实际排版逻辑。
 - `src/docxtool/security/`：上传 DOCX 安全校验。

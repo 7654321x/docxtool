@@ -13,20 +13,19 @@ from __future__ import annotations
 import os
 import sys
 import json
-import multiprocessing as mp
 import uuid
 import time
 import socket
 import threading
 import logging
 import shutil
-from queue import Empty
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from collections import OrderedDict
 from urllib.parse import urlparse, parse_qs
 
 from docxtool.document.importer import DocxImporter
 from docxtool.document.engine import export_doc
+from docxtool.application.process_document import process_uploaded_docx_task as _application_process_uploaded_docx_task
 from docxtool.security import DocxIntegrityError, validate_docx_integrity
 from docxtool.security.docx_validator import DocxValidationError, detect_docx_complexity, validate_docx_upload
 from docxtool.document.style_config import (
@@ -349,6 +348,10 @@ from docxtool.web.task_route_handlers import (
 )
 from docxtool.web.task_result import record_task_result as _task_result_record
 from docxtool.web.task_worker import (
+    ensure_worker_threads_started as _task_worker_ensure_threads_started,
+    run_task_process_entry as _task_worker_run_process_entry,
+    run_task_in_subprocess as _task_worker_run_in_subprocess,
+    run_worker_loop as _task_worker_run_loop,
     run_task_with_execution_boundary as _task_worker_run_with_boundary,
     start_worker_threads as _task_worker_start_threads,
 )
@@ -593,7 +596,7 @@ TASKS = OrderedDict()
 TASKS_LOCK = threading.Lock()
 TASK_QUEUE = OrderedDict()
 QUEUE_COND = threading.Condition()
-WORKERS_STARTED = False
+WORKER_STATE = {"started": False}
 WORKERS_LOCK = threading.Lock()
 WORKER_THREADS = []
 
@@ -846,196 +849,53 @@ def _enqueue_task(task_id: str, input_path: str, orig_name: str, ip: str, ua: st
     )
 def _task_process_body(task_id: str, input_path: str, orig_name: str, ip: str, ua: str,
                        format_config: dict = None, request_meta: dict = None) -> dict:
-    """Run the actual DOCX pipeline and return a structured result.
-
-    该函数在子进程内执行时是识别和导出的进程边界：Web 线程只传入文件路径、
-    格式配置和脱敏请求元数据，子进程负责 DOCX 导入、识别、导出和完整性
-    校验。返回值必须是可序列化字典，且失败信息要经过脱敏，避免把正文、
-    绝对路径或 traceback 暴露给普通用户。
-    """
-    t0 = time.time()
-    request_meta = request_meta or {}
-    file_id = _safe_file_identifier(orig_name)
-    log_path = make_document_log_path("document", log_dir=LOG_DIR, suffix=task_id[:8])
-    log_filename = os.path.basename(log_path)
-    os.makedirs(os.path.dirname(log_path), exist_ok=True)
-    with open(log_path, "a", encoding="utf-8") as f:
-        f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} [INFO ] docx_tool | [Task] {task_id[:8]} log created file_id={file_id}\n")
-    token = set_context_log_path(log_path)
-    try:
-        rules, settings, features = load_rules_and_settings(format_config)
-        rules = rules or [StyleRule.default_for_row(i) for i in range(10)]
-        settings = settings or PageSettings()
-        features = features or {}
-        features.setdefault("numbered_bold_enabled", True)
-        features.setdefault("punctuation_enabled", True)
-        features.setdefault("page_number_enabled", True)
-        processing_options = features.setdefault("processing", {})
-        if not isinstance(processing_options, dict):
-            processing_options = {}
-            features["processing"] = processing_options
-        # Browser smart mode is structural preservation: split only reliable
-        # visual structure, then recognize and style it without rewriting the
-        # source text.  Strict mode remains available to explicit callers.
-        processing_options.setdefault(
-            "strategy",
-            str(request_meta.get("processing_strategy", "") or "structural"),
-        )
-        recognition_options = features.setdefault("recognition", {})
-        if not isinstance(recognition_options, dict):
-            recognition_options = {}
-            features["recognition"] = recognition_options
-        recognition_options.setdefault("mode", "authoritative")
-        for key, value in _core_feature_config_defaults().items():
-            features.setdefault(key, value)
-        body_rule = rules[5] if len(rules) > 5 else StyleRule.default_for_row(5)
-        letterhead_summary = features.get("letterhead", {})
-        letterhead_agencies = letterhead_summary.get("agencies", [])
-        logger.info(
-            f"[Task] {task_id[:8]} start file_id={file_id} log={log_filename} "
-            f"preset={request_meta.get('preset_name','')} mode={processing_options.get('strategy', 'structural')} "
-            f"frontend_config={bool(format_config)} body={body_rule.font}/{body_rule.font_size_label} "
-            f"margins=top{settings.margin_top_cm} bottom{settings.margin_bottom_cm} "
-            f"left{settings.margin_left_cm} right{settings.margin_right_cm} "
-            f"line_spacing={settings.line_spacing_value} numbered_bold_enabled={features['numbered_bold_enabled']} "
-            f"letterhead_enabled={bool(letterhead_summary.get('enabled', False))} "
-            f"letterhead_mode={letterhead_summary.get('issuance_mode', 'single')} "
-            f"letterhead_agencies={len(letterhead_agencies) if isinstance(letterhead_agencies, list) else 0} "
-            f"letterhead_scope={letterhead_summary.get('joint_mark_scope', 'all_agencies')}"
-        )
-        importer = DocxImporter()
-        doc_data = importer.load(
-            input_path,
-            rules,
-            features=features,
-            recognition_mode=str(recognition_options.get("mode", "authoritative")),
-        )
-        output_dir = _ensure_path_within(OUTPUT_DIR, _task_output_dir(task_id))
-        os.makedirs(output_dir, exist_ok=True)
-        output_path = _ensure_path_within(output_dir, _task_output_path(task_id))
-        download_name = _safe_download_filename(orig_name)
-        try:
-            export_stats = export_doc(
-                doc_data,
-                rules,
-                settings,
-                output_path,
-                numbered_bold_enabled=features["numbered_bold_enabled"],
-                page_number_enabled=features["page_number_enabled"],
-                numbering_options=features.get("numbering"),
-                page_number_options=features.get("page_number"),
-                signature_block_options=features.get("signature_block"),
-                table_format_options=features.get("table_format"),
-                cleanup_options=features.get("cleanup"),
-                letterhead_options=features.get("letterhead"),
-            )
-        except TypeError:
-            export_stats = export_doc(
-                doc_data,
-                rules,
-                settings,
-                output_path,
-                numbered_bold_enabled=features["numbered_bold_enabled"],
-            )
-        export_stats = export_stats or {}
-        try:
-            validate_docx_integrity(output_path)
-        except DocxIntegrityError as exc:
-            logger.error(
-                f"[Task] {task_id[:8]} generated DOCX integrity check failed "
-                f"code={exc.code} detail={exc.message}"
-            )
-            duration = round(time.time() - t0, 2)
-            return {
-                "status": "error",
-                "log_filename": log_filename,
-                "log_path": log_path,
-                "output_dir": output_dir,
-                "output_filename": "",
-                "output_path": "",
-                "duration_s": duration,
-                "duration_ms": int(duration * 1000),
-                "doc_mode": doc_data.doc_mode or "UNKNOWN",
-                "paragraphs": len(doc_data.paragraphs),
-                "headings": sum(1 for pd in doc_data.paragraphs if pd.type_id.startswith("heading")),
-                "body": sum(1 for pd in doc_data.paragraphs if pd.type_id == "body"),
-                "error": "",
-                "error_code": "OUTPUT_DOCX_INVALID",
-                "error_message": _sanitize_internal_error_detail(f"{exc.code}: {exc.message}"),
-                "recognition_summary": _public_recognition_summary(doc_data),
-            }
-        duration = round(time.time() - t0, 2)
-        hc = sum(1 for pd in doc_data.paragraphs if pd.type_id.startswith("heading"))
-        bc = sum(1 for pd in doc_data.paragraphs if pd.type_id == "body")
-        return {
-            "status": "done",
-            "log_filename": log_filename,
-            "log_path": log_path,
-            "output_dir": output_dir,
-            "output_filename": download_name,
-            "output_path": output_path,
-            "duration_s": duration,
-            "duration_ms": int(duration * 1000),
-            "doc_mode": doc_data.doc_mode or "UNKNOWN",
-            "paragraphs": len(doc_data.paragraphs),
-            "headings": hc,
-            "body": bc,
-            "error": "",
-            "error_code": "",
-            "error_message": "",
-            "recognition_summary": _public_recognition_summary(doc_data),
-            "compatibility_warnings": list(export_stats.get("compatibility_warnings", []) or []),
-        }
-    except Exception as exc:
-        logger.error("[Task] %s internal failure type=%s", task_id[:8], type(exc).__name__)
-        return {
-            "status": "error",
-            "log_filename": log_filename,
-            "log_path": log_path,
-            "output_dir": "",
-            "output_filename": "",
-            "output_path": "",
-            "duration_s": round(time.time() - t0, 2),
-            "duration_ms": 0,
-            "doc_mode": "",
-            "paragraphs": 0,
-            "headings": 0,
-            "body": 0,
-            "error": "",
-            "error_code": "TASK_PROCESSING_ERROR",
-            "error_message": _sanitize_internal_error_detail(exc),
-            "recognition_summary": {},
-        }
-    finally:
-        reset_context_log_path(token)
+    """兼容旧私有入口，传入任务参数并返回应用层 DOCX 处理结果字典。"""
+    return _application_process_uploaded_docx_task(
+        task_id,
+        input_path,
+        orig_name,
+        ip,
+        ua,
+        format_config,
+        request_meta,
+        log_dir=LOG_DIR,
+        output_root_dir=OUTPUT_DIR,
+        importer_factory=DocxImporter,
+        export_doc_func=export_doc,
+        load_rules_and_settings=load_rules_and_settings,
+        style_rule_cls=StyleRule,
+        page_settings_cls=PageSettings,
+        core_feature_defaults=_core_feature_config_defaults,
+        make_document_log_path=make_document_log_path,
+        set_context_log_path=set_context_log_path,
+        reset_context_log_path=reset_context_log_path,
+        task_output_dir=_task_output_dir,
+        task_output_path=_task_output_path,
+        ensure_path_within=_ensure_path_within,
+        safe_file_identifier=_safe_file_identifier,
+        safe_download_filename=_safe_download_filename,
+        sanitize_error=_sanitize_internal_error_detail,
+        public_recognition_summary=_public_recognition_summary,
+        validate_docx_integrity=validate_docx_integrity,
+        integrity_error_cls=DocxIntegrityError,
+        logger=logger,
+    )
 
 def _task_process_entry(result_queue, task_id: str, input_path: str, orig_name: str, ip: str, ua: str,
                         format_config: dict = None, request_meta: dict = None) -> None:
-    try:
-        result = _task_process_body(task_id, input_path, orig_name, ip, ua, format_config, request_meta)
-    except Exception as exc:
-        result = {
-            "status": "error",
-            "log_filename": "",
-            "log_path": "",
-            "output_dir": "",
-            "output_filename": "",
-            "output_path": "",
-            "duration_s": 0,
-            "duration_ms": 0,
-            "doc_mode": "",
-            "paragraphs": 0,
-            "headings": 0,
-            "body": 0,
-            "error": "",
-            "error_code": "TASK_PROCESSING_ERROR",
-            "error_message": _sanitize_internal_error_detail(f"{type(exc).__name__}: {exc}"),
-            "recognition_summary": {},
-        }
-    try:
-        result_queue.put(result)
-    except Exception:
-        pass
+    """兼容旧 spawn target，传入结果队列和任务参数，执行子进程任务并写回结果。"""
+    _task_worker_run_process_entry(
+        result_queue,
+        task_id,
+        input_path,
+        orig_name,
+        ip,
+        ua,
+        format_config,
+        request_meta,
+        process_task_body=_task_process_body,
+        sanitize_error=_sanitize_internal_error_detail,
+    )
 
 def _task_process_direct(task_id: str, input_path: str, orig_name: str, ip: str, ua: str,
                          format_config: dict = None, request_meta: dict = None) -> dict:
@@ -1043,71 +903,23 @@ def _task_process_direct(task_id: str, input_path: str, orig_name: str, ip: str,
 
 def _task_process_subprocess(task_id: str, input_path: str, orig_name: str, ip: str, ua: str,
                              format_config: dict = None, request_meta: dict = None) -> dict:
-    """Execute one task in a spawned child process with a hard timeout.
+    """兼容旧私有入口，传入任务参数后在 spawn 子进程内执行并返回结果字典。"""
+    import multiprocessing as mp
 
-    worker 线程不能直接信任 DOCX 解析和 OOXML 导出过程；spawn 子进程隔离
-    崩溃、死循环和内存污染。超时后先 terminate，再 kill，随后清理本轮输出
-    目录；已接收的原始上传由永久保留策略保护，不在这里删除。
-    """
-    ctx = mp.get_context("spawn")
-    result_queue = ctx.Queue()
-    process = ctx.Process(
-        target=_task_process_entry,
-        args=(result_queue, task_id, input_path, orig_name, ip, ua, format_config, request_meta),
-        daemon=True,
+    return _task_worker_run_in_subprocess(
+        task_id,
+        input_path,
+        orig_name,
+        ip,
+        ua,
+        format_config,
+        request_meta,
+        process_timeout=PROCESS_TIMEOUT,
+        context_factory=mp.get_context,
+        process_target=_task_process_entry,
+        cleanup_output_path=_cleanup_output_path,
+        task_output_dir=_task_output_dir,
     )
-    process.start()
-    process.join(PROCESS_TIMEOUT)
-    if process.is_alive():
-        process.terminate()
-        process.join(5)
-        if process.is_alive():
-            try:
-                process.kill()
-            except Exception:
-                pass
-            process.join(5)
-        _cleanup_output_path(_task_output_dir(task_id))
-        return {
-            "status": "timeout",
-            "log_filename": "",
-            "log_path": "",
-            "output_dir": "",
-            "output_filename": "",
-            "output_path": "",
-            "duration_s": PROCESS_TIMEOUT,
-            "duration_ms": PROCESS_TIMEOUT * 1000,
-            "doc_mode": "",
-            "paragraphs": 0,
-            "headings": 0,
-            "body": 0,
-            "error": f"排版超时：超过 {PROCESS_TIMEOUT} 秒",
-            "error_code": "TASK_TIMEOUT",
-            "error_message": f"排版超时：超过 {PROCESS_TIMEOUT} 秒",
-        }
-    try:
-        result = result_queue.get(timeout=2)
-    except Empty:
-        result = {
-            "status": "error",
-            "log_filename": "",
-            "log_path": "",
-            "output_dir": "",
-            "output_filename": "",
-            "output_path": "",
-            "duration_s": 0,
-            "duration_ms": 0,
-            "doc_mode": "",
-            "paragraphs": 0,
-            "headings": 0,
-            "body": 0,
-            "error": f"子进程未返回结果，退出码={process.exitcode}",
-            "error_code": "TASK_PROCESSING_ERROR",
-            "error_message": f"子进程未返回结果，退出码={process.exitcode}",
-        }
-    if result.get("status") != "done":
-        _cleanup_output_path(_task_output_dir(task_id))
-    return result
 
 def _record_task_result(task_id: str, input_path: str, orig_name: str, ip: str, ua: str, result: dict) -> None:
     """兼容旧私有入口，传入任务结果，统一同步数据库、内存状态和日志。"""
@@ -1130,30 +942,26 @@ def _record_task_result(task_id: str, input_path: str, orig_name: str, ip: str, 
     )
 
 def _worker_loop():
-    """Consume queued tasks sequentially inside one daemon worker thread."""
-    while True:
-        with QUEUE_COND:
-            while not TASK_QUEUE:
-                QUEUE_COND.wait()
-            task_id, payload = TASK_QUEUE.popitem(last=False)
-        input_path, orig_name, ip, ua, format_config, request_meta = payload
-        _mark_task_processing(task_id)
-        with TASKS_LOCK:
-            task = TASKS.get(task_id, {})
-            task["status"] = "processing"
-            task["started_at"] = time.time()
-            task["queue_ahead"] = 0
-            task["queue_position"] = 0
-            TASKS[task_id] = task
-        _process_task(task_id, input_path, orig_name, ip, ua, format_config, request_meta)
+    """兼容旧私有入口，传入全局队列和回调后持续消费后台任务。"""
+    _task_worker_run_loop(
+        TASK_QUEUE,
+        QUEUE_COND,
+        TASKS,
+        TASKS_LOCK,
+        mark_task_processing=_mark_task_processing,
+        process_task=_process_task,
+    )
 
 def _ensure_workers_started():
-    global WORKERS_STARTED
-    with WORKERS_LOCK:
-        if WORKERS_STARTED:
-            return
-        WORKER_THREADS.extend(_task_worker_start_threads(MAX_WORKERS, _worker_loop))
-        WORKERS_STARTED = True
+    """兼容旧私有入口，传入 worker 状态和启动回调，确保后台线程只启动一次。"""
+    _task_worker_ensure_threads_started(
+        WORKER_THREADS,
+        WORKERS_LOCK,
+        WORKER_STATE,
+        max_workers=MAX_WORKERS,
+        worker_target=_worker_loop,
+        start_threads=_task_worker_start_threads,
+    )
 
 def _process_task(task_id: str, input_path: str, orig_name: str = "upload.docx", ip: str = "", ua: str = "",
                   format_config: dict = None, request_meta: dict = None):

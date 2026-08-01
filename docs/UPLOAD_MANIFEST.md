@@ -67,7 +67,9 @@ https://github.com/7654321x/docxtool.git
 | `src/docxtool/auth/passwords.py` | Argon2id 密码哈希与校验 |
 | `src/docxtool/auth/service.py` | 用户名和密码输入归一化及验证 |
 | `src/docxtool/web/__init__.py` | Web 包入口 |
-| `src/docxtool/web/app.py` | Web 服务入口、上传下载、任务队列、管理后台、健康检查 |
+| `src/docxtool/web/app.py` | Web 服务兼容入口、路由 facade 和全局依赖注入 |
+| `src/docxtool/application/__init__.py` | 应用层包入口 | 标记应用层编排模块 |
+| `src/docxtool/application/process_document.py` | 上传 DOCX 任务应用层编排 | 串联 Importer、Recognition、Renderer 和完整性校验，不实现识别规则 |
 | `src/docxtool/web/admin_access.py` | 管理员请求上下文和 POST CSRF 校验 | 只消费已解析上下文、请求参数和请求头 |
 | `src/docxtool/web/admin_actions.py` | 管理员监控动作参数解析 | 只处理 IP、封禁原因和上传限制表单值 |
 | `src/docxtool/web/admin_auth.py` | 管理员 session、legacy token 和 CSRF 校验 | 通过注入的数据库连接器和密钥配置工作 |
@@ -121,7 +123,7 @@ https://github.com/7654321x/docxtool.git
 | `src/docxtool/web/task_result.py` | 终态任务结果同步收口 | 同步统计、内存状态、失败清理和脱敏日志，不执行 DOCX |
 | `src/docxtool/web/task_statistics.py` | 任务结果统计、按日汇总和监控聚合查询 | 只读写统计字段，不生成 HTML 或执行 DOCX |
 | `src/docxtool/web/task_state.py` | 任务计数、队列位置、公开状态和识别摘要 | 只处理传入的任务/队列容器和脱敏摘要，不直接访问路由 |
-| `src/docxtool/web/task_worker.py` | 任务执行边界选择和后台 worker 启动 | 只编排 direct/subprocess runner 和线程启动，不执行识别规则 |
+| `src/docxtool/web/task_worker.py` | 后台 worker 生命周期和执行边界 | 只编排一次性启动、队列弹出、内存状态、子进程入口和超时清理，不执行识别规则 |
 | `src/docxtool/web/upload_route_handlers.py` | DOCX 上传限流、落盘、校验和任务入队 | 只编排上传请求，不执行 DOCX 识别或导出 |
 | `src/docxtool/web/time_check.py` | 启动时区和网络时间校验辅助 | 只生成启动提示，不影响服务启动流程 |
 | `src/docxtool/web/user_auth.py` | 普通用户 session、登录 cookie、principal 和 CSRF 校验 | 通过注入的数据库连接器和匿名身份解析函数工作 |
@@ -129,6 +131,11 @@ https://github.com/7654321x/docxtool.git
 | `src/docxtool/sdk/binding.py` | 宿主无关的识别计划绑定 | 对本地段落快照保序验证，不调用 WPS API |
 | `src/docxtool/document/__init__.py` | 文档处理包入口 |
 | `src/docxtool/document/importer.py` | DOCX 结构识别、段落分类、元数据生成 |
+| `src/docxtool/document/importing/__init__.py` | DOCX 物理导入层包入口 | 标记 importing 模块 |
+| `src/docxtool/document/importing/images.py` | 图片和题注物理事实判断 | 只读取段落文本、样式和 OOXML 图片尺寸，不判断最终类型 |
+| `src/docxtool/document/importing/inline_tokens.py` | 行内 token 提取 | 只提取文本、制表符、软换行和分页符，不执行段落分类 |
+| `src/docxtool/document/importing/numbering.py` | 字面编号前缀提取 | 只返回文本开头编号形态，不决定标题层级 |
+| `src/docxtool/document/importing/sections.py` | 分节和页眉页脚关系导入 | 只读取 sectPr 和关系部件，不修改分节布局 |
 | `src/docxtool/document/effective_format.py` | run、样式继承、主题字体的有效格式解析 |
 | `src/docxtool/document/source_tape.py` | 物理段落来源范围与 raw/canonical 坐标映射 |
 | `src/docxtool/document/models/` | 导入链路共享数据模型 | 为 importer、分段和 SDK 兼容入口提供稳定中间结构 |
@@ -139,6 +146,8 @@ https://github.com/7654321x/docxtool.git
 | `src/docxtool/document/recognition/` | 候选、Beam 解码、诊断、验证和兼容映射 |
 | `src/docxtool/document/recognition/colon.py` | 共享冒号结构分析 | 只输出称呼、机构标签、键值和解释性正文证据，不直接定型 |
 | `src/docxtool/document/recognition/global_context.py` | 文首结构、正文边界和同级标题族的全文只读分析 |
+| `src/docxtool/document/recognition/legacy/__init__.py` | 旧识别兼容包入口 | 暴露 legacy 评分数据模型 |
+| `src/docxtool/document/recognition/legacy/scoring.py` | 旧 importer 评分数据模型 | 保存 ScoreBoard、ScoreDetail 和 DetectionContext，不实现新识别规则 |
 | `src/docxtool/document/style_config.py` | 样式规则、页面设置、日志配置、默认配置读取 |
 | `src/docxtool/resources/__init__.py` | 打包资源包入口 |
 | `src/docxtool/resources/config/default-format.json` | 默认公文格式配置，随 wheel 安装 |

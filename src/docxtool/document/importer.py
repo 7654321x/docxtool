@@ -16,9 +16,8 @@ import copy
 import hashlib
 import os
 import re
-from dataclasses import dataclass, field
 from types import SimpleNamespace
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 from docxtool.document.classifier import ClassificationOptions, classify_paragraphs
 from docxtool.document.models import (
@@ -35,6 +34,27 @@ from docxtool.document.normalization.tail import (
     normalize_tail_structures as _normalize_tail_structures,
     sync_recognition_consistency as _sync_recognition_consistency,
 )
+from docxtool.document.importing.images import (
+    contains_visible_image as _contains_visible_image,
+    is_object_caption as _is_object_caption,
+    is_object_caption_text as _is_object_caption_text,
+    is_standalone_image_paragraph as _is_standalone_image_paragraph,
+)
+from docxtool.document.importing.inline_tokens import (
+    extract_inline_tokens,
+    inline_tokens_text,
+    normalize_inline_tokens as _importing_normalize_inline_tokens,
+)
+from docxtool.document.importing.sections import (
+    collect_section_header_footer_parts,
+    extract_paragraph_sectPr,
+)
+from docxtool.document.importing.numbering import (
+    NUMBERING_PATTERNS as _NUMBERING_PATTERNS,
+    detect_numbering_prefix as _importing_detect_numbering_prefix,
+    heading_style_prefix as _importing_heading_style_prefix,
+    word_list_level_prefix as _importing_word_list_level_prefix,
+)
 from docxtool.document.recognition import apply_recognition
 from docxtool.document.recognition.colon import (
     analyze_colon_structure,
@@ -42,6 +62,7 @@ from docxtool.document.recognition.colon import (
     is_standalone_addressing_text,
 )
 from docxtool.document.recognition.version import RECOGNITION_VERSION_TAG
+from docxtool.document.recognition.legacy import DetectionContext, ScoreBoard, ScoreDetail
 from docxtool.document.segmentation.source_locator import (
     apply_segment_format_features as _apply_segment_format_features,
     inherit_source_locator as _inherit_source_locator,
@@ -203,23 +224,6 @@ def _validate_numbered_heading_body_split(
     )
 
 
-_OBJECT_CAPTION_RE = re.compile(
-    r"^(?:表|图)\s*(?:(?:[0-9一二三四五六七八九十百]+(?:[-—._、][0-9一二三四五六七八九十百]+)*).*|[:：].*|)$"
-)
-
-
-def _is_object_caption(paragraph) -> bool:
-    """Return whether a paragraph immediately below an object is a caption."""
-    text = paragraph.text.strip()
-    style_name = (paragraph.style.name or "") if paragraph.style else ""
-    return bool(text and (_OBJECT_CAPTION_RE.match(text) or style_name.lower() == "caption" or "题注" in style_name))
-
-
-def _is_standalone_image_paragraph(paragraph) -> bool:
-    """Return whether an image paragraph contains no surrounding body text."""
-    return not paragraph.text.strip()
-
-
 # ═══════════════════════════════════════════════════════════════
 # 特征提取
 # ═══════════════════════════════════════════════════════════════
@@ -322,38 +326,20 @@ def extract_features(paragraph, index: int) -> ParagraphFeatures:
 
     # Word 多级列表：ilvl → 项目里的标题级别（0=heading2, 1=heading3, 2+=heading4）
     try:
-        from docx.oxml.ns import qn as _qn2
-        pPr = paragraph._element.find(_qn2('w:pPr'))
-        if pPr is not None:
-            numPr = pPr.find(_qn2('w:numPr'))
-            if numPr is not None:
-                ilvl_el = numPr.find(_qn2('w:ilvl'))
-                lvl = int(ilvl_el.get(_qn2('w:val'), '0')) if ilvl_el is not None else 0
-                # 只要 Word 里确实存在自动编号/多级列表，且文本本身没有字面编号，
-                # 就保留层级信息，后续再结合上下文决定是标题还是附件项。
-                has_literal = bool(re.match(r'^[（\(]?\d+[）\)\.．]', text.strip()))
-                if not pf.numbering_prefix and not has_literal:
-                    pf.numbering_prefix = f"@lvl_{lvl}"
-                    logger.debug("[多级列表] ilvl=%s → heading%s chars=%s", lvl, lvl + 2, len(text))
+        word_prefix = _importing_word_list_level_prefix(paragraph._element, text)
+        if word_prefix and not pf.numbering_prefix:
+            pf.numbering_prefix = word_prefix
+            lvl = int(word_prefix[5:])
+            logger.debug("[多级列表] ilvl=%s → heading%s chars=%s", lvl, lvl + 2, len(text))
     except Exception as e:
         logger.debug(f"[多级列表] 提取失败: {e}")
 
     # Word 自动编号/样式检测
     try:
         # 样式名直接映射
-        style_name = pf.style_name.lower()
-        heading_styles = {
-            "heading 1": "heading1", "heading1": "heading1",
-            "标题 1": "heading1", "标题1": "heading1",
-            "heading 2": "heading2", "heading2": "heading2",
-            "标题 2": "heading2", "标题2": "heading2",
-            "heading 3": "heading3", "heading3": "heading3",
-            "标题 3": "heading3", "标题3": "heading3",
-            "heading 4": "heading4", "heading4": "heading4",
-            "标题 4": "heading4", "标题4": "heading4",
-        }
-        if style_name in heading_styles:
-            pf.numbering_prefix = f"@style_{heading_styles[style_name]}"
+        style_prefix = _importing_heading_style_prefix(pf.style_name)
+        if style_prefix:
+            pf.numbering_prefix = style_prefix
 
     except Exception:
         pass
@@ -361,217 +347,22 @@ def extract_features(paragraph, index: int) -> ParagraphFeatures:
     return pf
 
 
-def _contains_visible_image(paragraph_element) -> bool:
-    picts = paragraph_element.findall(
-        './/{http://schemas.openxmlformats.org/wordprocessingml/2006/main}pict'
-    )
-    if picts:
-        return True
-
-    drawings = paragraph_element.findall(
-        './/{http://schemas.openxmlformats.org/wordprocessingml/2006/main}drawing'
-    )
-    for drawing in drawings:
-        extents = [element for element in drawing.iter() if element.tag.endswith('}extent')]
-        if not extents:
-            return True
-        for extent in extents:
-            try:
-                if int(extent.get('cx', '0')) > 0 and int(extent.get('cy', '0')) > 0:
-                    return True
-            except ValueError:
-                return True
-    return False
-
-
-def extract_inline_tokens(paragraph) -> List[InlineToken]:
-    """Extract supported inline tokens without duplicating rendered page breaks."""
-    from docx.oxml.ns import qn as _qn
-
-    tokens: List[InlineToken] = []
-    for run in paragraph._element.findall(".//" + _qn("w:r")):
-        for child in run.iterchildren():
-            if child.tag == _qn("w:t"):
-                tokens.append(InlineToken("text", child.text or ""))
-            elif child.tag == _qn("w:tab"):
-                tokens.append(InlineToken("tab"))
-            elif child.tag == _qn("w:br"):
-                break_type = child.get(_qn("w:type"))
-                tokens.append(InlineToken("page_break" if break_type == "page" else "line_break"))
-            elif child.tag == _qn("w:cr"):
-                tokens.append(InlineToken("line_break"))
-            elif child.tag == _qn("w:lastRenderedPageBreak"):
-                continue
-    return tokens
-
-
-def inline_tokens_text(tokens: List[InlineToken]) -> str:
-    parts = []
-    for token in tokens or []:
-        if token.kind == "text":
-            parts.append(token.text)
-        elif token.kind == "tab":
-            parts.append("\t")
-        elif token.kind == "line_break":
-            parts.append("\n")
-    return "".join(parts)
-
-
 def _normalize_inline_tokens(tokens: List[InlineToken], punctuation_enabled: bool) -> List[InlineToken]:
-    if not punctuation_enabled:
-        return list(tokens or [])
-    normalized = []
-    for token in tokens or []:
-        if token.kind == "text":
-            normalized.append(InlineToken("text", _to_chinese_punctuation(_normalize_quotes(token.text))))
-        else:
-            normalized.append(token)
-    return normalized
-
-
-def extract_paragraph_sectPr(paragraph):
-    from docx.oxml.ns import qn as _qn
-
-    pPr = paragraph._element.find(_qn("w:pPr"))
-    if pPr is None:
-        return None
-    sectPr = pPr.find(_qn("w:sectPr"))
-    return copy.deepcopy(sectPr) if sectPr is not None else None
-
-
-def collect_section_header_footer_parts(doc, sectPr, data: DocumentData) -> None:
-    """Record source document relationships used by a section properties element."""
-    if sectPr is None:
-        return
-
-    from docx.oxml.ns import qn as _qn
-
-    for tag in ("w:headerReference", "w:footerReference"):
-        for ref in sectPr.findall(_qn(tag)):
-            rel_id = ref.get(_qn("r:id"))
-            if not rel_id or rel_id in data.section_relationship_parts:
-                continue
-            related = doc.part.related_parts.get(rel_id)
-            if related is not None:
-                data.section_relationship_parts[rel_id] = related
+    """兼容旧私有入口，传入 token 和标点开关，返回按 importer 标点策略处理后的 token。"""
+    return _importing_normalize_inline_tokens(
+        tokens,
+        enabled=punctuation_enabled,
+        normalize_text=lambda text: _to_chinese_punctuation(_normalize_quotes(text)),
+    )
 
 
 # ═══════════════════════════════════════════════════════════════
 # 编号前缀检测（仅用于提取特征，不做业务判定）
 # ═══════════════════════════════════════════════════════════════
 
-_NUMBERING_PATTERNS = [
-    (re.compile(r'^[一二三四五六七八九十百]+[、.．]+'), "chinese_dun"),
-    (re.compile(r'^[（\(][一二三四五六七八九十百]+[）\)]'), "chinese_paren"),
-    (re.compile(r'^\d+[.．]'), "digit_dot"),
-    (re.compile(r'^[（\(]\d+[）\)]'), "digit_paren"),
-    (re.compile(r'^\[(\d+)\]'), "bracket_ref"),
-    (re.compile(r'^-\s*\d+\s*-'), "page_num"),
-]
-
-
 def _detect_numbering_prefix(text: str) -> str:
     """检测文本中的编号前缀（仅特征提取，不判断类型）。"""
-    for pat, name in _NUMBERING_PATTERNS:
-        m = pat.match(text)
-        if m:
-            return m.group(0)
-    return ""
-
-
-# ═══════════════════════════════════════════════════════════════
-# 统一评分容器
-# ═══════════════════════════════════════════════════════════════
-
-@dataclass
-class ScoreDetail:
-    """某个候选类型的完整评分明细。"""
-    total: float = 0.0
-    reasons: List[Tuple[str, float]] = field(default_factory=list)  # [(来源, 分值), …]
-
-
-@dataclass
-class ScoreBoard:
-    """统一评分面板，保留完整评分链路（可解释）。"""
-    _scores: Dict[str, ScoreDetail] = field(default_factory=dict)
-
-    def add_pattern(self, type_id: str, score: float) -> None:
-        self._add(type_id, "pattern", score)
-
-    def add_rules(self, scores: Dict[str, float]) -> None:
-        for type_id, score in scores.items():
-            if score != 0:
-                self._add(type_id, "rule", score)
-
-    def add_context(self, type_id: str, score: float) -> None:
-        self._add(type_id, "context", score)
-
-    def _add(self, type_id: str, source: str, value: float) -> None:
-        if value == 0:
-            return
-        if type_id not in self._scores:
-            self._scores[type_id] = ScoreDetail()
-        self._scores[type_id].total += value
-        self._scores[type_id].reasons.append((source, value))
-
-    def winner(self) -> Tuple[str, ScoreDetail]:
-        """返回 (type_id, ScoreDetail)。无候选时返回 body。"""
-        if not self._scores:
-            detail = ScoreDetail()
-            detail.total = 10.0
-            detail.reasons.append(("default", 10.0))
-            return ("body", detail)
-        best = max(self._scores, key=lambda x: self._scores[x].total)
-        return best, self._scores[best]
-
-    def explain(self) -> List[dict]:
-        """结构化解释（供 UI 或高级 debug 使用）。"""
-        result = []
-        for type_id, detail in sorted(
-            self._scores.items(), key=lambda x: x[1].total, reverse=True
-        ):
-            result.append({
-                "type": type_id,
-                "score": detail.total,
-                "reasons": detail.reasons,
-            })
-        return result
-
-    def debug_log(self, para_index: int, text: str) -> None:
-        """输出完整评分明细到 DEBUG 日志。"""
-        logger.debug("[评分] para=%s chars=%s", para_index, len(text))
-        for item in self.explain():
-            parts = " + ".join(f"{s}={v:.0f}" for s, v in item["reasons"])
-            logger.debug(f"  {item['type']:15} = {item['score']:5.0f}  ({parts})")
-
-
-# ═══════════════════════════════════════════════════════════════
-# 上下文对象
-# ═══════════════════════════════════════════════════════════════
-
-@dataclass
-class DetectionContext:
-    """段落识别上下文，随遍历推进更新。"""
-    para_index: int = 0
-    prev_type_id: str = ""
-    has_seen_heading: bool = False
-    has_seen_body: bool = False
-    current_level: int = 0  # 0=无, 1=heading1, 2=heading2, 3=heading3, 4=heading4
-    doc_mode: str = ""       # 文种："" / "REPORT" / "NORMAL"（头部结束后自动锁定）
-    glossary_mode: bool = False  # 名词解释模式（title2="名词解释"后激活）
-    title_texts: list = field(default_factory=list)  # 头部标题文字（用于文种检测）
-
-    # ── 附件 / 落款 结构状态 ──
-    has_seen_real_body: bool = False
-    attachment_note_seen: bool = False
-    attachment_note_mode: bool = False
-    attachment_page_mode: bool = False
-    signature_seen: bool = False
-    signature_complete: bool = False
-    _remaining_has_no_body: bool = False  # 后面没有正文/标题了
-    last_structural_type: str = ""
-    last_structural_text: str = ""
-    attachment_note_next_no: int = 1
+    return _importing_detect_numbering_prefix(text)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1563,7 +1354,7 @@ def detect_paragraph_type(text: str, feats: ParagraphFeatures,
     prefix: str = ""
     from_word_structure = False
     score_log = []  # 收集各 scorer 得分
-    unbound_object_label = bool(_OBJECT_CAPTION_RE.match(text.strip()))
+    unbound_object_label = _is_object_caption_text(text)
 
     # 未紧邻对象的“表1/图2...”不再具备题注语义，应作为正文清理
     # 直接格式；真正题注已在 raw_blocks 阶段转换为受保护对象。

@@ -3,6 +3,15 @@
 ## 2.3 - 2026-08-01
 
 - Split Web request lifecycle, authorization, upload, monitor, page, health, and task-queue orchestration into focused modules while keeping `web/app.py` as the compatibility facade.
+- Moved Web worker queue consumption and in-memory processing-state updates behind the task worker facade.
+- Moved spawned subprocess timeout handling and child-result collection into the task worker boundary.
+- Moved subprocess entry result writing and fallback error shaping into the task worker boundary.
+- Moved one-time worker thread startup state handling into the task worker boundary.
+- Added an application-layer uploaded DOCX task processor facade so Web app code no longer owns the import/export result orchestration body.
+- Moved legacy importer scoring context models under `document/recognition/legacy` while preserving importer re-exports.
+- Moved image/caption physical facts and inline token extraction helpers under `document/importing`.
+- Moved section property and header/footer relationship collection helpers under `document/importing`.
+- Moved literal numbering-prefix extraction under `document/importing` while preserving importer compatibility wrappers.
 - Fixed authoritative recognition ownership so tail normalization no longer reclassifies body paragraphs after recognition.
 - Weakened legacy importer influence so it cannot hard-veto front metadata, headings, signature dates, or attachment decisions.
 - Made Beam Search diagnostics come from the final winning path instead of a temporary best prefix.

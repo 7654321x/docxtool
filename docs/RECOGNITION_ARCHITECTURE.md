@@ -93,9 +93,10 @@ IP 查询回调，不直接访问数据库、任务队列、HTTP handler 或 DOC
 该模块只消费 handler facade、管理员鉴权回调、统计查询回调和 HTML 渲染回调，不直接
 访问 SQLite、不读取任务表，也不触碰 DOCX 识别链路。
 
-任务执行边界选择和后台 worker 线程启动已迁移到 `src/docxtool/web/task_worker.py`。该模块
-只根据调用方传入的主线程判断、direct/subprocess runner 和记录回调编排任务执行，不导入、
-识别或导出 DOCX，也不持有数据库连接。
+后台 worker 一次性启动、队列消费、内存处理中状态写入、任务执行边界选择和子进程入口已迁移到
+`src/docxtool/web/task_worker.py`。该模块只根据调用方传入的队列、锁、状态容器、
+direct/subprocess runner、子进程 target、结果队列、清理回调和记录回调编排任务执行，
+不导入、识别或导出 DOCX，也不持有数据库连接。
 
 已校验上传任务的 queued 记录写入、内存队列写入和 worker 通知顺序已迁移到
 `src/docxtool/web/task_queue.py`。该模块只消费任务容器、锁、记录写入和队列信息回调，
@@ -104,6 +105,18 @@ IP 查询回调，不直接访问数据库、任务队列、HTTP handler 或 DOC
 DOCX 上传请求的限流、请求配置解析、临时落盘、安全校验、复杂度提示和任务入队编排已
 迁移到 `src/docxtool/web/upload_route_handlers.py`。该模块只消费 handler facade 和调用方注入的
 路径、校验、队列、响应构造回调，不直接执行 DOCX 识别、规范化或渲染。
+
+上传 DOCX 任务的应用层处理编排已迁移到 `src/docxtool/application/process_document.py`。该模块
+只串联调用方注入的 Importer、Renderer、完整性校验、路径、日志和脱敏辅助，负责生成 Web
+任务结果字典；具体段落拆分、识别候选、状态机、规范化和 DOCX 输出规则仍由原有文档层模块负责。
+
+旧 importer 评分链路的 `ScoreDetail`、`ScoreBoard` 和 `DetectionContext` 已迁移到
+`src/docxtool/document/recognition/legacy/scoring.py`。`document/importer.py` 继续 re-export
+这些类型以保持旧导入路径兼容；本次只移动数据模型，不改变 legacy scorer 的分数、状态推进或最终类型判断。
+
+图片可见性、表/图题注判断、行内 token 提取、字面编号前缀提取、分节属性和页眉页脚关系收集已迁移到
+`src/docxtool/document/importing/`。这些模块只读取 python-docx 段落对象和 OOXML 物理事实，
+不决定最终段落类型；`document/importer.py` 继续作为兼容编排入口调用它们。
 
 匿名 owner 的任务归属、私人模板归属和重名模板导入改名已迁移到
 `src/docxtool/web/owner_migration.py`。该模块只处理调用方传入的 SQLite 连接或连接器，
