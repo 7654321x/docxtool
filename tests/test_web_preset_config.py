@@ -5,12 +5,17 @@ import pytest
 from docxtool.web.preset_config import (
     normalize_template_id,
     normalize_template_name,
+    preset_error_from_exception,
+    preset_mutation_context,
     preset_row_to_dict,
+    preset_template_origin_error,
+    preset_user_csrf_error,
     validate_template_config,
 )
 
 
 def _core_defaults() -> dict:
+    """无需传入数据，返回模板配置测试使用的核心功能默认值。"""
     return {
         "punctuation": {"enabled": False},
         "classification": {"enabled": True},
@@ -92,3 +97,45 @@ def test_preset_row_to_dict_uses_empty_config_on_invalid_json() -> None:
     data = preset_row_to_dict({"config_json": "{bad", "is_system": 0, "is_default": 0}, include_config=True)
 
     assert data["config_json"] == {}
+
+
+def test_preset_error_from_exception_returns_code_message_and_status() -> None:
+    """模板异常解析应返回稳定错误码、提示文本和 HTTP 状态码。"""
+    assert preset_error_from_exception(ValueError("TEMPLATE_NAME_REQUIRED: 模板名称不能为空")) == (
+        "TEMPLATE_NAME_REQUIRED",
+        "模板名称不能为空",
+        400,
+    )
+
+
+def test_preset_mutation_context_describes_admin_or_private_scope() -> None:
+    """preset 变更上下文应区分管理员公共模板和用户私有模板。"""
+    assert preset_mutation_context(admin=True) == {
+        "owner_id": "",
+        "cookie_header": "",
+        "public_only": True,
+        "admin": True,
+    }
+    assert preset_mutation_context("usr_1", "anon=cookie") == {
+        "owner_id": "usr_1",
+        "cookie_header": "anon=cookie",
+        "public_only": False,
+        "admin": False,
+    }
+
+
+def test_preset_mutation_csrf_errors_are_stable() -> None:
+    """preset 变更来源和用户 CSRF 错误应返回稳定错误字段。"""
+    assert preset_template_origin_error() == ("CSRF_INVALID", "模板请求来源校验失败", 403)
+    assert preset_user_csrf_error() == ("CSRF_INVALID", "CSRF 校验失败", 403)
+    assert preset_error_from_exception(ValueError("TEMPLATE_NOT_FOUND: 模板不存在")) == (
+        "TEMPLATE_NOT_FOUND",
+        "模板不存在",
+        404,
+    )
+    assert preset_error_from_exception(ValueError("plain error")) == ("TEMPLATE_INVALID", "plain error", 400)
+    assert preset_error_from_exception(ValueError("TEMPLATE_NOT_FOUND: 模板不存在"), not_found_status=400) == (
+        "TEMPLATE_NOT_FOUND",
+        "模板不存在",
+        400,
+    )

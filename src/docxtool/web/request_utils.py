@@ -77,6 +77,24 @@ def route_path(path: str) -> str:
     return path[4:] if path.startswith("/api/") else path
 
 
+def prefixed_route_tail(path: str, *prefixes: str) -> str | None:
+    """传入请求路径和允许前缀，匹配时返回前缀后的资源 ID，否则返回 None。"""
+    path = path or ""
+    for prefix in prefixes:
+        if path.startswith(prefix):
+            return path.split("/", 2)[-1]
+    return None
+
+
+def prefixed_route_last_segment(path: str, *prefixes: str) -> str | None:
+    """传入请求路径和允许前缀，匹配时返回最后一段资源 ID，否则返回 None。"""
+    path = path or ""
+    for prefix in prefixes:
+        if path.startswith(prefix):
+            return path.split("/")[-1]
+    return None
+
+
 def json_dumps(obj: dict) -> str:
     """Serialize a JSON object with compact separators while preserving Chinese text."""
     return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))

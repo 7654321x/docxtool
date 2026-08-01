@@ -5,11 +5,18 @@ from __future__ import annotations
 from typing import Mapping
 from urllib.parse import parse_qs
 
+POST_ONLY_ACTION_PATHS = frozenset({"/ban", "/unban", "/limit", "/cleanup"})
+
 
 def query_ip_from_parsed_url(parsed) -> str:
     """传入已解析 URL，返回监控详情页中的 ip/addr 查询参数。"""
     values = parse_qs(parsed.query)
     return (values.get("ip") or values.get("addr") or [""])[0].strip()
+
+
+def is_post_only_action_path(path: str) -> bool:
+    """传入请求路径，返回是否为只能通过 POST 调用的管理员动作。"""
+    return str(path or "") in POST_ONLY_ACTION_PATHS
 
 
 def ip_from_action_params(params: Mapping[str, object] | None) -> str:

@@ -17,7 +17,6 @@ import multiprocessing as mp
 import uuid
 import time
 import hashlib
-import hmac
 import socket
 import threading
 import logging
@@ -69,10 +68,21 @@ from docxtool.web.anonymous_identity import (
     parse_anonymous_user as _anon_parse_user,
 )
 from docxtool.web.auth_payloads import (
+    auth_account_disabled_error as _auth_payloads_account_disabled_error,
+    auth_invalid_credentials_error as _auth_payloads_invalid_credentials_error,
+    auth_json_request_error as _auth_payloads_json_request_error,
+    auth_login_rate_limit_error as _auth_payloads_login_rate_limit_error,
     auth_me_data as _auth_payloads_me_data,
     auth_me_extra_headers as _auth_payloads_me_extra_headers,
-    auth_success_data as _auth_payloads_success_data,
-    is_json_content_type as _auth_payloads_is_json_content_type,
+    auth_logout_extra_headers as _auth_payloads_logout_extra_headers,
+    auth_logout_request_error as _auth_payloads_logout_request_error,
+    auth_logout_response as _auth_payloads_logout_response,
+    auth_register_error_from_exception as _auth_payloads_register_error_from_exception,
+    auth_register_rate_limit_error as _auth_payloads_register_rate_limit_error,
+    auth_session_extra_headers as _auth_payloads_session_extra_headers,
+    auth_success_response as _auth_payloads_success_response,
+    auth_validation_error_from_exception as _auth_payloads_validation_error_from_exception,
+    ok_data_response as _auth_payloads_ok_data_response,
 )
 from docxtool.web.admin_auth import (
     admin_authorized as _admin_auth_authorized,
@@ -87,12 +97,18 @@ from docxtool.web.admin_auth import (
     validate_admin_csrf as _admin_auth_validate_csrf,
 )
 from docxtool.web.admin_access import (
+    admin_csrf_invalid_error as _admin_access_csrf_invalid_error,
     admin_context_or_default as _admin_access_context_or_default,
+    admin_login_error as _admin_access_login_error,
+    admin_logout_cookie_header as _admin_access_logout_cookie_header,
     admin_post_csrf_allowed as _admin_access_post_csrf_allowed,
+    admin_session_payload as _admin_access_session_payload,
+    admin_unauthorized_error as _admin_access_unauthorized_error,
     csrf_token_from_admin_context as _admin_access_csrf_token,
 )
 from docxtool.web.admin_actions import (
     ban_reason_from_params as _admin_actions_ban_reason,
+    is_post_only_action_path as _admin_actions_is_post_only_path,
     ip_from_action_params as _admin_actions_ip_from_params,
     query_ip_from_parsed_url as _admin_actions_query_ip,
     upload_limit_values_from_params as _admin_actions_upload_limit_values,
@@ -155,6 +171,10 @@ from docxtool.web.owner_migration import (
     migrate_anonymous_resources as _owner_migration_migrate_resources,
 )
 from docxtool.web.preset_config import (
+    preset_error_from_exception as _preset_error_from_exception,
+    preset_mutation_context as _preset_mutation_context,
+    preset_template_origin_error as _preset_template_origin_error,
+    preset_user_csrf_error as _preset_user_csrf_error,
     normalize_template_id as _preset_normalize_template_id,
     normalize_template_name as _preset_normalize_template_name,
     preset_row_to_dict as _preset_row_to_dict_impl,
@@ -198,15 +218,37 @@ from docxtool.web.request_utils import (
     html_escape as _request_html_escape,
     json_dumps as _request_json_dumps,
     parse_json_body as _request_parse_json_body,
+    prefixed_route_last_segment as _request_prefixed_route_last_segment,
+    prefixed_route_tail as _request_prefixed_route_tail,
     route_path as _request_route_path,
 )
 from docxtool.web.request_params import request_params as _request_params_from_parts
 from docxtool.web.responses import (
-    auth_error_body as _responses_auth_error_body,
+    docx_download_headers as _responses_docx_download_headers,
+    file_expired_error as _responses_file_expired_error,
+    file_not_ready_error as _responses_file_not_ready_error,
+    incomplete_upload_error as _responses_incomplete_upload_error,
+    internal_server_error as _responses_internal_server_error,
+    invalid_task_id_error as _responses_invalid_task_id_error,
+    json_error_body as _responses_json_error_body,
+    json_response_headers as _responses_json_headers,
     json_response_bytes as _responses_json_bytes,
-    normalize_extra_headers as _responses_normalize_extra_headers,
+    log_not_found_error as _responses_log_not_found_error,
+    optional_set_cookie_headers as _responses_optional_set_cookie_headers,
+    queue_full_error as _responses_queue_full_error,
+    queued_upload_body as _responses_queued_upload_body,
+    redirect_headers as _responses_redirect_headers,
     retry_after_headers as _responses_retry_after_headers,
+    security_headers as _responses_security_headers,
+    task_not_found_error as _responses_task_not_found_error,
+    text_response_headers as _responses_text_headers,
     text_response_bytes as _responses_text_bytes,
+    upload_failed_error as _responses_upload_failed_error,
+    upload_file_too_large_error as _responses_upload_file_too_large_error,
+    upload_ip_banned_error as _responses_upload_ip_banned_error,
+    upload_limit_exceeded_error as _responses_upload_limit_exceeded_error,
+    upload_rate_limited_error as _responses_upload_rate_limited_error,
+    upload_timeout_error as _responses_upload_timeout_error,
 )
 from docxtool.web.secrets import (
     load_secret as _secrets_load_secret,
@@ -1409,6 +1451,14 @@ def _route_path(path: str) -> str:
     """兼容旧入口：归一化 Worker 转发路径。"""
     return _request_route_path(path)
 
+def _prefixed_route_tail(path: str, *prefixes: str) -> str | None:
+    """兼容旧入口：传入路径和前缀，返回匹配资源 ID 或 None。"""
+    return _request_prefixed_route_tail(path, *prefixes)
+
+def _prefixed_route_last_segment(path: str, *prefixes: str) -> str | None:
+    """兼容旧入口：传入路径和前缀，返回最后一段资源 ID 或 None。"""
+    return _request_prefixed_route_last_segment(path, *prefixes)
+
 def _json_dumps(obj: dict) -> str:
     """兼容旧入口：把响应对象序列化为紧凑 JSON 字符串。"""
     return _request_json_dumps(obj)
@@ -1737,9 +1787,8 @@ def _client_ip(headers, client_address) -> str:
 class Handler(BaseHTTPRequestHandler):
 
     def _set_security_headers(self):
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("X-Frame-Options", "DENY")
-        self.send_header("X-XSS-Protection", "1; mode=block")
+        for key, value in _responses_security_headers():
+            self.send_header(key, value)
 
     def _set_cors_headers(self):
         for key, value in cors_headers_for_request(self.headers.get("Origin", "")).items():
@@ -1787,30 +1836,24 @@ class Handler(BaseHTTPRequestHandler):
             if not self._require_admin(parsed):
                 return
             self._handle_ip_detail(parsed)
-        elif path == "/ban":
-            self.send_error(405)
-        elif path == "/unban":
-            self.send_error(405)
-        elif path == "/limit":
-            self.send_error(405)
-        elif path == "/cleanup":
+        elif _admin_actions_is_post_only_path(path):
             self.send_error(405)
         elif path == "/presets":
             self._handle_presets_list()
-        elif path.startswith("/presets/"):
-            self._handle_preset_detail(path.split("/", 2)[-1])
-        elif path.startswith("/status/") or path.startswith("/api/status/"):
+        elif (preset_id := _prefixed_route_tail(path, "/presets/")) is not None:
+            self._handle_preset_detail(preset_id)
+        elif (task_id := _prefixed_route_last_segment(path, "/status/", "/api/status/")) is not None:
             if not self._require_file_api():
                 return
-            self._handle_status(path.split("/")[-1])
-        elif path.startswith("/download/") or path.startswith("/api/download/"):
+            self._handle_status(task_id)
+        elif (file_id := _prefixed_route_last_segment(path, "/download/", "/api/download/")) is not None:
             if not self._require_file_api():
                 return
-            self._handle_download(path.split("/")[-1])
-        elif path.startswith("/log/"):
+            self._handle_download(file_id)
+        elif (task_id := _prefixed_route_last_segment(path, "/log/")) is not None:
             if not self._require_admin(parsed):
                 return
-            self._handle_log(path.split("/")[-1])
+            self._handle_log(task_id)
         else:
             self.send_error(404)
 
@@ -1851,10 +1894,10 @@ class Handler(BaseHTTPRequestHandler):
             if not self._require_preset_mutation(parsed):
                 return
             self._handle_preset_create()
-        elif path.startswith("/presets/"):
+        elif (preset_id := _prefixed_route_tail(path, "/presets/")) is not None:
             if not self._require_preset_mutation(parsed):
                 return
-            self._handle_preset_update(path.split("/", 2)[-1])
+            self._handle_preset_update(preset_id)
         else:
             self.send_error(404)
 
@@ -1864,20 +1907,20 @@ class Handler(BaseHTTPRequestHandler):
             if not self._require_file_api():
                 return
             self._handle_upload_raw()
-        elif path.startswith("/presets/"):
+        elif (preset_id := _prefixed_route_tail(path, "/presets/")) is not None:
             if not self._require_preset_mutation(urlparse(self.path)):
                 return
-            self._handle_preset_update(path.split("/", 2)[-1])
+            self._handle_preset_update(preset_id)
         else:
             self.send_error(404)
 
     def do_DELETE(self):
         path = _route_path(urlparse(self.path).path)
-        if path.startswith("/presets/"):
+        if (preset_id := _prefixed_route_tail(path, "/presets/")) is not None:
             parsed = urlparse(self.path)
             if not self._require_preset_mutation(parsed):
                 return
-            self._handle_preset_delete(path.split("/", 2)[-1])
+            self._handle_preset_delete(preset_id)
         else:
             self.send_error(404)
 
@@ -1902,21 +1945,15 @@ class Handler(BaseHTTPRequestHandler):
         if not session:
             self._json_error("UNAUTHORIZED", "需要管理员权限", 403)
             return
-        self._json({
-            "ok": True,
-            "csrf_token": session.get("csrf_token", ""),
-            "expires_at": session.get("expires_at", 0),
-        })
+        self._json(_admin_access_session_payload(session))
 
     def _handle_admin_login(self):
         length = int(self.headers.get("Content-Length", 0) or 0)
         body = _read_exact(self.rfile, length) if length > 0 else b""
         token = _admin_forms_parse_login_token(body)
-        if not token:
-            self._json_error("INVALID_LOGIN", "请输入管理员密钥", 400)
-            return
-        if not hmac.compare_digest(token, ADMIN_TOKEN):
-            self._json_error("INVALID_LOGIN", "管理员密钥错误", 403)
+        login_error = _admin_access_login_error(token, ADMIN_TOKEN)
+        if login_error is not None:
+            self._json_error_fields(login_error)
             return
         session = _create_admin_session(self.headers.get("User-Agent", ""), self.client_address[0] if self.client_address else "")
         cookie = _admin_cookie_header(session["session_id"])
@@ -1926,9 +1963,7 @@ class Handler(BaseHTTPRequestHandler):
         session = _admin_session_from_headers(self.headers, self.headers.get("Cookie", ""))
         if session:
             _delete_admin_session(session.get("session_id", ""))
-        cookie = f"{ADMIN_SESSION_COOKIE}=; HttpOnly; Path=/; SameSite=Strict; Max-Age=0"
-        if COOKIE_SECURE:
-            cookie += "; Secure"
+        cookie = _admin_access_logout_cookie_header(ADMIN_SESSION_COOKIE, secure=COOKIE_SECURE)
         self._redirect("/admin/login", extra_headers=[("Set-Cookie", cookie)])
 
     def _require_admin(self, parsed) -> bool:
@@ -1936,21 +1971,28 @@ class Handler(BaseHTTPRequestHandler):
         self._admin_context = ctx
         if ctx.get("authorized"):
             return True
-        self._json_error("UNAUTHORIZED", "需要管理员权限", 403)
+        self._json_error_fields(_admin_access_unauthorized_error())
         return False
 
     def _require_admin_post(self, parsed) -> bool:
         ctx = _admin_request_context(parsed, self.headers, self.headers.get("Cookie", ""))
         self._admin_context = ctx
         if not ctx.get("authorized"):
-            self._json_error("UNAUTHORIZED", "需要管理员权限", 403)
+            self._json_error_fields(_admin_access_unauthorized_error())
             return False
         params = self._request_params(parsed)
         self._request_params_cache = params
         if not _admin_access_post_csrf_allowed(ctx, params, self.headers, csrf_header_name=ADMIN_CSRF_HEADER):
-            self._json_error("CSRF_INVALID", "CSRF 校验失败", 403)
+            self._json_error_fields(_admin_access_csrf_invalid_error())
             return False
         return True
+
+    def _set_preset_mutation_context(self, context: dict) -> None:
+        """传入 preset 变更上下文字典，写入当前请求处理器的兼容状态属性。"""
+        self._preset_owner_id = context["owner_id"]
+        self._preset_cookie_header = context["cookie_header"]
+        self._preset_public_only = context["public_only"]
+        self._preset_admin = context["admin"]
 
     def _require_preset_mutation(self, parsed) -> bool:
         """Authorize either an admin public-template mutation or a private one."""
@@ -1958,22 +2000,19 @@ class Handler(BaseHTTPRequestHandler):
         if admin_context.get("authorized"):
             if not self._require_admin_post(parsed):
                 return False
-            self._preset_owner_id = ""
-            self._preset_public_only = True
-            self._preset_admin = True
+            self._set_preset_mutation_context(_preset_mutation_context(admin=True))
             return True
         if not _anonymous_template_origin_allowed(self.headers):
-            self._json_error("CSRF_INVALID", "模板请求来源校验失败", 403)
+            self._json_error_fields(_preset_template_origin_error())
             return False
         self._request_params_cache = self._request_params(parsed)
         principal = _principal(self.headers, self.client_address)
         if principal.get("authenticated") and not _auth_csrf_allowed(self.headers, principal):
-            self._json_error("CSRF_INVALID", "CSRF 校验失败", 403)
+            self._json_error_fields(_preset_user_csrf_error())
             return False
-        self._preset_owner_id = principal["owner_id"]
-        self._preset_cookie_header = principal.get("cookie", "")
-        self._preset_public_only = False
-        self._preset_admin = False
+        self._set_preset_mutation_context(
+            _preset_mutation_context(principal["owner_id"], principal.get("cookie", ""))
+        )
         return True
 
     def _require_file_api(self) -> bool:
@@ -1983,11 +2022,9 @@ class Handler(BaseHTTPRequestHandler):
         return False
 
     def _auth_json_request(self) -> dict | None:
-        if not _auth_origin_allowed(self.headers):
-            self._json_error("ORIGIN_INVALID", "请求来源不被允许", 403)
-            return None
-        if not _auth_payloads_is_json_content_type(self.headers):
-            self._json_error("CONTENT_TYPE_INVALID", "请求必须使用 application/json", 415)
+        error = _auth_payloads_json_request_error(_auth_origin_allowed(self.headers), self.headers)
+        if error is not None:
+            self._json_error_fields(error)
             return None
         payload = self._request_params(urlparse(self.path))
         return payload if isinstance(payload, dict) else None
@@ -1996,22 +2033,22 @@ class Handler(BaseHTTPRequestHandler):
         principal = _principal(self.headers, self.client_address)
         data = _auth_payloads_me_data(principal)
         extra = _auth_payloads_me_extra_headers(principal, clear_user_cookie_header=_user_cookie_header("", clear=True))
-        self._json({"ok": True, "data": data}, extra_headers=extra)
+        self._json(_auth_payloads_ok_data_response(data), extra_headers=extra)
 
     def _handle_auth_register(self):
         payload = self._auth_json_request()
         if payload is None:
             return
         allowed, retry = _auth_rate_allow("register-ip", _client_ip(self.headers, self.client_address), 3600, 5)
-        if not allowed:
-            self._json_error("RATE_LIMITED", "注册请求过于频繁，请稍后再试", 429, retry_after=retry)
+        rate_error = _auth_payloads_register_rate_limit_error(allowed, retry)
+        if rate_error is not None:
+            self._json_error_fields(rate_error)
             return
         try:
             display, username_norm = validate_username(payload.get("username", ""))
             password = validate_password(payload.get("password", ""))
         except ValueError as exc:
-            code, msg = str(exc).split(":", 1)
-            self._json_error(code, msg, 400)
+            self._json_error_fields(_auth_payloads_validation_error_from_exception(exc))
             return
         anonymous = _principal(self.headers, self.client_address)
         user_id = f"usr_{uuid.uuid4().hex}"
@@ -2029,16 +2066,17 @@ class Handler(BaseHTTPRequestHandler):
             if conn is not None:
                 conn.rollback()
                 conn.close()
-            if "UNIQUE constraint" in str(exc):
-                self._json_error("USERNAME_TAKEN", "用户名已存在", 409)
-            else:
-                self._json_error("REGISTER_FAILED", "注册失败", 500)
+            self._json_error_fields(_auth_payloads_register_error_from_exception(exc))
             return
         session = _create_user_session(user_id, self.headers.get("User-Agent", ""), self.client_address[0] if self.client_address else "")
-        self._json({"ok": True, "data": _auth_payloads_success_data(user_id, display, display, session["csrf_token"])}, 201, [
-            ("Set-Cookie", _user_cookie_header(session["token"])),
-            ("Set-Cookie", _anonymous_user_cookie_clear_header()),
-        ])
+        self._json(
+            _auth_payloads_success_response(user_id, display, display, session["csrf_token"]),
+            201,
+            _auth_payloads_session_extra_headers(
+                _user_cookie_header(session["token"]),
+                _anonymous_user_cookie_clear_header(),
+            ),
+        )
 
     def _handle_auth_login(self):
         payload = self._auth_json_request()
@@ -2047,13 +2085,14 @@ class Handler(BaseHTTPRequestHandler):
         try:
             _, username_norm = validate_username(payload.get("username", ""))
         except ValueError:
-            self._json_error("INVALID_CREDENTIALS", "用户名或密码错误", 401)
+            self._json_error_fields(_auth_payloads_invalid_credentials_error())
             return
         ip = _client_ip(self.headers, self.client_address)
         ip_allowed, ip_retry = _auth_rate_allow("login-ip", ip, 600, 30)
         name_allowed, name_retry = _auth_rate_allow("login-name", username_norm, 600, 10)
-        if not ip_allowed or not name_allowed:
-            self._json_error("RATE_LIMITED", "登录请求过于频繁，请稍后再试", 429, retry_after=max(ip_retry, name_retry))
+        rate_error = _auth_payloads_login_rate_limit_error(ip_allowed, ip_retry, name_allowed, name_retry)
+        if rate_error is not None:
+            self._json_error_fields(rate_error)
             return
         password = str(payload.get("password", ""))
         with _SQL_LOCK:
@@ -2061,10 +2100,10 @@ class Handler(BaseHTTPRequestHandler):
             row = conn.execute("SELECT * FROM users WHERE username_norm=?", (username_norm,)).fetchone()
             conn.close()
         if not row or not verify_password(row["password_hash"], password)[0]:
-            self._json_error("INVALID_CREDENTIALS", "用户名或密码错误", 401)
+            self._json_error_fields(_auth_payloads_invalid_credentials_error())
             return
         if row["status"] != "active":
-            self._json_error("ACCOUNT_DISABLED", "账号已停用", 403)
+            self._json_error_fields(_auth_payloads_account_disabled_error())
             return
         _, needs_rehash = verify_password(row["password_hash"], password)
         with _SQL_LOCK:
@@ -2079,35 +2118,47 @@ class Handler(BaseHTTPRequestHandler):
         _migrate_anonymous_resources(principal.get("owner_id", ""), row["id"])
         session = _create_user_session(row["id"], self.headers.get("User-Agent", ""), self.client_address[0] if self.client_address else "")
         remember_me = _parse_bool(str(payload.get("remember_me", "true")), True)
-        self._json({"ok": True, "data": _auth_payloads_success_data(row["id"], row["username"], row["display_name"], session["csrf_token"])}, extra_headers=[
-            ("Set-Cookie", _user_cookie_header(session["token"], persistent=remember_me)),
-            ("Set-Cookie", _anonymous_user_cookie_clear_header()),
-        ])
+        self._json(
+            _auth_payloads_success_response(row["id"], row["username"], row["display_name"], session["csrf_token"]),
+            extra_headers=_auth_payloads_session_extra_headers(
+                _user_cookie_header(session["token"], persistent=remember_me),
+                _anonymous_user_cookie_clear_header(),
+            ),
+        )
 
     def _handle_auth_logout(self):
-        if not _auth_origin_allowed(self.headers):
-            self._json_error("ORIGIN_INVALID", "请求来源不被允许", 403)
+        origin_error = _auth_payloads_logout_request_error(_auth_origin_allowed(self.headers), False, False)
+        if origin_error is not None:
+            self._json_error_fields(origin_error)
             return
         principal = _principal(self.headers, self.client_address)
-        if principal.get("authenticated") and not _auth_csrf_allowed(self.headers, principal):
-            self._json_error("CSRF_INVALID", "CSRF 校验失败", 403)
+        csrf_error = _auth_payloads_logout_request_error(
+            True,
+            bool(principal.get("authenticated")),
+            _auth_csrf_allowed(self.headers, principal),
+        )
+        if csrf_error is not None:
+            self._json_error_fields(csrf_error)
             return
         _delete_user_session(self.headers)
-        self._json({"ok": True, "data": {"logged_out": True}}, extra_headers=[("Set-Cookie", _user_cookie_header("", True))])
+        self._json(
+            _auth_payloads_logout_response(),
+            extra_headers=_auth_payloads_logout_extra_headers(_user_cookie_header("", True)),
+        )
 
     def _handle_upload_raw(self):
         principal = _principal(self.headers, self.client_address)
         ip = _client_ip(self.headers, self.client_address)
         if _is_ip_banned(ip):
             logger.warning(f"[Security] banned ip blocked: {ip}")
-            self._json_error("IP_BANNED", "该 IP 已被禁止访问", 403)
+            self._json_error_fields(_responses_upload_ip_banned_error())
             return
         if _upload_limit_exceeded(ip):
             logger.warning(f"[Security] upload limit exceeded: {ip}")
-            self._json_error("UPLOAD_LIMIT_EXCEEDED", "当前 IP 在该时间段内排版次数已达上限，请稍后再试", 429)
+            self._json_error_fields(_responses_upload_limit_exceeded_error())
             return
         if not _allow(ip):
-            self._json_error("RATE_LIMITED", "请求过于频繁，请稍后再试", 429)
+            self._json_error_fields(_responses_upload_rate_limited_error())
             return
         try:
             try:
@@ -2138,7 +2189,7 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError:
                 length = 0
             if length <= 0 or length > MAX_SIZE:
-                self._json_error("FILE_TOO_LARGE", "文件过大或无内容", 413)
+                self._json_error_fields(_responses_upload_file_too_large_error())
                 return
             task_id = str(uuid.uuid4())
             raw_name = unquote(self.headers.get("X-Filename", "upload.docx"))
@@ -2155,11 +2206,11 @@ class Handler(BaseHTTPRequestHandler):
                 written = _read_exact_to_file(self.rfile, input_path, length, timeout=UPLOAD_READ_TIMEOUT_SECONDS)
             except (TimeoutError, socket.timeout):
                 _cleanup_incomplete_upload(task_id, input_path)
-                self._json_error("UPLOAD_TIMEOUT", "文件上传超时", 408)
+                self._json_error_fields(_responses_upload_timeout_error())
                 return
             except Exception:
                 _cleanup_incomplete_upload(task_id, input_path)
-                self._json_error("UPLOAD_FAILED", "文件上传失败，请重试", 400)
+                self._json_error_fields(_responses_upload_failed_error())
                 return
             finally:
                 if old_timeout is not None:
@@ -2169,7 +2220,7 @@ class Handler(BaseHTTPRequestHandler):
                         pass
             if written != length:
                 _cleanup_incomplete_upload(task_id, input_path)
-                self._json_error("INCOMPLETE_UPLOAD", "读取不完整", 400)
+                self._json_error_fields(_responses_incomplete_upload_error())
                 return
             try:
                 validate_docx_upload(
@@ -2207,36 +2258,32 @@ class Handler(BaseHTTPRequestHandler):
                                      owner_id=principal["owner_id"])
             except OverflowError as exc:
                 _cleanup_incomplete_upload(task_id, input_path)
-                message = str(exc)
-                text = message.split(":", 1)[1].strip() if ":" in message else "服务器繁忙，请稍后再试"
-                self._json_error("QUEUE_FULL", text, 503)
+                self._json_error_fields(_responses_queue_full_error(exc))
                 return
-            payload = {"task_id": task_id, "status": "queued", **info}
-            if compatibility_warnings:
-                payload["compatibility_warnings"] = compatibility_warnings
-            self._json(payload, extra_headers=[("Set-Cookie", principal["cookie"])] if principal.get("cookie") else None)
+            payload = _responses_queued_upload_body(task_id, info, compatibility_warnings)
+            self._json(payload, extra_headers=_responses_optional_set_cookie_headers(principal.get("cookie", "")))
         except Exception:
             try:
                 if 'task_id' in locals():
                     _cleanup_incomplete_upload(task_id, locals().get("input_path", ""))
             except Exception:
                 pass
-            self._json_error("INTERNAL_ERROR", "服务器处理失败，请稍后重试", 500)
+            self._json_error_fields(_responses_internal_server_error())
 
     def _handle_status(self, task_id: str):
         if not _is_safe_uuid(task_id):
-            self._json_error("INVALID_TASK_ID", "无效的任务 ID", 400)
+            self._json_error_fields(_responses_invalid_task_id_error())
             return
         principal = _principal(self.headers, self.client_address)
         task = _public_task_state(task_id, principal["owner_id"])
         if not task:
-            self._json_error("TASK_NOT_FOUND", "任务不存在或已过期", 404)
+            self._json_error_fields(_responses_task_not_found_error())
         else:
             self._json(task)
 
     def _handle_download(self, task_id: str):
         if not _is_safe_uuid(task_id):
-            self._json_error("INVALID_TASK_ID", "无效的任务 ID", 400)
+            self._json_error_fields(_responses_invalid_task_id_error())
             return
         principal = _principal(self.headers, self.client_address)
         owner_id = principal["owner_id"]
@@ -2250,10 +2297,10 @@ class Handler(BaseHTTPRequestHandler):
                 row = conn.execute(
                     "SELECT status, output_path, output_filename, filename FROM tasks WHERE id=? AND owner_id=?",
                     (task_id, owner_id),
-                ).fetchone()
+            ).fetchone()
                 conn.close()
             if not row or row["status"] != "done":
-                self._json_error("FILE_NOT_READY", "文件未就绪", 400)
+                self._json_error_fields(_responses_file_not_ready_error())
                 return
             path = row["output_path"] or ""
             download_name = row["output_filename"] or _safe_download_filename(row["filename"] or "download.docx")
@@ -2261,17 +2308,16 @@ class Handler(BaseHTTPRequestHandler):
             path = task.get("output_path") or task.get("output") or ""
             download_name = task.get("download_name") or _safe_download_filename(task.get("filename", "download.docx"))
         if not path or not os.path.exists(path):
-            self._json_error("FILE_EXPIRED", "文件已过期", 410)
+            self._json_error_fields(_responses_file_expired_error())
             return
         try:
             file_size = os.path.getsize(path)
         except OSError:
-            self._json_error("FILE_EXPIRED", "文件已过期", 410)
+            self._json_error_fields(_responses_file_expired_error())
             return
         self.send_response(200)
-        self.send_header("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-        self.send_header("Content-Disposition", _content_disposition_filename(download_name))
-        self.send_header("Content-Length", str(file_size))
+        for key, value in _responses_docx_download_headers(_content_disposition_filename(download_name), file_size):
+            self.send_header(key, value)
         self._set_cors_headers()
         self._set_security_headers()
         self.end_headers()
@@ -2279,14 +2325,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def _redirect(self, target: str, extra_headers=None):
         self.send_response(303)
-        self.send_header("Location", target)
-        if extra_headers:
-            if isinstance(extra_headers, dict):
-                items = extra_headers.items()
-            else:
-                items = extra_headers
-            for key, value in items:
-                self.send_header(key, value)
+        for key, value in _responses_redirect_headers(target, extra_headers):
+            self.send_header(key, value)
         self._set_security_headers()
         self.end_headers()
 
@@ -2356,7 +2396,7 @@ class Handler(BaseHTTPRequestHandler):
         principal = _principal(self.headers, self.client_address)
         self._json(
             {"presets": _list_presets(principal["owner_id"])},
-            extra_headers=[("Set-Cookie", principal["cookie"])] if principal.get("cookie") else None,
+            extra_headers=_responses_optional_set_cookie_headers(principal.get("cookie", "")),
         )
 
     def _handle_preset_detail(self, preset_id: str):
@@ -2369,7 +2409,7 @@ class Handler(BaseHTTPRequestHandler):
         if not preset:
             self._json_error("TEMPLATE_NOT_FOUND", "模板不存在", 404)
             return
-        self._json(preset, extra_headers=[("Set-Cookie", principal["cookie"])] if principal.get("cookie") else None)
+        self._json(preset, extra_headers=_responses_optional_set_cookie_headers(principal.get("cookie", "")))
 
     def _handle_preset_create(self):
         payload = getattr(self, "_request_params_cache", {})
@@ -2383,13 +2423,9 @@ class Handler(BaseHTTPRequestHandler):
                 visibility="public" if getattr(self, "_preset_admin", False) else "private",
             )
         except ValueError as exc:
-            code, message = str(exc).split(":", 1) if ":" in str(exc) else ("TEMPLATE_INVALID", str(exc))
-            self._json_error(code, message.strip(), 400)
+            self._json_error_fields(_preset_error_from_exception(exc, not_found_status=400))
             return
-        extra_headers = []
-        if getattr(self, "_preset_cookie_header", ""):
-            extra_headers.append(("Set-Cookie", self._preset_cookie_header))
-        self._json(preset, 201, extra_headers=extra_headers or None)
+        self._json(preset, 201, extra_headers=_responses_optional_set_cookie_headers(getattr(self, "_preset_cookie_header", "")))
 
     def _handle_preset_update(self, preset_id: str):
         payload = getattr(self, "_request_params_cache", {})
@@ -2403,14 +2439,9 @@ class Handler(BaseHTTPRequestHandler):
                 public_only=getattr(self, "_preset_public_only", True),
             )
         except ValueError as exc:
-            code, message = str(exc).split(":", 1) if ":" in str(exc) else ("TEMPLATE_INVALID", str(exc))
-            status = 404 if code == "TEMPLATE_NOT_FOUND" else 400
-            self._json_error(code, message.strip(), status)
+            self._json_error_fields(_preset_error_from_exception(exc))
             return
-        extra_headers = []
-        if getattr(self, "_preset_cookie_header", ""):
-            extra_headers.append(("Set-Cookie", self._preset_cookie_header))
-        self._json(preset, extra_headers=extra_headers or None)
+        self._json(preset, extra_headers=_responses_optional_set_cookie_headers(getattr(self, "_preset_cookie_header", "")))
 
     def _handle_preset_delete(self, preset_id: str):
         try:
@@ -2420,18 +2451,13 @@ class Handler(BaseHTTPRequestHandler):
                 public_only=getattr(self, "_preset_public_only", True),
             )
         except ValueError as exc:
-            code, message = str(exc).split(":", 1) if ":" in str(exc) else ("TEMPLATE_INVALID", str(exc))
-            status = 404 if code == "TEMPLATE_NOT_FOUND" else 400
-            self._json_error(code, message.strip(), status)
+            self._json_error_fields(_preset_error_from_exception(exc))
             return
-        extra_headers = []
-        if getattr(self, "_preset_cookie_header", ""):
-            extra_headers.append(("Set-Cookie", self._preset_cookie_header))
-        self._json(result, 200, extra_headers=extra_headers or None)
+        self._json(result, 200, extra_headers=_responses_optional_set_cookie_headers(getattr(self, "_preset_cookie_header", "")))
 
     def _handle_log(self, task_id: str):
         if not _is_safe_uuid(task_id):
-            self._json_error("INVALID_TASK_ID", "无效的任务 ID", 400)
+            self._json_error_fields(_responses_invalid_task_id_error())
             return
         path = ""
         with TASKS_LOCK:
@@ -2452,12 +2478,12 @@ class Handler(BaseHTTPRequestHandler):
         if not path:
             path = row["log_path"] if row else ""
         if not path:
-            self._json_error("LOG_NOT_FOUND", "日志不存在", 404)
+            self._json_error_fields(_responses_log_not_found_error())
             return
         root = os.path.abspath(LOG_DIR)
         path = os.path.abspath(path)
         if not path.startswith(root + os.sep) or not os.path.exists(path):
-            self._json_error("LOG_NOT_FOUND", "日志不存在或已过期", 404)
+            self._json_error_fields(_responses_log_not_found_error(expired=True))
             return
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             log_text = _redact_sensitive_log(f.read())
@@ -2467,9 +2493,7 @@ class Handler(BaseHTTPRequestHandler):
     def _text(self, body: str, mime: str, status: int = 200, extra_headers=None):
         data = _responses_text_bytes(body)
         self.send_response(status)
-        self.send_header("Content-Type", f"{mime}; charset=utf-8")
-        self.send_header("Content-Length", str(len(data)))
-        for key, value in _responses_normalize_extra_headers(extra_headers):
+        for key, value in _responses_text_headers(mime, len(data), extra_headers):
             self.send_header(key, value)
         self._set_cors_headers()
         self._set_security_headers()
@@ -2479,21 +2503,30 @@ class Handler(BaseHTTPRequestHandler):
     def _json(self, obj: dict, status: int = 200, extra_headers=None):
         data = _responses_json_bytes(obj)
         self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(data)))
-        for key, value in _responses_normalize_extra_headers(extra_headers):
+        for key, value in _responses_json_headers(len(data), extra_headers):
             self.send_header(key, value)
         self._set_cors_headers()
         self._set_security_headers()
         self.end_headers()
         self.wfile.write(data)
 
+    def _json_error_fields(self, error: tuple[str, str, int] | tuple[str, str, int, int]):
+        """传入错误码、提示、状态码和可选重试秒数，按现有 JSON 错误格式发送响应。"""
+        code, message, status, *retry = error
+        retry_after = retry[0] if retry else 0
+        self._json_error(code, message, status, retry_after=retry_after)
+
     def _json_error(self, code: str, message: str, status: int, *, field: str = "", reason: str = "", retry_after: int = 0):
         headers = _responses_retry_after_headers(retry_after)
-        if _route_path(urlparse(self.path).path).startswith("/auth/"):
-            self._json(_responses_auth_error_body(code, message, field=field, reason=reason), status, extra_headers=headers)
-            return
-        self._json(_error_payload(code, message, field=field, reason=reason), status, extra_headers=headers)
+        body = _responses_json_error_body(
+            auth_route=_route_path(urlparse(self.path).path).startswith("/auth/"),
+            code=code,
+            message=message,
+            field=field,
+            reason=reason,
+            legacy_error_body=_error_payload,
+        )
+        self._json(body, status, extra_headers=headers)
 
     def log_message(self, fmt, *args):
         pass

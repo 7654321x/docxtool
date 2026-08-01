@@ -10,6 +10,8 @@ from docxtool.web.request_utils import (
     html_escape,
     json_dumps,
     parse_json_body,
+    prefixed_route_last_segment,
+    prefixed_route_tail,
     route_path,
 )
 
@@ -17,6 +19,10 @@ from docxtool.web.request_utils import (
 def test_request_utils_match_legacy_route_and_json_helpers():
     assert route_path("/api/auth/me") == "/auth/me"
     assert server._route_path("/api/auth/me") == route_path("/api/auth/me")
+    assert prefixed_route_tail("/presets/a/b", "/presets/") == "a/b"
+    assert server._prefixed_route_tail("/presets/a/b", "/presets/") == "a/b"
+    assert prefixed_route_last_segment("/status/a/b", "/status/") == "b"
+    assert server._prefixed_route_last_segment("/status/a/b", "/status/") == "b"
     assert json_dumps({"消息": "成功", "n": 1}) == '{"消息":"成功","n":1}'
     assert server._json_dumps({"消息": "成功", "n": 1}) == json_dumps({"消息": "成功", "n": 1})
     assert parse_json_body("{}".encode("utf-8")) == {}

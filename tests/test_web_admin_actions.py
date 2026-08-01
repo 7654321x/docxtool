@@ -5,6 +5,7 @@ from urllib.parse import urlparse
 from docxtool.web.admin_actions import (
     ban_reason_from_params,
     ip_from_action_params,
+    is_post_only_action_path,
     query_ip_from_parsed_url,
     upload_limit_values_from_params,
 )
@@ -22,6 +23,13 @@ def test_ip_from_action_params_accepts_ip_or_addr() -> None:
     assert ip_from_action_params({"ip": " 203.0.113.8 ", "addr": "198.51.100.2"}) == "203.0.113.8"
     assert ip_from_action_params({"addr": " 198.51.100.2 "}) == "198.51.100.2"
     assert ip_from_action_params({}) == ""
+
+
+def test_is_post_only_action_path_matches_admin_mutations() -> None:
+    """管理员动作路径中，封禁、解封、限流和清理入口只能通过 POST 调用。"""
+    for path in ("/ban", "/unban", "/limit", "/cleanup"):
+        assert is_post_only_action_path(path)
+    assert not is_post_only_action_path("/monitor")
 
 
 def test_ban_reason_from_params_uses_default_and_limit() -> None:
