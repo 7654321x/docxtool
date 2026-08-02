@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.4 - 2026-08-02
+
+- Completed Phase A document-chain extraction by separating source reading, recognition helper boundaries, segmentation, and normalization orchestration while preserving the existing public importer facade.
+- Added focused regression coverage for the extracted document-chain modules and a reusable equivalence snapshot tool for before/after migration verification.
+- Verified that the Phase A refactor preserves strict, structural, and normalize processing behavior across the standard and special DOCX regression sets.
+
 ## 2.3 - 2026-08-01
 
 - Split Web request lifecycle, authorization, upload, monitor, page, health, and task-queue orchestration into focused modules while keeping `web/app.py` as the compatibility facade.

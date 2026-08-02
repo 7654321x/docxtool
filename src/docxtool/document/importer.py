@@ -12,9 +12,7 @@
 
 from __future__ import annotations
 
-import copy
 import hashlib
-import os
 import re
 from types import SimpleNamespace
 from typing import List, Optional, Tuple
@@ -38,6 +36,12 @@ from docxtool.document.normalization.tail import (
 from docxtool.document.normalization.changes import (
     record_applied_normalization_changes as _normalization_record_applied_normalization_changes,
     record_strict_normalization_suggestions as _normalization_record_strict_normalization_suggestions,
+)
+from docxtool.document.normalization.pipeline import (
+    apply_post_recognition_normalization as _normalization_apply_post_recognition_normalization,
+    capture_pre_normalization_snapshot as _normalization_capture_pre_normalization_snapshot,
+    merge_uniform_heading_siblings as _normalization_merge_uniform_heading_siblings,
+    strip_word_auto_numbering as _normalization_strip_word_auto_numbering,
 )
 from docxtool.document.normalization.dates import (
     chinese_number_to_int as _normalization_chinese_number_to_int,
@@ -64,26 +68,22 @@ from docxtool.document.normalization.text import (
     to_chinese_punctuation as _normalization_to_chinese_punctuation,
 )
 from docxtool.document.importing.images import (
-    is_object_caption as _is_object_caption,
     is_object_caption_text as _is_object_caption_text,
-    is_standalone_image_paragraph as _is_standalone_image_paragraph,
 )
 from docxtool.document.importing.features import (
     extract_paragraph_features as _importing_extract_paragraph_features,
 )
 from docxtool.document.importing.inline_tokens import (
-    extract_inline_tokens,
-    inline_tokens_text,
     normalize_inline_tokens as _importing_normalize_inline_tokens,
-)
-from docxtool.document.importing.sections import (
-    collect_section_header_footer_parts,
-    extract_paragraph_sectPr,
 )
 from docxtool.document.importing.numbering import (
     NUMBERING_PATTERNS as _NUMBERING_PATTERNS,
     detect_numbering_prefix as _importing_detect_numbering_prefix,
     is_auto_numbered_item as _importing_is_auto_numbered_item,
+)
+from docxtool.document.importing.reader import (
+    open_docx_document as _open_docx_document,
+    read_body_blocks as _read_body_blocks,
 )
 from docxtool.document.importing.relationships import repair_broken_rels as _repair_broken_rels
 from docxtool.document.recognition import apply_recognition
@@ -142,9 +142,6 @@ from docxtool.document.recognition.version import RECOGNITION_VERSION_TAG
 from docxtool.document.recognition.legacy import DetectionContext, ScoreBoard, ScoreDetail
 from docxtool.document.segmentation.source_locator import (
     apply_segment_format_features as _apply_segment_format_features,
-    assign_segment_ordinals as _assign_segment_ordinals,
-    build_segment_features as _build_segment_features,
-    build_unresolved_empty_segment_features as _build_unresolved_empty_segment_features,
     inherit_source_locator as _inherit_source_locator,
     set_source_locator as _set_source_locator,
     source_line_spans as _source_line_spans,
@@ -152,7 +149,7 @@ from docxtool.document.segmentation.source_locator import (
     visible_character_count as _visible_character_count,
 )
 from docxtool.document.segmentation.pipeline import (
-    build_logical_span_plan as _build_logical_span_plan,
+    build_logical_lines as _build_logical_lines,
 )
 from docxtool.document.segmentation.body_tail import (
     find_last_body_candidate_index as _find_last_body_candidate_index,
@@ -202,6 +199,7 @@ __all__ = [
     "_apply_segment_format_features",
     "_inherit_source_locator",
     "_set_source_locator",
+    "_source_line_spans",
     "_trim_source_span",
     "_visible_character_count",
     "extract_features",
@@ -858,19 +856,16 @@ class DocxImporter:
                 for token in normalized
             ]
 
-        # 自动修复损坏的 .rels 引用；修复副本只由本次导入持有。
+        # 物理文件打开与关系修复副本清理由 importing.reader 负责；传入
+        # 旧回调，保留 importer 私有入口可被既有调用方和回归测试替换。
         original_filepath = filepath
-        repaired_filepath = _repair_broken_rels(filepath)
-        try:
-            doc = DocxDocument(repaired_filepath)
-        except Exception as e:
-            raise ImportError(f"无法打开文件: {type(e).__name__}") from e
-        finally:
-            if repaired_filepath != original_filepath:
-                try:
-                    os.unlink(repaired_filepath)
-                except OSError:
-                    logger.warning("[修复] 临时 DOCX 清理失败")
+        doc = _open_docx_document(
+            filepath,
+            document_factory=DocxDocument,
+            repair_broken_rels_func=_repair_broken_rels,
+            import_error_type=ImportError,
+            cleanup_warning=logger.warning,
+        )
 
         data = DocumentData(
             filepath=original_filepath,
@@ -884,144 +879,33 @@ class DocxImporter:
         data.letterhead_detection = detect_letterhead(doc)
         protected_letterhead_indexes = set(data.letterhead_detection.protected_body_indexes)
 
-        # 第一步：按 Word body XML 顺序提取段落、表格、图片段落。
-        from docx.text.paragraph import Paragraph as DocxParagraph
-        from docx.table import Table as DocxTable
-        from docx.oxml.ns import qn as _qn_body
-
-        data.even_and_odd_headers = copy.deepcopy(
-            doc.settings._element.find(_qn_body("w:evenAndOddHeaders"))
+        # 第一步：只提取物理 body 事实；Reader 不处理逻辑边界或类型。
+        raw_blocks = _read_body_blocks(
+            doc,
+            data,
+            strict_preservation=strict_preservation,
+            protected_letterhead_indexes=protected_letterhead_indexes,
+            extract_features_func=extract_features,
         )
 
-        raw_blocks = []
-        para_index = 0
-        body_index = 0
-        for child in doc._body._element.iterchildren():
-            if child.tag == _qn_body('w:p'):
-                para = DocxParagraph(child, doc._body)
-                pf = extract_features(para, para_index)
-                inline_tokens = extract_inline_tokens(para)
-                sectPr = extract_paragraph_sectPr(para)
-                collect_section_header_footer_parts(doc, sectPr, data)
-                para_index += 1
-                if body_index in protected_letterhead_indexes:
-                    raw_blocks.append(("letterhead_paragraph_xml", para))
-                elif pf.contains_image:
-                    raw_blocks.append(("paragraph_xml", para))
-                elif strict_preservation or para.text.strip() or sectPr is not None or any(token.kind == "page_break" for token in inline_tokens):
-                    raw_blocks.append(("paragraph", para, pf, inline_tokens, sectPr))
-            elif child.tag == _qn_body('w:tbl'):
-                table = DocxTable(child, doc._body)
-                raw_blocks.append(("table", table))
-                data.tables.append(table)
-            elif child.tag == _qn_body('w:sectPr'):
-                data.body_sectPr = copy.deepcopy(child)
-                collect_section_header_footer_parts(doc, child, data)
-                continue
-            body_index += 1
-
-        # Preserve at most one caption immediately below a table or a standalone
-        # image paragraph.  A caption cannot anchor another caption, and an
-        # inline image surrounded by body text must not protect the next line.
-        for block_index in range(1, len(raw_blocks)):
-            block = raw_blocks[block_index]
-            previous = raw_blocks[block_index - 1]
-            previous_is_caption_anchor = (
-                previous[0] == "table"
-                or (
-                    previous[0] == "paragraph_xml"
-                    and _is_standalone_image_paragraph(previous[1])
-                )
-            )
-            if (
-                block[0] == "paragraph"
-                and previous_is_caption_anchor
-                and _is_object_caption(block[1])
-            ):
-                raw_blocks[block_index] = ("protected_paragraph_xml", block[1], block[2])
-
-        # 第二步：从原始物理段落范围拆分逻辑行。这里不能把已规范化的
-        # 字符串再 find() 回原文，否则重复文字会被绑定到错误 occurrence。
-        flat_lines = []  # text / table / image paragraph XML / protected caption XML
-
-        body_region_started = False
-        for block_index, block in enumerate(raw_blocks):
-            if block[0] != "paragraph":
-                flat_lines.append(block)
-                continue
-            _, para, pf, inline_tokens, sectPr = block
-            source = pf.source_physical_text
-            source_spans = _source_line_spans(source)
-            has_structural_inline = any(
-                token.kind in {"tab", "line_break", "page_break"} for token in inline_tokens
-            )
-            has_page_break = any(token.kind == "page_break" for token in inline_tokens)
-
-            if strict_preservation:
-                raw_text = inline_tokens_text(inline_tokens) if inline_tokens else source
-                flat_lines.append(("text", raw_text, pf, list(inline_tokens), sectPr))
-                continue
-
-            if not source_spans:
-                if sectPr is not None or has_page_break:
-                    sub_pf = _build_unresolved_empty_segment_features(
-                        pf,
-                        paragraph_index=len(flat_lines),
-                    )
-                    flat_lines.append(("text", "", sub_pf, [], sectPr))
-                continue
-
-            following_text = ""
-            for following in raw_blocks[block_index + 1:]:
-                if following[0] == "paragraph":
-                    following_text = normalize_text(following[1].text).strip()
-                    if following_text:
-                        break
-
-            span_plan = _build_logical_span_plan(
-                source,
-                source_spans,
-                body_region_started=body_region_started,
-                has_structural_inline=has_structural_inline,
-                has_page_break=has_page_break,
-                structural_preservation=structural_preservation,
-                split_inline_heading_body_enabled=split_inline_heading_body,
-                following_text=following_text,
-                features=pf,
-                source_starts_body_region_func=_source_starts_body_region,
-                split_inline_heading_body_spans_func=_split_inline_heading_body_spans,
-                validate_numbered_heading_body_split_func=_validate_numbered_heading_body_split,
-                should_split_structural_line_breaks_func=_should_split_structural_line_breaks,
-                split_structural_tail_after_numbered_heading_func=_split_structural_tail_after_numbered_heading,
-                validate_source_span_partition_func=_validate_source_span_partition,
-            )
-            spans = span_plan.spans
-            preserve_tokens = list(inline_tokens) if span_plan.preserve_inline_tokens else []
-
-            for li, (start, end) in enumerate(spans):
-                raw_fragment = source[start:end]
-                line = normalize_text(raw_fragment)
-                if not line:
-                    continue
-                sub_pf = _build_segment_features(
-                    pf,
-                    start,
-                    end,
-                    paragraph_index=len(flat_lines),
-                    is_new_line=li > 0,
-                    inline_lead_bold_func=_has_inline_lead_bold_transition,
-                )
-                sub_pf.numbering_prefix = pf.numbering_prefix if li == 0 else _detect_numbering_prefix(line)
-                sub_pf.segment_numbering_features = sub_pf.numbering_prefix
-                flat_lines.append((
-                    "text", line, sub_pf,
-                    preserve_tokens if len(spans) == 1 else [],
-                    sectPr if li == len(spans) - 1 else None,
-                ))
-            body_region_started = span_plan.current_body_region
-
-        _assign_segment_ordinals(
-            item[2] for item in flat_lines if item[0] == "text"
+        # 第二步：只按原始 source span 形成逻辑行。结构条件与顺序仍由
+        # 原有 segmentation 规则决定，Importer 随后才开始旧链路和 Recognition。
+        flat_lines = _build_logical_lines(
+            raw_blocks,
+            strict_preservation=strict_preservation,
+            structural_preservation=structural_preservation,
+            split_inline_heading_body_enabled=split_inline_heading_body,
+            normalize_text_func=normalize_text,
+            source_starts_body_region_func=_source_starts_body_region,
+            split_inline_heading_body_spans_func=_split_inline_heading_body_spans,
+            validate_numbered_heading_body_split_func=_validate_numbered_heading_body_split,
+            should_split_structural_line_breaks_func=_should_split_structural_line_breaks,
+            split_structural_tail_after_numbered_heading_func=(
+                _split_structural_tail_after_numbered_heading
+            ),
+            validate_source_span_partition_func=_validate_source_span_partition,
+            detect_numbering_prefix_func=_detect_numbering_prefix,
+            inline_lead_bold_func=_has_inline_lead_bold_transition,
         )
 
         ctx = DetectionContext()
@@ -1167,18 +1051,10 @@ class DocxImporter:
             # (body_blocks removed — tables/images now use paragraph stream placeholders)
 
         data.doc_mode = ctx.doc_mode
-        visible_paragraphs = [
-            paragraph for paragraph in data.paragraphs
-            if not paragraph.type_id.startswith("__")
-        ]
-        before_normalization = [
-            (
-                source_text,
-                source_text,
-                visible_paragraphs[index].type_id if index < len(visible_paragraphs) else "",
-            )
-            for index, source_text in enumerate(source_visible_texts)
-        ]
+        before_normalization = _normalization_capture_pre_normalization_snapshot(
+            data,
+            source_visible_texts,
+        )
         if strict_preservation:
             self._record_strict_normalization_suggestions(data)
         self._apply_core_classification(data, features)
@@ -1186,36 +1062,29 @@ class DocxImporter:
         from docxtool.document.recognition.config import DEFAULT_CONFIG
 
         apply_recognition(data, replace(DEFAULT_CONFIG, mode=recognition_mode))
-        if structural_preservation:
-            _normalize_tail_structures(data.paragraphs, normalize_text=False)
-        elif not strict_preservation:
-            _normalize_tail_structures(data.paragraphs)
-            self._reorder_attachment_note_before_signature(data.paragraphs)
-            self._assign_numbering(data.paragraphs, rules)
-            self._merge_siblings(data.paragraphs)
-            self._record_applied_normalization_changes(data, before_normalization)
+        _normalization_apply_post_recognition_normalization(
+            data,
+            rules,
+            doc.paragraphs,
+            strict_preservation=strict_preservation,
+            structural_preservation=structural_preservation,
+            processing_strategy=processing_strategy,
+            numbering_enabled=numbering_enabled,
+            before_normalization=before_normalization,
+            normalize_tail_structures_func=_normalize_tail_structures,
+            reorder_attachment_note_before_signature_func=(
+                self._reorder_attachment_note_before_signature
+            ),
+            assign_numbering_func=self._assign_numbering,
+            merge_siblings_func=self._merge_siblings,
+            record_applied_normalization_changes_func=(
+                self._record_applied_normalization_changes
+            ),
+            fix_numbering_gaps_func=self._fix_numbering_gaps,
+            strip_auto_numbering_func=self._strip_auto_numbering,
+            sync_recognition_consistency_func=_sync_recognition_consistency,
+        )
         # (old classification loop removed — replaced by flat_lines single pass above)
-
-        if structural_preservation and numbering_enabled:
-            # Smart mode keeps all non-numbering source text intact.  The user
-            # may still explicitly request canonical heading sequences through
-            # the numbering switch; compute those only after final recognition
-            # has settled every heading level.
-            self._assign_numbering(data.paragraphs, rules)
-            for paragraph in data.paragraphs:
-                if paragraph.type_id.startswith("heading"):
-                    paragraph.meta["numbering_correction"] = True
-
-        # 第三半：编号连续性检查（需在编号赋值之后）
-        if processing_strategy == "normalize":
-            self._fix_numbering_gaps(data.paragraphs)
-
-        # 第三步：剥离 Word 自动编号
-        if processing_strategy == "normalize":
-            for para in doc.paragraphs:
-                self._strip_auto_numbering(para)
-
-        _sync_recognition_consistency(data)
 
         logger.info(
             "[导入] file_sha256=%s paragraphs=%s tables=%s strategy=%s recognition=%s",
@@ -1297,52 +1166,18 @@ class DocxImporter:
 
     def _strip_auto_numbering(self, paragraph) -> None:
         """删除段落中的 Word 自动编号标记 <w:numPr>。"""
-        try:
-            from docx.oxml.ns import qn
-            pPr = paragraph._element.find(qn('w:pPr'))
-            if pPr is not None:
-                numPr = pPr.find(qn('w:numPr'))
-                if numPr is not None:
-                    pPr.remove(numPr)
-                    logger.debug("[导入] 剥离自动编号 chars=%s", len(paragraph.text))
-        except Exception:
-            pass
+        _normalization_strip_word_auto_numbering(
+            paragraph,
+            log_debug=logger.debug,
+        )
 
     def _merge_siblings(self, paragraphs: list) -> None:
         """A. 同级合并：父标题下全是同模式子项 → 提升为父+1级。"""
-        PARENT_KEYS = {"heading1", "heading2", "heading3"}
-        changed = True
-        while changed:
-            changed = False
-            for i in range(len(paragraphs)):
-                pd = paragraphs[i]
-                if pd.type_id not in PARENT_KEYS:
-                    continue
-                parent_lvl = int(pd.type_id[-1])
-                parent_key = pd.type_id
-                j = i + 1
-                siblings = []
-                while j < len(paragraphs):
-                    t = paragraphs[j].type_id
-                    if t in PARENT_KEYS and int(t[-1]) <= parent_lvl:
-                        break
-                    if t.startswith("heading"):
-                        siblings.append(j)
-                    j += 1
-                if len(siblings) >= 2:
-                    levels = {int(paragraphs[s].type_id[-1]) for s in siblings}
-                    if len(levels) == 1:
-                        target = f"heading{min(parent_lvl + 1, 4)}"
-                        # 保护：已有编号的段落不合并（防止吃掉并列标题如（一）（二）（三））
-                        if any(paragraphs[s].meta.get("numbering") for s in siblings):
-                            logger.debug("[同级合并] 跳过：siblings 已有编号")
-                            continue
-                        if any(paragraphs[s].type_id != target for s in siblings):
-                            for s in siblings:
-                                paragraphs[s].type_id = target
-                                paragraphs[s].meta["numbering"] = ""
-                            logger.info(f"[同级合并] {parent_key}下{len(siblings)}项L{max(levels)}→{target}")
-                            changed = True
+        _normalization_merge_uniform_heading_siblings(
+            paragraphs,
+            log_debug=logger.debug,
+            log_info=logger.info,
+        )
 
     def _fix_numbering_gaps(self, paragraphs: list) -> None:
         """兼容旧私有入口，传入段落列表，修复标题编号连续性。"""

@@ -38,6 +38,29 @@ node --test tests/frontend-format-config.test.mjs
 当前仓库没有提交真实用户语料或黄金 DOCX 二进制；无敏感结构样本由专项测试在临时目录生成。
 生产发布前仍需使用脱敏或仅哈希登记的内部样本执行同一套快照门禁。
 
+## Phase A 机械迁移等价验证
+
+仅在拆分导入、分段、规范化或渲染职责且声明“不改变行为”的迁移中，使用以下工具建立
+迁移前后快照。快照只保存文字长度、SHA-256、类型、定位、诊断和关键 OOXML 部件哈希；
+不要把原文或绝对用户路径写入报告。
+
+```pwsh
+$work = Join-Path $env:TEMP "docxtool-phase-a"
+python .\scripts\phase_a_equivalence_snapshot.py capture `
+  --output "$work\before.json" --artifact-dir "$work\before-export"
+# Capture before.json in an isolated pre-migration worktree, then capture
+# after.json in the current migration worktree with the equivalent command.
+python .\scripts\phase_a_equivalence_snapshot.py compare `
+  --before "$work\before.json" --after "$work\after.json" `
+  --output "$work\comparison.json"
+python .\scripts\phase_a_equivalence_snapshot.py legacy-input `
+  --output "$work\legacy-input.json"
+```
+
+`compare` 返回非零时，必须先解释或恢复差异；不得带着未解释的物理块、逻辑段、locator、
+最终类型、review 或关键 OOXML 差异进入下一行为修复阶段。该工具不替代正式批量排版和
+视觉抽查，后者仍按 `DOCX_REGRESSION_CHECKLIST.md` 执行。
+
 ## 回滚
 
 回滚使用上一份已验证的发布包或上一版本部署目录，不在生产机执行 `git reset --hard`、`git clean` 或强制 checkout。

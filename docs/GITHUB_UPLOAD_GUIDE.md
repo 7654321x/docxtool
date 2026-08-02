@@ -61,7 +61,7 @@ pwsh -NoProfile -Command "git ls-remote https://github.com/7654321x/docxtool.git
 - 管理员、文件 API 和 preset 修改路由的鉴权响应位于 `src/docxtool/web/route_authorization.py`。
 - DOCX 上传限流、落盘、安全校验和任务入队编排位于 `src/docxtool/web/upload_route_handlers.py`。
 - 已校验上传任务的 queued 记录和内存队列入队位于 `src/docxtool/web/task_queue.py`。
-- 脚本：`scripts/generate_secrets.py`、`scripts/benchmark_recognition.py`、`scripts/compare_recognition_runs.py`、`scripts/analyze_end_format.py`、`scripts/analyze_letterhead_batch.py`、`scripts/batch_test_docx.py`、`scripts/generate_005_format_fixtures.py`、`scripts/normalize_correct_template_role_spacing.py`、`scripts/migrate_legacy_database.ps1`、`scripts/publish_to_github.ps1`
+- 脚本：`scripts/generate_secrets.py`、`scripts/benchmark_recognition.py`、`scripts/compare_recognition_runs.py`、`scripts/analyze_end_format.py`、`scripts/analyze_letterhead_batch.py`、`scripts/batch_test_docx.py`、`scripts/generate_005_format_fixtures.py`、`scripts/normalize_correct_template_role_spacing.py`、`scripts/phase_a_equivalence_snapshot.py`、`scripts/migrate_legacy_database.ps1`、`scripts/publish_to_github.ps1`
 - 前端和 Cloudflare Pages：`resources/frontend/pages/index.html`、`resources/frontend/pages/_worker.js`
 - 运行目录占位：`var/data/.gitkeep`、`var/logs/.gitkeep`、`var/outputs/.gitkeep`、`var/runtime/.gitkeep`
 - 测试：`tests/test_*.py`、`tests/*.test.mjs`

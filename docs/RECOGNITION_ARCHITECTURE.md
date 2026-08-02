@@ -310,17 +310,24 @@ Web 服务启动顺序、启动日志、TCP_NODELAY 设置和 KeyboardInterrupt 
 
 旧的 `docxtool.document.importer` 仍 re-export 这些类型，保持现有测试、SDK 和渲染器导入路径兼容。
 
+## 物理导入边界
+
+`src/docxtool/document/importing/reader.py` 负责打开已修复关系的 DOCX、按 body XML
+顺序读取段落/表格/分节、保留页眉页脚关系，并保护紧邻表格或纯图片的首条题注。它只返回
+旧 importer 已使用的物理块 tuple，不生成逻辑段、不调用候选或状态机；关系修复函数和特征
+提取函数仍由兼容 importer 注入，保持现有调用方可替换的边界。
+
 ## 逻辑分段边界
 
 `src/docxtool/document/segmentation/` 开始承接物理段到逻辑段的守恒职责：
 
-- `pipeline.py`：根据源物理段行范围、软换行证据、行内标题正文拆分开关和正文区域状态生成逻辑 source span 计划；该模块只返回范围和 token 保留策略，不创建最终段落类型。
+- `pipeline.py`：根据源物理段行范围、软换行证据、行内标题正文拆分开关和正文区域状态生成逻辑 source span 计划，并把物理块按原顺序展开为旧 importer 使用的逻辑行 tuple；识别相关回调仍由 importer 注入，该模块不创建最终段落类型。
 - `source_locator.py`：根据源物理段 raw span 写入 UTF-16 locator、canonical locator、段内格式特征，构建逻辑段 `ParagraphFeatures`，并按物理段写入逻辑段序号和总数。旧的 importer 私有函数名仍作为兼容入口转发到该模块。
 - `boundaries.py`：根据源范围、冒号结构、编号事实和 run 格式切换生成标题正文边界候选，并提供“标题后粘连正文”共享事实；该模块不修改文本，也不决定最终标题层级。
 - `soft_breaks.py`：根据编号、文号、键值段、日期、附件、职务姓名和落款证据，判断软换行是否应形成逻辑段边界；其中职务姓名和文首职务日期组合由本模块提供通用形态判断，不维护具体姓名名单，也不决定最终段落类型。
 - `body_tail.py`：根据 importer 注入的附件、成文日期、附件项和附件页标记判断函数，扫描逻辑行中的最后正文候选位置；该模块只提供尾部边界事实，不写入最终类型。
 
-当前软换行、标题正文粘连和尾部软换行拆分规则仍保留在 importer 编排中，后续迁移时必须继续保持文字覆盖、不重叠和不丢失。
+当前 importer 保留兼容 facade 与识别编排；软换行、标题正文粘连和尾部软换行的边界实现已由 segmentation 消费既有回调。后续迁移必须继续保持文字覆盖、不重叠和不丢失。
 
 ## 目录
 
@@ -356,6 +363,28 @@ Web 服务启动顺序、启动日志、TCP_NODELAY 设置和 KeyboardInterrupt 
 - `responsibility.py`：提供已识别责任单位行的标签归一和重复标签换行规范化，只处理显示文本，不把正文重新分类为责任单位。
 - `text.py`：提供旧 importer 兼容的基础文本清理、中文语境引号转换和半角标点转换。该模块只封装文本转换 helper，不改变处理模式开关。
 - `tail.py`：消费最终 `type_id`，整理已确认的附件说明、落款单位、成文日期和附件正文页标记，承接 `sign_org + sign_date + attachment_note` 的尾部窄重排，并同步识别诊断。它不重新生成候选、不重新判定正文或标题，也不改变候选分数。
+- `pipeline.py`：仅承接 importer 原有的 Recognition 之后规范化调用顺序，包括尾部整理、编号 meta、同级合并、编号间隙修复、Word 自动编号清理和最终诊断同步。所有具体操作仍由 importer 注入的兼容回调执行，因此不改变私有 monkeypatch 边界、处理模式语义或 Recognition 的先后顺序。
+
+## Phase A-2 Mechanical Boundary
+
+Phase A-2 only changes the placement of document-chain code. `DocxImporter.load()` remains
+the compatibility facade and retains the existing order:
+
+```text
+physical reader -> logical segmentation -> legacy/core metadata -> Recognition
+-> post-recognition normalization -> renderer
+```
+
+The importer still owns the legacy/core classification call and the Recognition invocation.
+`normalization/pipeline.py` starts only after Recognition returns; it receives every action as
+an injected importer callback so it cannot silently acquire authority over candidates, state,
+final types, text rewriting or ordering rules.
+
+`scripts/phase_a_equivalence_snapshot.py` observes the existing importer aliases to record
+physical blocks, logical lines, pre-Recognition inputs, locator facts, post-chain types,
+review diagnostics and exported key OOXML parts. Snapshot JSON stores only text length and
+SHA-256 values. It also compares Legacy candidate enabled/disabled inputs at the decoder
+boundary as a Phase B investigation record, without changing Legacy behavior.
 
 ## 关键规则
 

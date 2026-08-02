@@ -27,6 +27,12 @@ from docxtool.document.normalization.numbering import (
     strip_numbering_prefix,
     style_key_to_rule_row,
 )
+from docxtool.document.normalization.pipeline import (
+    apply_post_recognition_normalization,
+    capture_pre_normalization_snapshot,
+    merge_uniform_heading_siblings,
+    strip_word_auto_numbering,
+)
 from docxtool.document.normalization.signature import normalize_sign_org
 from docxtool.document.normalization.text import (
     normalize_basic_text,
@@ -43,6 +49,8 @@ __all__ = [
     "chinese_number_to_int",
     "chinese_year_to_int",
     "assign_heading_numbering",
+    "apply_post_recognition_normalization",
+    "capture_pre_normalization_snapshot",
     "fix_heading_numbering_gaps",
     "is_attachment_page_mark",
     "is_sign_date_text",
@@ -55,11 +63,13 @@ __all__ = [
     "normalize_quotes",
     "is_responsibility_line",
     "normalize_responsibility_line",
+    "merge_uniform_heading_siblings",
     "record_applied_normalization_changes",
     "record_strict_normalization_suggestions",
     "reorder_attachment_note_before_signature",
     "sync_recognition_consistency",
     "strip_numbering_prefix",
     "style_key_to_rule_row",
+    "strip_word_auto_numbering",
     "to_chinese_punctuation",
 ]

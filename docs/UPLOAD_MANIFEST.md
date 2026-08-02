@@ -136,6 +136,7 @@ https://github.com/7654321x/docxtool.git
 | `src/docxtool/document/importing/images.py` | 图片和题注物理事实判断 | 只读取段落文本、样式和 OOXML 图片尺寸，不判断最终类型 |
 | `src/docxtool/document/importing/inline_tokens.py` | 行内 token 提取 | 只提取文本、制表符、软换行和分页符，不执行段落分类 |
 | `src/docxtool/document/importing/numbering.py` | 编号物理事实提取 | 返回文本开头编号形态、Word 原生列表/标题样式编号事实，不决定标题层级或最终类型 |
+| `src/docxtool/document/importing/reader.py` | DOCX 物理读取和 body 块提取 | 只负责安全打开、body XML 顺序、表格/图片/分节和题注保护，不参与逻辑拆段或类型裁决 |
 | `src/docxtool/document/importing/relationships.py` | 导入前损坏关系修复 | 只在临时副本中删除 `Target="../NULL"` 的 OOXML 关系，不修改原文件和识别结果 |
 | `src/docxtool/document/importing/sections.py` | 分节和页眉页脚关系导入 | 只读取 sectPr 和关系部件，不修改分节布局 |
 | `src/docxtool/document/effective_format.py` | run、样式继承、主题字体的有效格式解析 |
@@ -144,6 +145,7 @@ https://github.com/7654321x/docxtool.git
 | `src/docxtool/document/normalization/` | 导入后的结构归一化 | 当前承载基础文本清理、标题编号剥离与编号 meta、日期/附件/落款/责任单位显示规范、规范化账本、尾部附件、落款、日期顺序修正和诊断同步 |
 | `src/docxtool/document/normalization/changes.py` | 规范化变更账本生成 | 只根据最终段落、规范化前快照和调用方传入的标点建议函数记录 strict 建议或 normalize 已应用变化，不修改正文、类型或顺序 |
 | `src/docxtool/document/normalization/numbering.py` | 识别后标题编号规范化 | 只消费最终 type_id、已识别编号前缀、兼容兜底正则和样式规则，剥离旧前缀、生成标题编号 meta 并修复跳号，不重新判断标题层级或正文类型 |
+| `src/docxtool/document/normalization/pipeline.py` | Recognition 后规范化兼容编排 | 仅按 importer 原调用顺序调度注入的尾部、编号、合并、清理和诊断同步回调；不生成候选、不改变最终类型或处理模式语义 |
 | `src/docxtool/document/normalization/tail.py` | 识别后尾部结构归一化 | 只消费最终 type_id，整理附件说明、落款单位、成文日期、附件正文页和尾部窄重排，并同步诊断，不重新识别正文或标题 |
 | `src/docxtool/document/segmentation/` | 物理段到逻辑段的分段辅助 | 当前承载来源定位、标题正文边界、段内格式映射、发文字号/职务姓名/日期软换行证据、软换行强结构判断和尾部正文候选边界扫描 |
 | `src/docxtool/document/classifier.py` | 文档模式和段落结构分类 |
@@ -203,6 +205,7 @@ https://github.com/7654321x/docxtool.git
 | `scripts/generate_secrets.py` | 生成随机密钥辅助脚本 |
 | `scripts/benchmark_recognition.py` | 无正文识别性能基准 |
 | `scripts/compare_recognition_runs.py` | 安全识别差分和确定性检查 |
+| `scripts/phase_a_equivalence_snapshot.py` | Phase A 机械迁移脱敏等价快照 | 通过兼容入口比较物理块、逻辑段、识别输入/结果和关键 OOXML 哈希；不写入正文或用户 DOCX |
 | `scripts/analyze_end_format.py` | 排版结果与正确模板的无正文格式差异分析 |
 | `scripts/analyze_letterhead_batch.py` | 批量版头状态与问题归类 |
 | `scripts/batch_test_docx.py` | 编号测试文档批处理、结构对齐模板比较与可选视觉渲染抽查 |
