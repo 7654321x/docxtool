@@ -316,6 +316,32 @@ def normalize_tail_structures(
             _retag_tail_paragraph(paragraph, paragraph.type_id, source_text)
 
 
+def reorder_attachment_note_before_signature(paragraphs: list[Any]) -> None:
+    """把落款后置的附件说明块移到落款前。
+
+    传入已识别的可变段落列表。返回值为 None；只在出现
+    `sign_org + sign_date + attachment_note + item*` 的连续尾部块时
+    原地重排为 `attachment_note + item* + sign_org + sign_date`。
+    """
+    index = 0
+    while index < len(paragraphs) - 3:
+        if paragraphs[index].type_id != "sign_org" or paragraphs[index + 1].type_id != "sign_date":
+            index += 1
+            continue
+        if paragraphs[index + 2].type_id != "attachment_note":
+            index += 1
+            continue
+
+        note_end = index + 3
+        while note_end < len(paragraphs) and paragraphs[note_end].type_id == "attachment_note_item":
+            note_end += 1
+
+        sign_pair = paragraphs[index:index + 2]
+        note_block = paragraphs[index + 2:note_end]
+        paragraphs[index:note_end] = note_block + sign_pair
+        index = note_end
+
+
 def _diagnostic_text_hash(paragraph: Any, length: int) -> str:
     """Build the redacted text hash used in recognition diagnostics.
 

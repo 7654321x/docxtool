@@ -80,8 +80,8 @@
 - `src/docxtool/document/importer.py`：DOCX 结构识别、段落分类、元数据生成。
 - `src/docxtool/document/importing/`：DOCX 物理导入事实辅助，例如段落物理格式特征、图片可见性、题注、行内 token、编号前缀、Word 自动编号事实、分节关系和损坏关系副本修复。
 - `src/docxtool/document/segmentation/`：逻辑段 source locator、可见文字守恒、段内格式特征映射、标题正文粘连事实、发文字号/职务姓名/日期软换行证据、软换行结构边界判断和尾部正文候选边界扫描。
-- `src/docxtool/document/normalization/`：识别完成后的尾部顺序、日期/附件/责任单位显示规范和诊断一致性处理。
-- `src/docxtool/document/recognition/`：候选、Beam 解码、旧 Flow 状态约束、文首标题/续行/日期/署名/职务姓名证据、文首讲话标题证据、文种和报告标题证据、编号标题证据映射、冒号结构事实、附件结构形态事实、落款单位形态事实、诊断、验证和兼容映射；legacy 子包保留旧 importer 评分链路兼容数据模型。
+- `src/docxtool/document/normalization/`：识别完成后的尾部顺序、标题编号剥离与编号 meta、日期/附件/责任单位显示规范、规范化账本和诊断一致性处理。
+- `src/docxtool/document/recognition/`：候选、Beam 解码、旧 Flow 状态约束、文首标题/续行/日期/署名/职务姓名证据、文首讲话标题证据、文种和报告标题证据、编号标题证据映射、冒号结构事实、附件结构形态事实、尾部固定结构状态机、落款单位形态事实、诊断、验证和兼容映射；legacy 子包保留旧 importer 评分链路兼容数据模型。
 - `src/docxtool/document/style_config.py`：样式规则、页面设置、日志配置。
 - `src/docxtool/document/engine/`：DOCX 导出和实际排版逻辑。
 - `src/docxtool/security/`：上传 DOCX 安全校验。

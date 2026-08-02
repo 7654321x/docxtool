@@ -32,7 +32,12 @@ from docxtool.document.models import (
 )
 from docxtool.document.normalization.tail import (
     normalize_tail_structures as _normalize_tail_structures,
+    reorder_attachment_note_before_signature as _normalization_reorder_attachment_note_before_signature,
     sync_recognition_consistency as _sync_recognition_consistency,
+)
+from docxtool.document.normalization.changes import (
+    record_applied_normalization_changes as _normalization_record_applied_normalization_changes,
+    record_strict_normalization_suggestions as _normalization_record_strict_normalization_suggestions,
 )
 from docxtool.document.normalization.dates import (
     chinese_number_to_int as _normalization_chinese_number_to_int,
@@ -41,6 +46,12 @@ from docxtool.document.normalization.dates import (
     is_sign_date_text as _normalization_is_sign_date_text,
     normalize_attachment_page_mark as _normalization_normalize_attachment_page_mark,
     normalize_sign_date as _normalization_normalize_sign_date,
+)
+from docxtool.document.normalization.numbering import (
+    assign_heading_numbering as _normalization_assign_heading_numbering,
+    fix_heading_numbering_gaps as _normalization_fix_heading_numbering_gaps,
+    strip_numbering_prefix as _normalization_strip_numbering_prefix,
+    style_key_to_rule_row as _normalization_style_key_to_rule_row,
 )
 from docxtool.document.normalization.signature import normalize_sign_org as _normalization_normalize_sign_org
 from docxtool.document.normalization.responsibility import (
@@ -90,29 +101,21 @@ from docxtool.document.recognition.colon import (
 )
 from docxtool.document.recognition.document_mode import (
     detect_legacy_doc_type as _recognition_detect_legacy_doc_type,
-    has_title_keyword as _recognition_has_title_keyword,
-    legacy_glossary_item_score as _recognition_legacy_glossary_item_score,
-    legacy_glossary_title_score as _recognition_legacy_glossary_title_score,
-    legacy_heading_addressing_score as _recognition_legacy_heading_addressing_score,
-    legacy_report_addressing_score as _recognition_legacy_report_addressing_score,
-    legacy_report_heading_score as _recognition_legacy_report_heading_score,
-    legacy_title2_score as _recognition_legacy_title2_score,
     starts_report_heading_or_addressing as _recognition_starts_report_heading_or_addressing,
 )
-from docxtool.document.recognition.front_matter import (
-    legacy_author_line_score as _recognition_legacy_author_line_score,
-    legacy_date_line_score as _recognition_legacy_date_line_score,
-    legacy_role_name_score as _recognition_legacy_role_name_score,
-    legacy_title_cont_score as _recognition_legacy_title_cont_score,
-    legacy_title_score as _recognition_legacy_title_score,
+from docxtool.document.recognition.metadata import (
+    enrich_legacy_type_metadata as _recognition_enrich_legacy_type_metadata,
 )
 from docxtool.document.recognition.opening_speech import (
     opening_speech_title_text as _recognition_opening_speech_title_text,
     strip_inferred_speech_numbering as _recognition_strip_inferred_speech_numbering,
 )
+from docxtool.document.recognition.selection import (
+    build_legacy_scorer_registry as _recognition_build_legacy_scorer_registry,
+    select_legacy_scored_type as _recognition_select_legacy_scored_type,
+)
 from docxtool.document.recognition.numbering import (
     find_numbered_bold_pos as _recognition_find_numbered_bold_pos,
-    legacy_numbered_heading_score as _recognition_legacy_numbered_heading_score,
     looks_like_damaged_heading as _recognition_looks_like_damaged_heading,
     match_numbering as _recognition_match_numbering,
     match_style_or_level as _recognition_match_style_or_level,
@@ -125,8 +128,15 @@ from docxtool.document.recognition.signature import (
 )
 from docxtool.document.recognition.state import (
     legacy_flow_allows as _recognition_legacy_flow_allows,
+    legacy_record_structural as _recognition_legacy_record_structural,
+    legacy_repair_heading2_continuation as _recognition_legacy_repair_heading2_continuation,
     legacy_repair_heading4_colon as _recognition_legacy_repair_heading4_colon,
     legacy_repair_heading_level as _recognition_legacy_repair_heading_level,
+    legacy_repair_ocr_heading as _recognition_legacy_repair_ocr_heading,
+    legacy_update_context_after_type as _recognition_legacy_update_context_after_type,
+)
+from docxtool.document.recognition.tail_structure import (
+    detect_legacy_tail_structural_type as _recognition_detect_legacy_tail_structural_type,
 )
 from docxtool.document.recognition.version import RECOGNITION_VERSION_TAG
 from docxtool.document.recognition.legacy import DetectionContext, ScoreBoard, ScoreDetail
@@ -163,6 +173,7 @@ from docxtool.document.segmentation.soft_breaks import (
     is_header_role_date_pair as _seg_is_header_role_date_pair,
     is_dispatch_number_line as _seg_is_dispatch_number_line,
     is_role_name_line as _seg_is_role_name_line,
+    is_structural_key_value_line as _seg_is_structural_key_value_line,
     should_split_structural_line_breaks as _seg_should_split_structural_line_breaks,
 )
 from docxtool.document.style_config import (
@@ -186,7 +197,13 @@ __all__ = [
     "ParagraphFeatures",
     "SegmentBoundaryCandidate",
     "SourceRun",
+    "ScoreBoard",
+    "ScoreDetail",
     "_apply_segment_format_features",
+    "_inherit_source_locator",
+    "_set_source_locator",
+    "_trim_source_span",
+    "_visible_character_count",
     "extract_features",
 ]
 
@@ -384,8 +401,8 @@ def _norm_sign_org(text: str) -> str:
 
 
 def _record_structural(ctx, type_id: str, text: str) -> None:
-    ctx.last_structural_type = type_id
-    ctx.last_structural_text = (text or "").strip()
+    """兼容旧私有入口，传入上下文、类型和文本，记录最后结构事实。"""
+    _recognition_legacy_record_structural(ctx, type_id, text)
 
 def _blocks_independent_sign_date(ctx) -> bool:
     """判断上一结构文本是否阻止当前日期作为独立尾部日期。"""
@@ -422,8 +439,12 @@ def _is_auto_numbered_item(feats: Optional[ParagraphFeatures]) -> bool:
 
 
 def _is_structural_key_value_line(text: str) -> bool:
-    """传入一行文本，返回它是否是可作为软换行边界的键值结构。"""
-    return bool(_normalization_is_responsibility_line(text or "") or _colon_bold_match(text or "") >= 0)
+    """兼容旧私有入口，传入一行文本，返回它是否可作为软换行键值边界。"""
+    return _seg_is_structural_key_value_line(
+        text,
+        is_responsibility_line_func=_normalization_is_responsibility_line,
+        colon_bold_match_func=_colon_bold_match,
+    )
 
 
 def _is_role_name_line(text: str) -> bool:
@@ -476,23 +497,6 @@ def _is_dispatch_number_line(text: str) -> bool:
     return _seg_is_dispatch_number_line(text)
 
 
-def _split_inline_heading_body(line: str) -> list[str]:
-    """Split a numbered title followed by a real body sentence without editing text.
-
-    This is intentionally narrower than punctuation normalization: only a
-    numbered heading whose first sentence is followed by at least five visible
-    characters becomes two structural paragraphs.  The full source text is
-    retained across the two results.
-    """
-    text = (line or "").strip()
-    if not _detect_numbering_prefix(text):
-        return [text]
-    period_index = text.find("。")
-    if period_index < 0 or len(text[period_index + 1:].strip()) < 5:
-        return [text]
-    return [text[:period_index + 1], text[period_index + 1:].strip()]
-
-
 def _normalize_responsibility_line(text: str) -> str:
     """兼容旧私有入口，传入责任单位文本，返回规范化后的显示文本。"""
     return _normalization_normalize_responsibility_line(text)
@@ -501,127 +505,31 @@ def _normalize_responsibility_line(text: str) -> str:
 def detect_structural_type(line: str, next_line: str, ctx,
                            feats: Optional[ParagraphFeatures] = None,
                            next_feats: Optional[ParagraphFeatures] = None):
-    """固定结构状态机：正文 → [附件说明] → 落款 → 日期 → [附件页]+
-
-        body → [attachment_note → item*] → sign_org → sign_date → [page_mark → title → body*]*
-
-        返回 (type_id, meta, prefix, fixed_text) 或 (None, {}, "", orig_text)
-    """
-    text = line.strip()
-    next_text = next_line.strip() if next_line else ""
-
-    if _normalization_is_responsibility_line(text):
-        return "responsibility_line", {"colon_bold": True}, "", _normalize_responsibility_line(text)
-
-    # 1. 附件说明：上一段必须是正文
-    m = _recognition_match_attachment_note(text)
-    if m and _can_start_attachment_note(ctx):
-        had_signature_complete = ctx.signature_complete
-        body = m.group(1).strip()
-        first_no = re.match(r"^(\d+)[.．、]\s*", body)
-        next_is_item = bool(_recognition_match_attachment_item(next_text)) or _is_auto_numbered_item(next_feats)
-
-        # 空"附件："无内容且无续行 → 不识别
-        if not body and not next_is_item:
-            return None, {}, "", text
-
-        if first_no and next_is_item:
-            # A: 多附件，规范空格：附件：1.基本情况 → 附件：1. 基本情况
-            is_multi = True
-            ctx.attachment_note_next_no = int(first_no.group(1)) + 1
-            fixed_text = re.sub(
-                r"^\s*附件\s*[:：]\s*(\d+)[.．、]\s*",
-                lambda x: f"附件：{x.group(1)}. ",
-                text, count=1)
-        elif first_no and not next_is_item:
-            # B: 首行有 1. 但下一行不是编号 → 单附件，去掉编号
-            is_multi = False
-            ctx.attachment_note_next_no = 1
-            body_no = re.sub(r"^\d+[.．、]\s*", "", body, count=1).strip()
-            fixed_text = f"附件：{body_no}"
-        elif not first_no and next_is_item:
-            # C: 首行无编号但下一行有 → 补 1.
-            is_multi = True
-            ctx.attachment_note_next_no = 2
-            fixed_text = f"附件：1. {body}"
-        else:
-            # D: 单附件
-            is_multi = False
-            ctx.attachment_note_next_no = 1
-            fixed_text = text
-
-        ctx.attachment_note_seen = True
-        ctx.attachment_note_mode = is_multi
-        ctx.signature_seen = had_signature_complete
-        ctx.signature_complete = had_signature_complete
-        _record_structural(ctx, "attachment_note", fixed_text)
-        return "attachment_note", {"attachment_single": not is_multi,
-                                    "attachment_multi": is_multi}, "", fixed_text
-
-    # 2. 附件续行：已进入附件说明块，且当前段是编号项；自动修正序号
-    m2 = _recognition_match_attachment_item(text)
-    is_auto_item = _is_auto_numbered_item(feats)
-    if ctx.attachment_note_mode and ctx.attachment_note_seen and (m2 or is_auto_item):
-        if m2:
-            fixed = re.sub(r"^\s*\d+[.．、]\s*", f"{ctx.attachment_note_next_no}. ", text, count=1)
-        else:
-            fixed = f"{ctx.attachment_note_next_no}. {text.strip()}"
-        ctx.attachment_note_next_no += 1
-        _record_structural(ctx, "attachment_note_item", fixed)
-        return "attachment_note_item", {}, "", fixed
-
-    # 3. 落款单位：上段是 body / attachment_note / item，且下一行是日期
-    if ctx.last_structural_type in ("body", "attachment_note", "attachment_note_item"):
-        if _looks_like_sign_org(text, next_text, ctx):
-            ctx.attachment_note_mode = False
-            ctx.signature_seen = True
-            fixed = _norm_sign_org(text)
-            _record_structural(ctx, "sign_org", fixed)
-            return "sign_org", {}, "", fixed
-
-    # 4. 成文日期：紧接落款单位之后，自动规范化
-    if ctx.last_structural_type == "sign_org" and _normalization_is_sign_date_text(text):
-        ctx.signature_complete = True
-        fixed = _norm_sign_date(text)
-        _record_structural(ctx, "sign_date", fixed)
-        return "sign_date", {}, "", fixed
-
-    # 4b. 独立尾部日期：正文后、非附件页内，且后续只接附件边界或已到文末
-    if (ctx.has_seen_real_body and not ctx.attachment_page_mode
-            and _normalization_is_sign_date_text(text)
-            and (not next_text or _is_attachment_boundary(next_text))
-            and not _blocks_independent_sign_date(ctx)):
-        ctx.attachment_note_mode = False
-        ctx.signature_seen = True
-        ctx.signature_complete = True
-        fixed = _norm_sign_date(text)
-        _record_structural(ctx, "sign_date", fixed)
-        return "sign_date", {}, "", fixed
-
-    # 5. 附件正文页标识：由附件说明或成文日期形成强边界，不再依赖二者同时存在
-    if ((ctx.attachment_note_seen or ctx.signature_complete or ctx.attachment_page_mode)
-            and ctx.last_structural_type in ("sign_date", "attachment_note", "attachment_note_item",
-                                             "attachment_body", "attachment_title")
-            and _is_attachment_page_mark(text)):
-        ctx.attachment_page_mode = True
-        fixed = _norm_attach_mark(text)
-        _record_structural(ctx, "attachment_page_mark", fixed)
-        return "attachment_page_mark", {}, "", fixed
-
-    # 6. 附件标题：附件页标识后 + 短句(<28字) + 无编号无冒号 → 标题
-    if (ctx.last_structural_type == "attachment_page_mark" and ctx.attachment_page_mode
-            and len(text) <= 28 and not _contains_colon(text)):
-        tid, _ = _match_numbering(text)
-        if not tid:
-            _record_structural(ctx, "attachment_title", text)
-            return "attachment_title", {}, "", text
-
-    # 7. 附件正文：附件页内，不满足标题条件 → 走正常分类
-    if ctx.attachment_page_mode and ctx.last_structural_type in ("attachment_title", "attachment_body", "attachment_page_mark"):
-        ctx.has_seen_real_body = True  # 确保 scorer 的 has_seen_body 条件通过
-        # 不 return，让 detect_paragraph_type 正常分类
-
-    return None, {}, "", text
+    """兼容旧私有入口，传入当前/下一行和上下文，返回尾部结构类型结果。"""
+    return _recognition_detect_legacy_tail_structural_type(
+        line,
+        next_line,
+        ctx,
+        feats,
+        next_feats,
+        is_responsibility_line_func=_normalization_is_responsibility_line,
+        normalize_responsibility_line_func=_normalize_responsibility_line,
+        match_attachment_note_func=_recognition_match_attachment_note,
+        can_start_attachment_note_func=_can_start_attachment_note,
+        match_attachment_item_func=_recognition_match_attachment_item,
+        is_auto_numbered_item_func=_is_auto_numbered_item,
+        looks_like_sign_org_func=_looks_like_sign_org,
+        normalize_sign_org_func=_norm_sign_org,
+        is_sign_date_func=_normalization_is_sign_date_text,
+        normalize_sign_date_func=_norm_sign_date,
+        is_attachment_boundary_func=_is_attachment_boundary,
+        blocks_independent_sign_date_func=_blocks_independent_sign_date,
+        is_attachment_page_mark_func=_is_attachment_page_mark,
+        normalize_attachment_page_mark_func=_norm_attach_mark,
+        contains_colon_func=_contains_colon,
+        match_numbering_func=_match_numbering,
+        record_structural_func=_record_structural,
+    )
 
 
 def _is_tail_signature_org_text(text: str) -> bool:
@@ -691,233 +599,16 @@ def _match_style_or_lvl(text: str, feats):
     return _recognition_match_style_or_level(text, feats, normalize_text=_normalize_text)
 
 
-# ═══════════════════════════════════════════════════════════════
-# Scorer 层：每个类型独立打分函数（按优先级 ①~⑲ 排列）
-# ═══════════════════════════════════════════════════════════════
-
-def _score_01_title(text: str, feats, ctx) -> Tuple[int, dict, str]:
-    """① title（方正小标宋 二号 居中）：首个可分类正文段 + 无编号无冒号。"""
-    tid, _ = _match_numbering(text)
-    score = _recognition_legacy_title_score(
-        text,
-        ctx.prev_type_id,
-        has_seen_body=ctx.has_seen_body,
-        contains_colon=_contains_colon(text),
-        has_numbering=bool(tid),
-    )
-    return (score, {"is_title": True}, "") if score else (0, {}, "")
-
-
-def _score_02_title_cont(text: str, feats, ctx) -> Tuple[int, dict, str]:
-    """② title续行：头部区域内 + 短行 + 无特征，兜底为标题续行。"""
-    tid, _ = _match_numbering(text)
-    score = _recognition_legacy_title_cont_score(
-        text,
-        ctx.prev_type_id,
-        has_seen_body=ctx.has_seen_body,
-        contains_colon=_contains_colon(text),
-        has_numbering=bool(tid),
-    )
-    return (score, {}, "") if score else (0, {}, "")
-
-
-def _score_03_date_line(text: str, feats, ctx) -> Tuple[int, dict, str]:
-    """③ 日期行（楷体 居中）：上段 title/续行/署名 + 括号开头或含年份 + <50字。"""
-    tid, _ = _match_numbering(text)
-    score = _recognition_legacy_date_line_score(
-        text,
-        ctx.prev_type_id,
-        has_seen_body=ctx.has_seen_body,
-        has_numbering=bool(tid),
-    )
-    return (score, {}, "") if score else (0, {}, "")
-
-
-def _score_04_author_line(text: str, feats, ctx) -> Tuple[int, dict, str]:
-    """④ 署名行（楷体 加粗 居中）：上段是日期行 + <20字 + 无编号无冒号 + 无连续空格。"""
-    tid, _ = _match_numbering(text)
-    score = _recognition_legacy_author_line_score(
-        text,
-        ctx.prev_type_id,
-        has_seen_body=ctx.has_seen_body,
-        contains_colon=_contains_colon(text),
-        has_numbering=bool(tid),
-    )
-    return (score, {}, "") if score else (0, {}, "")
-
-
-def _score_05_role_name(text: str, feats, ctx) -> Tuple[int, dict, str]:
-    """⑤ 职务署名（楷体 加粗）：上段 title/续行 + <20字 + 含空格或职务关键词。"""
-    if ctx.has_seen_body:
-        return 0, {}, ""
-    if ctx.prev_type_id not in ("title", "title_cont", "date_line", "author_line"):
-        return 0, {}, ""
-    prev_title = ctx.title_texts[-1] if ctx.title_texts else ""
-    score = _recognition_legacy_role_name_score(text, prev_title, contains_colon=_contains_colon(text))
-    return (score, {}, "") if score else (0, {}, "")
-
-
-def _score_06_heading1_cn(text: str, feats, ctx) -> Tuple[int, dict, str]:
-    """⑥ heading1（黑体 左对齐 有编号）：^一、~^二十、，但跳过报告模式的回顾类标题。"""
-    tid, prefix = _match_numbering(text)
-    mode = ctx.doc_mode or _detect_doc_type(ctx)
-    score = _recognition_legacy_numbered_heading_score(
-        text,
-        tid,
-        prefix,
-        document_mode=mode,
-        contains_colon=_contains_colon(text),
-    )
-    return (score, {}, prefix) if score and tid == "heading1" else (0, {}, "")
-
-
-def _score_07_heading2_cn(text: str, feats, ctx) -> Tuple[int, dict, str]:
-    """⑦ heading2（楷体 加粗 左对齐）：^（一）~^（二十）"""
-    tid, prefix = _match_numbering(text)
-    score = _recognition_legacy_numbered_heading_score(
-        text,
-        tid,
-        prefix,
-        document_mode=ctx.doc_mode or _detect_doc_type(ctx),
-        contains_colon=_contains_colon(text),
-    )
-    return (score, {}, prefix) if score and tid == "heading2" else (0, {}, "")
-
-
-def _score_08_heading3_digit(text: str, feats, ctx) -> Tuple[int, dict, str]:
-    """⑧ heading3（仿宋 左对齐）：^1.~"""
-    tid, prefix = _match_numbering(text)
-    score = _recognition_legacy_numbered_heading_score(
-        text,
-        tid,
-        prefix,
-        document_mode=ctx.doc_mode or _detect_doc_type(ctx),
-        contains_colon=_contains_colon(text),
-    )
-    return (score, {}, prefix) if score and tid == "heading3" else (0, {}, "")
-
-
-def _score_09_heading4_digit(text: str, feats, ctx) -> Tuple[int, dict, str]:
-    """⑨ heading4（仿宋 左对齐 无冒号）：^（1）~"""
-    tid, prefix = _match_numbering(text)
-    score = _recognition_legacy_numbered_heading_score(
-        text,
-        tid,
-        prefix,
-        document_mode=ctx.doc_mode or _detect_doc_type(ctx),
-        contains_colon=_contains_colon(text),
-    )
-    return (score, {}, prefix) if score and tid == "heading4" else (0, {}, "")
-
-
-def _score_10_heading1_report(text: str, feats, ctx) -> Tuple[int, dict, str]:
-    """⑩ heading1 报告回顾类标题（黑体 左对齐）：段首或编号后接"一年来/五年来"。"""
-    # 可能带编号前缀如"一、 一年来" / "一、 五年来"
-    tid, prefix = _match_numbering(text)
-    score, should_split = _recognition_legacy_report_heading_score(text, prefix)
-    if not score:
-        return 0, {}, ""
-    return score, {"heading1_report_split": should_split}, prefix if prefix else ""
-
-
-def _score_11_title2(text: str, feats, ctx) -> Tuple[int, dict, str]:
-    """⑪ title2（黑体 居中）：has_body(或 REPORT 模式) + <28字 + 非报告回顾/称呼 + 无冒号 + 无编号 + 无句号。"""
-    doc_mode = ctx.doc_mode or _detect_doc_type(ctx)
-    tid, _ = _match_numbering(text)
-    score = _recognition_legacy_title2_score(
-        text,
-        document_mode=doc_mode,
-        has_seen_body=ctx.has_seen_body,
-        previous_type=ctx.prev_type_id,
-        contains_colon=_contains_colon(text),
-        has_numbering=bool(tid),
-    )
-    return (score, {}, "") if score else (0, {}, "")
-
-
-def _score_glossary_title(text: str, feats, ctx) -> Tuple[int, dict, str]:
-    """glossary_title（方正小标宋 二号 居中）：title2 命中且含"名词解释"。"""
-    score, m, p = _score_11_title2(text, feats, ctx)
-    glossary_score = _recognition_legacy_glossary_title_score(text, title2_score=score)
-    return (glossary_score, m, p) if glossary_score else (0, {}, "")
-
-
-def _score_glossary_item(text: str, feats, ctx) -> Tuple[int, dict, str]:
-    """glossary_item：glossary_mode 下含冒号段落 → 自动编号 + 关键词黑体加粗+正文仿宋。"""
-    # 先检查是否有显式编号（1. / 2. 等）
-    tid, prefix = _match_numbering(text)
-    return _recognition_legacy_glossary_item_score(
-        text,
-        glossary_mode=ctx.glossary_mode,
-        numbering_type=tid,
-        prefix=prefix,
-        contains_colon=_contains_colon(text),
-    )
-
-
-def _score_12_addressing_report(text: str, feats, ctx) -> Tuple[int, dict, str]:
-    """⑫ addressing 报告"各位委员"（仿宋 两端对齐 缩进2字）。仅匹配短句。"""
-    score = _recognition_legacy_report_addressing_score(text)
-    return (score, {"no_indent": False}, "") if score else (0, {}, "")
-
-
-def _score_13_addressing_check(text: str, feats, ctx) -> Tuple[int, dict, str]:
-    """⑬ addressing 对照检查主送（仿宋 左对齐 0缩进）：heading后第一段 + 冒号结尾。"""
-    score = _recognition_legacy_heading_addressing_score(
-        text,
-        ctx.prev_type_id,
-        has_seen_real_body=ctx.has_seen_real_body,
-    )
-    return (score, {"no_indent": True}, "") if score else (0, {}, "")
-
-
-
-
-
-def _score_16_body_default(text: str, feats, ctx) -> Tuple[int, dict, str]:
-    """⑲ body 兜底：仿宋 两端对齐 缩进2字。"""
-    return 10, {}, ""
-
-
-# ── 骨架层（任何文种都跑，永远不变）──
-
-_STRUCTURE_SCORERS: List[Tuple[str, callable]] = [
-    ("title",              _score_01_title),
-    ("title_cont",         _score_02_title_cont),
-    ("date_line",          _score_03_date_line),
-    ("author_line",        _score_04_author_line),
-    ("role_name",          _score_05_role_name),
-    ("heading1",           _score_06_heading1_cn),
-    ("heading2",           _score_07_heading2_cn),
-    ("heading3",           _score_08_heading3_digit),
-    ("heading4",           _score_09_heading4_digit),
-]
-
-# ── 文种覆盖层（mode 锁定后追加到骨架之后）──
-
-_MODE_SCORERS: Dict[str, List[Tuple[str, callable]]] = {
-    "NORMAL": [
-        ("addressing",     _score_13_addressing_check),
-    ],
-    "REPORT": [
-        ("heading1_report", _score_10_heading1_report),
-        ("glossary_title", _score_glossary_title),
-        ("title2",         _score_11_title2),
-        ("addressing",     _score_12_addressing_report),
-        ("glossary_item",  _score_glossary_item),
-    ],
-}
-
-# ── 兜底层（所有文种通用）──
-
-_FALLBACK_SCORERS: List[Tuple[str, callable]] = [
-    ("body",               _score_16_body_default),
-]
-
-
 def _detect_doc_type(ctx) -> str:
     """从头部标题文字检测文种。仅在 has_seen_body 首次变为 True 时调用一次。"""
     return _recognition_detect_legacy_doc_type(ctx.title_texts)
+
+
+_STRUCTURE_SCORERS, _MODE_SCORERS, _FALLBACK_SCORERS = _recognition_build_legacy_scorer_registry(
+    match_numbering_func=_match_numbering,
+    contains_colon_func=_contains_colon,
+    detect_doc_type_func=_detect_doc_type,
+)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -989,130 +680,66 @@ def detect_paragraph_type(text: str, feats: ParagraphFeatures,
             prefix = style_prefix
             from_word_structure = True
         else:
-            # ── ① 骨架层 → ② 文种覆盖层 → ③ 兜底层 ──
-            type_id = "body"
-            best_score = -1
-
-            # 第一遍：骨架层 scorer
-            for tid, scorer in _STRUCTURE_SCORERS:
-                score, m, p = scorer(text, feats, ctx)
-                if score > 0:
-                    score_log.append(f"{tid}:{score}")
-                if score > best_score and score > 0 and _flow_allows(tid, ctx):
-                    best_score, type_id, meta, prefix = score, tid, m, p
-
-            # 第二遍：文种覆盖层（提前检测 mode，确保首段也生效）
-            mode = ctx.doc_mode or _detect_doc_type(ctx)
-            if mode:
-                for tid, scorer in _MODE_SCORERS.get(mode, []):
-                    score, m, p = scorer(text, feats, ctx)
-                    if score > best_score and score > 0 and _flow_allows(tid, ctx):
-                        best_score, type_id, meta, prefix = score, tid, m, p
-
-            # 第三遍：兜底层
-            if best_score < 0:
-                for tid, scorer in _FALLBACK_SCORERS:
-                    score, m, p = scorer(text, feats, ctx)
-                    if score > best_score and _flow_allows(tid, ctx):
-                        best_score, type_id, meta, prefix = score, tid, m, p
+            type_id, meta, prefix, score_log = _recognition_select_legacy_scored_type(
+                text,
+                feats,
+                ctx,
+                structure_scorers=_STRUCTURE_SCORERS,
+                mode_scorers=_MODE_SCORERS,
+                fallback_scorers=_FALLBACK_SCORERS,
+                detect_doc_type_func=_detect_doc_type,
+                flow_allows_func=_flow_allows,
+            )
 
     # ── Repair ──
     type_id = _repair_heading4_colon(type_id, text, feats, ctx)
     if not from_word_structure:
         type_id = _repair_level(type_id, feats, ctx)
 
-    # ── OCR 标题容错 ──
-    if (
-        type_id == "body"
-        and not unbound_object_label
-        and _looks_like_heading(text)
-        and not ctx.has_seen_body
-    ):
-        type_id = "heading1"
+    repaired_type_id = _recognition_legacy_repair_ocr_heading(
+        type_id,
+        text,
+        has_seen_body=ctx.has_seen_body,
+        unbound_object_label=unbound_object_label,
+        looks_like_heading_func=_looks_like_heading,
+    )
+    if repaired_type_id != type_id:
+        type_id = repaired_type_id
         logger.debug("[修复] OCR 标题升级 chars=%s", len(text))
 
     # ── 打分日志 ──
     scores_str = ' → '.join(score_log) if score_log else 'by_style'
     logger.info("[打分] chars=%s text_sha256=%s | %s → %s", len(text), hashlib.sha256(text.encode("utf-8")).hexdigest()[:12], scores_str, type_id)
 
-    # ── heading2 续行修复：前段 heading2 + 短句含句号 → 缺编号的 heading2 ──
-    if type_id == "body" and ctx.prev_type_id == "heading2" and len(text) <= 30 and text.endswith('。'):
-        type_id = "heading2"
-        meta["heading2_cont"] = True  # 不自动编号
+    repaired_type_id = _recognition_legacy_repair_heading2_continuation(
+        type_id,
+        text,
+        ctx.prev_type_id,
+        meta,
+    )
+    if repaired_type_id != type_id:
+        type_id = repaired_type_id
         logger.debug("[修复] heading2 续行 chars=%s", len(text))
 
-    # ── Meta 补充：body 内部加粗标记 ──
-    if type_id in ("heading1", "heading2") and _heading_has_inline_body(text):
-        # 方案模式二级标题不拆分，整段保留
-        if not (type_id == "heading2" and ctx.doc_mode == "SCHEME"):
-            meta["heading_inline_body"] = True
+    meta = _recognition_enrich_legacy_type_metadata(
+        text,
+        type_id,
+        feats,
+        ctx,
+        meta,
+        heading_has_inline_body_func=_heading_has_inline_body,
+        find_numbered_bold_pos_func=_find_numbered_bold_pos,
+        colon_bold_match_func=_colon_bold_match,
+        starts_report_heading_or_addressing_func=_recognition_starts_report_heading_or_addressing,
+    )
 
-    if type_id == "body":
-        numbered_bold = _find_numbered_bold_pos(text) >= 0
-        if numbered_bold:
-            meta["numbered_bold"] = True
-        elif feats.inline_lead_bold:
-            # “一是/一要”正文由 numbered_bold 统一处理全部并列引导句；
-            # 不再叠加首句强调恢复，避免把句号后的普通正文重新加粗。
-            meta["inline_lead_bold"] = True
-        cp = _colon_bold_match(text)
-        if cp >= 0:
-            meta["colon_bold"] = True
-        # 报告首句加粗（current_level==1 + 首句≤30字 + 非报告回顾/称呼）。
-        # 一是/二是/三是类段落已有 numbered_bold，避免两套 run 重写规则叠加。
-        if (ctx.doc_mode == "REPORT" and ctx.current_level == 1 and not meta.get("numbered_bold")
-                and not _recognition_starts_report_heading_or_addressing(text)):
-            period = text.find('。')
-            if 0 < period <= 26:  # 首句≤26字加粗
-                meta["report_first_sentence_bold"] = True
-
-    if text.endswith(("：", ":")):
-        meta["no_indent"] = True
-
-    # ── 更新上下文 ──
-    ctx.prev_type_id = type_id
-
-    # 附件/落款 结构状态跟踪
-    if type_id in ("body", "addressing", "responsibility_line"):
-        ctx.has_seen_real_body = True
-        _record_structural(ctx, "body", text)
-    elif type_id in ("attachment_note", "attachment_note_item",
-                      "attachment_page_mark", "attachment_title",
-                      "attachment_body", "sign_org", "sign_date"):
-        _record_structural(ctx, type_id, text)
-    elif type_id.startswith("heading") or type_id in ("title", "title2"):
-        _record_structural(ctx, "body" if meta.get("heading_inline_body") else type_id, text)
-
-    # 成文日期后重置附件页内状态，允许多个附件
-    if type_id == "sign_date":
-        ctx.signature_complete = True
-        ctx.attachment_page_mode = False
-
-    # 头部区域：收集标题文字
-    if not ctx.has_seen_body and type_id in ("title", "title_cont"):
-        ctx.title_texts.append(text)
-
-    if type_id.startswith("heading"):
-        ctx.has_seen_heading = True
-        if not ctx.has_seen_body:
-            ctx.has_seen_body = True
-            ctx.doc_mode = _detect_doc_type(ctx)
-        if type_id == "heading1_report":
-            ctx.current_level = 1
-        else:
-            ctx.current_level = int(type_id[-1])
-    elif type_id == "title2":
-        ctx.has_seen_heading = True
-        # title2 不设 current_level，首句加粗仅在 heading1_report 后触发
-    elif type_id == "glossary_title":
-        ctx.glossary_mode = True
-        ctx.has_seen_body = True
-    elif type_id in ("title", "title_cont", "date_line", "author_line", "role_name"):
-        pass  # 头部区域，不设 has_seen_body
-    elif type_id in ("body", "addressing", "responsibility_line"):
-        if not ctx.has_seen_body:
-            ctx.has_seen_body = True
-            ctx.doc_mode = _detect_doc_type(ctx)  # 锁定文种
+    _recognition_legacy_update_context_after_type(
+        ctx,
+        type_id,
+        text,
+        meta,
+        detect_doc_type_func=_detect_doc_type,
+    )
 
     logger.debug(f"[决策] para={ctx.para_index} → {type_id} meta={meta}")
     return type_id, meta, prefix
@@ -1123,25 +750,17 @@ def detect_paragraph_type(text: str, feats: ParagraphFeatures,
 # ═══════════════════════════════════════════════════════════════
 
 def strip_numbering(text: str, prefix: Optional[str] = None) -> str:
-    """剥离编号前缀 + 清理残留多余标点（如 "4..xxx" → "xxx"）。"""
-    # 自动编号补标：@lvl_N:text → 剥离 @lvl_N: 部分
-    if text.startswith('@lvl_'):
-        colon = text.find(':')
-        if colon > 0:
-            return text[colon+1:].strip()
-    if prefix:
-        text = text[len(prefix):]
-    else:
-        # 兜底正则
-        for pat, _ in _NUMBERING_PATTERNS:
-            text = pat.sub('', text, count=1)
-    # 清理残留的多余标点（如 ".还需优化" → "还需优化"）
-    text = re.sub(r'^[.．、，,]\s*', '', text)
-    return text.strip()
+    """兼容旧入口，传入标题文本和可选前缀，返回剥离编号后的正文。"""
+    return _normalization_strip_numbering_prefix(
+        text,
+        prefix,
+        numbering_patterns=_NUMBERING_PATTERNS,
+    )
 
 
 def _key_to_row(key: str) -> int:
-    return {"a": 1, "b": 2, "c": 3, "d": 4}.get(key, 5)  # row 0=主标题, row 5=正文
+    """兼容旧私有入口，传入编号层级 key，返回样式规则行号。"""
+    return _normalization_style_key_to_rule_row(key)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1609,79 +1228,21 @@ class DocxImporter:
         return data
 
     def _record_strict_normalization_suggestions(self, data: DocumentData) -> None:
+        """兼容旧私有入口，传入文档数据，记录 strict 模式规范化建议。"""
         from docxtool.document.engine.punctuation import normalize_punctuation_text
 
-        for index, paragraph in enumerate(data.paragraphs):
-            if paragraph.type_id.startswith("__"):
-                continue
-            proposed = normalize_punctuation_text(paragraph.original_text, mode="safe")
-            if proposed != paragraph.original_text:
-                data.normalization_changes.append(NormalizationChange(
-                    paragraph_index=index,
-                    action="normalize_punctuation",
-                    before=paragraph.original_text,
-                    after=proposed,
-                    reason_code="PUNCTUATION_NORMALIZATION_SUGGESTED",
-                    confidence=0.9,
-                    applied=False,
-                ))
-        for index in range(len(data.paragraphs) - 2):
-            current = data.paragraphs[index]
-            following = data.paragraphs[index + 1]
-            trailing = data.paragraphs[index + 2]
-            if (
-                current.type_id == "sign_org"
-                and following.type_id == "sign_date"
-                and trailing.type_id == "attachment_note"
-            ):
-                data.normalization_changes.append(NormalizationChange(
-                    paragraph_index=index,
-                    action="reorder_tail_structure",
-                    before="sign_org,sign_date,attachment_note",
-                    after="attachment_note,sign_org,sign_date",
-                    reason_code="TAIL_STRUCTURE_REORDER_SUGGESTED",
-                    confidence=0.85,
-                    applied=False,
-                ))
-        for index in range(len(data.paragraphs) - 1):
-            current = data.paragraphs[index]
-            following = data.paragraphs[index + 1]
-            if current.type_id.startswith("heading") and current.type_id == following.type_id:
-                data.normalization_changes.append(NormalizationChange(
-                    paragraph_index=index,
-                    action="merge_sibling_heading",
-                    before=current.original_text,
-                    after=f"{current.original_text}{following.original_text}",
-                    reason_code="SIBLING_HEADING_MERGE_SUGGESTED",
-                    confidence=0.7,
-                    applied=False,
-                ))
+        _normalization_record_strict_normalization_suggestions(
+            data,
+            normalize_punctuation_func=lambda text: normalize_punctuation_text(text, mode="safe"),
+        )
 
     def _record_applied_normalization_changes(
         self,
         data: DocumentData,
         before: list[tuple[str, str, str]],
     ) -> None:
-        after = [
-            (paragraph.original_text, paragraph.text, paragraph.type_id)
-            for paragraph in data.paragraphs
-            if not paragraph.type_id.startswith("__")
-        ]
-        max_length = max(len(before), len(after))
-        for index in range(max_length):
-            old = before[index] if index < len(before) else ("", "", "")
-            new = after[index] if index < len(after) else ("", "", "")
-            if old == new:
-                continue
-            data.normalization_changes.append(NormalizationChange(
-                paragraph_index=index,
-                action="normalize_structure",
-                before=old[1] or old[0],
-                after=new[1] or new[0],
-                reason_code="LEGACY_NORMALIZATION_APPLIED",
-                confidence=0.8,
-                applied=True,
-            ))
+        """兼容旧私有入口，传入文档数据和旧快照，记录已应用变化。"""
+        _normalization_record_applied_normalization_changes(data, before)
 
     def _apply_core_classification(self, data: DocumentData, features: dict) -> None:
         classification_options = features.get("classification", {}) if isinstance(features.get("classification", {}), dict) else {}
@@ -1721,83 +1282,18 @@ class DocxImporter:
             data.paragraphs[paragraph_index].meta = meta
 
     def _reorder_attachment_note_before_signature(self, paragraphs: list) -> None:
-        """Normalize sign/date before attachment note into official note→sign→date order."""
-        i = 0
-        while i < len(paragraphs) - 3:
-            if paragraphs[i].type_id != "sign_org" or paragraphs[i + 1].type_id != "sign_date":
-                i += 1
-                continue
-            if paragraphs[i + 2].type_id != "attachment_note":
-                i += 1
-                continue
-
-            note_end = i + 3
-            while note_end < len(paragraphs) and paragraphs[note_end].type_id == "attachment_note_item":
-                note_end += 1
-
-            sign_pair = paragraphs[i:i + 2]
-            note_block = paragraphs[i + 2:note_end]
-            paragraphs[i:note_end] = note_block + sign_pair
-            i = note_end
+        """兼容旧私有入口，传入段落列表，按正式尾部顺序原地重排。"""
+        _normalization_reorder_attachment_note_before_signature(paragraphs)
 
     def _assign_numbering(self, paragraphs: list, rules: list, reset_on_attach: bool = True) -> None:
-        """预计算所有标题编号，写入 pd.meta['numbering']。
-
-        四级计数器 a/b/c/d，级联清零。Renderer 只负责显示，不计算。
-        """
-        from docxtool.document.engine.numbering import chinese_integer
-
-        def _cn(n):
-            return chinese_integer(n)
-        def _ar(n): return str(n)
-
-        counters = {"a": 0, "b": 0, "c": 0, "d": 0}
-        level_map = {"heading1": "a", "heading2": "b", "heading3": "c", "heading4": "d",
-                     "glossary_item": "c"}
-
-        for pd in paragraphs:
-            # 附件页标记 → 重置所有编号
-            if reset_on_attach and pd.type_id == "attachment_page_mark":
-                counters = {"a": 0, "b": 0, "c": 0, "d": 0}
-                continue
-            if pd.meta.get("heading2_cont"):  # 缺编号的 heading2 续行，不自动编号
-                continue
-            key = level_map.get(pd.type_id)
-            if key is None:
-                continue
-
-            # 递增本级，清零下级
-            counters[key] += 1
-            if key == "a":
-                counters["b"] = counters["c"] = counters["d"] = 0
-            elif key == "b":
-                counters["c"] = counters["d"] = 0
-            elif key == "c":
-                counters["d"] = 0
-
-            # 查找对应规则获取模板（若已被误渲染则回退默认值）
-            rule = rules[_key_to_row(key)] if _key_to_row(key) < len(rules) else None
-            pattern = rule.numbering_pattern if rule else ""
-            # 修复：pattern 中没有 {a}/{b}/{c}/{d} → 说明是渲染后的值，强制回退
-            if pattern and not any(c in pattern for c in ("{a}", "{b}", "{c}", "{d}")):
-                fallback = {
-                    "a": "{a}、", "b": "（{b}）", "c": "{c}.", "d": "（{d}）",
-                }.get(key, "")
-                logger.warning(f"[编号修复] pattern={pattern!r} 不包含模板变量，回退为 {fallback!r}")
-                pattern = fallback
-
-            # 渲染编号
-            is_cn = pd.type_id in ("heading1", "heading2")
-            num_fn = _cn if is_cn else _ar
-            result = pattern
-            logger.debug(f"[编号渲染] pattern={pattern!r} a={counters['a']} is_cn={is_cn}")
-            result = result.replace("{a}", num_fn(counters["a"]))
-            result = result.replace("{b}", num_fn(counters["b"]))
-            result = result.replace("{c}", _ar(counters["c"]))
-            result = result.replace("{d}", _ar(counters["d"]))
-
-            pd.meta["numbering"] = result
-            logger.debug(f"[编号] {pd.type_id} → \"{result}\" (a={counters['a']} b={counters['b']} c={counters['c']} d={counters['d']})")
+        """兼容旧私有入口，传入段落和样式规则，写入标题编号 meta。"""
+        _normalization_assign_heading_numbering(
+            paragraphs,
+            rules,
+            reset_on_attach=reset_on_attach,
+            log_warning=logger.warning,
+            log_debug=logger.debug,
+        )
 
     def _strip_auto_numbering(self, paragraph) -> None:
         """删除段落中的 Word 自动编号标记 <w:numPr>。"""
@@ -1849,78 +1345,8 @@ class DocxImporter:
                             changed = True
 
     def _fix_numbering_gaps(self, paragraphs: list) -> None:
-        """C. 编号连续性检查 + 自动修正跳号（heading1/2/3）。"""
-        _CN = {"一":1,"二":2,"三":3,"四":4,"五":5,"六":6,"七":7,"八":8,"九":9,"十":10}
-        _NC = {v:k for k,v in _CN.items()}
-        expected = {"a": 1, "b": {}, "c": {}, "d": {}}
-
-        for pd in paragraphs:
-            # 附件页边界 → 重置期望值
-            if pd.type_id == "attachment_page_mark":
-                expected = {"a": 1, "b": {}, "c": {}, "d": {}}
-                continue
-            tid = pd.type_id
-            if tid not in ("heading1", "heading2", "heading3", "heading4"):
-                continue
-            key = tid[-1]
-            num = pd.meta.get("numbering", "")
-            if not num:
-                continue
-
-            if key == "1":
-                ch = num[0]
-                actual = _CN.get(ch)
-                if actual and actual != expected["a"]:
-                    fixed = _NC.get(expected["a"], str(expected["a"]))
-                    pd.meta["numbering"] = num.replace(ch + "、", fixed + "、", 1)
-                    logger.warning(f"[编号修正] heading1 {num}→{pd.meta['numbering']}")
-                    actual = expected["a"]  # 用修正后的值
-                if actual:
-                    expected["a"] = actual + 1
-                    expected["b"] = {actual: 1}
-                    expected["c"] = {}
-                    expected["d"] = {}
-            elif key == "2":
-                pa = expected["a"] - 1
-                ch = num[1] if num.startswith("（") else num[0]
-                actual = _CN.get(ch)
-                exp = expected["b"].get(pa, 1)
-                if actual and actual != exp:
-                    fixed = _NC.get(exp, str(exp))
-                    pd.meta["numbering"] = num.replace("（" + ch + "）", "（" + fixed + "）", 1).replace(ch + ".", fixed + ".", 1)
-                    logger.warning(f"[编号修正] heading2 {num}→{pd.meta['numbering']}")
-                    actual = exp
-                if actual:
-                    expected["b"][pa] = actual + 1
-                expected["c"] = {}
-                expected["d"] = {}
-            elif key == "3":
-                pa = expected["a"] - 1
-                pb = expected["b"].get(pa, 1) - 1
-                idx = (pa, pb)
-                actual = int(num.rstrip(".")) if num.rstrip(".").isdigit() else None
-                exp = expected["c"].get(idx, 1)
-                if actual is not None and actual != exp:
-                    pd.meta["numbering"] = str(exp) + "."
-                    logger.warning(f"[编号修正] heading3 {num}→{pd.meta['numbering']}")
-                    actual = exp
-                if actual is not None:
-                    expected["c"][idx] = actual + 1
-                expected["d"] = {}
-            elif key == "4":
-                pa = expected["a"] - 1
-                pb = expected["b"].get(pa, 1) - 1
-                pc = expected["c"].get((pa, pb), 1) - 1
-                idx = (pa, pb, pc)
-                m = re.search(r'\d+', num)
-                actual = int(m.group()) if m else None
-                exp = expected["d"].get(idx, 1)
-                if actual is not None and actual != exp:
-                    pd.meta["numbering"] = num.replace(str(actual), str(exp), 1)
-                    logger.warning(f"[编号修正] heading4 {num}→{pd.meta['numbering']}")
-                    actual = exp
-                if actual is not None:
-                    expected["d"][idx] = actual + 1
+        """兼容旧私有入口，传入段落列表，修复标题编号连续性。"""
+        _normalization_fix_heading_numbering_gaps(paragraphs, log_warning=logger.warning)
 
 
 if __name__ == "__main__":

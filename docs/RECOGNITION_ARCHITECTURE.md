@@ -331,12 +331,15 @@ Web 服务启动顺序、启动日志、TCP_NODELAY 设置和 KeyboardInterrupt 
 - `colon.py`：共享冒号存在判断、冒号标签加粗位置和结构分析，只输出标签、值、称呼形态、机构形态、解释性正文等事实，不直接返回最终类型。
 - `document_mode.py`：提供旧 importer scorer 兼容的文种关键词、报告回顾标题、正文小标题、名词解释和称呼候选评分；只返回识别证据，不改变候选分数或最终类型。
 - `front_matter.py`：提供旧 importer scorer 兼容的文首标题、续行、日期、署名和职务姓名候选评分；只返回分值事实，不推进标题区状态、不写最终类型。
+- `metadata.py`：根据最终类型、段落特征和上下文事实补充旧渲染 meta，例如标题正文粘连、正文引导句加粗、冒号标签和报告首句加粗；不重新打分或改写最终类型。
 - `model.py`：`DocumentMode`、`SectionKind`、`ParagraphType` 三层模型。
 - `candidates.py`：结构、键值、编号、语义、旧分类器和样式候选提供器。旧分类结果只作为兼容候选。
 - `opening_speech.py`：提供文首“在……上的讲话”主标题证据和误推断一级编号剥离 helper；只生成识别证据，不写入最终类型。
 - `numbering.py`：提供字面编号、Word 多级列表/标题样式、损坏编号标题、“一是/一要”正文引导句和旧编号标题候选分事实映射；只返回候选类型、编号前缀、位置或分值，不更新上下文状态。
+- `selection.py`：构建旧 importer 兼容的骨架层、文种覆盖层和兜底层 scorer registry，并执行三阶段 scorer 选择；只返回候选类型、meta、前缀和得分日志，不执行 Repair 或推进上下文。
 - `signature.py`：提供落款单位否定前缀、通用组织后缀、正文尾部上下文和下一段日期组合事实；只判断短行是否像落款单位，不写最终类型。
-- `state.py`：提供旧 importer 兼容 Flow 状态允许表和标题层级 Repair 判断；只判断候选类型、上一结构类型和当前层级事实，不推进上下文、不写最终类型。
+- `state.py`：提供旧 importer 兼容 Flow 状态允许表、标题层级 Repair、最后结构事实记录和识别上下文推进；只消费最终类型，不重新打分或改写最终类型。
+- `tail_structure.py`：承接旧 importer 尾部固定结构状态机，通过回调消费附件、落款、日期和附件页事实，保持旧返回契约并避免反向依赖 importer。
 - `global_context.py`：文首结构、正文边界和同级标题族的全文只读分析。
 - `decoder.py`：硬结构否决、标题序列冲突复核和宽度可配置的确定性 Beam Search；默认宽度为 12。
 - `compatibility.py`：内部段落类型到旧渲染 `type_id` 的唯一映射边界。
@@ -346,11 +349,13 @@ Web 服务启动顺序、启动日志、TCP_NODELAY 设置和 KeyboardInterrupt 
 
 `src/docxtool/document/normalization/` 位于识别层之后：
 
+- `changes.py`：根据最终段落和调用方传入的规范化前快照生成 `NormalizationChange` 账本；只记录 strict 模式建议和 normalize 模式已应用变化，不修改正文、类型或段落顺序。
 - `dates.py`：提供中文数字转换、成文日期形态判断、成文日期规范化和附件页标识规范化。该模块只处理已识别文本的安全显示转换，不决定段落类型。
+- `numbering.py`：提供已识别标题编号前缀剥离、旧样式规则行号映射、最终标题编号 meta 分配和跳号修复。该模块只消费 Recognition 已给出的最终 `type_id`、前缀和样式规则，不重新判断标题层级或正文类型。
 - `signature.py`：提供已识别落款单位的安全文本规范化，只移除误粘连的中文一级编号前缀，不识别或扩写单位名称。
 - `responsibility.py`：提供已识别责任单位行的标签归一和重复标签换行规范化，只处理显示文本，不把正文重新分类为责任单位。
 - `text.py`：提供旧 importer 兼容的基础文本清理、中文语境引号转换和半角标点转换。该模块只封装文本转换 helper，不改变处理模式开关。
-- `tail.py`：消费最终 `type_id`，整理已确认的附件说明、落款单位、成文日期和附件正文页标记，并同步识别诊断。它不重新生成候选、不重新判定正文或标题，也不改变候选分数。
+- `tail.py`：消费最终 `type_id`，整理已确认的附件说明、落款单位、成文日期和附件正文页标记，承接 `sign_org + sign_date + attachment_note` 的尾部窄重排，并同步识别诊断。它不重新生成候选、不重新判定正文或标题，也不改变候选分数。
 
 ## 关键规则
 

@@ -16,7 +16,10 @@ from docxtool.document.importer import (
     _validate_numbered_heading_body_split,
 )
 from docxtool.document.segmentation.boundaries import heading_has_inline_body
-from docxtool.document.segmentation.soft_breaks import should_split_structural_line_breaks
+from docxtool.document.segmentation.soft_breaks import (
+    is_structural_key_value_line,
+    should_split_structural_line_breaks,
+)
 from docxtool.sdk import recognize_docx
 
 
@@ -88,6 +91,25 @@ def test_soft_break_decision_uses_structural_evidence_without_final_type() -> No
     assert _soft_break_decision(["测试单位", "2026年5月1日"])
     assert _soft_break_decision(["正文结束", "测试单位"], "2026年5月1日")
     assert not _soft_break_decision(["普通正文第一行", "普通正文第二行"])
+
+
+def test_structural_key_value_line_uses_injected_boundary_evidence() -> None:
+    """键值边界判断接收责任单位和冒号标签回调，只返回软换行边界事实。"""
+    assert is_structural_key_value_line(
+        "责任单位：办公室",
+        is_responsibility_line_func=lambda text: text.startswith("责任单位："),
+        colon_bold_match_func=lambda _text: -1,
+    )
+    assert is_structural_key_value_line(
+        "联系人：张三",
+        is_responsibility_line_func=lambda _text: False,
+        colon_bold_match_func=lambda text: text.find("："),
+    )
+    assert not is_structural_key_value_line(
+        "某某学院：现将情况说明如下。",
+        is_responsibility_line_func=lambda _text: False,
+        colon_bold_match_func=lambda _text: -1,
+    )
 
 
 def test_body_visual_emphasis_does_not_create_a_paragraph_boundary() -> None:

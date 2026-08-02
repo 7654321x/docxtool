@@ -15,8 +15,9 @@ from docxtool.document.importer import (
     ParagraphData,
     ParagraphFeatures,
     _normalize_tail_structures,
+    strip_numbering,
 )
-from docxtool.document.normalization import normalize_tail_structures
+from docxtool.document.normalization import normalize_tail_structures, strip_numbering_prefix
 from docxtool.document.style_config import PageSettings, StyleRule, load_rules_and_settings
 
 
@@ -27,6 +28,9 @@ def _rules():
 class ProcessingFlagsTest(unittest.TestCase):
     def test_tail_normalizer_importer_facade_uses_normalization_module(self):
         self.assertIs(_normalize_tail_structures, normalize_tail_structures)
+
+    def test_numbering_strip_importer_facade_uses_normalization_module(self):
+        self.assertEqual(strip_numbering("一、改革", "一、"), strip_numbering_prefix("一、改革", "一、"))
 
     def test_punctuation_disabled_keeps_original_text(self):
         with tempfile.TemporaryDirectory() as tmp:

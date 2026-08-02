@@ -6,7 +6,12 @@ the document model for rendering without owning classification decisions.
 
 from docxtool.document.normalization.tail import (
     normalize_tail_structures,
+    reorder_attachment_note_before_signature,
     sync_recognition_consistency,
+)
+from docxtool.document.normalization.changes import (
+    record_applied_normalization_changes,
+    record_strict_normalization_suggestions,
 )
 from docxtool.document.normalization.dates import (
     chinese_number_to_int,
@@ -15,6 +20,12 @@ from docxtool.document.normalization.dates import (
     is_sign_date_text,
     normalize_attachment_page_mark,
     normalize_sign_date,
+)
+from docxtool.document.normalization.numbering import (
+    assign_heading_numbering,
+    fix_heading_numbering_gaps,
+    strip_numbering_prefix,
+    style_key_to_rule_row,
 )
 from docxtool.document.normalization.signature import normalize_sign_org
 from docxtool.document.normalization.text import (
@@ -31,6 +42,8 @@ from docxtool.document.normalization.responsibility import (
 __all__ = [
     "chinese_number_to_int",
     "chinese_year_to_int",
+    "assign_heading_numbering",
+    "fix_heading_numbering_gaps",
     "is_attachment_page_mark",
     "is_sign_date_text",
     "normalize_attachment_page_mark",
@@ -42,6 +55,11 @@ __all__ = [
     "normalize_quotes",
     "is_responsibility_line",
     "normalize_responsibility_line",
+    "record_applied_normalization_changes",
+    "record_strict_normalization_suggestions",
+    "reorder_attachment_note_before_signature",
     "sync_recognition_consistency",
+    "strip_numbering_prefix",
+    "style_key_to_rule_row",
     "to_chinese_punctuation",
 ]

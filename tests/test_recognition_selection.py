@@ -1,0 +1,163 @@
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+from docxtool.document.recognition.selection import (
+    build_legacy_scorer_registry,
+    select_legacy_scored_type,
+)
+
+
+def _scorer(score: int, meta: dict | None = None, prefix: str = ""):
+    """测试辅助：传入固定分值、meta 和前缀，返回旧 scorer 兼容函数。"""
+    def score_func(_text, _features, _ctx):
+        """测试辅助 scorer：传入旧 scorer 参数，返回固定评分三元组。"""
+        return score, dict(meta or {}), prefix
+
+    return score_func
+
+
+def test_select_legacy_scored_type_prefers_allowed_highest_structure_score() -> None:
+    """选择器接收结构 scorer 列表，返回 Flow 允许的最高分候选。"""
+    type_id, meta, prefix, score_log = select_legacy_scored_type(
+        "测试",
+        None,
+        SimpleNamespace(doc_mode=""),
+        structure_scorers=[
+            ("title", _scorer(90, {"title": True})),
+            ("heading1", _scorer(100, {"heading": True}, "一、")),
+        ],
+        mode_scorers={},
+        fallback_scorers=[("body", _scorer(10))],
+        detect_doc_type_func=lambda _ctx: "",
+        flow_allows_func=lambda candidate, _ctx: candidate != "heading1",
+    )
+
+    assert type_id == "title"
+    assert meta == {"title": True}
+    assert prefix == ""
+    assert score_log == ["title:90", "heading1:100"]
+
+
+def test_select_legacy_scored_type_uses_mode_scorer_when_score_is_higher() -> None:
+    """选择器接收文种 scorer 表，返回高于结构层的文种候选。"""
+    type_id, meta, prefix, score_log = select_legacy_scored_type(
+        "测试",
+        None,
+        SimpleNamespace(doc_mode="REPORT"),
+        structure_scorers=[("body", _scorer(20))],
+        mode_scorers={"REPORT": [("heading1_report", _scorer(80, {"report": True}))]},
+        fallback_scorers=[("body", _scorer(10))],
+        detect_doc_type_func=lambda _ctx: "",
+        flow_allows_func=lambda _candidate, _ctx: True,
+    )
+
+    assert type_id == "heading1_report"
+    assert meta == {"report": True}
+    assert prefix == ""
+    assert score_log == ["body:20"]
+
+
+def test_select_legacy_scored_type_runs_fallback_only_without_positive_score() -> None:
+    """选择器接收无正分 scorer 时，返回兜底层候选。"""
+    type_id, meta, prefix, score_log = select_legacy_scored_type(
+        "测试",
+        None,
+        SimpleNamespace(doc_mode=""),
+        structure_scorers=[("title", _scorer(0))],
+        mode_scorers={},
+        fallback_scorers=[("body", _scorer(10, {"fallback": True}))],
+        detect_doc_type_func=lambda _ctx: "",
+        flow_allows_func=lambda _candidate, _ctx: True,
+    )
+
+    assert type_id == "body"
+    assert meta == {"fallback": True}
+    assert prefix == ""
+    assert score_log == []
+
+
+def test_select_legacy_scored_type_detects_doc_mode_when_context_empty() -> None:
+    """选择器接收空文种上下文时，通过回调检测文种并使用对应 scorer。"""
+    ctx = SimpleNamespace(doc_mode="")
+
+    type_id, _, _, _ = select_legacy_scored_type(
+        "测试",
+        None,
+        ctx,
+        structure_scorers=[("body", _scorer(1))],
+        mode_scorers={"MEETING": [("meeting_meta", _scorer(50))]},
+        fallback_scorers=[("body", _scorer(10))],
+        detect_doc_type_func=lambda _ctx: "MEETING",
+        flow_allows_func=lambda _candidate, _ctx: True,
+    )
+
+    assert type_id == "meeting_meta"
+
+
+def test_build_legacy_scorer_registry_keeps_title_role_and_heading_scores() -> None:
+    """旧 scorer registry 接收基础回调，返回可直接用于 importer 的三层评分表。"""
+    structure_scorers, mode_scorers, fallback_scorers = build_legacy_scorer_registry(
+        match_numbering_func=lambda text: ("heading1", "一、") if text.startswith("一、") else ("", ""),
+        contains_colon_func=lambda text: "：" in text or ":" in text,
+        detect_doc_type_func=lambda _ctx: "NORMAL",
+    )
+
+    title_type, title_meta, _, _ = select_legacy_scored_type(
+        "关于测试工作的报告",
+        None,
+        SimpleNamespace(
+            prev_type_id=None,
+            has_seen_body=False,
+            has_seen_real_body=False,
+            title_texts=[],
+            doc_mode="",
+            glossary_mode=False,
+        ),
+        structure_scorers=structure_scorers,
+        mode_scorers=mode_scorers,
+        fallback_scorers=fallback_scorers,
+        detect_doc_type_func=lambda _ctx: "NORMAL",
+        flow_allows_func=lambda _candidate, _ctx: True,
+    )
+    assert title_type == "title"
+    assert title_meta == {"is_title": True}
+
+    role_type, _, _, _ = select_legacy_scored_type(
+        "办公室主任  张三",
+        None,
+        SimpleNamespace(
+            prev_type_id="title",
+            has_seen_body=False,
+            has_seen_real_body=False,
+            title_texts=["在测试会议上的讲话"],
+            doc_mode="",
+            glossary_mode=False,
+        ),
+        structure_scorers=structure_scorers,
+        mode_scorers=mode_scorers,
+        fallback_scorers=fallback_scorers,
+        detect_doc_type_func=lambda _ctx: "NORMAL",
+        flow_allows_func=lambda _candidate, _ctx: True,
+    )
+    assert role_type == "role_name"
+
+    heading_type, _, heading_prefix, _ = select_legacy_scored_type(
+        "一、提高认识",
+        None,
+        SimpleNamespace(
+            prev_type_id="body",
+            has_seen_body=True,
+            has_seen_real_body=True,
+            title_texts=["关于测试工作的报告"],
+            doc_mode="NORMAL",
+            glossary_mode=False,
+        ),
+        structure_scorers=structure_scorers,
+        mode_scorers=mode_scorers,
+        fallback_scorers=fallback_scorers,
+        detect_doc_type_func=lambda _ctx: "NORMAL",
+        flow_allows_func=lambda _candidate, _ctx: True,
+    )
+    assert heading_type == "heading1"
+    assert heading_prefix == "一、"

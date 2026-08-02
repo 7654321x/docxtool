@@ -38,6 +38,7 @@ from docxtool.document.segmentation.soft_breaks import (
     is_header_role_date_pair,
     is_dispatch_number_line,
     is_role_name_line,
+    is_structural_key_value_line,
 )
 from docxtool.document.segmentation.body_tail import find_last_body_candidate_index
 
@@ -55,6 +56,7 @@ __all__ = [
     "is_header_role_date_pair",
     "is_dispatch_number_line",
     "is_role_name_line",
+    "is_structural_key_value_line",
     "is_strong_soft_line_structure",
     "LogicalSpanPlan",
     "segment_boundary_candidates",

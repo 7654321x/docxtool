@@ -51,6 +51,21 @@ def is_header_role_date_pair(role_line: str, date_line: str) -> bool:
     )
 
 
+def is_structural_key_value_line(
+    text: str,
+    *,
+    is_responsibility_line_func: Callable[[str], bool],
+    colon_bold_match_func: Callable[[str], int],
+) -> bool:
+    """判断软换行中的一行文本是否能作为键值结构边界。
+
+    传入数据是一行文本，以及责任单位识别和冒号标签识别回调。返回值
+    只表示该行足以支持软换行拆段，不决定最终段落类型或段内格式。
+    """
+    value = text or ""
+    return bool(is_responsibility_line_func(value) or colon_bold_match_func(value) >= 0)
+
+
 def should_split_structural_line_breaks(
     parts: list[str],
     next_text: str,
