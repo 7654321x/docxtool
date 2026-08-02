@@ -132,21 +132,23 @@ https://github.com/7654321x/docxtool.git
 | `src/docxtool/document/__init__.py` | 文档处理包入口 |
 | `src/docxtool/document/importer.py` | DOCX 结构识别、段落分类、元数据生成 |
 | `src/docxtool/document/importing/__init__.py` | DOCX 物理导入层包入口 | 标记 importing 模块 |
+| `src/docxtool/document/importing/features.py` | 段落物理格式特征提取 | 只读取文本 locator、run 字体字号、加粗比例、缩进、图片和 Word 编号事实，不判断最终类型 |
 | `src/docxtool/document/importing/images.py` | 图片和题注物理事实判断 | 只读取段落文本、样式和 OOXML 图片尺寸，不判断最终类型 |
 | `src/docxtool/document/importing/inline_tokens.py` | 行内 token 提取 | 只提取文本、制表符、软换行和分页符，不执行段落分类 |
-| `src/docxtool/document/importing/numbering.py` | 字面编号前缀提取 | 只返回文本开头编号形态，不决定标题层级 |
+| `src/docxtool/document/importing/numbering.py` | 编号物理事实提取 | 返回文本开头编号形态、Word 原生列表/标题样式编号事实，不决定标题层级或最终类型 |
 | `src/docxtool/document/importing/relationships.py` | 导入前损坏关系修复 | 只在临时副本中删除 `Target="../NULL"` 的 OOXML 关系，不修改原文件和识别结果 |
 | `src/docxtool/document/importing/sections.py` | 分节和页眉页脚关系导入 | 只读取 sectPr 和关系部件，不修改分节布局 |
 | `src/docxtool/document/effective_format.py` | run、样式继承、主题字体的有效格式解析 |
 | `src/docxtool/document/source_tape.py` | 物理段落来源范围与 raw/canonical 坐标映射 |
 | `src/docxtool/document/models/` | 导入链路共享数据模型 | 为 importer、分段和 SDK 兼容入口提供稳定中间结构 |
-| `src/docxtool/document/normalization/` | 导入后的结构归一化 | 当前承载基础文本清理、日期/附件/落款显示规范、尾部附件、落款、日期顺序修正和诊断同步 |
-| `src/docxtool/document/segmentation/` | 物理段到逻辑段的分段辅助 | 当前承载来源定位、标题正文边界、段内格式映射、软换行强结构判断和尾部正文候选边界扫描 |
+| `src/docxtool/document/normalization/` | 导入后的结构归一化 | 当前承载基础文本清理、日期/附件/落款/责任单位显示规范、尾部附件、落款、日期顺序修正和诊断同步 |
+| `src/docxtool/document/segmentation/` | 物理段到逻辑段的分段辅助 | 当前承载来源定位、标题正文边界、段内格式映射、发文字号/职务姓名/日期软换行证据、软换行强结构判断和尾部正文候选边界扫描 |
 | `src/docxtool/document/classifier.py` | 文档模式和段落结构分类 |
 | `src/docxtool/document/letterhead_config.py` | 版头配置归一化和安全校验 |
 | `src/docxtool/document/recognition/` | 候选、Beam 解码、诊断、验证和兼容映射 |
-| `src/docxtool/document/recognition/colon.py` | 共享冒号结构分析 | 只输出称呼、机构标签、键值和解释性正文证据，不直接定型 |
+| `src/docxtool/document/recognition/colon.py` | 共享冒号存在判断和结构分析 | 只输出称呼、机构标签、键值和解释性正文证据，不直接定型 |
 | `src/docxtool/document/recognition/global_context.py` | 文首结构、正文边界和同级标题族的全文只读分析 |
+| `src/docxtool/document/recognition/opening_speech.py` | 文首讲话标题识别证据 | 只判断“在……上的讲话”主标题候选和误推断一级编号剥离，不写最终类型 |
 | `src/docxtool/document/recognition/legacy/__init__.py` | 旧识别兼容包入口 | 暴露 legacy 评分数据模型 |
 | `src/docxtool/document/recognition/legacy/scoring.py` | 旧 importer 评分数据模型 | 保存 ScoreBoard、ScoreDetail 和 DetectionContext，不实现新识别规则 |
 | `src/docxtool/document/style_config.py` | 样式规则、页面设置、日志配置、默认配置读取 |

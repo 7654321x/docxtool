@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Iterable
 
+from docxtool.document.segmentation.boundaries import heading_has_inline_body
+
 
 class ParagraphKind(str, Enum):
     MAIN_TITLE = "main_title"
@@ -339,8 +341,8 @@ def _looks_like_key_value_body(text: str) -> bool:
 
 
 def _heading_has_inline_body(text: str) -> bool:
-    period = text.find("。")
-    return period >= 0 and len(text[period + 1 :].strip()) >= 5
+    """兼容旧私有入口，传入标题候选文本，返回是否粘连正文。"""
+    return heading_has_inline_body(text)
 
 
 def _short_without_sentence_punctuation(text: str) -> bool:

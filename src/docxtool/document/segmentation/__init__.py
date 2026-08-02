@@ -18,6 +18,7 @@ from docxtool.document.segmentation.source_locator import (
     visible_character_count,
 )
 from docxtool.document.segmentation.boundaries import (
+    heading_has_inline_body,
     has_format_transition,
     has_inline_lead_bold_transition,
     is_strong_soft_line_structure,
@@ -33,6 +34,11 @@ from docxtool.document.segmentation.pipeline import (
     build_logical_span_plan,
 )
 from docxtool.document.segmentation.soft_breaks import should_split_structural_line_breaks
+from docxtool.document.segmentation.soft_breaks import (
+    is_header_role_date_pair,
+    is_dispatch_number_line,
+    is_role_name_line,
+)
 from docxtool.document.segmentation.body_tail import find_last_body_candidate_index
 
 __all__ = [
@@ -42,9 +48,13 @@ __all__ = [
     "build_logical_span_plan",
     "build_unresolved_empty_segment_features",
     "find_last_body_candidate_index",
+    "heading_has_inline_body",
     "has_format_transition",
     "has_inline_lead_bold_transition",
     "inherit_source_locator",
+    "is_header_role_date_pair",
+    "is_dispatch_number_line",
+    "is_role_name_line",
     "is_strong_soft_line_structure",
     "LogicalSpanPlan",
     "segment_boundary_candidates",

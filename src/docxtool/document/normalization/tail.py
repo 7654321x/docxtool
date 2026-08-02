@@ -18,6 +18,7 @@ from docxtool.document.normalization.dates import (
     normalize_sign_date as _norm_sign_date,
 )
 from docxtool.document.normalization.signature import normalize_sign_org as _norm_sign_org
+from docxtool.document.recognition.colon import contains_colon as _recognition_contains_colon
 from docxtool.document.recognition.validators import validate_diagnostics
 
 
@@ -34,7 +35,7 @@ _SIGN_ORG_SUFFIX_RE = re.compile(
 
 def _contains_colon(text: str) -> bool:
     """Return whether text contains a Chinese or ASCII colon."""
-    return "：" in text or ":" in text
+    return _recognition_contains_colon(text)
 
 
 def _tail_source_text(paragraph: Any) -> str:

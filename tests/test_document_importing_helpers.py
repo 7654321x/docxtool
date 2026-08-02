@@ -23,8 +23,10 @@ from docxtool.document.importing.inline_tokens import (
 from docxtool.document.importing.numbering import (
     detect_numbering_prefix,
     heading_style_prefix,
+    is_auto_numbered_item,
     word_list_level_prefix,
 )
+from docxtool.document.models import ParagraphFeatures
 from docxtool.document.importing.relationships import repair_broken_rels
 from docxtool.document.importing.sections import (
     collect_section_header_footer_parts,
@@ -170,6 +172,14 @@ def test_heading_style_prefix_supports_chinese_and_english_heading_names() -> No
     assert heading_style_prefix("Heading 1") == "@style_heading1"
     assert heading_style_prefix("标题 2") == "@style_heading2"
     assert heading_style_prefix("正文") == ""
+
+
+def test_is_auto_numbered_item_reads_word_numbering_facts_only() -> None:
+    """验证 Word 自动编号事实判断不把字面编号误作原生编号。"""
+    assert is_auto_numbered_item(ParagraphFeatures(numbering_prefix="@lvl_0"))
+    assert is_auto_numbered_item(ParagraphFeatures(numbering_prefix="@style_heading1"))
+    assert not is_auto_numbered_item(ParagraphFeatures(numbering_prefix="一、"))
+    assert not is_auto_numbered_item(None)
 
 
 def test_repair_broken_rels_removes_null_relationship_from_temporary_copy(tmp_path) -> None:

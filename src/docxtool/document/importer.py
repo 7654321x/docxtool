@@ -43,16 +43,22 @@ from docxtool.document.normalization.dates import (
     normalize_sign_date as _normalization_normalize_sign_date,
 )
 from docxtool.document.normalization.signature import normalize_sign_org as _normalization_normalize_sign_org
+from docxtool.document.normalization.responsibility import (
+    is_responsibility_line as _normalization_is_responsibility_line,
+    normalize_responsibility_line as _normalization_normalize_responsibility_line,
+)
 from docxtool.document.normalization.text import (
     normalize_basic_text as _normalization_normalize_basic_text,
     normalize_quotes as _normalization_normalize_quotes,
     to_chinese_punctuation as _normalization_to_chinese_punctuation,
 )
 from docxtool.document.importing.images import (
-    contains_visible_image as _contains_visible_image,
     is_object_caption as _is_object_caption,
     is_object_caption_text as _is_object_caption_text,
     is_standalone_image_paragraph as _is_standalone_image_paragraph,
+)
+from docxtool.document.importing.features import (
+    extract_paragraph_features as _importing_extract_paragraph_features,
 )
 from docxtool.document.importing.inline_tokens import (
     extract_inline_tokens,
@@ -66,15 +72,19 @@ from docxtool.document.importing.sections import (
 from docxtool.document.importing.numbering import (
     NUMBERING_PATTERNS as _NUMBERING_PATTERNS,
     detect_numbering_prefix as _importing_detect_numbering_prefix,
-    heading_style_prefix as _importing_heading_style_prefix,
-    word_list_level_prefix as _importing_word_list_level_prefix,
+    is_auto_numbered_item as _importing_is_auto_numbered_item,
 )
 from docxtool.document.importing.relationships import repair_broken_rels as _repair_broken_rels
 from docxtool.document.recognition import apply_recognition
 from docxtool.document.recognition.colon import (
     analyze_colon_structure,
+    contains_colon as _recognition_contains_colon,
     is_organization_label,
     is_standalone_addressing_text,
+)
+from docxtool.document.recognition.opening_speech import (
+    opening_speech_title_text as _recognition_opening_speech_title_text,
+    strip_inferred_speech_numbering as _recognition_strip_inferred_speech_numbering,
 )
 from docxtool.document.recognition.version import RECOGNITION_VERSION_TAG
 from docxtool.document.recognition.legacy import DetectionContext, ScoreBoard, ScoreDetail
@@ -87,7 +97,6 @@ from docxtool.document.segmentation.source_locator import (
     set_source_locator as _set_source_locator,
     source_line_spans as _source_line_spans,
     trim_source_span as _trim_source_span,
-    utf16_length_of as _utf16_length,
     visible_character_count as _visible_character_count,
 )
 from docxtool.document.segmentation.pipeline import (
@@ -97,6 +106,7 @@ from docxtool.document.segmentation.body_tail import (
     find_last_body_candidate_index as _find_last_body_candidate_index,
 )
 from docxtool.document.segmentation.boundaries import (
+    heading_has_inline_body as _seg_heading_has_inline_body,
     has_format_transition as _seg_has_format_transition,
     has_inline_lead_bold_transition as _seg_has_inline_lead_bold_transition,
     is_strong_soft_line_structure as _seg_is_strong_soft_line_structure,
@@ -108,11 +118,10 @@ from docxtool.document.segmentation.boundaries import (
     validate_source_span_partition as _seg_validate_source_span_partition,
 )
 from docxtool.document.segmentation.soft_breaks import (
+    is_header_role_date_pair as _seg_is_header_role_date_pair,
+    is_dispatch_number_line as _seg_is_dispatch_number_line,
+    is_role_name_line as _seg_is_role_name_line,
     should_split_structural_line_breaks as _seg_should_split_structural_line_breaks,
-)
-from docxtool.document.source_tape import SourceTape
-from docxtool.document.effective_format import (
-    resolve_effective_run_format,
 )
 from docxtool.document.style_config import (
     NB_FIXED, NB_SUFFIXES,
@@ -127,6 +136,18 @@ from docxtool.document.style_config import (
 # Stable document models live in ``docxtool.document.models``.  They are
 # imported above and re-exported from this module to keep legacy imports such
 # as ``from docxtool.document.importer import ParagraphData`` compatible.
+__all__ = [
+    "BodyBlock",
+    "DocumentData",
+    "InlineToken",
+    "NormalizationChange",
+    "ParagraphData",
+    "ParagraphFeatures",
+    "SegmentBoundaryCandidate",
+    "SourceRun",
+    "_apply_segment_format_features",
+    "extract_features",
+]
 
 
 def _has_format_transition(
@@ -256,122 +277,12 @@ def _validate_numbered_heading_body_split(
 # ═══════════════════════════════════════════════════════════════
 
 def extract_features(paragraph, index: int) -> ParagraphFeatures:
-    """从 python-docx Paragraph 提取物理特征。"""
-    text = paragraph.text.strip()
-    source_tape = SourceTape.from_text(paragraph.text)
-    pf = ParagraphFeatures(
-        text=text,
-        paragraph_index=index,
-        source_physical_paragraph_index=index,
-        source_physical_text=paragraph.text,
-        source_start_utf16=0,
-        source_end_utf16=_utf16_length(paragraph.text),
-        source_canonical_text=source_tape.canonical_text,
-        source_canonical_start_utf16=0,
-        source_canonical_end_utf16=_utf16_length(source_tape.canonical_text),
-        source_fragment_text=paragraph.text,
-        source_canonical_fragment_text=source_tape.canonical_text,
-        source_locator_status="confirmed" if paragraph.text else "unresolved",
-        source_locator_evidence=("PHYSICAL_PARAGRAPH_EXTRACTED",) if paragraph.text else (),
-        source_locator_warnings=() if paragraph.text else ("SOURCE_RANGE_UNRESOLVED",),
+    """兼容旧入口，传入 python-docx 段落和序号，返回物理格式特征。"""
+    return _importing_extract_paragraph_features(
+        paragraph,
+        index,
+        detect_numbering_prefix_func=_detect_numbering_prefix,
     )
-
-    # 样式名
-    if paragraph.style:
-        pf.style_name = paragraph.style.name or ""
-
-    # Keep first-run fields only as compatibility diagnostics.  Effective
-    # properties come from the OOXML style cascade, not from ``bool(None)``.
-    # The full logical-segment statistics are populated below from exact run
-    # intersections with the original physical paragraph.
-    source_runs: list[SourceRun] = []
-    source_cursor = 0
-    first_run_seen = False
-    if paragraph.runs:
-        for run in paragraph.runs:
-            run_text = run.text or ""
-            run_start = source_cursor
-            run_end = run_start + len(run_text)
-            source_cursor = run_end
-            char_count = len(re.sub(r"\s+", "", run.text or ""))
-            if not char_count:
-                continue
-            try:
-                effective = resolve_effective_run_format(run, paragraph)
-                run_font = effective.east_asia_font_name or effective.ascii_font_name or ""
-                run_size = effective.font_size_pt
-                source_matches_run = (
-                    run_end <= len(paragraph.text)
-                    and paragraph.text[run_start:run_end] == run_text
-                )
-                if source_matches_run:
-                    source_runs.append(SourceRun(
-                        start=run_start,
-                        end=run_end,
-                        font_name=run_font,
-                        east_asia_font_name=effective.east_asia_font_name,
-                        ascii_font_name=effective.ascii_font_name,
-                        font_size_pt=float(run_size) if run_size is not None else None,
-                        bold=effective.bold,
-                        italic=effective.italic,
-                        underline=effective.underline,
-                        explicit=effective.explicit,
-                        inherited=effective.inherited,
-                        known=effective.known,
-                        format_sources=effective.sources,
-                        format_warnings=effective.warnings,
-                    ))
-                if not first_run_seen:
-                    pf.first_run_font_name = run_font
-                    pf.first_run_font_size_pt = run_size
-                    pf.first_run_bold = effective.bold is True
-                    first_run_seen = True
-            except (AttributeError, TypeError, ValueError):
-                continue
-    pf.source_run_spans = tuple(source_runs)
-    _apply_segment_format_features(pf, pf, 0, len(pf.source_physical_text))
-
-    # 对齐（统一小写 + 处理 None）
-    try:
-        if paragraph.alignment is not None:
-            pf.alignment = str(paragraph.alignment).split(".")[-1].lower()
-    except Exception:
-        pass
-
-    # 缩进
-    try:
-        indent = paragraph.paragraph_format.first_line_indent
-        if indent is not None:
-            pf.first_line_indent = indent / 360000  # EMU → cm
-    except Exception:
-        pass
-
-    # 编号前缀
-    pf.numbering_prefix = _detect_numbering_prefix(text)
-
-    pf.contains_image = _contains_visible_image(paragraph._element)
-
-    # Word 多级列表：ilvl → 项目里的标题级别（0=heading2, 1=heading3, 2+=heading4）
-    try:
-        word_prefix = _importing_word_list_level_prefix(paragraph._element, text)
-        if word_prefix and not pf.numbering_prefix:
-            pf.numbering_prefix = word_prefix
-            lvl = int(word_prefix[5:])
-            logger.debug("[多级列表] ilvl=%s → heading%s chars=%s", lvl, lvl + 2, len(text))
-    except Exception as e:
-        logger.debug(f"[多级列表] 提取失败: {e}")
-
-    # Word 自动编号/样式检测
-    try:
-        # 样式名直接映射
-        style_prefix = _importing_heading_style_prefix(pf.style_name)
-        if style_prefix:
-            pf.numbering_prefix = style_prefix
-
-    except Exception:
-        pass
-
-    return pf
 
 
 def _normalize_inline_tokens(tokens: List[InlineToken], punctuation_enabled: bool) -> List[InlineToken]:
@@ -475,9 +386,8 @@ def _looks_like_sign_org(text: str, next_text: str, ctx) -> bool:
     return bool(_SIGN_ORG_SUFFIX_RE.search(t))
 
 def _heading_has_inline_body(text: str) -> bool:
-    """判断标题文本句号后是否粘连了足够长度的正文。"""
-    period_pos = (text or "").find("。")
-    return period_pos >= 0 and len(text[period_pos + 1:].strip()) >= 5
+    """兼容旧私有入口，传入标题候选文本，返回是否粘连正文。"""
+    return _seg_heading_has_inline_body(text)
 
 def _can_start_attachment_note(ctx) -> bool:
     """判断当前上下文是否允许进入附件说明块。
@@ -499,70 +409,42 @@ def _can_start_attachment_note(ctx) -> bool:
     )
 
 def _is_auto_numbered_item(feats: Optional[ParagraphFeatures]) -> bool:
-    """判断段落特征是否来自 Word 自动列表或标题样式编号。"""
-    if not feats or not feats.numbering_prefix:
-        return False
-    return feats.numbering_prefix.startswith("@lvl_") or feats.numbering_prefix.startswith("@style_")
-
-
-_RESPONSIBILITY_LINE_RE = re.compile(r"^\s*[“”\"'‘’「『]?\s*责\s*任\s*单\s*位\s*[:：]")
-_RESPONSIBILITY_LABEL_RE = re.compile(r"\s*责\s*任\s*单\s*位\s*[:：]\s*")
-_RESPONSIBILITY_WRAPPER_RE = re.compile(r"^\s*[“”\"'‘’「『]\s*(.*?)\s*[”\"'’」』]?\s*$")
-_HEADER_ROLE_KEYWORD_RE = re.compile(
-    r"主任|书记|主席|部长|局长|处长|科长|司长|厅长|市长|县长|区长|镇长|乡长|院长|校长|政委|组长|队长|秘书长|委员|常委|负责人"
-)
-_HEADER_DATE_LINE_RE = re.compile(r"^[（(]\s*(?:19|20)\d{2}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日")
-_OPENING_SPEECH_TITLE_RE = re.compile(r"^在[\u4e00-\u9fffA-Za-z0-9（）()、，,.·\-\s]{3,70}(?:上)?的?讲话$")
+    """兼容旧私有入口，传入段落特征，返回是否有 Word 自动编号事实。"""
+    return _importing_is_auto_numbered_item(feats)
 
 
 def _is_structural_key_value_line(text: str) -> bool:
     """传入一行文本，返回它是否是可作为软换行边界的键值结构。"""
-    return bool(_RESPONSIBILITY_LINE_RE.match(text or "") or _colon_bold_match(text or "") >= 0)
+    return bool(_normalization_is_responsibility_line(text or "") or _colon_bold_match(text or "") >= 0)
 
 
 def _is_role_name_line(text: str) -> bool:
-    """传入一行文本，返回它是否具备标题区职务姓名行形态。"""
-    value = text or ""
-    return bool(
-        re.fullmatch(r"[\u4e00-\u9fff、，,·]{2,28}\s{2,}[\u4e00-\u9fff·]{2,6}", value)
-        or (
-            re.search(
-                r"主任|书记|主席|部长|局长|处长|科长|市长|县长|区长|镇长|乡长|院长|校长|政委|组长|队长|秘书长|委员|常委|负责人",
-                value,
-            )
-            and re.search(r"\s{2,}", value)
-        )
-    )
+    """兼容旧私有入口，传入一行文本，返回是否具备文首职务姓名形态。"""
+    return _seg_is_role_name_line(text)
 
 
 def _is_header_role_date_pair(role_line: str, date_line: str) -> bool:
-    """传入相邻两行文本，返回是否是文首职务姓名和括号日期组合。"""
-    return bool(
-        _HEADER_ROLE_KEYWORD_RE.search(role_line or "")
-        and _HEADER_DATE_LINE_RE.match(date_line or "")
-    )
+    """兼容旧私有入口，传入相邻两行文本，返回是否是职务姓名加日期。"""
+    return _seg_is_header_role_date_pair(role_line, date_line)
 
 
 def _opening_speech_title_text(text: str, ctx) -> str | None:
-    """Return a first-line speech title, ignoring one inferred erroneous H1 prefix."""
-    value = (text or "").strip()
-    if ctx.has_seen_body or ctx.prev_type_id or _contains_colon(value):
-        return None
-    numbered, prefix = _match_numbering(value)
-    if numbered == "heading1" and prefix:
-        candidate = value[len(prefix):].strip()
-        return candidate if _OPENING_SPEECH_TITLE_RE.fullmatch(candidate) else None
-    if numbered:
-        return None
-    return value if _OPENING_SPEECH_TITLE_RE.fullmatch(value) else None
+    """兼容旧私有入口，传入文本和上下文，返回文首讲话主标题文本。"""
+    return _recognition_opening_speech_title_text(
+        text,
+        has_seen_body=ctx.has_seen_body,
+        previous_type_id=ctx.prev_type_id,
+        contains_colon_func=_contains_colon,
+        match_numbering_func=_match_numbering,
+    )
 
 
 def _strip_inferred_speech_numbering(text: str) -> str:
-    value = (text or "").strip()
-    numbered, prefix = _match_numbering(value)
-    if numbered == "heading1" and prefix:
-        return value[len(prefix):].strip()
-    return value
+    """兼容旧私有入口，传入文首讲话标题，返回去除误推断编号后的文本。"""
+    return _recognition_strip_inferred_speech_numbering(
+        text,
+        match_numbering_func=_match_numbering,
+    )
 
 
 def _should_split_structural_line_breaks(parts: list[str], next_text: str) -> bool:
@@ -581,13 +463,9 @@ def _should_split_structural_line_breaks(parts: list[str], next_text: str) -> bo
     )
 
 
-_DISPATCH_NUMBER_LINE_RE = re.compile(
-    r"^(?:[\u4e00-\u9fffA-Za-z0-9]{0,20})[〔\[]\d{4}[〕\]]\s*\d+\s*号$"
-)
-
-
 def _is_dispatch_number_line(text: str) -> bool:
-    return bool(_DISPATCH_NUMBER_LINE_RE.fullmatch(re.sub(r"\s+", "", text or "")))
+    """兼容旧私有入口，传入一行文本，返回是否为结构化发文字号。"""
+    return _seg_is_dispatch_number_line(text)
 
 
 def _split_inline_heading_body(line: str) -> list[str]:
@@ -608,9 +486,8 @@ def _split_inline_heading_body(line: str) -> list[str]:
 
 
 def _normalize_responsibility_line(text: str) -> str:
-    unwrapped = _RESPONSIBILITY_WRAPPER_RE.sub(r"\1", text or "")
-    normalized = _RESPONSIBILITY_LABEL_RE.sub("责任单位：", unwrapped)
-    return re.sub(r"(?<!^)(责任单位：)", r"\n\1", normalized)
+    """兼容旧私有入口，传入责任单位文本，返回规范化后的显示文本。"""
+    return _normalization_normalize_responsibility_line(text)
 
 
 def detect_structural_type(line: str, next_line: str, ctx,
@@ -625,7 +502,7 @@ def detect_structural_type(line: str, next_line: str, ctx,
     text = line.strip()
     next_text = next_line.strip() if next_line else ""
 
-    if _RESPONSIBILITY_LINE_RE.match(text):
+    if _normalization_is_responsibility_line(text):
         return "responsibility_line", {"colon_bold": True}, "", _normalize_responsibility_line(text)
 
     # 1. 附件说明：上一段必须是正文
@@ -779,6 +656,7 @@ def _normalize_quotes(text: str) -> str:
 
 
 def _feature_bool(value, default: bool = False) -> bool:
+    """兼容旧私有入口，传入任意开关值，返回布尔配置结果。"""
     raw = str(value).strip().lower()
     if raw in {"1", "true", "yes", "on", "启用", "是"}:
         return True
@@ -788,7 +666,8 @@ def _feature_bool(value, default: bool = False) -> bool:
 
 
 def _contains_colon(text: str) -> bool:
-    return '：' in text or ':' in text
+    """兼容旧私有入口，传入文本，返回是否包含中英文冒号。"""
+    return _recognition_contains_colon(text)
 
 
 def _colon_bold_match(text: str):

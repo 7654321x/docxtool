@@ -114,7 +114,7 @@ DOCX 上传请求的限流、请求配置解析、临时落盘、安全校验、
 `src/docxtool/document/recognition/legacy/scoring.py`。`document/importer.py` 继续 re-export
 这些类型以保持旧导入路径兼容；本次只移动数据模型，不改变 legacy scorer 的分数、状态推进或最终类型判断。
 
-图片可见性、表/图题注判断、行内 token 提取、字面编号前缀提取、分节属性、页眉页脚关系收集和损坏关系副本修复已迁移到
+段落物理格式特征提取、图片可见性、表/图题注判断、行内 token 提取、字面编号前缀提取、Word 自动编号事实判断、分节属性、页眉页脚关系收集和损坏关系副本修复已迁移到
 `src/docxtool/document/importing/`。这些模块只读取 python-docx 段落对象和 OOXML 物理事实，
 不决定最终段落类型；`document/importer.py` 继续作为兼容编排入口调用它们。
 
@@ -316,7 +316,8 @@ Web 服务启动顺序、启动日志、TCP_NODELAY 设置和 KeyboardInterrupt 
 
 - `pipeline.py`：根据源物理段行范围、软换行证据、行内标题正文拆分开关和正文区域状态生成逻辑 source span 计划；该模块只返回范围和 token 保留策略，不创建最终段落类型。
 - `source_locator.py`：根据源物理段 raw span 写入 UTF-16 locator、canonical locator、段内格式特征，构建逻辑段 `ParagraphFeatures`，并按物理段写入逻辑段序号和总数。旧的 importer 私有函数名仍作为兼容入口转发到该模块。
-- `soft_breaks.py`：根据 importer 注入的编号、文号、键值段、日期、附件、职务姓名和落款证据，判断软换行是否应形成逻辑段边界；该模块只返回边界决策，不决定最终段落类型。
+- `boundaries.py`：根据源范围、冒号结构、编号事实和 run 格式切换生成标题正文边界候选，并提供“标题后粘连正文”共享事实；该模块不修改文本，也不决定最终标题层级。
+- `soft_breaks.py`：根据编号、文号、键值段、日期、附件、职务姓名和落款证据，判断软换行是否应形成逻辑段边界；其中职务姓名和文首职务日期组合由本模块提供通用形态判断，不维护具体姓名名单，也不决定最终段落类型。
 - `body_tail.py`：根据 importer 注入的附件、成文日期、附件项和附件页标记判断函数，扫描逻辑行中的最后正文候选位置；该模块只提供尾部边界事实，不写入最终类型。
 
 当前软换行、标题正文粘连和尾部软换行拆分规则仍保留在 importer 编排中，后续迁移时必须继续保持文字覆盖、不重叠和不丢失。
@@ -326,9 +327,10 @@ Web 服务启动顺序、启动日志、TCP_NODELAY 设置和 KeyboardInterrupt 
 `src/docxtool/document/recognition/` 包含识别层：
 
 - `features.py`：保留原文的块模型和共享特征。表格、图片、空段和分页标记不会被静默丢弃。
-- `colon.py`：共享冒号结构分析，只输出标签、值、称呼形态、机构形态、解释性正文等事实，不直接返回最终类型。
+- `colon.py`：共享冒号存在判断和结构分析，只输出标签、值、称呼形态、机构形态、解释性正文等事实，不直接返回最终类型。
 - `model.py`：`DocumentMode`、`SectionKind`、`ParagraphType` 三层模型。
 - `candidates.py`：结构、键值、编号、语义、旧分类器和样式候选提供器。旧分类结果只作为兼容候选。
+- `opening_speech.py`：提供文首“在……上的讲话”主标题证据和误推断一级编号剥离 helper；只生成识别证据，不写入最终类型。
 - `global_context.py`：文首结构、正文边界和同级标题族的全文只读分析。
 - `decoder.py`：硬结构否决、标题序列冲突复核和宽度可配置的确定性 Beam Search；默认宽度为 12。
 - `compatibility.py`：内部段落类型到旧渲染 `type_id` 的唯一映射边界。
@@ -340,6 +342,7 @@ Web 服务启动顺序、启动日志、TCP_NODELAY 设置和 KeyboardInterrupt 
 
 - `dates.py`：提供中文数字转换、成文日期形态判断、成文日期规范化和附件页标识规范化。该模块只处理已识别文本的安全显示转换，不决定段落类型。
 - `signature.py`：提供已识别落款单位的安全文本规范化，只移除误粘连的中文一级编号前缀，不识别或扩写单位名称。
+- `responsibility.py`：提供已识别责任单位行的标签归一和重复标签换行规范化，只处理显示文本，不把正文重新分类为责任单位。
 - `text.py`：提供旧 importer 兼容的基础文本清理、中文语境引号转换和半角标点转换。该模块只封装文本转换 helper，不改变处理模式开关。
 - `tail.py`：消费最终 `type_id`，整理已确认的附件说明、落款单位、成文日期和附件正文页标记，并同步识别诊断。它不重新生成候选、不重新判定正文或标题，也不改变候选分数。
 

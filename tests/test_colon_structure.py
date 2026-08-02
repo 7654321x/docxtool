@@ -1,6 +1,15 @@
 from __future__ import annotations
 
-from docxtool.document.recognition.colon import analyze_colon_structure
+from docxtool.document.importer import _contains_colon
+from docxtool.document.recognition.colon import analyze_colon_structure, contains_colon
+
+
+def test_contains_colon_helper_keeps_importer_facade_compatible() -> None:
+    """验证冒号存在判断收口到 recognition helper 后旧入口仍一致。"""
+    assert contains_colon("责任单位：办公室")
+    assert contains_colon("责任单位:办公室")
+    assert _contains_colon("责任单位：办公室")
+    assert not contains_colon("责任单位办公室")
 
 
 def test_colon_analyzer_distinguishes_salutation_from_body_label() -> None:

@@ -90,6 +90,15 @@ def compact_text(value: str) -> str:
     return re.sub(r"\s+", "", value or "")
 
 
+def contains_colon(text: str) -> bool:
+    """判断文本是否包含中文或英文冒号。
+
+    传入数据是一段可见文本。返回值为布尔值，只提供冒号存在事实，
+    不分析标签和值，也不决定最终段落类型。
+    """
+    return "：" in (text or "") or ":" in (text or "")
+
+
 def _strip_wrapping_quotes(value: str) -> tuple[str, int]:
     stripped = (value or "").strip()
     if len(stripped) < 2:
@@ -228,6 +237,7 @@ __all__ = [
     "STRUCTURAL_KEY_VALUE_LABELS",
     "analyze_colon_structure",
     "compact_text",
+    "contains_colon",
     "is_organization_label",
     "is_standalone_addressing_text",
 ]

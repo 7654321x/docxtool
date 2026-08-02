@@ -8,12 +8,14 @@ import pytest
 from docxtool.document.importer import (
     ParagraphFeatures,
     SourceRun,
+    _heading_has_inline_body,
     _segment_boundary_candidates,
     _split_inline_heading_body_spans,
     _split_structural_tail_after_numbered_heading,
     _validate_source_span_partition,
     _validate_numbered_heading_body_split,
 )
+from docxtool.document.segmentation.boundaries import heading_has_inline_body
 from docxtool.document.segmentation.soft_breaks import should_split_structural_line_breaks
 from docxtool.sdk import recognize_docx
 
@@ -70,6 +72,13 @@ def test_visual_title_terminator_can_split_without_numbering() -> None:
     assert [source[start:end] for start, end in spans] == [
         "关于推进工作的要求。", "各单位应当结合实际认真执行。",
     ]
+
+
+def test_heading_has_inline_body_shared_boundary_helper() -> None:
+    """验证标题正文粘连边界 helper 与旧 importer 入口保持一致。"""
+    assert heading_has_inline_body("一、标题。正文内容不少于五字")
+    assert _heading_has_inline_body("一、标题。正文内容不少于五字")
+    assert not heading_has_inline_body("一、标题。短")
 
 
 def test_soft_break_decision_uses_structural_evidence_without_final_type() -> None:

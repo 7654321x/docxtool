@@ -48,6 +48,16 @@ def has_format_transition(
     return bool(left_fonts and right_fonts and left_fonts != right_fonts)
 
 
+def heading_has_inline_body(text: str) -> bool:
+    """判断标题文本句号后是否粘连了足够长度的正文。
+
+    传入数据是一段标题候选文本。返回值为布尔值，只表示存在“标题。
+    正文”边界事实；不拆分文本，也不决定最终标题层级。
+    """
+    period_pos = (text or "").find("。")
+    return period_pos >= 0 and len((text or "")[period_pos + 1:].strip()) >= 5
+
+
 def segment_boundary_candidates(
     source: str,
     start: int,

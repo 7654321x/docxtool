@@ -23,6 +23,10 @@ from docxtool.document.normalization.text import (
     normalize_quotes,
     to_chinese_punctuation,
 )
+from docxtool.document.normalization.responsibility import (
+    is_responsibility_line,
+    normalize_responsibility_line,
+)
 
 __all__ = [
     "chinese_number_to_int",
@@ -36,6 +40,8 @@ __all__ = [
     "normalize_basic_text",
     "normalize_legacy_punctuation_text",
     "normalize_quotes",
+    "is_responsibility_line",
+    "normalize_responsibility_line",
     "sync_recognition_consistency",
     "to_chinese_punctuation",
 ]

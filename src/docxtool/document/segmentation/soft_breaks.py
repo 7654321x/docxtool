@@ -2,7 +2,53 @@
 
 from __future__ import annotations
 
+import re
 from typing import Callable
+
+_HEADER_ROLE_KEYWORD_RE = re.compile(
+    r"主任|书记|主席|部长|局长|处长|科长|司长|厅长|市长|县长|区长|镇长|乡长|院长|校长|政委|组长|队长|秘书长|委员|常委|负责人"
+)
+_HEADER_DATE_LINE_RE = re.compile(r"^[（(]\s*(?:19|20)\d{2}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日")
+_DISPATCH_NUMBER_LINE_RE = re.compile(
+    r"^(?:[\u4e00-\u9fffA-Za-z0-9]{0,20})[〔\[]\d{4}[〕\]]\s*\d+\s*号$"
+)
+
+
+def is_dispatch_number_line(text: str) -> bool:
+    """判断软换行中的单行文本是否为结构化发文字号。
+
+    传入数据是一行可见文本。返回值为布尔值，只用于证明文首软换行
+    边界；不判断版头是否存在，也不决定最终 `dispatch_number` 类型。
+    """
+    return bool(_DISPATCH_NUMBER_LINE_RE.fullmatch(re.sub(r"\s+", "", text or "")))
+
+
+def is_role_name_line(text: str) -> bool:
+    """判断软换行中的单行文本是否具备文首职务姓名形态。
+
+    传入数据是一行可见文本。返回值为布尔值，只表示它可作为拆段边界
+    的结构事实；不维护具体姓名名单，也不决定最终 `role_name` 类型。
+    """
+    value = text or ""
+    return bool(
+        re.fullmatch(r"[\u4e00-\u9fff、，,·]{2,28}\s{2,}[\u4e00-\u9fff·]{2,6}", value)
+        or (
+            _HEADER_ROLE_KEYWORD_RE.search(value)
+            and re.search(r"\s{2,}", value)
+        )
+    )
+
+
+def is_header_role_date_pair(role_line: str, date_line: str) -> bool:
+    """判断相邻软换行是否是文首职务姓名和括号日期组合。
+
+    传入数据是相邻两行文本。返回值为布尔值，只用于证明两行应拆成
+    独立逻辑结构，不判断标题区最终类型。
+    """
+    return bool(
+        _HEADER_ROLE_KEYWORD_RE.search(role_line or "")
+        and _HEADER_DATE_LINE_RE.match(date_line or "")
+    )
 
 
 def should_split_structural_line_breaks(

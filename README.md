@@ -78,10 +78,10 @@
 - `src/docxtool/application/process_document.py`：上传 DOCX 任务的应用层导入、识别、导出和结果编排。
 - `src/docxtool/document/models/`：导入、识别、规范化、渲染和 SDK 共享的稳定文档数据模型。
 - `src/docxtool/document/importer.py`：DOCX 结构识别、段落分类、元数据生成。
-- `src/docxtool/document/importing/`：DOCX 物理导入事实辅助，例如图片可见性、题注、行内 token、编号前缀、分节关系和损坏关系副本修复。
-- `src/docxtool/document/segmentation/`：逻辑段 source locator、可见文字守恒、段内格式特征映射、软换行结构边界判断和尾部正文候选边界扫描。
-- `src/docxtool/document/normalization/`：识别完成后的尾部顺序、日期/附件显示规范和诊断一致性处理。
-- `src/docxtool/document/recognition/legacy/`：旧 importer 评分链路的兼容数据模型和后续隔离入口。
+- `src/docxtool/document/importing/`：DOCX 物理导入事实辅助，例如段落物理格式特征、图片可见性、题注、行内 token、编号前缀、Word 自动编号事实、分节关系和损坏关系副本修复。
+- `src/docxtool/document/segmentation/`：逻辑段 source locator、可见文字守恒、段内格式特征映射、标题正文粘连事实、发文字号/职务姓名/日期软换行证据、软换行结构边界判断和尾部正文候选边界扫描。
+- `src/docxtool/document/normalization/`：识别完成后的尾部顺序、日期/附件/责任单位显示规范和诊断一致性处理。
+- `src/docxtool/document/recognition/`：候选、Beam 解码、文首讲话标题证据、诊断、验证和兼容映射；legacy 子包保留旧 importer 评分链路兼容数据模型。
 - `src/docxtool/document/style_config.py`：样式规则、页面设置、日志配置。
 - `src/docxtool/document/engine/`：DOCX 导出和实际排版逻辑。
 - `src/docxtool/security/`：上传 DOCX 安全校验。

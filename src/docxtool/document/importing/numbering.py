@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 
 
 NUMBERING_PATTERNS = [
@@ -62,3 +63,13 @@ def heading_style_prefix(style_name: str) -> str:
     normalized = (style_name or "").lower()
     type_id = HEADING_STYLE_TYPES.get(normalized)
     return f"@style_{type_id}" if type_id else ""
+
+
+def is_auto_numbered_item(features: Any) -> bool:
+    """判断段落特征是否来自 Word 自动列表或标题样式编号。
+
+    传入数据是带 `numbering_prefix` 属性的段落特征对象。返回值为布尔值，
+    只表示存在 Word 原生编号事实，不决定附件项、标题或正文的最终类型。
+    """
+    prefix = getattr(features, "numbering_prefix", "") if features is not None else ""
+    return bool(prefix and (prefix.startswith("@lvl_") or prefix.startswith("@style_")))
