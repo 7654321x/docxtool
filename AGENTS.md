@@ -32,6 +32,25 @@ pwsh -NoProfile -Command "python -m ruff check src tests scripts"
 pwsh -NoProfile -Command "node --test tests/worker-routing.test.mjs"
 ```
 
+## 迁移专项执行规则
+
+适用于声明为“机械迁移”或“行为保持重构”的识别、导入、分段、规范化和渲染链路工作。详细门禁、快照方法和报告格式见 `docs/migration/codex-workflow.md`；Phase A-2 当前状态见 `docs/migration/phase-a2-checklist.md`。
+
+1. 每轮只完成一个主要职责，例如抽取一个模块、迁移一个兼容入口或补齐一组等价测试；不得在同一轮顺带开始下一阶段或行为优化。
+2. 机械迁移只允许调整文件归属、导入关系、兼容 facade 和等价测试，不得改变业务规则、默认配置、公开协议、文字处理、识别结果或渲染输出。
+3. 默认只运行当前职责的快速测试和相关静态检查；达到模块、阶段或发布里程碑时，按 `docs/migration/codex-workflow.md` 执行对应的扩展门禁。
+4. 快照或测试发现未解释的行为差异时，立即标记为 `blocked`，保存脱敏证据并停止该迁移项；不得通过修改基线、放宽断言或夹带行为补丁继续推进。
+5. 当前项通过门禁后停止，不自动开始下一个迁移项，不自动执行 `git commit` 或 `git push`。提交、发布和下一阶段均须由用户明确要求。
+6. 每轮结束后更新对应阶段清单，记录已完成项、待办项、新文件位置、执行命令和结果；不得记录用户 DOCX 正文、绝对用户路径、密钥或日志原文。
+
+## 文档维护与扩展
+
+1. `docs/README.md` 是 `docs` 的导航入口和文档职责索引；新增或调整项目文档前先阅读该文件，避免复制既有规范。
+2. `AGENTS.md` 只保存跨任务强制规则；架构说明、发布门禁、回归问题、SDK 契约和阶段状态分别维护在其对应文档中，不在多个位置重复维护同一事实。
+3. 既有文档路径视为稳定链接。除非用户明确同意迁移和更新全部引用，否则通过索引、交叉链接和目录入口整理，而不移动或重命名旧文件。
+4. 新增长期维护文档时，必须在 `docs/README.md` 登记职责和阅读入口；如属于发布范围，还必须同步更新 `docs/UPLOAD_MANIFEST.md`、`docs/GITHUB_UPLOAD_GUIDE.md` 和 `scripts/publish_to_github.ps1`。
+5. 每份规范文档必须明确适用范围、唯一职责、上位规则和验证入口；不得写入用户正文、真实密钥、绝对用户路径或运行日志原文。
+
 ## 重复问题处理
 
 1. 遇到已经出现过、或明显可能反复出现的问题时，先回看本文件和相关项目文档，确认是否已有处理约定。
@@ -138,17 +157,46 @@ pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m ruff check src tests scr
 - `stats.db`、日志、生成的 Word 文件
 - 用户隐私文档正文
 
-## GitHub 发布
+## GitHub 发布与文件收口
 
-GitHub 发布以 `docs/GITHUB_UPLOAD_GUIDE.md` 和 `scripts/publish_to_github.ps1` 为准。脚本默认使用临时干净克隆，一次完成安全扫描、提交、推送和远程核验，不直接推送当前工作树。
+GitHub 发布的目标是同步**全部符合发布范围的项目修改**，而不是按临时记忆挑选几个文件，也不是直接把当前磁盘的所有内容推送。发布以 `docs/GITHUB_UPLOAD_GUIDE.md`、`docs/UPLOAD_MANIFEST.md` 和 `scripts/publish_to_github.ps1` 为准；脚本使用临时干净克隆、安全扫描、提交、推送和远程核验，禁止直接对脏工作树执行 `git add -A` 后推送。
 
-发布安全扫描必须精确允许仓库根目录的 `.env.example`，同时继续禁止 `.env` 和其他 `.env.*` 文件。日常发布无需重复演练；需要预览时使用 `-DryRun`，需要在发布脚本内重跑全量测试时使用 `-Verify`。
+### 应上传的项目文件
+
+以下目录中的源码、测试、文档和配置属于可发布范围：
+
+- `src/`、`tests/`、`docs/`、`scripts/`、`resources/`、`deploy/`、`.github/`；
+- 根目录的 `AGENTS.md`、`README.md`、`CHANGELOG.md`、`CONVENTIONS.md`、`公文格式规范.md`、`server.py`、`pyproject.toml`、`requirements*.txt`、`requirements*.lock`、`run.sh`、`run.ps1`、`.env.example`、`.gitignore`、`.gitattributes`、`pytest.ini`、`ruff.toml`；
+- 运行目录仅允许 `var/data/.gitkeep`、`var/logs/.gitkeep`、`var/outputs/.gitkeep`、`var/runtime/.gitkeep`。
+
+用户明确要求“上传最新修改”时，应收口上述范围内的全部已修改、已删除和新增文件。当前发布脚本采用明确白名单：新增的可发布文件必须同步登记到 `docs/UPLOAD_MANIFEST.md` 和 `scripts/publish_to_github.ps1`；文档还必须登记到 `docs/README.md` 与 `docs/GITHUB_UPLOAD_GUIDE.md`。来源、职责或是否可公开不明确的新增文件必须先标记出来，不得静默遗漏或猜测上传。
+
+### 永不上传的文件
+
+以下内容无论是否未跟踪、是否本地测试成功，都不得进入 GitHub：
+
+- `.env`、`.env.*`（仅根目录 `.env.example` 例外）、真实密钥、令牌、Cookie、会话、SSH 私钥、证书私钥；
+- 用户原件、测试 DOCX、生成 DOCX、PDF、图片、压缩包、wheel、构建产物和补丁基线，例如 `test_docx/`、`wps/` 私有产物、`*.docx`、`*.whl`、`*.zip`、`phase-*.patch`；
+- 数据库、日志、任务记录、运行输出和临时目录，例如 `*.db`、`*.sqlite*`、`*.log`、`var/data/*`、`var/logs/*`、`var/outputs/*`、`var/runtime/*`；
+- 虚拟环境、缓存和本机工具目录，例如 `.venv/`、`__pycache__/`、`.pytest_cache/`、`.ruff_cache/`、`build/`、`dist/`、`tmp/`、`temp/`。
+
+安全扫描必须精确允许根目录 `.env.example`，并继续拒绝其他 `.env` 文件。发现疑似敏感文件、用户内容或未归类文件时，发布必须停止并报告路径与原因。
+
+### 发布方式
+
+1. 用户未明确要求发布时，只完成代码、测试和文档工作；报告建议版本号、主要变更和验证结果后停止。
+2. 普通推送默认使用快速模式：仍执行临时干净克隆、发布范围收口、敏感文件扫描、差异检查、远端并发保护和推送后核验，但不重复执行全量 Python、Ruff 和 Node 测试。`-Quick` 是快速模式的显式标识；省略 `-Quick` 时也保持同一快速行为，以兼容既有调用。
+3. 以下情形必须使用完整验证：用户明确要求全量测试或正式发布；修改识别/导入/分段/规范化/渲染主链路、SDK 公开契约、鉴权安全、依赖锁、启动部署或 CI；或快速门禁、快照、批量 DOCX 回归存在未解释差异。完整验证使用 `-Verify`，不得与 `-Quick` 同时使用。
+4. 用户明确要求发布时，先收口全部可发布修改，再更新版本与变更记录，按本规则执行快速或完整验证，通过后创建一个单一、可读的发布提交并推送；随后核验远端分支提交号和版本文件。
+5. 发布提交不得混入不相关的用户本地变更。需要保留但不发布的草稿、基线补丁或运行数据保持在本地，并在发布结果中明确说明。
+6. 发布前可做预览；具体参数和操作细节只维护在 `docs/GITHUB_UPLOAD_GUIDE.md`，不要在本文件复制命令。
 
 ## 版本与提交提醒
 
-1. 对用户可见的发布版本固定使用两段编号，例如 `1.1`、`1.2`，从 `1.9` 进位为 `2.0`，不使用第三段修订号。
-2. 完成一批可发布功能、测试和文档后，如用户未明确要求提交，先说明建议发布的版本号、主要变更和验证结果，并询问是否提交到 GitHub。
-3. 用户明确要求提交时，更新 `pyproject.toml` 和 `CHANGELOG.md` 后再执行发布安全扫描、提交与推送；不得将密钥、运行数据或用户文档纳入提交。
+1. 对用户可见的发布版本固定使用两段编号，例如 `2.4`、`2.5`；第二段从 `9` 进位为下一主版本，例如 `2.9` 后为 `3.0`。不得使用第三段修订号，也不得复用已发布版本号。
+2. 每个可发布批次只生成一个新版本。默认递增第二段；只有不兼容的公开协议、部署方式或用户明确指定的重大发布才递增第一段。
+3. 发布前必须同步更新 `pyproject.toml`、`src/docxtool/version.py` 和 `CHANGELOG.md`；wheel、Web、SDK、CLI 和远端版本文件必须由测试或远端核验确认一致。
+4. 完成一批可发布功能、测试和文档后，如用户未明确要求提交，先说明建议版本号、主要变更和验证结果，并询问是否提交到 GitHub。未经明确要求，不自动 commit 或 push。
 
 ## 公文测试文档批处理
 

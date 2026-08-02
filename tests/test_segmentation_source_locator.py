@@ -13,6 +13,8 @@ from docxtool.document.segmentation import (
     source_line_spans,
     trim_source_span,
 )
+from docxtool.document.segmentation.source_locator import build_physical_source_features
+from docxtool.document.source_tape import canonicalize_text
 
 
 def test_importer_reexports_segmentation_source_helpers():
@@ -20,6 +22,40 @@ def test_importer_reexports_segmentation_source_helpers():
     assert _set_source_locator is set_source_locator
     assert _source_line_spans is source_line_spans
     assert _trim_source_span is trim_source_span
+
+
+def test_build_physical_source_features_preserves_initial_locator_contract():
+    """原始物理段文本和序号传入后，应返回与旧导入层一致的初始 locator 字段。"""
+    raw_text = "标题\r\n正文\U00020000"
+
+    features = build_physical_source_features(raw_text, 7)
+
+    assert features.text == raw_text.strip()
+    assert features.paragraph_index == 7
+    assert features.source_physical_paragraph_index == 7
+    assert features.source_physical_text == raw_text
+    assert features.source_start_utf16 == 0
+    assert features.source_end_utf16 == len(raw_text.encode("utf-16-le")) // 2
+    assert features.source_canonical_text == canonicalize_text(raw_text)
+    assert features.source_canonical_start_utf16 == 0
+    assert features.source_canonical_end_utf16 == (
+        len(features.source_canonical_text.encode("utf-16-le")) // 2
+    )
+    assert features.source_fragment_text == raw_text
+    assert features.source_canonical_fragment_text == features.source_canonical_text
+    assert features.source_locator_status == "confirmed"
+    assert features.source_locator_evidence == ("PHYSICAL_PARAGRAPH_EXTRACTED",)
+    assert features.source_locator_warnings == ()
+
+
+def test_build_physical_source_features_keeps_empty_source_unresolved():
+    """空物理段传入后，应保持旧有 unresolved 状态和警告。"""
+    features = build_physical_source_features("", 2)
+
+    assert features.text == ""
+    assert features.source_locator_status == "unresolved"
+    assert features.source_locator_evidence == ()
+    assert features.source_locator_warnings == ("SOURCE_RANGE_UNRESOLVED",)
 
 
 def test_set_source_locator_confirms_raw_and_canonical_ranges():

@@ -46,14 +46,15 @@ pwsh -NoProfile -Command "git ls-remote https://github.com/7654321x/docxtool.git
 
 默认发布以下类型文件：
 
-- 项目文档：`README.md`、`CHANGELOG.md`、`docs/DEPLOY.md`、`docs/API.md`、`docs/SDK.md`、`docs/RECOGNITION_SOURCE_LOCATORS.md`、`docs/HOST_TEXT_V1_GOLDEN.json`、`docs/USER_WPS_VALIDATION.md`、`docs/USER_WPS_VALIDATION_RESULT.md`、`docs/RECOGNITION_ARCHITECTURE.md`、`docs/ARCHITECTURE_DAG.md`、`docs/RECOGNITION_RELEASE.md`、`docs/UPLOAD_MANIFEST.md`、`docs/GITHUB_UPLOAD_GUIDE.md`、`公文格式规范.md`、`AGENTS.md`、`CONVENTIONS.md`
+- 项目文档：`README.md`、`CHANGELOG.md`、`docs/README.md`、`docs/DEPLOY.md`、`docs/API.md`、`docs/SDK.md`、`docs/RECOGNITION_SOURCE_LOCATORS.md`、`docs/HOST_TEXT_V1_GOLDEN.json`、`docs/USER_WPS_VALIDATION.md`、`docs/USER_WPS_VALIDATION_RESULT.md`、`docs/RECOGNITION_ARCHITECTURE.md`、`docs/ARCHITECTURE_DAG.md`、`docs/RECOGNITION_RELEASE.md`、`docs/migration/README.md`、`docs/migration/codex-workflow.md`、`docs/migration/phase-a2-checklist.md`、`docs/migration/phase-a2-looper-log.md`、`docs/UPLOAD_MANIFEST.md`、`docs/GITHUB_UPLOAD_GUIDE.md`、`公文格式规范.md`、`AGENTS.md`、`CONVENTIONS.md`
 - 依赖和启动：`requirements.txt`、`requirements.lock`、`requirements-dev.lock`、`run.sh`、`run.ps1`
 - 服务器代理模板：`deploy/nginx-docxtool.conf`
 - 配置：`.env.example`、`.gitignore`、`.gitattributes`、`pytest.ini`、`ruff.toml`、`pyproject.toml`、`.github/workflows/ci.yml`
 - 应用层：`src/docxtool/application/__init__.py`、`src/docxtool/application/process_document.py`
-- 物理导入层：`src/docxtool/document/importing/__init__.py`、`src/docxtool/document/importing/images.py`、`src/docxtool/document/importing/inline_tokens.py`、`src/docxtool/document/importing/numbering.py`、`src/docxtool/document/importing/sections.py`
+- 物理导入层：`src/docxtool/document/importing/__init__.py`、`src/docxtool/document/importing/images.py`、`src/docxtool/document/importing/inline_tokens.py`、`src/docxtool/document/importing/numbering.py`、`src/docxtool/document/importing/physical_format.py`、`src/docxtool/document/importing/reader.py`、`src/docxtool/document/importing/sections.py`
+- 分段层：`src/docxtool/document/segmentation/*.py`，其中 `partition.py` 负责来源范围保序分区，`conservation.py` 负责无重叠、无丢失、无重复的守恒核验
 - 旧识别隔离：`src/docxtool/document/recognition/legacy/__init__.py`、`src/docxtool/document/recognition/legacy/scoring.py`
-- 后端、排版核心和 SDK：`server.py`、`src/docxtool/**/*.py`、`src/docxtool/resources/config/default-format.json`、`src/docxtool/resources/schemas/*.json`，其中管理员请求上下文和 POST CSRF 辅助位于 `src/docxtool/web/admin_access.py`，管理员监控动作参数解析位于 `src/docxtool/web/admin_actions.py`，管理员监控动作处理位于 `src/docxtool/web/admin_route_handlers.py`，管理员 session 路由处理位于 `src/docxtool/web/admin_session_routes.py`，管理员表单解析位于 `src/docxtool/web/admin_forms.py`，管理员静态页面位于 `src/docxtool/web/admin_pages.py`，用户认证响应辅助位于 `src/docxtool/web/auth_payloads.py`，普通用户认证路由处理位于 `src/docxtool/web/auth_route_handlers.py`，Web 建表和迁移位于 `src/docxtool/web/database_schema.py`，文件 API 授权位于 `src/docxtool/web/file_api_auth.py`，前端首页读取位于 `src/docxtool/web/frontend_pages.py`，HTTP handler 路由动作分派位于 `src/docxtool/web/handler_dispatch.py`，HTTP handler 响应发送位于 `src/docxtool/web/handler_responses.py`，日志脱敏位于 `src/docxtool/web/log_redaction.py`，后台维护线程入口位于 `src/docxtool/web/maintenance.py`，监控页面局部渲染位于 `src/docxtool/web/monitoring_pages.py`，预设模板路由处理位于 `src/docxtool/web/preset_route_handlers.py`，请求参数合并位于 `src/docxtool/web/request_params.py`，响应编码和错误体辅助位于 `src/docxtool/web/responses.py`，兼容路由匹配位于 `src/docxtool/web/routing.py`，服务启动编排位于 `src/docxtool/web/server_runtime.py`，任务状态/下载/日志路由处理位于 `src/docxtool/web/task_route_handlers.py`，后台 worker 一次性启动、队列消费、内存处理中状态、子进程入口和超时清理位于 `src/docxtool/web/task_worker.py`
+- 后端、排版核心和 SDK：`server.py`、`src/docxtool/**/*.py`、`src/docxtool/resources/config/default-format.json`、`src/docxtool/resources/schemas/*.json`，其中管理员请求上下文和 POST CSRF 辅助位于 `src/docxtool/web/admin_access.py`，管理员监控动作参数解析位于 `src/docxtool/web/admin_actions.py`，管理员监控动作处理位于 `src/docxtool/web/admin_route_handlers.py`，管理员 session 路由处理位于 `src/docxtool/web/admin_session_routes.py`，管理员表单解析位于 `src/docxtool/web/admin_forms.py`，管理员静态页面位于 `src/docxtool/web/admin_pages.py`，用户认证响应辅助位于 `src/docxtool/web/auth_payloads.py`，普通用户认证路由处理位于 `src/docxtool/web/auth_route_handlers.py`，Web 建表和迁移位于 `src/docxtool/web/database_schema.py`，文件 API 授权位于 `src/docxtool/web/file_api_auth.py`，前端首页读取位于 `src/docxtool/web/frontend_pages.py`，HTTP handler 路由动作分派位于 `src/docxtool/web/handler_dispatch.py`，HTTP handler 响应发送位于 `src/docxtool/web/handler_responses.py`，日志脱敏位于 `src/docxtool/web/log_redaction.py`，后台维护线程入口位于 `src/docxtool/web/maintenance.py`，监控页面局部渲染位于 `src/docxtool/web/monitoring_pages.py`，预设模板路由处理位于 `src/docxtool/web/preset_route_handlers.py`，请求参数合并位于 `src/docxtool/web/request_params.py`，响应编码和错误体辅助位于 `src/docxtool/web/responses.py`，兼容路由匹配位于 `src/docxtool/web/routing.py`，服务启动编排位于 `src/docxtool/web/server_runtime.py`，任务状态/下载/日志路由处理位于 `src/docxtool/web/task_route_handlers.py`，后台 worker 一次性启动、队列消费、内存处理中状态、子进程入口和超时清理位于 `src/docxtool/web/task_worker.py`；机械迁移门禁和阶段状态分别记录在 `docs/migration/codex-workflow.md`、`docs/migration/phase-a2-checklist.md`
 - 监控首页和统计接口路由响应发送位于 `src/docxtool/web/monitor_route_handlers.py`；前端首页和管理员登录页路由响应发送位于 `src/docxtool/web/page_route_handlers.py`；健康检查路由响应发送位于 `src/docxtool/web/health_route_handlers.py`。
 - 管理员监控仪表盘整页 HTML 渲染位于 `src/docxtool/web/monitor_dashboard_page.py`。
 - HTTP handler 响应头、OPTIONS 和方法入口分派位于 `src/docxtool/web/handler_lifecycle.py`。
@@ -88,10 +89,18 @@ pwsh -NoProfile -Command "git ls-remote https://github.com/7654321x/docxtool.git
 
 ## 5. 发布命令
 
-日常发布只执行一条命令：
+日常推送默认使用快速模式：保留临时干净克隆、允许清单复制、敏感文件扫描、差异检查、提交、推送和远端提交号核验，但不重复运行全量 Python、Ruff 和 Node 测试。可显式标记为 `-Quick`；省略该标记仍保持同一快速行为，兼容既有调用。
 
 ```pwsh
-pwsh -NoProfile -File .\scripts\publish_to_github.ps1 -CommitMessage "说明本次修改"
+pwsh -NoProfile -File .\scripts\publish_to_github.ps1 -Quick -CommitMessage "说明本次修改"
+```
+
+以下情况必须使用完整验证：用户要求全量验证或正式发布；修改识别/导入/分段/规范化/渲染主链路、SDK 公开协议、鉴权安全、依赖锁、启动部署或 CI；或存在未解释快照、批量 DOCX 回归差异。
+
+完整验证使用：
+
+```pwsh
+pwsh -NoProfile -File .\scripts\publish_to_github.ps1 -Verify -CommitMessage "说明本次修改"
 ```
 
 脚本自动完成：复制允许文件、敏感文件扫描、差异检查、提交、推送和远程提交号核验。它不会 force push；如果发布期间远端分支发生变化，脚本会停止。
@@ -102,8 +111,6 @@ pwsh -NoProfile -File .\scripts\publish_to_github.ps1 -CommitMessage "说明本�
 # 只预览，不提交、不推送
 pwsh -NoProfile -File .\scripts\publish_to_github.ps1 -DryRun
 
-# 发布前同时重跑 Python、Ruff 和 Node 测试
-pwsh -NoProfile -File .\scripts\publish_to_github.ps1 -Verify -CommitMessage "说明本次修改"
 ```
 
 ## 6. 重要限制

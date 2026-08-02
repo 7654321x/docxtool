@@ -317,11 +317,18 @@ Web 服务启动顺序、启动日志、TCP_NODELAY 设置和 KeyboardInterrupt 
 旧 importer 已使用的物理块 tuple，不生成逻辑段、不调用候选或状态机；关系修复函数和特征
 提取函数仍由兼容 importer 注入，保持现有调用方可替换的边界。
 
+`src/docxtool/document/importing/features.py` 只编排物理段初始 locator、样式名、格式、
+图片和编号事实。run 有效格式、source run span、段落对齐与缩进由 `physical_format.py`
+读取；Word 原生列表和 Heading 样式前缀由 `numbering.py` 按原顺序应用。二者均只填充
+既有 `ParagraphFeatures` 字段，不决定标题层级或最终 `type_id`。
+
 ## 逻辑分段边界
 
 `src/docxtool/document/segmentation/` 开始承接物理段到逻辑段的守恒职责：
 
-- `pipeline.py`：根据源物理段行范围、软换行证据、行内标题正文拆分开关和正文区域状态生成逻辑 source span 计划，并把物理块按原顺序展开为旧 importer 使用的逻辑行 tuple；识别相关回调仍由 importer 注入，该模块不创建最终段落类型。
+- `pipeline.py`：把物理块按原顺序展开为旧 importer 使用的逻辑行 tuple，并保留原 `build_logical_span_plan` facade 和 monkeypatch 边界；识别相关回调仍由 importer 注入，该模块不创建最终段落类型。
+- `partition.py`：根据源物理段行范围、软换行证据、行内标题正文拆分开关和正文区域状态生成 logical source span 计划，同时决定整段 inline token 是否可原样保留；不创建 `ParagraphData` 或最终类型。
+- `conservation.py`：校验拆分范围的可见文字覆盖、顺序、重叠、空洞和越界，保留既有异常文本；`boundaries.py` 和 importer 旧入口只作兼容转发。
 - `source_locator.py`：根据源物理段 raw span 写入 UTF-16 locator、canonical locator、段内格式特征，构建逻辑段 `ParagraphFeatures`，并按物理段写入逻辑段序号和总数。旧的 importer 私有函数名仍作为兼容入口转发到该模块。
 - `boundaries.py`：根据源范围、冒号结构、编号事实和 run 格式切换生成标题正文边界候选，并提供“标题后粘连正文”共享事实；该模块不修改文本，也不决定最终标题层级。
 - `soft_breaks.py`：根据编号、文号、键值段、日期、附件、职务姓名和落款证据，判断软换行是否应形成逻辑段边界；其中职务姓名和文首职务日期组合由本模块提供通用形态判断，不维护具体姓名名单，也不决定最终段落类型。
@@ -382,9 +389,11 @@ final types, text rewriting or ordering rules.
 
 `scripts/phase_a_equivalence_snapshot.py` observes the existing importer aliases to record
 physical blocks, logical lines, pre-Recognition inputs, locator facts, post-chain types,
-review diagnostics and exported key OOXML parts. Snapshot JSON stores only text length and
-SHA-256 values. It also compares Legacy candidate enabled/disabled inputs at the decoder
-boundary as a Phase B investigation record, without changing Legacy behavior.
+review diagnostics and the complete exported OPC package manifest. The manifest covers every
+part, content type and relationship, and rejects missing internal relationship targets. Snapshot
+JSON stores only text length and SHA-256 values. The provider experiment toggles only
+`LegacyCandidateProvider` at the decoder boundary; importer Legacy preprocessing remains enabled
+in both runs and is explicitly reported as outside that experiment.
 
 ## 关键规则
 

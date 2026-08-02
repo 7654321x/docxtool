@@ -13,12 +13,15 @@ import argparse
 from dataclasses import replace
 import hashlib
 import json
+import posixpath
 from pathlib import Path
 import sys
 from typing import Any, Dict, Iterable, List, Mapping, Optional
+from urllib.parse import unquote
 import zipfile
 
 from docx import Document
+from lxml import etree
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -32,12 +35,11 @@ from docxtool.document.style_config import PageSettings, StyleRule  # noqa: E402
 STANDARD_ROOT = ROOT / "test_docx" / "tset1" / "test1"
 SPECIAL_ROOT = ROOT / "test_docx" / "test2" / "test2"
 MODES = ("strict", "structural", "normalize")
-_KEY_OOXML_PARTS = frozenset((
-    "word/document.xml",
-    "word/styles.xml",
-    "word/numbering.xml",
-    "word/_rels/document.xml.rels",
-))
+_CONTENT_TYPES_PART = "[Content_Types].xml"
+_CONTENT_TYPES_CONTENT_TYPE = "application/vnd.openxmlformats-package.content-types+xml"
+_CORE_PROPERTIES_PART = "docProps/core.xml"
+_CORE_TIME_FIELDS = frozenset(("created", "modified", "lastPrinted"))
+_NORMALIZED_TIME_TEXT = "__DOCXTOOL_NORMALIZED_CORE_TIME__"
 
 
 def _sha256(value: bytes) -> str:
@@ -62,6 +64,221 @@ def _json_digest(value: Any) -> str:
     """Hash arbitrary diagnostic data after deterministic JSON serialization."""
     encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
     return _sha256(encoded.encode("utf-8"))
+
+
+def _parse_xml(value: bytes) -> Any:
+    """Parse package XML without network or entity resolution."""
+    parser = etree.XMLParser(resolve_entities=False, no_network=True, recover=False)
+    return etree.fromstring(value, parser=parser)
+
+
+def _content_type_maps(value: Optional[bytes]) -> tuple[Dict[str, str], Dict[str, str], List[str]]:
+    """Return OPC default/override content types and stable parse errors."""
+    defaults: Dict[str, str] = {}
+    overrides: Dict[str, str] = {}
+    errors: List[str] = []
+    if value is None:
+        return defaults, overrides, ["MISSING_CONTENT_TYPES"]
+    try:
+        root = _parse_xml(value)
+    except (etree.XMLSyntaxError, ValueError):
+        return defaults, overrides, ["MALFORMED_CONTENT_TYPES"]
+    for child in root:
+        local_name = etree.QName(child).localname
+        if local_name == "Default":
+            extension = str(child.get("Extension", "") or "").lower()
+            content_type = str(child.get("ContentType", "") or "")
+            if extension:
+                defaults[extension] = content_type
+        elif local_name == "Override":
+            part_name = str(child.get("PartName", "") or "").lstrip("/")
+            content_type = str(child.get("ContentType", "") or "")
+            if part_name:
+                overrides[part_name] = content_type
+    return defaults, overrides, errors
+
+
+def _part_content_type(
+    part_name: str,
+    defaults: Mapping[str, str],
+    overrides: Mapping[str, str],
+) -> str:
+    """Resolve one OPC part content type without guessing unknown extensions."""
+    if part_name == _CONTENT_TYPES_PART:
+        return _CONTENT_TYPES_CONTENT_TYPE
+    if part_name in overrides:
+        return str(overrides[part_name])
+    extension = posixpath.splitext(part_name)[1].lstrip(".").lower()
+    return str(defaults.get(extension, "") or "")
+
+
+def _normalize_part(part_name: str, value: bytes) -> tuple[bytes, List[str], Optional[str]]:
+    """Normalize only documented non-deterministic core-property time text."""
+    if part_name != _CORE_PROPERTIES_PART:
+        return value, [], None
+    try:
+        root = _parse_xml(value)
+    except (etree.XMLSyntaxError, ValueError):
+        return value, [], "MALFORMED_CORE_PROPERTIES"
+    normalized_fields: List[str] = []
+    for element in root.iter():
+        local_name = etree.QName(element).localname
+        if local_name in _CORE_TIME_FIELDS:
+            normalized_fields.append(local_name)
+            element.text = _NORMALIZED_TIME_TEXT
+    if not normalized_fields:
+        return value, [], None
+    canonical = etree.tostring(root, method="c14n", with_comments=True)
+    return canonical, sorted(set(normalized_fields)), None
+
+
+def _relationship_source_part(relationships_part: str) -> str:
+    """Map an OPC .rels member to its source part, using '/' for package root."""
+    if relationships_part == "_rels/.rels":
+        return "/"
+    marker = "/_rels/"
+    if marker not in relationships_part or not relationships_part.endswith(".rels"):
+        return ""
+    prefix, filename = relationships_part.rsplit(marker, 1)
+    return posixpath.join(prefix, filename[:-5])
+
+
+def _resolve_relationship_target(source_part: str, target: str) -> str:
+    """Resolve one internal relationship target to a normalized package part name."""
+    target_path = unquote(str(target or "").split("#", 1)[0].split("?", 1)[0])
+    target_path = target_path.replace("\\", "/")
+    if target_path.startswith("/"):
+        return posixpath.normpath(target_path).lstrip("/")
+    base = "" if source_part == "/" else posixpath.dirname(source_part)
+    return posixpath.normpath(posixpath.join(base, target_path)).lstrip("/")
+
+
+def _package_manifest(path: Path) -> Dict[str, Any]:
+    """Build a deterministic manifest for every package part and relationship."""
+    with zipfile.ZipFile(path) as package:
+        raw_entries = []
+        for info in package.infolist():
+            if info.is_dir():
+                continue
+            part_name = info.filename.replace("\\", "/").lstrip("/")
+            raw_entries.append((part_name, package.read(info)))
+        raw_entries.sort(key=lambda item: (item[0], _sha256(item[1])))
+        package_names = {name for name, _value in raw_entries}
+        content_types_value = next(
+            (value for name, value in raw_entries if name == _CONTENT_TYPES_PART),
+            None,
+        )
+        defaults, overrides, manifest_errors = _content_type_maps(content_types_value)
+        duplicate_counts: Dict[str, int] = {}
+        for name, _value in raw_entries:
+            duplicate_counts[name] = duplicate_counts.get(name, 0) + 1
+        duplicate_ordinals: Dict[str, int] = {}
+        parts: Dict[str, Dict[str, Any]] = {}
+        normalized_metadata: List[Dict[str, Any]] = []
+        for part_name, raw_value in raw_entries:
+            duplicate_ordinals[part_name] = duplicate_ordinals.get(part_name, 0) + 1
+            ordinal = duplicate_ordinals[part_name]
+            record_key = (
+                part_name
+                if duplicate_counts[part_name] == 1
+                else "{0}#{1}".format(part_name, ordinal)
+            )
+            normalized_value, normalized_fields, normalization_error = _normalize_part(
+                part_name,
+                raw_value,
+            )
+            if normalization_error:
+                manifest_errors.append(normalization_error)
+            if normalized_fields:
+                normalized_metadata.append({
+                    "part_name": part_name,
+                    "fields": normalized_fields,
+                    "strategy": "replace-core-property-time-text",
+                })
+            parts[record_key] = {
+                "part_name": part_name,
+                "size": len(normalized_value),
+                "sha256": _sha256(normalized_value),
+                "content_type": _part_content_type(part_name, defaults, overrides),
+            }
+        duplicate_parts = sorted(name for name, count in duplicate_counts.items() if count > 1)
+        if duplicate_parts:
+            manifest_errors.append("DUPLICATE_PACKAGE_PART")
+
+        relationships: Dict[str, Dict[str, Any]] = {}
+        relationship_parse_errors: List[Dict[str, str]] = []
+        missing_targets: List[Dict[str, str]] = []
+        for relationships_part, raw_value in raw_entries:
+            if not relationships_part.endswith(".rels"):
+                continue
+            source_part = _relationship_source_part(relationships_part)
+            try:
+                root = _parse_xml(raw_value)
+            except (etree.XMLSyntaxError, ValueError):
+                relationship_parse_errors.append({
+                    "part_name": relationships_part,
+                    "error_code": "MALFORMED_RELATIONSHIPS_XML",
+                })
+                continue
+            duplicate_relationship_ids: Dict[str, int] = {}
+            for element in root:
+                if etree.QName(element).localname != "Relationship":
+                    continue
+                relationship_id = str(element.get("Id", "") or "")
+                relationship_type = str(element.get("Type", "") or "")
+                target = str(element.get("Target", "") or "")
+                target_mode = str(element.get("TargetMode", "") or "Internal")
+                duplicate_relationship_ids[relationship_id] = (
+                    duplicate_relationship_ids.get(relationship_id, 0) + 1
+                )
+                ordinal = duplicate_relationship_ids[relationship_id]
+                key = "{0}|{1}".format(source_part, relationship_id)
+                if ordinal > 1:
+                    key = "{0}#{1}".format(key, ordinal)
+                external = target_mode.lower() == "external"
+                resolved_target = "" if external else _resolve_relationship_target(source_part, target)
+                target_exists: Optional[bool] = None if external else resolved_target in package_names
+                relationships[key] = {
+                    "source_part": source_part,
+                    "relationship_id": relationship_id,
+                    "relationship_type": relationship_type,
+                    "target": target,
+                    "target_mode": target_mode,
+                    "target_exists": target_exists,
+                    "resolved_target": resolved_target,
+                }
+                if target_exists is False:
+                    missing_targets.append({
+                        "source_part": source_part,
+                        "relationship_id": relationship_id,
+                        "target": target,
+                        "resolved_target": resolved_target,
+                    })
+        if relationship_parse_errors:
+            manifest_errors.append("RELATIONSHIP_PARSE_ERROR")
+        bad_member = package.testzip()
+
+    normalized_metadata.sort(key=lambda item: item["part_name"])
+    missing_targets.sort(
+        key=lambda item: (item["source_part"], item["relationship_id"], item["target"])
+    )
+    relationship_parse_errors.sort(key=lambda item: item["part_name"])
+    errors = sorted(set(manifest_errors))
+    return {
+        "schema": "docx-package-manifest-v1",
+        "part_count": len(parts),
+        "parts": parts,
+        "relationship_count": len(relationships),
+        "relationships": relationships,
+        "normalized_metadata": normalized_metadata,
+        "missing_relationship_target_count": len(missing_targets),
+        "missing_relationship_targets": missing_targets,
+        "relationship_parse_errors": relationship_parse_errors,
+        "duplicate_parts": duplicate_parts,
+        "zip_integrity_member": bad_member or "",
+        "errors": errors,
+        "valid": not errors and not missing_targets and not bad_member,
+    }
 
 
 def _source_run_snapshot(source_run: Any) -> Dict[str, Any]:
@@ -287,21 +504,11 @@ def _document_snapshot(data: Any) -> Dict[str, Any]:
 
 
 def _output_docx_snapshot(path: Path) -> Dict[str, Any]:
-    """Capture key OOXML parts and visible structure of an exported DOCX."""
-    with zipfile.ZipFile(path) as package:
-        names = sorted(package.namelist())
-        parts = {
-            name: _sha256(package.read(name))
-            for name in names
-            if name in _KEY_OOXML_PARTS
-            or name.startswith("word/header")
-            or name.startswith("word/footer")
-        }
-        bad_member = package.testzip()
+    """Capture the complete OPC package manifest and visible document structure."""
+    package_manifest = _package_manifest(path)
     document = Document(path)
     return {
-        "zip_integrity_member": bad_member or "",
-        "ooxml_parts": parts,
+        "package_manifest": package_manifest,
         "paragraph_count": len(document.paragraphs),
         "table_count": len(document.tables),
         "section_count": len(document.sections),
@@ -398,7 +605,7 @@ def capture_snapshot(output: Path, artifact_dir: Optional[Path]) -> Dict[str, An
             document_record["modes"][mode] = captured
         documents.append(document_record)
     payload = {
-        "schema": "phase-a-equivalence-v1",
+        "schema": "phase-a-equivalence-v2",
         "text_storage": "hash-and-length-only",
         "document_count": len(documents),
         "mode_count": len(MODES),
@@ -409,10 +616,11 @@ def capture_snapshot(output: Path, artifact_dir: Optional[Path]) -> Dict[str, An
     return payload
 
 
-def capture_legacy_input_comparison(output: Path) -> Dict[str, Any]:
-    """Compare the actual decoder-entry input with legacy candidates toggled."""
+def capture_legacy_provider_comparison(output: Path) -> Dict[str, Any]:
+    """Compare provider-toggle input invariance separately from output drift."""
     rules = StyleRule.from_config()
-    differences: List[Dict[str, Any]] = []
+    input_differences: List[Dict[str, Any]] = []
+    output_differences: List[Dict[str, Any]] = []
     checked = 0
     for group, source in _document_sources():
         for mode in MODES:
@@ -423,28 +631,66 @@ def capture_legacy_input_comparison(output: Path) -> Dict[str, Any]:
                 source, mode, rules, legacy_candidates_enabled=False
             )
             checked += 1
-            paths = _difference_paths(
+            input_paths = _difference_paths(
                 enabled.get("pre_recognition", {}),
                 disabled.get("pre_recognition", {}),
             )
-            if paths:
-                differences.append({
+            if input_paths:
+                input_differences.append({
                     "group": group,
                     "source_name": source.name,
                     "mode": mode,
-                    "different_field_count": len(paths),
-                    "fields": paths,
+                    "different_field_count": len(input_paths),
+                    "fields": input_paths,
+                })
+            output_paths = _difference_paths(
+                enabled.get("result", {}),
+                disabled.get("result", {}),
+            )
+            if output_paths:
+                output_differences.append({
+                    "group": group,
+                    "source_name": source.name,
+                    "mode": mode,
+                    "different_field_count": len(output_paths),
+                    "fields": output_paths,
                 })
     payload = {
-        "schema": "phase-a-legacy-input-v1",
-        "comparison": "pre-recognition-input",
+        "schema": "phase-a-legacy-provider-comparison-v2",
+        "comparison": "legacy-candidate-provider-input-invariance",
+        "scope_warning": (
+            "This experiment toggles only LegacyCandidateProvider and does not disable "
+            "importer Legacy preprocessing."
+        ),
+        "legacy_candidate_provider": {
+            "status": "toggled",
+            "enabled_run": True,
+            "disabled_run": False,
+        },
+        "importer_legacy_preprocessing": {
+            "status": "blocked",
+            "enabled_in_both_runs": True,
+            "tested": False,
+            "reason": "No production-neutral importer preprocessing bypass is available.",
+        },
         "checked_cases": checked,
-        "difference_count": len(differences),
-        "differences": differences,
+        "input_comparison": {
+            "difference_count": len(input_differences),
+            "differences": input_differences,
+        },
+        "output_comparison": {
+            "difference_count": len(output_differences),
+            "differences": output_differences,
+        },
     }
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
     return payload
+
+
+def capture_legacy_input_comparison(output: Path) -> Dict[str, Any]:
+    """Compatibility wrapper for the renamed provider-only experiment."""
+    return capture_legacy_provider_comparison(output)
 
 
 def _difference_paths(left: Any, right: Any, path: str = "$") -> List[str]:
@@ -470,17 +716,72 @@ def _difference_paths(left: Any, right: Any, path: str = "$") -> List[str]:
     return [] if left == right else [path]
 
 
+def _package_validation_paths(value: Any, path: str = "$") -> List[str]:
+    """Return paths for invalid package manifests even when both sides match."""
+    issues: List[str] = []
+    if isinstance(value, Mapping):
+        manifest = value.get("package_manifest")
+        if isinstance(manifest, Mapping):
+            for key, relationship in (manifest.get("relationships", {}) or {}).items():
+                if isinstance(relationship, Mapping) and relationship.get("target_exists") is False:
+                    issues.append(
+                        "{0}.package_manifest.relationships.{1}.target_exists".format(path, key)
+                    )
+            for index, _item in enumerate(manifest.get("relationship_parse_errors", ()) or ()):
+                issues.append(
+                    "{0}.package_manifest.relationship_parse_errors[{1}]".format(path, index)
+                )
+            if manifest.get("zip_integrity_member"):
+                issues.append("{0}.package_manifest.zip_integrity_member".format(path))
+        for key, item in value.items():
+            issues.extend(_package_validation_paths(item, "{0}.{1}".format(path, key)))
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            issues.extend(_package_validation_paths(item, "{0}[{1}]".format(path, index)))
+    return issues
+
+
+def _categorized_difference_paths(paths: Iterable[str]) -> Dict[str, List[str]]:
+    """Separate package, relationship, normalized metadata and structure drift."""
+    categories = {
+        "package_part_differences": [],
+        "relationship_differences": [],
+        "normalized_metadata_differences": [],
+        "document_structure_differences": [],
+    }
+    for path in paths:
+        if ".package_manifest.normalized_metadata" in path:
+            categories["normalized_metadata_differences"].append(path)
+        elif (
+            ".package_manifest.relationships" in path
+            or ".package_manifest.relationship_parse_errors" in path
+            or ".package_manifest.missing_relationship" in path
+        ):
+            categories["relationship_differences"].append(path)
+        elif ".package_manifest" in path:
+            categories["package_part_differences"].append(path)
+        else:
+            categories["document_structure_differences"].append(path)
+    return categories
+
+
 def compare_snapshots(before: Path, after: Path, output: Path) -> Dict[str, Any]:
     """Compare two captured payloads and retain only redacted structural paths."""
     before_payload = json.loads(before.read_text(encoding="utf-8"))
     after_payload = json.loads(after.read_text(encoding="utf-8"))
-    paths = _difference_paths(before_payload, after_payload)
+    paths = sorted(set(
+        _difference_paths(before_payload, after_payload)
+        + _package_validation_paths(before_payload)
+        + _package_validation_paths(after_payload)
+    ))
+    categories = _categorized_difference_paths(paths)
     payload = {
-        "schema": "phase-a-equivalence-comparison-v1",
+        "schema": "phase-a-equivalence-comparison-v2",
         "before_sha256": _sha256(before.read_bytes()),
         "after_sha256": _sha256(after.read_bytes()),
         "difference_count": len(paths),
         "difference_paths": paths,
+        **categories,
     }
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
@@ -494,8 +795,10 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     capture = subparsers.add_parser("capture")
     capture.add_argument("--output", type=Path, required=True)
     capture.add_argument("--artifact-dir", type=Path)
-    legacy = subparsers.add_parser("legacy-input")
-    legacy.add_argument("--output", type=Path, required=True)
+    legacy_provider = subparsers.add_parser("legacy-provider-input-invariance")
+    legacy_provider.add_argument("--output", type=Path, required=True)
+    legacy_alias = subparsers.add_parser("legacy-input")
+    legacy_alias.add_argument("--output", type=Path, required=True)
     compare = subparsers.add_parser("compare")
     compare.add_argument("--before", type=Path, required=True)
     compare.add_argument("--after", type=Path, required=True)
@@ -508,8 +811,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = _parse_args(argv)
     if args.command == "capture":
         capture_snapshot(args.output, args.artifact_dir)
-    elif args.command == "legacy-input":
-        capture_legacy_input_comparison(args.output)
+    elif args.command in {"legacy-provider-input-invariance", "legacy-input"}:
+        if args.command == "legacy-input":
+            print(
+                "warning: 'legacy-input' is deprecated; use "
+                "'legacy-provider-input-invariance'.",
+                file=sys.stderr,
+            )
+        comparison = capture_legacy_provider_comparison(args.output)
+        if comparison["input_comparison"]["difference_count"]:
+            return 1
     else:
         comparison = compare_snapshots(args.before, args.after, args.output)
         if comparison["difference_count"]:

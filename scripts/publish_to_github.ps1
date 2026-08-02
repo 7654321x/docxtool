@@ -3,6 +3,7 @@
 [CmdletBinding()]
 param(
     [switch]$DryRun,
+    [switch]$Quick,
     [switch]$Verify,
     [string]$Repository = "https://github.com/7654321x/docxtool.git",
     [string]$Branch = "main",
@@ -12,6 +13,10 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+if ($Quick -and $Verify) {
+    throw "-Quick and -Verify cannot be used together. Choose one publish verification level."
+}
 
 function Invoke-Checked {
     param(
@@ -101,6 +106,7 @@ $requiredFiles = @(
     ".gitignore",
     "AGENTS.md",
     "CHANGELOG.md",
+    "docs/README.md",
     "docs/API.md",
     "docs/SDK.md",
     "docs/ARCHITECTURE_DAG.md",
@@ -116,6 +122,10 @@ $requiredFiles = @(
     "docs/DEPLOY.md",
     "docs/RECOGNITION_ARCHITECTURE.md",
     "docs/RECOGNITION_RELEASE.md",
+    "docs/migration/README.md",
+    "docs/migration/codex-workflow.md",
+    "docs/migration/phase-a2-checklist.md",
+    "docs/migration/phase-a2-looper-log.md",
     "docs/DOCX_REGRESSION_CHECKLIST.md",
     "docs/GITHUB_UPLOAD_GUIDE.md",
     "README.md",
@@ -228,6 +238,7 @@ $requiredFiles = @(
     "src/docxtool/document/importing/images.py",
     "src/docxtool/document/importing/inline_tokens.py",
     "src/docxtool/document/importing/numbering.py",
+    "src/docxtool/document/importing/physical_format.py",
     "src/docxtool/document/importing/reader.py",
     "src/docxtool/document/importing/relationships.py",
     "src/docxtool/document/importing/sections.py",
@@ -249,6 +260,8 @@ $requiredFiles = @(
     "src/docxtool/document/segmentation/__init__.py",
     "src/docxtool/document/segmentation/body_tail.py",
     "src/docxtool/document/segmentation/boundaries.py",
+    "src/docxtool/document/segmentation/conservation.py",
+    "src/docxtool/document/segmentation/partition.py",
     "src/docxtool/document/segmentation/pipeline.py",
     "src/docxtool/document/segmentation/source_locator.py",
     "src/docxtool/document/segmentation/soft_breaks.py",
@@ -342,7 +355,8 @@ try {
     Write-Host "Source: $SourceRoot"
     Write-Host "Repository: $Repository"
     Write-Host "Branch: $Branch"
-    Write-Host "Mode: $(if ($DryRun) { 'dry-run' } else { 'push' })"
+    $verificationMode = if ($Verify) { "full" } else { "quick" }
+    Write-Host "Mode: $(if ($DryRun) { 'dry-run' } else { 'push' }) | Verification: $verificationMode"
 
     Invoke-Checked git @("clone", "--branch", $Branch, "--single-branch", $Repository, $tempRoot)
     Push-Location -LiteralPath $tempRoot

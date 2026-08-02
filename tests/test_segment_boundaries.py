@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import importlib
+
 from docx import Document
 from docx.enum.text import WD_BREAK
 from docx.shared import Pt
 import pytest
 
+import docxtool.document.importer as importer_module
+import docxtool.document.segmentation.boundaries as boundaries_module
 from docxtool.document.importer import (
     ParagraphFeatures,
     SourceRun,
@@ -57,6 +61,28 @@ def _features_for_visual_boundary(source: str, boundary: int) -> ParagraphFeatur
             ),
         ),
     )
+
+
+def test_source_span_conservation_facades_call_new_module(monkeypatch) -> None:
+    """boundaries 与 importer 旧入口都应调用唯一的守恒实现。"""
+    conservation_module = importlib.import_module(
+        "docxtool.document.segmentation.conservation"
+    )
+    calls = []
+
+    def fake_validate(source, spans):
+        calls.append((source, spans))
+
+    monkeypatch.setattr(
+        conservation_module,
+        "validate_source_span_partition",
+        fake_validate,
+    )
+
+    boundaries_module.validate_source_span_partition("正文", [(0, 2)])
+    importer_module._validate_source_span_partition("标题", [(0, 2)])
+
+    assert calls == [("正文", [(0, 2)]), ("标题", [(0, 2)])]
 
 
 def test_visual_title_terminator_can_split_without_numbering() -> None:

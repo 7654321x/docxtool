@@ -20,11 +20,16 @@ https://github.com/7654321x/docxtool.git
 | --- | --- | --- |
 | `README.md` | 项目说明和本地运行方式 | GitHub 首页会使用 |
 | `CHANGELOG.md` | 发布版本与变更记录 | 与 `pyproject.toml` 版本同步维护 |
+| `docs/README.md` | 文档导航和职责索引 | 新增或调整文档时的入口 |
 | `docs/DEPLOY.md` | 生产部署说明 | Cloudflare Pages + Python 后端 |
 | `docs/API.md` | HTTP 接口、鉴权、错误码 | 前后端联调和排错 |
 | `docs/RECOGNITION_ARCHITECTURE.md` | 识别架构和稳定边界 | 识别层维护依据 |
 | `docs/ARCHITECTURE_DAG.md` | Web 处理链和 SDK 宿主适配 DAG | 解释队列、worker、子进程和绑定协议边界 |
 | `docs/RECOGNITION_RELEASE.md` | 识别发布门禁和回滚 | 发布验收依据 |
+| `docs/migration/codex-workflow.md` | 机械迁移执行工作流 | 快速、模块和里程碑门禁及快照规则 |
+| `docs/migration/README.md` | 迁移文档目录入口 | 阶段清单命名、更新与边界说明 |
+| `docs/migration/phase-a2-checklist.md` | Phase A-2 状态清单 | 已完成项、待办项、文件位置和验证记录 |
+| `docs/migration/phase-a2-looper-log.md` | Phase A-2 Looper 执行记录 | 连续微批次的脱敏结果、门禁和等价验证摘要 |
 | `docs/DOCX_REGRESSION_CHECKLIST.md` | 已知公文问题和回归检查清单 | 批量测试与视觉抽查依据 |
 | `docs/SDK.md` | 本地识别 SDK 接口和集成边界 | WPS/第三方软件调用依据 |
 | `docs/INTEGRATION_CONTRACT_V1.md` | SDK 通用宿主 JSON 协议 | WPS、Word 和其他宿主共同实现依据 |
@@ -136,6 +141,7 @@ https://github.com/7654321x/docxtool.git
 | `src/docxtool/document/importing/images.py` | 图片和题注物理事实判断 | 只读取段落文本、样式和 OOXML 图片尺寸，不判断最终类型 |
 | `src/docxtool/document/importing/inline_tokens.py` | 行内 token 提取 | 只提取文本、制表符、软换行和分页符，不执行段落分类 |
 | `src/docxtool/document/importing/numbering.py` | 编号物理事实提取 | 返回文本开头编号形态、Word 原生列表/标题样式编号事实，不决定标题层级或最终类型 |
+| `src/docxtool/document/importing/physical_format.py` | 段落物理格式快照 | 只提取对齐、缩进、间距、样式和 run 格式事实，不执行逻辑分段或识别裁决 |
 | `src/docxtool/document/importing/reader.py` | DOCX 物理读取和 body 块提取 | 只负责安全打开、body XML 顺序、表格/图片/分节和题注保护，不参与逻辑拆段或类型裁决 |
 | `src/docxtool/document/importing/relationships.py` | 导入前损坏关系修复 | 只在临时副本中删除 `Target="../NULL"` 的 OOXML 关系，不修改原文件和识别结果 |
 | `src/docxtool/document/importing/sections.py` | 分节和页眉页脚关系导入 | 只读取 sectPr 和关系部件，不修改分节布局 |
@@ -147,7 +153,9 @@ https://github.com/7654321x/docxtool.git
 | `src/docxtool/document/normalization/numbering.py` | 识别后标题编号规范化 | 只消费最终 type_id、已识别编号前缀、兼容兜底正则和样式规则，剥离旧前缀、生成标题编号 meta 并修复跳号，不重新判断标题层级或正文类型 |
 | `src/docxtool/document/normalization/pipeline.py` | Recognition 后规范化兼容编排 | 仅按 importer 原调用顺序调度注入的尾部、编号、合并、清理和诊断同步回调；不生成候选、不改变最终类型或处理模式语义 |
 | `src/docxtool/document/normalization/tail.py` | 识别后尾部结构归一化 | 只消费最终 type_id，整理附件说明、落款单位、成文日期、附件正文页和尾部窄重排，并同步诊断，不重新识别正文或标题 |
-| `src/docxtool/document/segmentation/` | 物理段到逻辑段的分段辅助 | 当前承载来源定位、标题正文边界、段内格式映射、发文字号/职务姓名/日期软换行证据、软换行强结构判断和尾部正文候选边界扫描 |
+| `src/docxtool/document/segmentation/` | 物理段到逻辑段的分段辅助 | 当前承载来源定位、标题正文边界、段内格式映射、来源范围分区与守恒核验、软换行强结构判断和尾部正文候选边界扫描 |
+| `src/docxtool/document/segmentation/partition.py` | 来源范围保序分区 | 将物理段可见范围机械划分为逻辑片段，不判断最终段落类型 |
+| `src/docxtool/document/segmentation/conservation.py` | 分段守恒核验 | 检查逻辑片段无重叠、无丢失、无重复并覆盖原始可见文字 |
 | `src/docxtool/document/classifier.py` | 文档模式和段落结构分类 |
 | `src/docxtool/document/letterhead_config.py` | 版头配置归一化和安全校验 |
 | `src/docxtool/document/recognition/` | 候选、Beam 解码、诊断、验证和兼容映射 |
@@ -205,7 +213,7 @@ https://github.com/7654321x/docxtool.git
 | `scripts/generate_secrets.py` | 生成随机密钥辅助脚本 |
 | `scripts/benchmark_recognition.py` | 无正文识别性能基准 |
 | `scripts/compare_recognition_runs.py` | 安全识别差分和确定性检查 |
-| `scripts/phase_a_equivalence_snapshot.py` | Phase A 机械迁移脱敏等价快照 | 通过兼容入口比较物理块、逻辑段、识别输入/结果和关键 OOXML 哈希；不写入正文或用户 DOCX |
+| `scripts/phase_a_equivalence_snapshot.py` | Phase A 机械迁移脱敏等价快照 | 比较物理块、逻辑段、provider 开关前后输入/输出，以及完整 OPC package 部件和关系；不写入正文或用户 DOCX |
 | `scripts/analyze_end_format.py` | 排版结果与正确模板的无正文格式差异分析 |
 | `scripts/analyze_letterhead_batch.py` | 批量版头状态与问题归类 |
 | `scripts/batch_test_docx.py` | 编号测试文档批处理、结构对齐模板比较与可选视觉渲染抽查 |

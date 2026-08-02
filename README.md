@@ -95,11 +95,12 @@
 - `.env.example`：环境变量示例，不包含真实密钥。
 - `docs/API.md`：HTTP 接口、鉴权、错误码说明。
 - `docs/DEPLOY.md`：生产部署说明。
+- `docs/README.md`：全部项目文档的导航入口和职责索引。
 - `docs/DOCX_REGRESSION_CHECKLIST.md`：已知公文问题与批量回归检查清单。
 - `docs/UPLOAD_MANIFEST.md`：AI 修改和 GitHub 上传范围清单。
 - `docs/GITHUB_UPLOAD_GUIDE.md`：安全发布到 GitHub 的操作说明。
 - `scripts/publish_to_github.ps1`：PowerShell 7 安全发布脚本，一条命令完成提交、推送和远程核验。
-- `scripts/phase_a_equivalence_snapshot.py`：Phase A 机械迁移的脱敏等价快照工具，比较物理块、逻辑段、识别输入/结果和关键 OOXML 哈希，不保存正文。
+- `scripts/phase_a_equivalence_snapshot.py`：Phase A 机械迁移的脱敏等价快照工具，比较物理块、逻辑段、识别输入/结果、完整 OPC package 部件和关系，不保存正文。
 
 ## 本地运行
 
@@ -244,10 +245,10 @@ docxtool-sdk validate --kind recognition-binding --input binding.json
 不要直接把当前工作树整仓库推送到 GitHub。使用下列一条命令完成安全扫描、提交、推送和远程核验：
 
 ```pwsh
-pwsh -NoProfile -File .\scripts\publish_to_github.ps1 -CommitMessage "说明本次修改"
+pwsh -NoProfile -File .\scripts\publish_to_github.ps1 -Quick -CommitMessage "说明本次修改"
 ```
 
-需要先预览时增加 `-DryRun`；需要同时重跑全量测试时增加 `-Verify`：
+需要先预览时增加 `-DryRun`；正式版本或高风险改动需要同时重跑全量测试时使用 `-Verify`：
 
 ```pwsh
 pwsh -NoProfile -File .\scripts\publish_to_github.ps1 -DryRun

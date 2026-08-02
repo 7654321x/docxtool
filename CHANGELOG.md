@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.5 - 2026-08-02
+
+- Completed the Phase A mechanical importing and segmentation responsibility boundaries while preserving the existing importer and pipeline compatibility facades.
+- Added focused physical-format extraction, source-span partitioning, and segmentation conservation modules.
+- Verified strict, structural, and normalize equivalence with no package, relationship, document-structure, recognition-input, or source-span conservation differences.
+
 ## 2.4 - 2026-08-02
 
 - Completed Phase A document-chain extraction by separating source reading, recognition helper boundaries, segmentation, and normalization orchestration while preserving the existing public importer facade.

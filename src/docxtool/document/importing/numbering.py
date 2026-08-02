@@ -65,6 +65,41 @@ def heading_style_prefix(style_name: str) -> str:
     return f"@style_{type_id}" if type_id else ""
 
 
+def apply_physical_numbering_features(
+    features: Any,
+    paragraph_element,
+    text: str,
+    *,
+    debug_logger: Any,
+) -> None:
+    """把既有 Word 列表和标题样式事实写入段落特征。
+
+    该入口只收口原物理读取顺序：先尝试 ``w:numPr``，再应用 Word 标题
+    样式。异常吞吐、日志和前缀覆盖规则均与迁移前一致，不解析或新增最终
+    标题类型，也不构造新的编号元数据。
+    """
+    try:
+        word_prefix = word_list_level_prefix(paragraph_element, text)
+        if word_prefix and not features.numbering_prefix:
+            features.numbering_prefix = word_prefix
+            lvl = int(word_prefix[5:])
+            debug_logger.debug(
+                "[多级列表] ilvl=%s → heading%s chars=%s",
+                lvl,
+                lvl + 2,
+                len(text),
+            )
+    except Exception as exc:
+        debug_logger.debug("[多级列表] 提取失败: %s", exc)
+
+    try:
+        style_prefix = heading_style_prefix(features.style_name)
+        if style_prefix:
+            features.numbering_prefix = style_prefix
+    except Exception:
+        pass
+
+
 def is_auto_numbered_item(features: Any) -> bool:
     """判断段落特征是否来自 Word 自动列表或标题样式编号。
 

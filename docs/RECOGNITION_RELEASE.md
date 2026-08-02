@@ -41,7 +41,8 @@ node --test tests/frontend-format-config.test.mjs
 ## Phase A 机械迁移等价验证
 
 仅在拆分导入、分段、规范化或渲染职责且声明“不改变行为”的迁移中，使用以下工具建立
-迁移前后快照。快照只保存文字长度、SHA-256、类型、定位、诊断和关键 OOXML 部件哈希；
+迁移前后快照。快照只保存文字长度、SHA-256、类型、定位、诊断，以及完整 OPC package
+中每个部件和关系的脱敏 manifest；
 不要把原文或绝对用户路径写入报告。
 
 ```pwsh
@@ -53,12 +54,18 @@ python .\scripts\phase_a_equivalence_snapshot.py capture `
 python .\scripts\phase_a_equivalence_snapshot.py compare `
   --before "$work\before.json" --after "$work\after.json" `
   --output "$work\comparison.json"
-python .\scripts\phase_a_equivalence_snapshot.py legacy-input `
-  --output "$work\legacy-input.json"
+python .\scripts\phase_a_equivalence_snapshot.py legacy-provider-input-invariance `
+  --output "$work\legacy-provider-input.json"
 ```
 
+`legacy-provider-input-invariance` 只切换 Recognition 内部的 `LegacyCandidateProvider`，
+不会关闭 importer Legacy preprocessing；输入差异会令命令失败，输出候选、final type、
+review 和 diagnostics 差异单独报告并允许存在。旧 `legacy-input` 名称仅作兼容别名并输出
+弃用提示。真实 importer Legacy preprocessing bypass 没有生产中立入口，报告中明确标记为
+`blocked`，不得据此宣称 importer Legacy 已关闭。
+
 `compare` 返回非零时，必须先解释或恢复差异；不得带着未解释的物理块、逻辑段、locator、
-最终类型、review 或关键 OOXML 差异进入下一行为修复阶段。该工具不替代正式批量排版和
+最终类型、review、package part 或 relationship 差异进入下一行为修复阶段。该工具不替代正式批量排版和
 视觉抽查，后者仍按 `DOCX_REGRESSION_CHECKLIST.md` 执行。
 
 ## 回滚

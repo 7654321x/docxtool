@@ -20,6 +20,35 @@ def utf16_length_of(value: str) -> int:
     return utf16_length(value)
 
 
+def build_physical_source_features(
+    raw_text: str,
+    paragraph_index: int,
+) -> ParagraphFeatures:
+    """构建物理段落进入导入链时的初始 source locator 特征。
+
+    传入数据是 python-docx 段落原文和物理段落序号。返回值保留原有
+    raw/canonical UTF-16 范围、片段、证据和空段 unresolved 状态；本函数
+    不读取 run 格式、编号、图片或样式，也不判断段落类型。
+    """
+    source_tape = SourceTape.from_text(raw_text)
+    return ParagraphFeatures(
+        text=raw_text.strip(),
+        paragraph_index=paragraph_index,
+        source_physical_paragraph_index=paragraph_index,
+        source_physical_text=raw_text,
+        source_start_utf16=0,
+        source_end_utf16=utf16_length_of(raw_text),
+        source_canonical_text=source_tape.canonical_text,
+        source_canonical_start_utf16=0,
+        source_canonical_end_utf16=utf16_length_of(source_tape.canonical_text),
+        source_fragment_text=raw_text,
+        source_canonical_fragment_text=source_tape.canonical_text,
+        source_locator_status="confirmed" if raw_text else "unresolved",
+        source_locator_evidence=("PHYSICAL_PARAGRAPH_EXTRACTED",) if raw_text else (),
+        source_locator_warnings=() if raw_text else ("SOURCE_RANGE_UNRESOLVED",),
+    )
+
+
 def trim_source_span(source: str, start: int, end: int) -> Tuple[int, int]:
     """修剪源文本范围两端空白并保留原坐标体系。
 
