@@ -448,13 +448,8 @@ def _seed_default_presets(conn):
     """兼容旧私有入口，传入 SQLite 连接，缺省时插入官方默认模板。"""
     _preset_defaults_seed(conn, _default_preset_config, _now_local)
 
-def _first_query_value(values: dict, key: str, default=""):
-    """兼容旧私有入口，传入查询字典和键名，返回第一个值。"""
-    return _monitor_first_query_value(values, key, default)
-
-def _clamp_int(value, default: int, min_value: int = 1, max_value: int = MAX_MONITOR_PAGE_SIZE) -> int:
-    """兼容旧私有入口，传入数值和边界，返回范围内整数。"""
-    return _monitor_clamp_int(value, default, min_value, max_value)
+_first_query_value = _monitor_first_query_value
+_clamp_int = _monitor_clamp_int
 
 def _now_local() -> str:
     """兼容旧私有入口，无需传入数据，返回本地时间字符串。"""
@@ -477,21 +472,10 @@ def _startup_time_check_lines() -> list:
         fetch_func=_fetch_beijing_network_time,
     )
 
-def _monitor_query_from(parsed) -> dict:
-    """兼容旧私有入口，传入 urlparse 结果，返回监控分页查询。"""
-    return _build_monitor_query_from(parsed)
-
-def _normalize_monitor_query(values: dict = None) -> dict:
-    """兼容旧私有入口，传入查询字典，返回规范化监控分页参数。"""
-    return _build_normalize_monitor_query(values)
-
-def _where_sql(clauses) -> str:
-    """兼容旧私有入口，传入 SQL 条件片段，返回 WHERE 子句。"""
-    return _monitor_where_sql(clauses)
-
-def _page_count(total: int, size: int) -> int:
-    """兼容旧私有入口，传入总数和页大小，返回页数。"""
-    return _monitor_page_count(total, size)
+_monitor_query_from = _build_monitor_query_from
+_normalize_monitor_query = _build_normalize_monitor_query
+_where_sql = _monitor_where_sql
+_page_count = _monitor_page_count
 
 def log_sql(task_id, ip, ua, filename, file_size, doc_type,
             paragraphs, headings, body, duration_ms, status="done", error="",
@@ -672,9 +656,7 @@ def _auth_rate_allow(scope: str, key: str, window: int, limit: int) -> tuple[boo
         rate_lock=RATE_LOCK,
     )
 
-def _is_ip(value: str) -> bool:
-    """兼容旧入口：传入字符串，返回是否为合法 IPv4/IPv6。"""
-    return _client_is_ip(value)
+_is_ip = _client_is_ip
 
 def _is_ip_banned(ip: str) -> bool:
     """兼容旧入口：传入 IP，返回是否已被管理后台封禁。"""
@@ -769,14 +751,8 @@ def _public_task_state(task_id: str, owner_id: str = "") -> dict:
     )
 
 
-def _safe_file_identifier(filename: str) -> str:
-    """兼容旧私有入口，传入文件名，返回日志用短标识。"""
-    return _file_safe_file_identifier(filename)
-
-
-def _sanitize_internal_error_detail(value: object, limit: int = 500) -> str:
-    """兼容旧私有入口，传入错误对象，返回脱敏诊断文本。"""
-    return _file_sanitize_internal_error_detail(value, limit)
+_safe_file_identifier = _file_safe_file_identifier
+_sanitize_internal_error_detail = _file_sanitize_internal_error_detail
 
 
 def _public_recognition_summary(doc_data) -> dict:
@@ -1001,13 +977,8 @@ def _cleaner_loop():
 
 threading.Thread(target=_cleaner_loop, daemon=True).start()
 
-def _error_payload(code: str, message: str, field: str = "", reason: str = "") -> dict:
-    """兼容旧入口：传入错误码和消息，返回 API 错误响应字典。"""
-    return _request_error_payload(code, message, field, reason)
-
-def _cookie_value(cookie_header: str, name: str) -> str:
-    """兼容旧入口：从 Cookie 头中读取指定名称的值。"""
-    return _request_cookie_value(cookie_header, name)
+_error_payload = _request_error_payload
+_cookie_value = _request_cookie_value
 
 def _session_cookie_settings() -> str:
     """兼容旧入口：根据当前全局配置返回管理员会话 Cookie 模板。"""
@@ -1245,9 +1216,7 @@ def _file_api_authorized(headers, client_address=None) -> bool:
         compare_secret=_compare_secret,
     )
 
-def _format_config_error(code: str, message: str, *, field: str = "", reason: str = "") -> FormatConfigRequestError:
-    """兼容旧入口：传入稳定错误码和安全消息，返回格式配置请求错误。"""
-    return _format_config_error_impl(code, message, field=field, reason=reason)
+_format_config_error = _format_config_error_impl
 
 def _decode_format_config(headers) -> dict:
     """兼容旧入口：解码请求头中的格式配置并返回已验证配置。"""
@@ -1257,27 +1226,16 @@ def _decode_format_config(headers) -> dict:
         max_json_bytes=MAX_FORMAT_CONFIG_JSON_BYTES,
     )
 
-def _upload_request_meta(headers) -> dict:
-    """兼容旧入口：从上传请求头读取处理模式、模板和预设元数据。"""
-    return _format_upload_request_meta(headers)
-
-
-def _processing_strategy_from_mode(value: object) -> str:
-    """兼容旧入口：将外部处理模式映射为内部 processing strategy。"""
-    return _format_processing_strategy_from_mode(value)
+_upload_request_meta = _format_upload_request_meta
+_processing_strategy_from_mode = _format_processing_strategy_from_mode
 
 
 def _validate_requested_processing_mode(format_config: dict | None, request_meta: dict) -> None:
     """兼容旧入口：校验 header 处理模式与格式配置并写入 request_meta。"""
     _format_validate_requested_processing_mode(format_config, request_meta)
 
-def _admin_token_from(parsed) -> str:
-    """兼容旧入口：从 URL 查询参数中读取 legacy 管理员 token。"""
-    return _request_admin_token_from_query(parsed)
-
-def _admin_url(path: str, token: str = "") -> str:
-    """兼容旧入口：返回管理页 URL，legacy token 参数不再拼接进链接。"""
-    return _request_admin_url(path, token)
+_admin_token_from = _request_admin_token_from_query
+_admin_url = _request_admin_url
 
 def _admin_hidden_input(token: str = "") -> str:
     """兼容旧入口：传入 legacy token，返回隐藏 input HTML。"""
@@ -1305,41 +1263,20 @@ def _validate_admin_csrf(headers, cookie_header: str = "") -> bool:
         get_session=_get_admin_session,
     )
 
-def _route_path(path: str) -> str:
-    """兼容旧入口：归一化 Worker 转发路径。"""
-    return _request_route_path(path)
+_route_path = _request_route_path
+_prefixed_route_tail = _request_prefixed_route_tail
+_prefixed_route_last_segment = _request_prefixed_route_last_segment
+_json_dumps = _request_json_dumps
+_parse_json_body = _request_parse_json_body
 
-def _prefixed_route_tail(path: str, *prefixes: str) -> str | None:
-    """兼容旧入口：传入路径和前缀，返回匹配资源 ID 或 None。"""
-    return _request_prefixed_route_tail(path, *prefixes)
-
-def _prefixed_route_last_segment(path: str, *prefixes: str) -> str | None:
-    """兼容旧入口：传入路径和前缀，返回最后一段资源 ID 或 None。"""
-    return _request_prefixed_route_last_segment(path, *prefixes)
-
-def _json_dumps(obj: dict) -> str:
-    """兼容旧入口：把响应对象序列化为紧凑 JSON 字符串。"""
-    return _request_json_dumps(obj)
-
-def _parse_json_body(body: bytes) -> dict:
-    """兼容旧入口：解析 UTF-8 JSON 请求体并要求顶层为对象。"""
-    return _request_parse_json_body(body)
-
-def _normalize_template_name(name: str) -> str:
-    """兼容旧入口：传入模板名称，返回压缩空白后的合法名称。"""
-    return _preset_normalize_template_name(name)
-
-def _normalize_template_id(value: str) -> str:
-    """兼容旧入口：传入模板 ID，返回只含安全字符的模板 ID。"""
-    return _preset_normalize_template_id(value)
+_normalize_template_name = _preset_normalize_template_name
+_normalize_template_id = _preset_normalize_template_id
 
 def _validate_template_config(config_obj: dict) -> dict:
     """兼容旧入口：传入模板配置对象，返回归一化后的可持久化配置。"""
     return _preset_validate_template_config(config_obj, core_feature_defaults=_core_feature_config_defaults())
 
-def _preset_row_to_dict(row, include_config: bool = False) -> dict:
-    """兼容旧入口：传入数据库行和配置开关，返回 API 用模板字典。"""
-    return _preset_row_to_dict_impl(row, include_config)
+_preset_row_to_dict = _preset_row_to_dict_impl
 
 def _list_presets(owner_id: str = "") -> list:
     """兼容旧入口：传入 owner ID，返回该 owner 可见的模板列表。"""
@@ -1517,21 +1454,10 @@ def _ip_detail_html(ip: str, admin_token: str = "") -> str:
 
 # ── 安全工具 ──
 
-def _is_safe_uuid(s: str) -> bool:
-    """兼容旧私有入口，传入字符串，返回是否为安全 UUID 形态。"""
-    return _file_is_safe_uuid(s)
-
-def _sanitize_filename(name: str) -> str:
-    """兼容旧私有入口，传入原始文件名，返回安全文件名。"""
-    return _file_sanitize_filename(name)
-
-def _safe_download_filename(orig_name: str) -> str:
-    """兼容旧私有入口，传入原始文件名，返回排版结果下载名。"""
-    return _file_safe_download_filename(orig_name)
-
-def _content_disposition_filename(filename: str) -> str:
-    """兼容旧私有入口，传入下载名，返回 Content-Disposition 头值。"""
-    return _file_content_disposition_filename(filename)
+_is_safe_uuid = _file_is_safe_uuid
+_sanitize_filename = _file_sanitize_filename
+_safe_download_filename = _file_safe_download_filename
+_content_disposition_filename = _file_content_disposition_filename
 
 def _trusted_proxy_source(client_address) -> bool:
     """兼容旧入口：判断 socket 来源是否允许提供代理 IP 头。"""
@@ -1545,21 +1471,11 @@ def _compare_secret(value: str, secret: str) -> bool:
     """兼容旧入口：常量时间比较请求密钥和配置密钥。"""
     return _client_compare_secret(value, secret)
 
-def _html_escape(text: str) -> str:
-    """兼容旧入口：转义任意文本用于 HTML 输出。"""
-    return _request_html_escape(text)
+_html_escape = _request_html_escape
+_redact_sensitive_log = _log_redact_sensitive_log
 
-def _redact_sensitive_log(text: str) -> str:
-    """兼容旧入口：传入日志文本，返回隐藏认证字段后的日志字符串。"""
-    return _log_redact_sensitive_log(text)
-
-def _split_ip_header(value: str):
-    """兼容旧入口：拆分代理 IP 请求头为候选列表。"""
-    return _client_split_ip_header(value)
-
-def _is_ipv4(value: str) -> bool:
-    """兼容旧入口：传入字符串，返回是否为合法 IPv4。"""
-    return _client_is_ipv4(value)
+_split_ip_header = _client_split_ip_header
+_is_ipv4 = _client_is_ipv4
 
 def _client_ip(headers, client_address) -> str:
     """兼容旧入口：从可信代理头和 socket 地址解析真实客户端 IP。"""

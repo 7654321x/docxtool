@@ -158,17 +158,25 @@ https://github.com/7654321x/docxtool.git
 | `src/docxtool/document/engine/context_candidate.py` | 基于原始元素事实和局部邻接的独立上下文候选 |
 | `src/docxtool/document/engine/document_structure.py` | 只读结构化公文板块模型与边界识别 |
 | `src/docxtool/document/engine/header_footer.py` | 渲染阶段页眉页脚兼容辅助和旧 PAGE 域页码写入 |
+| `src/docxtool/document/engine/heading_body_split.py` | 渲染阶段可靠标题正文拆分输出和相邻完整性校验 |
 | `src/docxtool/document/engine/inline.py` | 渲染阶段行内 run 写入、inline token 恢复和正文冗余分页符清理 |
+| `src/docxtool/document/engine/inline_effects.py` | 渲染阶段段内文本效果；特殊加粗、责任单位、键值行、名词解释和行内标题粗细 |
 | `src/docxtool/document/engine/normal.py` | 常规文种规则分派 |
 | `src/docxtool/document/engine/preservation.py` | 渲染阶段源 OOXML 对象保留；复制表格、图片、题注、已有版头和页眉页脚关系，不参与识别定型 |
 | `src/docxtool/document/engine/letterhead.py` | 版头、发文字号、签发人和红色分隔线 |
 | `src/docxtool/document/engine/style_catalog.py` | 结构化 Word 样式目录 |
 | `src/docxtool/document/engine/page_number.py` | 字段页码和奇偶页外侧位置 |
 | `src/docxtool/document/engine/numbering.py` | 结构序号规范化 |
+| `src/docxtool/document/engine/paragraph_format.py` | 渲染阶段段落直接格式；写入字体、对齐、缩进、段前段后、网格和孤行控制 |
+| `src/docxtool/document/engine/paragraph_styles.py` | 渲染阶段段落 DCT 样式 ID 映射、keepNext 和正文样式不变量保护 |
+| `src/docxtool/document/engine/render_numbering.py` | 渲染阶段标题编号计数和段首编号写入；只消费最终 type_id，不参与识别定型 |
+| `src/docxtool/document/engine/render_options.py` | 渲染阶段功能开关解析；归一 enabled 配置，不执行业务逻辑 |
+| `src/docxtool/document/engine/render_text.py` | 渲染阶段纯文本辅助；附件回行列计算和标题旧编号清理 |
+| `src/docxtool/document/engine/render_types.py` | 渲染阶段 type_id 到样式行映射和正文流分组 |
 | `src/docxtool/document/engine/punctuation.py` | 标点规范化核心 |
 | `src/docxtool/document/engine/punctuation_docx.py` | DOCX 标点安全处理 |
 | `src/docxtool/document/engine/sections.py` | 渲染阶段分节页面布局、文档网格和页眉页脚引用保留 |
-| `src/docxtool/document/engine/signature_block.py` | 落款单位、成文日期和附件结构排版 |
+| `src/docxtool/document/engine/signature_block.py` | 落款单位、成文日期、附件尾部顺序校验和结构排版 |
 | `src/docxtool/document/engine/structure_context.py` | 板块候选与既有上下文分类的只读双重验证 |
 | `src/docxtool/document/engine/cleanup.py` | 保守样式清理 |
 | `src/docxtool/document/engine/table.py` | 表格处理边界入口 |

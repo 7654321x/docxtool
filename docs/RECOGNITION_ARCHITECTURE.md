@@ -136,9 +136,45 @@ Renderer 关系复制器，不读取文档识别上下文，也不改变段落�
 `src/docxtool/document/engine/inline.py`。该模块只处理 Renderer 已决定输出的行内内容，
 不执行软换行拆段、不判断结构类型，也不改写可见文字顺序。
 
+可靠的“一级标题。正文”输出拆分和最终相邻完整性校验已迁移到
+`src/docxtool/document/engine/heading_body_split.py`。该模块不判断是否应该拆段，只消费
+Segmenter/Recognition 已确认的拆分事实，把正文写入紧邻段落并在导出末尾校验未丢失。
+
+特殊加粗、冒号标签、责任单位行、键值行、名词解释、报告首句和行内标题正文粗细分离
+已迁移到 `src/docxtool/document/engine/inline_effects.py`。该模块只重写已生成输出段落的
+run 样式和必要手动换行，不判断段落类型、不新增逻辑段，也不改变识别结果。
+
 中英文字体写入、数字/拉丁字母字体拆分和上标格式化后处理已迁移到
 `src/docxtool/document/engine/typography.py`。该模块只处理已生成段落 run 的显示属性，
 不参与段落类型判断、编号规范化或文字重排。
+
+字体、对齐、缩进、段前段后、网格对齐和孤行控制等段落直接格式执行已迁移到
+`src/docxtool/document/engine/paragraph_format.py`。该模块只消费最终样式规则
+`StyleRule` 和已创建的输出段落，负责写入 OOXML 段落格式；不读取 importer、
+segmentation 或 recognition 状态，也不修改可见文字。
+
+最终段落类型到 `DCT-*` 样式 ID 的映射、附件标题 keepNext 标记和导出后正文样式不变量
+检查已迁移到 `src/docxtool/document/engine/paragraph_styles.py`。该模块只把已经确定的
+`type_id` 转换为输出样式并清理 Word 原生编号残留，不重新分类段落。
+
+标题编号计数和段首编号 run 写入已迁移到
+`src/docxtool/document/engine/render_numbering.py`。该模块只消费 Recognition/Normalizer
+已经确认的最终 `type_id`、样式规则和当前计数器状态，负责在输出段落前插入可见编号；
+字面编号识别、损坏编号修复和标题层级裁决仍保留在导入、识别和规范化层，不由 Renderer
+反向决定。
+
+渲染阶段功能开关解析已迁移到 `src/docxtool/document/engine/render_options.py`，附件回行列计算
+和段首旧标题编号清理已迁移到 `src/docxtool/document/engine/render_text.py`。这两个模块均为
+无副作用纯辅助，不访问 DOCX、识别候选或 Normalizer 状态。
+
+最终 `type_id` 到样式规则行的映射、头部留白分组和正文流分组已迁移到
+`src/docxtool/document/engine/render_types.py`。该模块只服务 Renderer 查表，不生成或修改
+最终类型。
+
+导出前的附件说明、落款单位和成文日期尾部顺序整理及连续性校验已收口到
+`src/docxtool/document/engine/signature_block.py`。该逻辑只消费既有最终 `type_id`，
+用于阻止不安全的落款/日期分离和保持合法尾部输出顺序，不重新识别 BODY，也不修改
+recognition diagnostics。
 
 匿名 owner 的任务归属、私人模板归属和重名模板导入改名已迁移到
 `src/docxtool/web/owner_migration.py`。该模块只处理调用方传入的 SQLite 连接或连接器，

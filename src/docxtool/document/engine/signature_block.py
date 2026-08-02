@@ -11,6 +11,8 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
+from docxtool.document.style_config import ExportError
+
 
 _SIGNATURE_STYLE_ID = "DCT-Signature"
 _DATE_STYLE_ID = "DCT-Date"
@@ -40,6 +42,65 @@ def apply_signature_block(document, options: Mapping[str, Any] | None = None) ->
             _apply_without_seal(signature_paragraph, date_paragraph)
         adjusted += 1
     return adjusted
+
+
+def normalize_signature_attachment_order(paragraphs: list[Any]) -> list[Any]:
+    """整理尾部块顺序；传入段落数据列表，返回新的段落数据列表。"""
+    normalized = list(paragraphs)
+    allowed = {"attachment_note", "attachment_note_item", "sign_org", "sign_date"}
+
+    index = 0
+    while index < len(normalized):
+        if getattr(normalized[index], "type_id", "") not in allowed:
+            index += 1
+            continue
+        end = index
+        while end < len(normalized) and (
+            getattr(normalized[end], "type_id", "") in allowed or _is_ignorable_tail_gap(normalized[end])
+        ):
+            end += 1
+        block = [item for item in normalized[index:end] if getattr(item, "type_id", "") in allowed]
+        notes = [item for item in block if getattr(item, "type_id", "") == "attachment_note"]
+        note_items = [item for item in block if getattr(item, "type_id", "") == "attachment_note_item"]
+        organizations = [item for item in block if getattr(item, "type_id", "") == "sign_org"]
+        dates = [item for item in block if getattr(item, "type_id", "") == "sign_date"]
+        if notes or (organizations and dates):
+            normalized[index:end] = notes + note_items + organizations + dates
+            end = index + len(notes) + len(note_items) + len(organizations) + len(dates)
+        index = end
+    return normalized
+
+
+def validate_signature_attachment_order(paragraphs: list[Any]) -> None:
+    """校验落款连续性；传入段落数据列表，异常表示导出计划不安全。"""
+    visible = [item for item in paragraphs if str(getattr(item, "text", "") or "").strip()]
+    for index, item in enumerate(visible):
+        if getattr(item, "type_id", "") != "sign_date":
+            continue
+        prior_org_indexes = [
+            position for position, candidate in enumerate(visible[:index])
+            if getattr(candidate, "type_id", "") == "sign_org"
+        ]
+        if not prior_org_indexes:
+            continue
+        previous_org = prior_org_indexes[-1]
+        if previous_org != index - 1:
+            raise ExportError("落款单位与落款日期未保持连续，已中止导出")
+        if any(
+            getattr(candidate, "type_id", "") in {"attachment_note", "attachment_note_item"}
+            for candidate in visible[previous_org + 1:index]
+        ):
+            raise ExportError("附件说明插入落款单位与日期之间，已中止导出")
+
+
+def _is_ignorable_tail_gap(item: Any) -> bool:
+    """判断尾部空段是否可丢弃；传入段落数据，返回布尔值。"""
+    return bool(
+        not str(getattr(item, "text", "") or "").strip()
+        and not getattr(item, "type_id", "").startswith("__")
+        and not (getattr(item, "inline_tokens", None) or [])
+        and not (getattr(item, "meta", None) or {}).get("sectPr")
+    )
 
 
 def _reliable_signature_before(date_paragraph):

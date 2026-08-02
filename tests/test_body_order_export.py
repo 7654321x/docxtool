@@ -6,6 +6,7 @@ import unittest
 import zipfile
 from pathlib import Path
 
+import pytest
 from docx import Document
 from docx.enum.section import WD_ORIENT, WD_SECTION
 from docx.enum.text import WD_BREAK
@@ -17,8 +18,12 @@ from docx.shared import Pt, RGBColor
 
 from docxtool.document.engine import export_doc
 from docxtool.document.engine.core import _normalize_signature_attachment_order
+from docxtool.document.engine.signature_block import (
+    normalize_signature_attachment_order,
+    validate_signature_attachment_order,
+)
 from docxtool.document.importer import DocxImporter, ParagraphData, ParagraphFeatures
-from docxtool.document.style_config import PageSettings, StyleRule, logger
+from docxtool.document.style_config import ExportError, PageSettings, StyleRule, logger
 
 
 def _rules():
@@ -41,6 +46,36 @@ def test_export_tail_order_crosses_ignorable_empty_paragraphs() -> None:
     assert [item.type_id for item in normalized] == [
         "attachment_note", "attachment_note_item", "sign_org", "sign_date",
     ]
+
+
+def test_signature_block_order_helpers_keep_core_facade_compatible() -> None:
+    def paragraph(text: str, type_id: str) -> ParagraphData:
+        return ParagraphData(text, type_id, text, ParagraphFeatures())
+
+    items = [
+        paragraph("测试单位", "sign_org"),
+        paragraph("附件：1. 测试材料", "attachment_note"),
+        paragraph("2026年7月31日", "sign_date"),
+    ]
+
+    direct = normalize_signature_attachment_order(items)
+    facade = _normalize_signature_attachment_order(items)
+    assert [item.type_id for item in direct] == ["attachment_note", "sign_org", "sign_date"]
+    assert [item.type_id for item in facade] == [item.type_id for item in direct]
+
+
+def test_signature_block_order_validation_rejects_separated_signature_pair() -> None:
+    def paragraph(text: str, type_id: str) -> ParagraphData:
+        return ParagraphData(text, type_id, text, ParagraphFeatures())
+
+    items = [
+        paragraph("测试单位", "sign_org"),
+        paragraph("附件：1. 测试材料", "attachment_note"),
+        paragraph("2026年7月31日", "sign_date"),
+    ]
+
+    with pytest.raises(ExportError):
+        validate_signature_attachment_order(items)
 
 
 def _body_order(path):
