@@ -11,6 +11,10 @@ import hashlib
 import re
 from typing import Any, Optional
 
+from docxtool.document.recognition.attachment import (
+    match_attachment_item as _recognition_match_attachment_item,
+    match_attachment_note as _recognition_match_attachment_note,
+)
 from docxtool.document.normalization.dates import (
     is_attachment_page_mark as _is_attachment_page_mark_text,
     is_sign_date_text as _is_sign_date_text,
@@ -19,18 +23,11 @@ from docxtool.document.normalization.dates import (
 )
 from docxtool.document.normalization.signature import normalize_sign_org as _norm_sign_org
 from docxtool.document.recognition.colon import contains_colon as _recognition_contains_colon
-from docxtool.document.recognition.validators import validate_diagnostics
-
-
-_ATT_NOTE_RE = re.compile(r"^\s*附件\s*[:：]\s*(.*)$")
-_ATT_ITEM_RE = re.compile(r"^\s*\d+[.．、]\s*\S+")
-_SIGN_ORG_NEGATIVE_STARTS = ("以上", "请", "现将", "特此", "有关", "此")
-_SIGN_ORG_SUFFIX_RE = re.compile(
-    r"(?:委员会|工作委员会|人民政府|人民法院|人民检察院|代表大会|"
-    r"办公室|街道办事处|领导小组|工作组|党组|党委|政府|政协|人大|"
-    r"总工会|专班|小组|集团|公司|协会|学会|商会|医院|学院|学校|"
-    r"大学|研究院|研究所|中心|局|厅|部|院|处|科|办|镇|乡)$"
+from docxtool.document.recognition.signature import (
+    has_signature_org_shape as _recognition_has_signature_org_shape,
+    starts_with_signature_negative as _recognition_starts_with_signature_negative,
 )
+from docxtool.document.recognition.validators import validate_diagnostics
 
 
 def _contains_colon(text: str) -> bool:
@@ -59,13 +56,7 @@ def _is_tail_signature_org_text(text: str) -> bool:
     Input is a short text line near the document tail.  The return value is a
     boolean structural fact; it is not used to retag body paragraphs directly.
     """
-    value = (text or "").strip()
-    return bool(
-        2 <= len(value) <= 40
-        and not value.startswith(_SIGN_ORG_NEGATIVE_STARTS)
-        and not any(mark in value for mark in "。；;：:")
-        and bool(_SIGN_ORG_SUFFIX_RE.search(value))
-    )
+    return _recognition_has_signature_org_shape(text, max_length=40)
 
 
 def _is_tail_structural_text(text: str) -> bool:
@@ -76,8 +67,8 @@ def _is_tail_structural_text(text: str) -> bool:
     """
     value = (text or "").strip()
     return bool(
-        _ATT_NOTE_RE.match(value)
-        or _ATT_ITEM_RE.match(value)
+        _recognition_match_attachment_note(value)
+        or _recognition_match_attachment_item(value)
         or _is_sign_date_text(value)
         or _is_attachment_page_mark(value)
         or _is_tail_signature_org_text(value)
@@ -99,7 +90,7 @@ def _allows_standalone_tail_date(paragraphs: list[Any], index: int) -> bool:
         ),
         "",
     )
-    if not previous or previous.startswith(_SIGN_ORG_NEGATIVE_STARTS):
+    if not previous or _recognition_starts_with_signature_negative(previous):
         return False
     return not _contains_colon(previous)
 
@@ -141,7 +132,7 @@ def _normalize_attachment_note_block(
     the text-normalization switch.  The function returns ``None`` and updates
     the paragraphs in place.
     """
-    match = _ATT_NOTE_RE.match(_tail_source_text(note))
+    match = _recognition_match_attachment_note(_tail_source_text(note))
     if match is None:
         return
     body = match.group(1).strip()
@@ -236,7 +227,7 @@ def normalize_tail_structures(
         ]
         next_is_item = bool(
             following_plain
-            and _ATT_ITEM_RE.match(_tail_source_text(paragraphs[following_plain[0]]))
+            and _recognition_match_attachment_item(_tail_source_text(paragraphs[following_plain[0]]))
         )
         near_tail_date = tail_date is not None and abs(index - tail_date) <= 12
         if near_tail_date or next_is_item:

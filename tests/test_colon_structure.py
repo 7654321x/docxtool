@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from docxtool.document.importer import _contains_colon
-from docxtool.document.recognition.colon import analyze_colon_structure, contains_colon
+from docxtool.document.importer import _colon_bold_match, _contains_colon
+from docxtool.document.recognition.colon import analyze_colon_structure, colon_bold_match, contains_colon
 
 
 def test_contains_colon_helper_keeps_importer_facade_compatible() -> None:
@@ -10,6 +10,14 @@ def test_contains_colon_helper_keeps_importer_facade_compatible() -> None:
     assert contains_colon("责任单位:办公室")
     assert _contains_colon("责任单位：办公室")
     assert not contains_colon("责任单位办公室")
+
+
+def test_colon_bold_match_keeps_body_label_fact_in_recognition_layer() -> None:
+    """验证冒号标签加粗事实由 recognition helper 输出，旧 importer 入口保持兼容。"""
+    assert colon_bold_match("原因：具体说明") == 2
+    assert _colon_bold_match("原因：具体说明") == 2
+    assert colon_bold_match("某某学院：具体说明") == -1
+    assert colon_bold_match("原因：") == -1
 
 
 def test_colon_analyzer_distinguishes_salutation_from_body_label() -> None:

@@ -76,15 +76,31 @@ from docxtool.document.importing.numbering import (
 )
 from docxtool.document.importing.relationships import repair_broken_rels as _repair_broken_rels
 from docxtool.document.recognition import apply_recognition
+from docxtool.document.recognition.attachment import (
+    can_start_attachment_note as _recognition_can_start_attachment_note,
+    is_attachment_boundary_text as _recognition_is_attachment_boundary_text,
+    match_attachment_item as _recognition_match_attachment_item,
+    match_attachment_note as _recognition_match_attachment_note,
+)
 from docxtool.document.recognition.colon import (
     analyze_colon_structure,
+    colon_bold_match as _recognition_colon_bold_match,
     contains_colon as _recognition_contains_colon,
-    is_organization_label,
     is_standalone_addressing_text,
 )
 from docxtool.document.recognition.opening_speech import (
     opening_speech_title_text as _recognition_opening_speech_title_text,
     strip_inferred_speech_numbering as _recognition_strip_inferred_speech_numbering,
+)
+from docxtool.document.recognition.numbering import (
+    find_numbered_bold_pos as _recognition_find_numbered_bold_pos,
+    looks_like_damaged_heading as _recognition_looks_like_damaged_heading,
+    match_numbering as _recognition_match_numbering,
+    match_style_or_level as _recognition_match_style_or_level,
+)
+from docxtool.document.recognition.signature import (
+    has_signature_org_shape as _recognition_has_signature_org_shape,
+    starts_with_signature_negative as _recognition_starts_with_signature_negative,
 )
 from docxtool.document.recognition.version import RECOGNITION_VERSION_TAG
 from docxtool.document.recognition.legacy import DetectionContext, ScoreBoard, ScoreDetail
@@ -124,7 +140,6 @@ from docxtool.document.segmentation.soft_breaks import (
     should_split_structural_line_breaks as _seg_should_split_structural_line_breaks,
 )
 from docxtool.document.style_config import (
-    NB_FIXED, NB_SUFFIXES,
     logger, ImportError,
     StyleRule,
 )
@@ -307,18 +322,8 @@ def _detect_numbering_prefix(text: str) -> str:
 # V3 规则引擎 — 19 步优先级 + 独立 scorer + Flow 状态机
 # ═══════════════════════════════════════════════════════════════
 
-# ── 附件 / 落款 结构正则 ──
-_ATT_NOTE_RE = re.compile(r'^\s*附件\s*[:：]\s*(.*)$')
-_ATT_ITEM_RE = re.compile(r'^\s*\d+[.．、]\s*\S+')
+# ── 附件 / 落款 结构事实 ──
 _REPORT_HEADING_STARTS = ("一年来", "五年来")
-_SIGN_ORG_NEGATIVE_STARTS = ("以上", "请", "现将", "特此", "有关", "此")
-_SIGN_ORG_SUFFIX_RE = re.compile(
-    r"(?:委员会|工作委员会|人民政府|人民法院|人民检察院|代表大会|"
-    r"办公室|街道办事处|领导小组|工作组|党组|党委|政府|政协|人大|"
-    r"总工会|专班|小组|集团|公司|协会|学会|商会|医院|学院|学校|"
-    r"大学|研究院|研究所|中心|局|厅|部|院|处|科|办|镇|乡)$"
-)
-
 def _is_body_context(ctx) -> bool:
     """判断识别上下文是否已经处在正文或正文后结构中。"""
     return ctx.last_structural_type in ("body", "addressing",
@@ -345,8 +350,9 @@ def _is_attachment_page_mark(text: str) -> bool:
     return _normalization_is_attachment_page_mark(text)
 
 def _is_attachment_boundary(text: str) -> bool:
+    """传入段落文本，返回是否是附件说明或附件页边界。"""
     t = (text or "").strip()
-    return bool(_ATT_NOTE_RE.match(t) or _is_attachment_page_mark(t))
+    return _recognition_is_attachment_boundary_text(t, is_attachment_page_mark=_is_attachment_page_mark)
 
 def _norm_sign_org(text: str) -> str:
     """兼容旧私有入口，传入落款单位文本，返回规范化单位名称。"""
@@ -364,7 +370,7 @@ def _blocks_independent_sign_date(ctx) -> bool:
         return False
     if prev.replace(" ", "").replace("\u3000", "").startswith("责任单位："):
         return False
-    if prev.startswith(_SIGN_ORG_NEGATIVE_STARTS):
+    if _recognition_starts_with_signature_negative(prev):
         return True
     return _contains_colon(prev)
 
@@ -373,39 +379,29 @@ def _looks_like_sign_org(text: str, next_text: str, ctx) -> bool:
     t = (text or "").strip()
     if not t or len(t) > 30:
         return False
-    if t.startswith(_SIGN_ORG_NEGATIVE_STARTS):
+    if _recognition_starts_with_signature_negative(t):
         return False
     if any(c in t for c in ("。","；",";","：",":")):
         return False
-    if _ATT_NOTE_RE.match(t) or _normalization_is_sign_date_text(t):
+    if _recognition_match_attachment_note(t) or _normalization_is_sign_date_text(t):
         return False
     if not _is_body_context(ctx):
         return False
     if not _normalization_is_sign_date_text(next_text or ""):
         return False
-    return bool(_SIGN_ORG_SUFFIX_RE.search(t))
+    return _recognition_has_signature_org_shape(t, max_length=30)
 
 def _heading_has_inline_body(text: str) -> bool:
     """兼容旧私有入口，传入标题候选文本，返回是否粘连正文。"""
     return _seg_heading_has_inline_body(text)
 
 def _can_start_attachment_note(ctx) -> bool:
-    """判断当前上下文是否允许进入附件说明块。
-
-    旧逻辑要求上一段必须精确等于 body，实际文档里附件说明前常常会夹着
-    addressing / heading / title2 等结构，导致“附件：...”被普通分类器抢走。
-    这里放宽为：正文主体已经出现，且尚未进入附件正文页/未完成一轮落款附件流程。
-    """
-    if not ctx.has_seen_real_body:
-        return False
-    if ctx.attachment_page_mode:
-        return False
-    if ctx.signature_complete and ctx.last_structural_type != "sign_date":
-        return False
-    return ctx.last_structural_type in (
-        "body", "addressing", "heading1", "heading2", "heading3", "heading4",
-        "heading1_report", "title2", "glossary_item", "sign_date",
-        "attachment_note_item",
+    """兼容旧私有入口，传入识别上下文，返回是否允许进入附件说明块。"""
+    return _recognition_can_start_attachment_note(
+        has_seen_real_body=ctx.has_seen_real_body,
+        attachment_page_mode=ctx.attachment_page_mode,
+        signature_complete=ctx.signature_complete,
+        last_structural_type=ctx.last_structural_type,
     )
 
 def _is_auto_numbered_item(feats: Optional[ParagraphFeatures]) -> bool:
@@ -506,12 +502,12 @@ def detect_structural_type(line: str, next_line: str, ctx,
         return "responsibility_line", {"colon_bold": True}, "", _normalize_responsibility_line(text)
 
     # 1. 附件说明：上一段必须是正文
-    m = _ATT_NOTE_RE.match(text)
+    m = _recognition_match_attachment_note(text)
     if m and _can_start_attachment_note(ctx):
         had_signature_complete = ctx.signature_complete
         body = m.group(1).strip()
         first_no = re.match(r"^(\d+)[.．、]\s*", body)
-        next_is_item = bool(_ATT_ITEM_RE.match(next_text)) or _is_auto_numbered_item(next_feats)
+        next_is_item = bool(_recognition_match_attachment_item(next_text)) or _is_auto_numbered_item(next_feats)
 
         # 空"附件："无内容且无续行 → 不识别
         if not body and not next_is_item:
@@ -551,7 +547,7 @@ def detect_structural_type(line: str, next_line: str, ctx,
                                     "attachment_multi": is_multi}, "", fixed_text
 
     # 2. 附件续行：已进入附件说明块，且当前段是编号项；自动修正序号
-    m2 = _ATT_ITEM_RE.match(text)
+    m2 = _recognition_match_attachment_item(text)
     is_auto_item = _is_auto_numbered_item(feats)
     if ctx.attachment_note_mode and ctx.attachment_note_seen and (m2 or is_auto_item):
         if m2:
@@ -617,27 +613,9 @@ def detect_structural_type(line: str, next_line: str, ctx,
 
 
 def _is_tail_signature_org_text(text: str) -> bool:
+    """兼容旧私有入口，传入尾部短行文本，返回是否具备落款单位形态。"""
     value = (text or "").strip()
-    return bool(
-        2 <= len(value) <= 40
-        and not value.startswith(_SIGN_ORG_NEGATIVE_STARTS)
-        and not any(mark in value for mark in "。；;：:")
-        and bool(_SIGN_ORG_SUFFIX_RE.search(value))
-    )
-
-
-# ── 编号正则（仅匹配，不决策）──
-
-_HEADING_RE = [
-    (re.compile(r'^[一二三四五六七八九十百]+[、.．]+'),     "heading1"),
-    (re.compile(r'^[（\(][一二三四五六七八九十百]+[）\)]'), "heading2"),
-    (re.compile(r'^\d+[.．]'),                            "heading3"),
-    (re.compile(r'^[（\(]\d+[）\)]'),                      "heading4"),
-]
-
-# ── 一是/二要/比如 ──
-_NB_RE = re.compile(rf'[一二三四五六七八九十]+(?:{"|".join(NB_SUFFIXES)})')
-_NB_FIXED_RE = re.compile(rf'^(?:{"|".join(map(re.escape, NB_FIXED))})') if NB_FIXED else None
+    return _recognition_has_signature_org_shape(value, max_length=40)
 
 
 def _normalize_text(text: str) -> str:
@@ -671,79 +649,34 @@ def _contains_colon(text: str) -> bool:
 
 
 def _colon_bold_match(text: str):
-    """冒号关键词加粗：含冒号+不在段末+前缀≤10字无标点。返回冒号位置或 -1。"""
-    if not text or text.rstrip().endswith(('：', ':')):
-        return -1
-    for colon in ('：', ':'):
-        pos = text.find(colon)
-        if (
-            0 < pos <= 10
-            and not is_organization_label(text[:pos])
-            and not re.search(r'[，。、；]', text[:pos])
-        ):
-            return pos
-    return -1
+    """兼容旧私有入口，传入文本，返回应加粗标签的冒号位置或 -1。"""
+    return _recognition_colon_bold_match(text)
 
 
 def _find_numbered_bold_pos(text: str) -> int:
-    """X是/X要/比如 命中检测。返回首次匹配索引，-1 为无。"""
-    text = _normalize_text(text)
-    if _NB_FIXED_RE and _NB_FIXED_RE.search(text):
-        return _NB_FIXED_RE.search(text).start()
-    m = _NB_RE.search(text)
-    return m.start() if m else -1
+    """兼容旧私有入口，传入文本，返回“一是/一要”等强调位置或 -1。"""
+    return _recognition_find_numbered_bold_pos(text, normalize_text=_normalize_text)
 
 
 def _looks_like_heading(text: str) -> bool:
-    """OCR 损坏标题检测。"""
-    text = text.strip()
-    if len(text) > 30 or re.search(r'[。；：]', text[:10]):
-        return False
-    if re.match(r'^([一二三四五六七八九十百]+)[，,、\s]', text):
-        return True
-    if re.match(r'^[）\)][一二三四五六七八九十百]+', text):
-        return True
-    if re.match(r'^[（\(][一二三四五六七八九十百]+', text) and len(text) <= 15:
-        return True
-    return False
+    """兼容旧私有入口，传入文本，返回是否像损坏的中文编号标题。"""
+    return _recognition_looks_like_damaged_heading(text)
 
 
 # ── 提取编号前缀（供 strip_numbering）──
 
 def _match_numbering(text: str):
-    """返回 (type_id, prefix) 或 (None, None)。"""
-    text_norm = _normalize_text(text)
-    for pat, tid in _HEADING_RE:
-        m = pat.match(text_norm)
-        if m:
-            if tid == "heading4" and _contains_colon(text_norm):
-                continue  # heading4 含冒号 → 过滤
-            return tid, m.group(0)
-    return None, None
+    """兼容旧私有入口，传入文本，返回 `(type_id, prefix)`。"""
+    return _recognition_match_numbering(
+        text,
+        normalize_text=_normalize_text,
+        contains_colon=_contains_colon,
+    )
 
 
 def _match_style_or_lvl(text: str, feats):
-    """Word 样式/多级列表 → 返回 (type_id, prefix)。"""
-    if not feats:
-        return None, None
-    # "一是/一要/比如："这类正文强调句即使被 Word 误挂了自动编号，也不按标题处理。
-    if _find_numbered_bold_pos(text) == 0:
-        return None, None
-    # Word 多级列表标记为 heading2，但文本是长正文（>25字含标点）→ 不按标题处理
-    if feats.numbering_prefix.startswith("@lvl_0") and len(text) > 25:
-        if re.search(r'[、，；]', text):
-            return None, None
-    # @lvl_N 自动编号：从提取到的 Word 多级列表层级直接映射
-    if feats.numbering_prefix.startswith("@lvl_"):
-        try:
-            lvl = int(feats.numbering_prefix[5:])
-            return f"heading{min(lvl + 2, 4)}", ""
-        except ValueError:
-            pass
-    # @style_ 样式映射
-    if feats.numbering_prefix.startswith("@style_"):
-        return feats.numbering_prefix[7:], ""
-    return None, None
+    """兼容旧私有入口，传入文本和特征，返回 Word 结构推导的标题类型。"""
+    return _recognition_match_style_or_level(text, feats, normalize_text=_normalize_text)
 
 
 # ═══════════════════════════════════════════════════════════════

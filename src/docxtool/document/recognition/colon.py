@@ -119,6 +119,22 @@ def is_organization_label(value: str) -> bool:
     return bool(compact and ORGANIZATION_LABEL_SUFFIX_RE.search(compact))
 
 
+def colon_bold_match(text: str) -> int:
+    """传入段落文本，返回适合冒号前标签加粗的冒号位置；不匹配返回 -1。"""
+    value = text or ""
+    if not value or value.rstrip().endswith(("：", ":")):
+        return -1
+    for colon in ("：", ":"):
+        position = value.find(colon)
+        if (
+            0 < position <= 10
+            and not is_organization_label(value[:position])
+            and not re.search(r"[，。、；]", value[:position])
+        ):
+            return position
+    return -1
+
+
 def analyze_colon_structure(value: str) -> ColonAnalysis:
     """Return colon-related structure facts without assigning a final type."""
 
@@ -236,6 +252,7 @@ __all__ = [
     "MEETING_KEY_VALUE_LABELS",
     "STRUCTURAL_KEY_VALUE_LABELS",
     "analyze_colon_structure",
+    "colon_bold_match",
     "compact_text",
     "contains_colon",
     "is_organization_label",

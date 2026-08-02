@@ -146,9 +146,12 @@ https://github.com/7654321x/docxtool.git
 | `src/docxtool/document/classifier.py` | 文档模式和段落结构分类 |
 | `src/docxtool/document/letterhead_config.py` | 版头配置归一化和安全校验 |
 | `src/docxtool/document/recognition/` | 候选、Beam 解码、诊断、验证和兼容映射 |
-| `src/docxtool/document/recognition/colon.py` | 共享冒号存在判断和结构分析 | 只输出称呼、机构标签、键值和解释性正文证据，不直接定型 |
+| `src/docxtool/document/recognition/attachment.py` | 附件结构形态和状态证据 | 只判断附件说明、续项、附件边界和附件说明起点许可，不写最终类型 |
+| `src/docxtool/document/recognition/colon.py` | 共享冒号存在判断、标签加粗位置和结构分析 | 只输出称呼、机构标签、键值和解释性正文证据，不直接定型 |
 | `src/docxtool/document/recognition/global_context.py` | 文首结构、正文边界和同级标题族的全文只读分析 |
 | `src/docxtool/document/recognition/opening_speech.py` | 文首讲话标题识别证据 | 只判断“在……上的讲话”主标题候选和误推断一级编号剥离，不写最终类型 |
+| `src/docxtool/document/recognition/numbering.py` | 标题编号识别证据 | 只映射字面编号、Word 列表/样式和损坏编号形态，不写最终类型 |
+| `src/docxtool/document/recognition/signature.py` | 落款单位形态证据 | 只判断通用组织后缀、否定前缀和标点边界，不写最终类型 |
 | `src/docxtool/document/recognition/legacy/__init__.py` | 旧识别兼容包入口 | 暴露 legacy 评分数据模型 |
 | `src/docxtool/document/recognition/legacy/scoring.py` | 旧 importer 评分数据模型 | 保存 ScoreBoard、ScoreDetail 和 DetectionContext，不实现新识别规则 |
 | `src/docxtool/document/style_config.py` | 样式规则、页面设置、日志配置、默认配置读取 |
