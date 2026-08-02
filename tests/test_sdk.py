@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 from docx import Document
+from docx.enum.text import WD_BREAK
+from docx.shared import Pt
 
 from docxtool import __version__ as package_version
 from docxtool.document.importer import DocxImporter
@@ -76,6 +78,36 @@ def test_sdk_emits_verified_physical_utf16_ranges_and_local_text_is_opt_in(tmp_p
         physical = "一、测试标题。这是同一物理段落中的测试正文内容。".encode("utf-16-le")
         selected = physical[block.range_start_utf16 * 2:block.range_end_utf16 * 2].decode("utf-16-le")
         assert selected == block.recognized_text
+
+
+def test_sdk_locates_front_role_and_date_split_from_one_physical_paragraph(tmp_path: Path) -> None:
+    source = tmp_path / "front-metadata.docx"
+    document = Document()
+    document.add_paragraph("在某地区委员会会议闭幕大会上的讲话", style="Heading 1")
+    byline = document.add_paragraph()
+    role = byline.add_run("某区委员会党组书记、主席　张测试")
+    role.bold = True
+    role.font.size = Pt(22)
+    byline.add_run().add_break(WD_BREAK.LINE)
+    date = byline.add_run("（2026年8月27日11:00，某地区委员会会议中心）")
+    date.bold = True
+    date.font.size = Pt(22)
+    document.add_paragraph("各位代表、同志们：")
+    document.add_paragraph("现将有关事项说明如下，请认真抓好落实。")
+    document.save(source)
+
+    plan = recognize_docx(source, include_text=True, include_raw_text=True)
+    front = [block for block in plan.blocks if block.physical_paragraph_index == 1]
+
+    assert [block.type_id for block in front] == ["role_name", "date_line"]
+    assert all(block.locator_verified for block in front)
+    assert front[0].raw_end_utf16 <= front[1].raw_start_utf16
+    physical = document.paragraphs[1].text.encode("utf-16-le")
+    for block in front:
+        selected = physical[
+            block.raw_start_utf16 * 2:block.raw_end_utf16 * 2
+        ].decode("utf-16-le")
+        assert selected == block.raw_fragment_text
 
 
 def test_sdk_cli_writes_json_plan(tmp_path: Path) -> None:

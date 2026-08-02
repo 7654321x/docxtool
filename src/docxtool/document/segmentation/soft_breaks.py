@@ -5,9 +5,9 @@ from __future__ import annotations
 import re
 from typing import Callable
 
-_HEADER_ROLE_KEYWORD_RE = re.compile(
-    r"主任|书记|主席|部长|局长|处长|科长|司长|厅长|市长|县长|区长|镇长|乡长|院长|校长|政委|组长|队长|秘书长|委员|常委|负责人"
-)
+from ..role_shape import has_compact_role_name_shape, has_role_hint
+
+
 _HEADER_DATE_LINE_RE = re.compile(r"^[（(]\s*(?:19|20)\d{2}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日")
 _DISPATCH_NUMBER_LINE_RE = re.compile(
     r"^(?:[\u4e00-\u9fffA-Za-z0-9]{0,20})[〔\[]\d{4}[〕\]]\s*\d+\s*号$"
@@ -33,9 +33,10 @@ def is_role_name_line(text: str) -> bool:
     return bool(
         re.fullmatch(r"[\u4e00-\u9fff、，,·]{2,28}\s{2,}[\u4e00-\u9fff·]{2,6}", value)
         or (
-            _HEADER_ROLE_KEYWORD_RE.search(value)
+            has_role_hint(value)
             and re.search(r"\s{2,}", value)
         )
+        or has_compact_role_name_shape(value)
     )
 
 
@@ -46,7 +47,7 @@ def is_header_role_date_pair(role_line: str, date_line: str) -> bool:
     独立逻辑结构，不判断标题区最终类型。
     """
     return bool(
-        _HEADER_ROLE_KEYWORD_RE.search(role_line or "")
+        has_role_hint(role_line)
         and _HEADER_DATE_LINE_RE.match(date_line or "")
     )
 

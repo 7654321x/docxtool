@@ -9,7 +9,6 @@ from __future__ import annotations
 import os
 import time
 from collections.abc import Callable, MutableMapping
-from typing import Any
 
 
 def input_file_size(input_path: str) -> int:

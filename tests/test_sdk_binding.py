@@ -116,6 +116,41 @@ def test_segment_counts_report_incomplete_source_locator_group() -> None:
     assert [block.source_locator_status for block in plan.blocks] == ["confirmed", "unresolved", "confirmed"]
 
 
+def test_sdk_uses_source_range_order_when_normalization_reorders_blocks() -> None:
+    source = "甲乙丙"
+
+    def feature(start: int, end: int) -> ParagraphFeatures:
+        raw = source[start:end]
+        return ParagraphFeatures(
+            source_physical_paragraph_index=0,
+            source_physical_text=source,
+            source_start_utf16=start,
+            source_end_utf16=end,
+            source_canonical_text=source,
+            source_canonical_start_utf16=start,
+            source_canonical_end_utf16=end,
+            source_fragment_text=raw,
+            source_canonical_fragment_text=raw,
+            source_locator_status="confirmed",
+        )
+
+    data = DocumentData(paragraphs=[
+        ParagraphData("丙", "attachment_note", "丙", feature(2, 3)),
+        ParagraphData("甲", "sign_org", "甲", feature(0, 1)),
+        ParagraphData("乙", "sign_date", "乙", feature(1, 2)),
+    ])
+    plan = _build_plan(data, "source-hash", include_text=True)
+
+    assert [block.type_id for block in plan.blocks] == [
+        "attachment_note",
+        "sign_org",
+        "sign_date",
+    ]
+    assert [block.segment_index for block in plan.blocks] == [2, 0, 1]
+    assert all(block.locator_verified for block in plan.blocks)
+    assert all("SOURCE_RANGE_OVERLAP" not in block.source_locator_warnings for block in plan.blocks)
+
+
 def test_sdk_splits_one_physical_paragraph_into_ordered_verified_segments(tmp_path: Path) -> None:
     source = tmp_path / "mixed.docx"
     raw = "一、总体要求。总体要求应覆盖😀、\t空格和重复文字。"

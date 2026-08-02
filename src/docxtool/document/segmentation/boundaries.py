@@ -214,6 +214,9 @@ def split_structural_tail_after_numbered_heading(
     is_strong_soft_line_structure_func: Callable[[str], bool],
     is_sign_date_func: Callable[[str], bool],
     is_tail_signature_org_func: Callable[[str], bool],
+    find_sign_date_suffix_span_func: Optional[
+        Callable[[str], Optional[Tuple[int, int]]]
+    ] = None,
 ) -> list[Tuple[int, int]]:
     """在“编号标题 + 一段正文”之后释放可靠的独立尾部结构。
 
@@ -229,34 +232,46 @@ def split_structural_tail_after_numbered_heading(
         (part.strip() for part in (next_text or "").splitlines() if part.strip()),
         "",
     )
-    structural_indexes = []
+    structural_spans: list[Tuple[int, int]] = []
     for index, (start, end) in enumerate(line_spans):
         if start <= body_start:
             continue
         value = source[start:end]
+        date_suffix = (
+            find_sign_date_suffix_span_func(value)
+            if find_sign_date_suffix_span_func is not None
+            else None
+        )
+        if date_suffix is not None:
+            date_start, date_end = date_suffix
+            org_start, org_end = trim_source_span(source, start, start + date_start)
+            if org_start < org_end and is_tail_signature_org_func(source[org_start:org_end]):
+                structural_spans.extend(
+                    ((org_start, org_end), (start + date_start, start + date_end))
+                )
+                continue
         if is_strong_soft_line_structure_func(value):
-            structural_indexes.append(index)
+            structural_spans.append((start, end))
             continue
         if (
             index + 1 < len(line_spans)
             and is_sign_date_func(source[line_spans[index + 1][0]:line_spans[index + 1][1]])
             and is_tail_signature_org_func(value)
         ):
-            structural_indexes.append(index)
+            structural_spans.append((start, end))
             continue
         if (
             index == len(line_spans) - 1
             and is_sign_date_func(next_visible_line)
             and is_tail_signature_org_func(value)
         ):
-            structural_indexes.append(index)
-    if not structural_indexes:
+            structural_spans.append((start, end))
+    if not structural_spans:
         return heading_body_spans
 
     result = [heading_span]
     cursor = body_start
-    for index in structural_indexes:
-        start, end = line_spans[index]
+    for start, end in structural_spans:
         preceding = trim_source_span(source, cursor, start)
         if preceding[0] < preceding[1]:
             result.append(preceding)

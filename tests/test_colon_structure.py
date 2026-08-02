@@ -56,3 +56,17 @@ def test_colon_analyzer_uses_shape_not_specific_organization_names() -> None:
     assert second.recipient_candidate is True
     assert first.organization_label is True
     assert second.organization_label is True
+
+
+def test_colon_analyzer_ignores_numeric_time_and_ratio_colons() -> None:
+    time_line = analyze_colon_structure("（2026年8月27日11:00，某地区委员会会议中心）")
+    ratio = analyze_colon_structure("本次抽查比例为1:2")
+    labeled_time = analyze_colon_structure("时间：11:00")
+
+    assert time_line.has_colon is False
+    assert time_line.explanatory_body_candidate is False
+    assert ratio.has_colon is False
+    assert ratio.explanatory_body_candidate is False
+    assert labeled_time.label == "时间"
+    assert labeled_time.value == "11:00"
+    assert labeled_time.key_value_candidate is True

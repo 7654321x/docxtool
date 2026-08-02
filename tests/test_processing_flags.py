@@ -352,6 +352,41 @@ class ProcessingFlagsTest(unittest.TestCase):
                 ],
             )
 
+    def test_smart_mode_front_role_and_date_override_inherited_title_format(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "formatted-byline.docx"
+            document = Document()
+            document.add_paragraph(
+                "在某地区委员会会议闭幕大会上的讲话",
+                style="Heading 1",
+            )
+            byline = document.add_paragraph()
+            role = byline.add_run("某区委员会党组书记、主席　张测试")
+            role.bold = True
+            role.font.size = Pt(22)
+            byline.add_run().add_break(WD_BREAK.LINE)
+            date = byline.add_run("（2026年8月27日11:00，某地区委员会会议中心）")
+            date.bold = True
+            date.font.size = Pt(22)
+            document.add_paragraph("各位代表、同志们：")
+            document.add_paragraph("现将有关事项说明如下，请认真抓好落实。")
+            document.save(source)
+
+            rules, _, features = load_rules_and_settings({"mode": "smart"})
+            data = DocxImporter().load(str(source), rules, features=features)
+
+            self.assertEqual(
+                [item.type_id for item in data.paragraphs[:5]],
+                ["title", "role_name", "date_line", "addressing", "body"],
+            )
+            self.assertNotEqual(data.paragraphs[1].meta["review_level"], "critical_review")
+            self.assertNotEqual(data.paragraphs[2].meta["review_level"], "critical_review")
+
+            strict_rules, _, strict_features = load_rules_and_settings({"mode": "strict"})
+            strict = DocxImporter().load(str(source), strict_rules, features=strict_features)
+            self.assertIn("\n", strict.paragraphs[1].text)
+            self.assertEqual(strict.paragraphs[1].features.source_physical_paragraph_index, 1)
+
     def test_smart_mode_removes_only_an_inferred_heading_prefix_from_speech_title(self):
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "speech-output.docx"

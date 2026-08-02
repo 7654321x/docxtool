@@ -42,6 +42,11 @@ _SIGN_DATE_RE = re.compile(
     r"([0-9]{1,2}|[零〇一二两三四五六七八九十]{1,3})\s*月\s*"
     r"([0-9]{1,2}|[零〇一二两三四五六七八九十]{1,3})\s*日\s*$"
 )
+_SIGN_DATE_SUFFIX_RE = re.compile(
+    r"((?:19|20)\d{2}|[零〇○一二两三四五六七八九]{4})\s*年\s*"
+    r"(?:[0-9]{1,2}|[零〇一二两三四五六七八九十]{1,3})\s*月\s*"
+    r"(?:[0-9]{1,2}|[零〇一二两三四五六七八九十]{1,3})\s*日\s*$"
+)
 
 
 def chinese_number_to_int(value: str) -> Optional[int]:
@@ -95,6 +100,18 @@ def is_sign_date_text(text: str) -> bool:
     该段最终类型。
     """
     return bool(_SIGN_DATE_RE.match(text or ""))
+
+
+def find_sign_date_suffix_span(text: str) -> Optional[tuple[int, int]]:
+    """Return the exact date suffix range inside a combined signature line."""
+    value = text or ""
+    match = _SIGN_DATE_SUFFIX_RE.search(value)
+    if not match:
+        return None
+    start, end = match.span()
+    while end > start and value[end - 1].isspace():
+        end -= 1
+    return (start, end)
 
 
 def is_attachment_page_mark(text: str) -> bool:

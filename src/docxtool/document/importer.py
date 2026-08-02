@@ -53,6 +53,7 @@ from docxtool.document.normalization.dates import (
     chinese_year_to_int as _normalization_chinese_year_to_int,
     is_attachment_page_mark as _normalization_is_attachment_page_mark,
     is_sign_date_text as _normalization_is_sign_date_text,
+    find_sign_date_suffix_span as _normalization_find_sign_date_suffix_span,
     normalize_attachment_page_mark as _normalization_normalize_attachment_page_mark,
     normalize_sign_date as _normalization_normalize_sign_date,
 )
@@ -317,6 +318,7 @@ def _split_structural_tail_after_numbered_heading(
         is_strong_soft_line_structure_func=_is_strong_soft_line_structure,
         is_sign_date_func=_normalization_is_sign_date_text,
         is_tail_signature_org_func=_is_tail_signature_org_text,
+        find_sign_date_suffix_span_func=_normalization_find_sign_date_suffix_span,
     )
 
 

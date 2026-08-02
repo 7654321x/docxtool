@@ -30,6 +30,7 @@ https://github.com/7654321x/docxtool.git
 | `docs/migration/README.md` | 迁移文档目录入口 | 阶段清单命名、更新与边界说明 |
 | `docs/migration/phase-a2-checklist.md` | Phase A-2 状态清单 | 已完成项、待办项、文件位置和验证记录 |
 | `docs/migration/phase-a2-looper-log.md` | Phase A-2 Looper 执行记录 | 连续微批次的脱敏结果、门禁和等价验证摘要 |
+| `docs/migration/phase-a3-final-looper-log.md` | Phase A-3 Final Looper 执行记录 | Web、Engine 和 Phase A 最终门禁 checkpoint |
 | `docs/DOCX_REGRESSION_CHECKLIST.md` | 已知公文问题和回归检查清单 | 批量测试与视觉抽查依据 |
 | `docs/SDK.md` | 本地识别 SDK 接口和集成边界 | WPS/第三方软件调用依据 |
 | `docs/INTEGRATION_CONTRACT_V1.md` | SDK 通用宿主 JSON 协议 | WPS、Word 和其他宿主共同实现依据 |
@@ -87,6 +88,10 @@ https://github.com/7654321x/docxtool.git
 | `src/docxtool/web/auth_route_handlers.py` | 普通用户认证路由处理 | 通过注入的校验、限流、数据库、密码和 session 回调工作 |
 | `src/docxtool/web/client_ip.py` | 可信代理、客户端 IP 和密钥比较辅助 | 只处理 headers、socket 地址和代理配置 |
 | `src/docxtool/web/config.py` | Web 环境和 CORS 配置解析 | 不读写数据库、不处理请求体，供 `web.app` 兼容入口调用 |
+| `src/docxtool/web/bootstrap.py` | Web import-time 配置装配 | 保持环境读取、路径创建、默认值和异常发生顺序 |
+| `src/docxtool/web/runtime_state.py` | Web 进程内共享状态工厂 | 只创建 app、Handler 和 worker 共用的一组锁、队列和缓存 |
+| `src/docxtool/web/compatibility.py` | 旧 Web 函数动态兼容 facade | 每次调用从 `web.app` 同步 patch 点，不保留第二套实现 |
+| `src/docxtool/web/handler.py` | HTTP Handler 实现 | 保留路由顺序、请求响应契约和旧 app monkeypatch 可见性 |
 | `src/docxtool/web/database_schema.py` | Web SQLite 建表、旧库轻量迁移和默认数据初始化编排 | 通过注入连接器、锁和 seed 函数工作，不处理 HTTP 或 DOCX |
 | `src/docxtool/web/file_api_auth.py` | 文件 API 代理密钥和本机调试授权 | 只消费请求头、客户端地址和密钥比较函数，不读取文件 |
 | `src/docxtool/web/file_utils.py` | 文件名、下载头和错误脱敏辅助 | 不读写磁盘，只处理字符串 |
@@ -162,13 +167,17 @@ https://github.com/7654321x/docxtool.git
 | `src/docxtool/document/segmentation/conservation.py` | 分段守恒核验 | 检查逻辑片段无重叠、无丢失、无重复并覆盖原始可见文字 |
 | `src/docxtool/document/classifier.py` | 文档模式和段落结构分类 |
 | `src/docxtool/document/letterhead_config.py` | 版头配置归一化和安全校验 |
+| `src/docxtool/document/role_shape.py` | 文首职务姓名共享形态证据 | 统一全文分析和软换行分段使用的通用职务、姓名后缀判断，不维护具体姓名或单位名单 |
 | `src/docxtool/document/recognition/` | 候选、Beam 解码、诊断、验证和兼容映射 |
 | `src/docxtool/document/recognition/core_adapter.py` | Core classifier 输入适配 | 只转换已导入段落并回写既有分类诊断 metadata |
 | `src/docxtool/document/recognition/attachment.py` | 附件结构形态和状态证据 | 只判断附件说明、续项、附件边界和附件说明起点许可，不写最终类型 |
 | `src/docxtool/document/recognition/colon.py` | 共享冒号存在判断、标签加粗位置和结构分析 | 只输出称呼、机构标签、键值和解释性正文证据，不直接定型 |
 | `src/docxtool/document/recognition/document_mode.py` | 文种覆盖层和报告标题证据 | 只判断旧 scorer 兼容文种、标题关键词、报告回顾标题、正文小标题、名词解释和称呼候选分，不写最终类型 |
 | `src/docxtool/document/recognition/front_matter.py` | 文首标题、续行、日期、署名和职务姓名证据 | 只返回旧 scorer 兼容文首候选分，不更新上下文或最终类型 |
-| `src/docxtool/document/recognition/global_context.py` | 文首结构、正文边界和同级标题族的全文只读分析 |
+| `src/docxtool/document/recognition/providers/` | 候选提供器实现 | 按既有顺序承载结构、键值、编号、语义、文首 metadata、Word 列表、Core、Legacy 和样式候选；`candidates.py` 保留兼容 facade |
+| `src/docxtool/document/recognition/context/` | 全文只读结构分析 | 分离文首、尾部、编号族和上下文模型；`global_context.py` 保留兼容 facade |
+| `src/docxtool/document/recognition/decoding/` | Beam 解码实现 | 分离候选汇集、状态转移、硬否决、复核诊断和主解码管线；`decoder.py` 保留兼容 facade 与 provider patch 点 |
+| `src/docxtool/document/recognition/global_context.py` | 全文结构分析兼容入口 | re-export `context/` 的公开模型、分析器和旧私有 helper |
 | `src/docxtool/document/recognition/metadata.py` | 旧识别结果 meta 补充 | 只消费最终类型、段落特征和上下文事实，补充渲染提示 meta，不重新打分或改写类型 |
 | `src/docxtool/document/recognition/opening_speech.py` | 文首讲话标题识别证据 | 只判断“在……上的讲话”主标题候选和误推断一级编号剥离，不写最终类型 |
 | `src/docxtool/document/recognition/numbering.py` | 标题编号识别证据和旧编号标题评分 | 只映射字面编号、Word 列表/样式、损坏编号形态和编号标题候选分，不写最终类型 |
@@ -185,7 +194,12 @@ https://github.com/7654321x/docxtool.git
 | `src/docxtool/resources/config/default-format.json` | 默认公文格式配置，随 wheel 安装 |
 | `src/docxtool/resources/schemas/` | SDK JSON Schema 资源 | 随 wheel 安装，作为跨语言协议来源 |
 | `src/docxtool/document/engine/__init__.py` | 排版引擎导出入口 |
-| `src/docxtool/document/engine/core.py` | DOCX 导出和实际排版逻辑 |
+| `src/docxtool/document/engine/core.py` | DOCX 导出公开兼容入口 | 保留旧 import、helper 和 monkeypatch surface，委托薄导出主链 |
+| `src/docxtool/document/engine/export_pipeline.py` | DOCX 导出薄编排 | 固定执行上下文准备、项目渲染和最终化顺序 |
+| `src/docxtool/document/engine/render_context.py` | 导出共享上下文 | 保存 document、关系/样式复制器、统计和延迟状态的同一对象 |
+| `src/docxtool/document/engine/special_items.py` | 非普通段落对象分派 | 原序处理表格、图片、对象题注和已有版头 |
+| `src/docxtool/document/engine/paragraph_renderer.py` | 普通段落渲染主循环 | 保持段落创建、样式、编号、行内效果、日志和降级顺序 |
+| `src/docxtool/document/engine/export_finalize.py` | DOCX 导出最终化 | 保持后处理、分节、页码、校验、保存和统计顺序 |
 | `src/docxtool/document/engine/context_candidate.py` | 基于原始元素事实和局部邻接的独立上下文候选 |
 | `src/docxtool/document/engine/document_structure.py` | 只读结构化公文板块模型与边界识别 |
 | `src/docxtool/document/engine/header_footer.py` | 渲染阶段页眉页脚兼容辅助和旧 PAGE 域页码写入 |

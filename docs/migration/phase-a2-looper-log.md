@@ -400,3 +400,117 @@
 - Module 1“Importer 收口”已完成并通过模块门禁。
 - 下一待拆模块为 Recognition 内部拆分，本轮不进入。
 - 快照和导出产物均位于 `%TEMP%`，未写入仓库。
+
+## Phase A-3 Recognition Loop 1：Candidate providers
+
+状态：passed
+
+原位置：
+- `src/docxtool/document/recognition/candidates.py`
+
+新位置：
+- `src/docxtool/document/recognition/providers/base.py`
+- `structural.py`、`key_value.py`、`numbering.py`、`semantic.py`、`compatibility.py`
+- `providers/__init__.py`
+
+兼容入口：
+- `recognition/candidates.py` 保留 Candidate、CandidateContext、CandidateProvider、9 个 provider 类、私有 helper 和 DEFAULT_PROVIDERS re-export。
+- DEFAULT_PROVIDERS 对象和 provider 注册顺序保持不变。
+
+快速门禁：
+- facade、decoder 和审计加固测试共 `120 tests` 通过；两条重复 ZIP fixture 警告为既存测试构造。
+- 修改文件 Ruff、`compileall` 和 `git diff --check` 通过。
+
+快照：
+- 标准集 3 份、专项集 3 份，3 种模式共 18 个案例；Recognition 输入输出、候选摘要、final type、文档结构、package 和 relationship 差异均为 0。
+
+下一项：
+- `global_context.py` 全文 context 拆分。
+
+## Phase A-3 Recognition Loop 2：Document context
+
+状态：passed
+
+原位置：
+- `src/docxtool/document/recognition/global_context.py`
+
+新位置：
+- `src/docxtool/document/recognition/context/model.py`
+- `context/numbering.py`、`front.py`、`tail.py`、`analyzer.py`
+- `context/__init__.py`
+
+兼容入口：
+- `recognition/global_context.py` 保留 `DocumentContext`、`HeadingFamily`、`analyze_document_context` 和原私有 helper 的 re-export。
+- 旧路径和新路径的三个公开对象保持同一对象身份。
+
+快速门禁：
+- facade 和 decoder 直接测试共 `64 passed`。
+- 修改文件 Ruff、`compileall` 和 `git diff --check` 通过。
+
+快照：
+- 当前快照工具默认捕获完整 50+5 集；Module 2 基线为固定 3+3 集，因此按源 SHA-256 筛回相同 6 份输入后比较。
+- `strict`、`structural`、`normalize` 共 18 个案例，结构、metadata、Recognition、package 和 relationship 差异均为 0。
+
+下一项：
+- `decoder.py` 解码状态、路径选择、复核和诊断拆分。
+
+## Phase A-3 Recognition Loop 3：Beam decoder
+
+状态：passed
+
+原位置：
+- `src/docxtool/document/recognition/decoder.py`
+
+新位置：
+- `src/docxtool/document/recognition/decoding/model.py`
+- `candidate_selection.py`、`transitions.py`、`review.py`、`pipeline.py`
+- `decoding/__init__.py`
+
+兼容入口：
+- `recognition/decoder.py` 保留 `apply_recognition` 及原私有模型和 helper 的 re-export。
+- `decoder.DEFAULT_PROVIDERS` 继续作为真实执行 patch 点，由 facade 在调用时注入新 pipeline。
+
+快速门禁：
+- facade、decoder 和审计加固测试共 `122 passed`；两条重复 ZIP fixture 警告为既存测试构造。
+- 修改文件 Ruff、`compileall` 和 `git diff --check` 通过。
+
+快照：
+- 固定 3 份标准集、3 份专项集，3 种模式共 18 个案例。
+- 迁移前后快照 SHA-256 均为 `e7e2fa57a75696ae4f3667c0e55b9fde65c830c4f45556095ea667152f0e1749`，差异为 0。
+
+下一项：
+- Module 2 统一门禁；通过后按模块完成停止。
+
+## Phase A-3 Module 2 门禁：Recognition 内部拆分
+
+状态：passed
+
+范围：
+- Candidate provider 注册和实现。
+- 文首、正文边界、尾部与同级标题族全文上下文。
+- Beam 数据模型、候选汇集、状态转移、hard veto、review 和主解码管线。
+- 旧 candidates、global_context、decoder 导入和 monkeypatch facade。
+
+模块门禁：
+- 全部 `test_recognition_*` 与导入、处理模式、分段、落款、审计、SDK 和 Phase A 快照直接上下游共 `273 tests` 通过。
+- Recognition 全目录和相关测试 Ruff、`python -m compileall -q src/docxtool`、PowerShell 发布脚本语法及 `git diff --check` 通过。
+- 两条重复 ZIP fixture 警告为既存安全测试构造；发布脚本 LF/CRLF 提示为开始前已有状态。
+
+快照：
+- 标准集 3 份、专项集 3 份，`strict`、`structural`、`normalize` 共 18 个案例。
+- physical blocks、logical paragraphs、text/original_text、source spans、locator、inline tokens、Legacy/Core metadata、Recognition input/output、final types、package parts、relationships、document structure 和 missing relationship targets 差异均为 0。
+- 迁移前后快照 JSON SHA-256 均为 `e7e2fa57a75696ae4f3667c0e55b9fde65c830c4f45556095ea667152f0e1749`。
+
+兼容入口：
+- `recognition/candidates.py`、`global_context.py`、`decoder.py`。
+- `decoder.DEFAULT_PROVIDERS` 仍控制真实 `apply_recognition` 执行。
+
+大型文件：
+- `candidates.py`：拆分前 732 行，兼容 facade 56 行；最大 provider 文件 203 行。
+- `global_context.py`：拆分前 828 行，兼容 facade 83 行；最大 context 文件 443 行。
+- `decoder.py`：拆分前 637 行，兼容 facade 62 行；最大 decoding 文件 302 行。
+
+停止原因：
+- Module 2“Recognition 内部拆分”已完成并通过模块门禁。
+- 下一待拆模块为 Web app 收口，本轮不进入。
+- 快照和导出产物均位于 `%TEMP%`，未写入仓库。

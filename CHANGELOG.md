@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.7 - 2026-08-02
+
+- Completed the remaining Phase A-3 mechanical module boundaries for recognition, Web, and document export while retaining the established compatibility facades and behavior.
+- Prevented front-matter role/date metadata from being overwritten by title continuation or colon-body candidates.
+- Fixed attachment pagination when a new attachment marker follows a title without body content, and preserved same-line signature/date source ranges during tail restructuring.
+- Ordered SDK segment metadata by original UTF-16 source spans after tail normalization so verified host ranges are not reported as overlapping.
+- Regenerated all 50 standard and 5 special regression documents; full Python tests, Ruff, compile checks, structural audits, and targeted page renders passed.
+
 ## 2.6 - 2026-08-02
 
 - Completed Phase A-3 Module 1 by reducing `DocxImporter.load` to a compatibility facade and moving the unchanged document call chain into focused pipeline modules.

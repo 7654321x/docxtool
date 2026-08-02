@@ -313,6 +313,38 @@ class SignatureDetectionTest(unittest.TestCase):
         )
         self.assertEqual(Counter(output_visible), Counter(source_visible))
 
+    def test_inline_heading_tail_splits_signature_org_and_date_on_same_line(self):
+        doc = Document()
+        doc.add_paragraph("总题目")
+        paragraph = doc.add_paragraph(
+            "（五）压实工作责任。这里是正文内容这里是正文内容这里是正文内容。"
+        )
+        paragraph.add_run().add_break()
+        paragraph.add_run().add_break()
+        paragraph.add_run("某区工作办公室  2025年十月15日")
+        paragraph.add_run().add_break()
+        paragraph.add_run("附件：1.基本情况")
+        path = self.root / "inline-heading-combined-signature-date.docx"
+        doc.save(path)
+
+        data = DocxImporter().load(
+            str(path),
+            _rules(),
+            strict_preservation=False,
+            features={"processing": {"strategy": "structural"}},
+        )
+
+        self.assertEqual(
+            [(item.type_id, item.text) for item in data.paragraphs[-5:]],
+            [
+                ("heading2", "（五）压实工作责任。"),
+                ("body", "这里是正文内容这里是正文内容这里是正文内容。"),
+                ("attachment_note", "附件：1.基本情况"),
+                ("sign_org", "某区工作办公室"),
+                ("sign_date", "2025年10月15日"),
+            ],
+        )
+
     def test_body_styled_numbered_paragraph_still_detects_inline_heading2(self):
         doc = Document()
         doc.add_paragraph("四、产生问题的原因")

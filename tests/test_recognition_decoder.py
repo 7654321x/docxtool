@@ -683,6 +683,87 @@ def test_title_formatting_cannot_override_front_role_and_placeholder_date():
     assert data.recognition_diagnostics["paragraphs"][3]["review_level"] != "critical_review"
 
 
+def test_front_role_metadata_vetoes_title_continuation_transition_bonus() -> None:
+    role = _paragraph(
+        "某区委员会党组书记、主席张测试",
+        "role_name",
+        1,
+        alignment="CENTER",
+        bold_char_ratio=1.0,
+        legacy_type_id="role_name",
+    )
+    date = _paragraph(
+        "（2026年8月27日11:00，某地区委员会会议中心）",
+        "date_line",
+        2,
+        alignment="CENTER",
+        bold_char_ratio=1.0,
+        legacy_type_id="date_line",
+    )
+    data = _document(
+        _paragraph("在某地区委员会会议闭幕大会上的讲话", "title", 0, alignment="CENTER"),
+        role,
+        date,
+        _paragraph("各位代表、同志们：", "addressing", 3),
+        _paragraph("现将有关事项说明如下，请认真抓好落实。", "body", 4),
+    )
+
+    apply_recognition(data)
+
+    assert [item.type_id for item in data.paragraphs[:5]] == [
+        "title", "role_name", "date_line", "addressing", "body",
+    ]
+    assert role.meta["review_level"] != "critical_review"
+    assert date.meta["review_level"] != "critical_review"
+    assert "colon-explanatory-body" not in date.meta["recognition_evidence"]
+
+
+def test_front_role_metadata_supports_generic_role_and_name_shapes() -> None:
+    cases = (
+        ("某办公室主任 张某", "2026年8月27日"),
+        ("某委员会书记、主席　张某某", "2026年8月27日"),
+        ("某区总工程师赵某某", "2026年8月27日11:00"),
+        ("某工作组负责人  张某", "各位代表、同志们："),
+    )
+
+    for role_text, following_text in cases:
+        following_type = "date_line" if "年" in following_text else "addressing"
+        data = _document(
+            _paragraph("年度工作报告", "title", 0, alignment="CENTER"),
+            _paragraph(role_text, "body", 1, alignment="CENTER"),
+            _paragraph(following_text, following_type, 2, alignment="CENTER"),
+            _paragraph("现将有关事项说明如下，请认真抓好落实。", "body", 3),
+        )
+
+        apply_recognition(data)
+
+        assert data.paragraphs[1].type_id == "role_name", role_text
+        assert data.paragraphs[1].meta["recognition_provider"].startswith("front-metadata:")
+
+
+def test_role_word_inside_real_title_continuation_is_not_a_person_name() -> None:
+    continuation = _paragraph(
+        "主席会议制度建设情况",
+        "title_cont",
+        1,
+        alignment="CENTER",
+    )
+    data = _document(
+        _paragraph("年度工作报告", "title", 0, alignment="CENTER"),
+        continuation,
+        _paragraph("2026年8月27日", "date_line", 2, alignment="CENTER"),
+        _paragraph("各有关单位：", "addressing", 3),
+        _paragraph("现将有关事项说明如下，请认真抓好落实。", "body", 4),
+    )
+
+    apply_recognition(data)
+
+    assert continuation.type_id == "title_cont"
+    assert data.recognition_diagnostics["document_context"]["front_metadata"] == [
+        {"position": 2, "kind": "date_line"},
+    ]
+
+
 def test_front_metadata_shape_recognizes_unseen_role_and_placeholder_date_without_legacy_type():
     data = _document(
         _paragraph("在推进重点项目专题会议上的讲话", "body", 0, alignment="CENTER"),

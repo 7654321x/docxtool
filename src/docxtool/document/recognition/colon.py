@@ -142,7 +142,16 @@ def analyze_colon_structure(value: str) -> ColonAnalysis:
     normalized = _normalize(raw)
     single_line = "\n" not in raw and "\r" not in raw
     semantic_raw, semantic_offset = _strip_wrapping_quotes(raw)
-    indexes = [index for index, char in enumerate(semantic_raw) if char in ":："]
+    indexes = [
+        index
+        for index, char in enumerate(semantic_raw)
+        if char in ":："
+        and not (
+            0 < index < len(semantic_raw) - 1
+            and semantic_raw[index - 1].isdigit()
+            and semantic_raw[index + 1].isdigit()
+        )
+    ]
     if not indexes:
         return ColonAnalysis(
             raw_text=raw,

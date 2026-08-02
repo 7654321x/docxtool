@@ -146,6 +146,53 @@ class SignatureAttachmentDetectionTest(unittest.TestCase):
             ],
         )
 
+    def test_attachment_page_can_follow_previous_attachment_title_without_body(self):
+        data = self._load_lines([
+            "总题目",
+            "一、一级标题",
+            "这里是正文内容这里是正文内容这里是正文内容。",
+            "附件：1. 基本情况",
+            "2025年10月15日",
+            "附件1",
+            "第一份附件标题",
+            "第一份附件正文。",
+            "附件2",
+            "第二份附件标题",
+            "附件3",
+            "第三份附件标题",
+            "第三份附件正文。",
+        ])
+
+        self.assertEqual(
+            [item.type_id for item in data.paragraphs[-8:]],
+            [
+                "attachment_page_mark",
+                "attachment_title",
+                "attachment_body",
+                "attachment_page_mark",
+                "attachment_title",
+                "attachment_page_mark",
+                "attachment_title",
+                "attachment_body",
+            ],
+        )
+
+    def test_long_content_after_attachment_page_mark_is_attachment_body(self):
+        data = self._load_lines([
+            "总题目",
+            "一、一级标题",
+            "这里是正文内容这里是正文内容这里是正文内容。",
+            "附件：1. 基本情况",
+            "2025年10月15日",
+            "附件1",
+            "较长附件正文内容" * 8 + "。",
+        ])
+
+        self.assertEqual(
+            [item.type_id for item in data.paragraphs[-2:]],
+            ["attachment_page_mark", "attachment_body"],
+        )
+
     def test_middle_date_is_not_signature_date(self):
         data = self._load_lines([
             "总题目",

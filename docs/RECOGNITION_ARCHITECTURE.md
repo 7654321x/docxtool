@@ -353,7 +353,7 @@ Web 服务启动顺序、启动日志、TCP_NODELAY 设置和 KeyboardInterrupt 
 - `front_matter.py`：提供旧 importer scorer 兼容的文首标题、续行、日期、署名和职务姓名候选评分；只返回分值事实，不推进标题区状态、不写最终类型。
 - `metadata.py`：根据最终类型、段落特征和上下文事实补充旧渲染 meta，例如标题正文粘连、正文引导句加粗、冒号标签和报告首句加粗；不重新打分或改写最终类型。
 - `model.py`：`DocumentMode`、`SectionKind`、`ParagraphType` 三层模型。
-- `candidates.py`：结构、键值、编号、语义、旧分类器和样式候选提供器。旧分类结果只作为兼容候选。
+- `providers/`：结构、键值、编号、语义、文首 metadata、Word 列表、Core、Legacy 和样式候选提供器；注册顺序保持不变。`candidates.py` 仅保留旧导入兼容 facade。
 - `opening_speech.py`：提供文首“在……上的讲话”主标题证据和误推断一级编号剥离 helper；只生成识别证据，不写入最终类型。
 - `numbering.py`：提供字面编号、Word 多级列表/标题样式、损坏编号标题、“一是/一要”正文引导句和旧编号标题候选分事实映射；只返回候选类型、编号前缀、位置或分值，不更新上下文状态。
 - `selection.py`：构建旧 importer 兼容的骨架层、文种覆盖层和兜底层 scorer registry，并执行三阶段 scorer 选择；只返回候选类型、meta、前缀和得分日志，不执行 Repair 或推进上下文。
@@ -363,8 +363,8 @@ Web 服务启动顺序、启动日志、TCP_NODELAY 设置和 KeyboardInterrupt 
 - `tail_structure.py`：承接旧 importer 尾部固定结构状态机，通过回调消费附件、落款、日期和附件页事实，保持旧返回契约并避免反向依赖 importer。
 - `legacy/classifier.py`：按原顺序执行 Legacy scorer、Flow、Repair、metadata 和上下文更新；全部具体规则仍由 importer 兼容回调注入。
 - `legacy/pipeline.py`：执行旧 paragraph stream 的标题层级封顶和结构状态推进，不生成新候选或改写分数。
-- `global_context.py`：文首结构、正文边界和同级标题族的全文只读分析。
-- `decoder.py`：硬结构否决、标题序列冲突复核和宽度可配置的确定性 Beam Search；默认宽度为 12。
+- `context/`：拆分全文上下文模型、文首证据、尾部证据、编号族和只读分析编排。`global_context.py` 仅保留旧导入兼容 facade。
+- `decoding/`：拆分候选汇集、Beam 数据模型、状态转移、硬结构否决、标题序列冲突复核和主解码管线；默认宽度仍为 12。`decoder.py` 保留旧入口并把旧 `DEFAULT_PROVIDERS` patch 点注入真实管线。
 - `compatibility.py`：内部段落类型到旧渲染 `type_id` 的唯一映射边界。
 - `validators.py`：有限结构序列校验。
 - `diagnostics.py`：只输出结构信息，不输出源文档正文、OOXML 或敏感字段。
@@ -421,6 +421,43 @@ The facade continues to expose stable models, Legacy scoring types, private help
 the patch points used by migration snapshots and tests. The extracted pipeline reads those
 hooks dynamically from the facade, so patching the old importer path still changes the real
 execution rather than a dormant copy.
+
+## Phase A-3 Recognition Closure
+
+Phase A-3 Module 2 mechanically moved candidate providers, document-wide context analysis and
+Beam decoding internals into `recognition/providers/`, `recognition/context/` and
+`recognition/decoding/`. The former `candidates.py`, `global_context.py` and `decoder.py` paths
+remain compatibility facades. Provider order, candidate scores and reasons, context fields,
+Beam width, transitions, hard vetoes, review diagnostics and final type selection remain
+unchanged. The decoder facade injects its current `DEFAULT_PROVIDERS` value into the extracted
+pipeline so existing monkeypatch users still control real execution.
+
+## Phase A-3 Web Closure
+
+Phase A-3 Module 3 mechanically separated import-time configuration into `web/bootstrap.py`,
+shared locks and queues into `web/runtime_state.py`, old callable wrappers into
+`web/compatibility.py`, and the HTTP handler into `web/handler.py`. `web/app.py` remains the
+public compatibility and patch surface: runtime objects retain identity, handler methods resolve
+old hooks dynamically, and `main()` continues to inject those hooks into `server_runtime`.
+Routes, status codes, headers, response shapes, startup side effects and worker behavior are
+unchanged.
+
+## Phase A-3 Engine Closure
+
+Phase A-3 Module 4 mechanically reduced `document/engine/core.py` to the public import and
+monkeypatch surface plus a thin `export_doc()` facade. The document export order is now explicit:
+
+```text
+prepare_render_context -> render_document_items -> finalize_export
+```
+
+`render_context.py` owns the single shared mutable context, `special_items.py` preserves tables,
+images, object captions and existing letterhead objects, `paragraph_renderer.py` owns the former
+paragraph loop, and `export_finalize.py` owns post-processing, sections, page structures,
+validation and save. Every stage receives the same document, relationship/style copiers,
+statistics, protected element set and deferred state. The facade injects the current `core`
+module, so existing private monkeypatch paths still affect real execution; there is no second
+renderer implementation.
 
 ## 关键规则
 

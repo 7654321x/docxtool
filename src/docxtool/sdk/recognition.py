@@ -235,9 +235,26 @@ def _build_plan(
             segments_by_physical.setdefault(physical_index, []).append(index)
     segment_meta = {}
     for physical_index, indexes in segments_by_physical.items():
-        # Importer preserves logical source order.  Keep that full order even
-        # when one locator is unresolved, otherwise segment_count would lie.
-        ordered = list(indexes)
+        all_located = all(
+            locators[index]["raw_start"] is not None
+            and locators[index]["raw_end"] is not None
+            for index in indexes
+        )
+        # Tail normalization may move attachment notes ahead of signatures.
+        # Segment ordinals describe source ranges, while block_index continues
+        # to describe final document order.
+        ordered = (
+            sorted(
+                indexes,
+                key=lambda index: (
+                    locators[index]["raw_start"],
+                    locators[index]["raw_end"],
+                    index,
+                ),
+            )
+            if all_located
+            else list(indexes)
+        )
         previous_end = -1
         for segment_index, index in enumerate(ordered):
             locator = locators[index]

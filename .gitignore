@@ -83,5 +83,8 @@ Thumbs.db
 .reasonix/
 %USERPROFILE%/
 
+# Local recycle bin for untracked temporary artifacts; never publish its contents.
+/local_recycle/
+
 # Nested standalone repository and nested Git metadata
 **/.git/

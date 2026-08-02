@@ -51,6 +51,13 @@ pwsh -NoProfile -Command "node --test tests/worker-routing.test.mjs"
 4. 新增长期维护文档时，必须在 `docs/README.md` 登记职责和阅读入口；如属于发布范围，还必须同步更新 `docs/UPLOAD_MANIFEST.md`、`docs/GITHUB_UPLOAD_GUIDE.md` 和 `scripts/publish_to_github.ps1`。
 5. 每份规范文档必须明确适用范围、唯一职责、上位规则和验证入口；不得写入用户正文、真实密钥、绝对用户路径或运行日志原文。
 
+## 本地回收站
+
+1. 仓库根目录 `local_recycle/` 是仅供本机使用的回收站，已整体加入 `.gitignore`，不得提交或通过发布脚本上传。
+2. 只允许移入未跟踪的临时补丁、一次性快照、备份副本和可重新生成的本地产物；移动前必须确认它们不是待提交的新源码、测试、配置或文档。
+3. 已被 Git 跟踪但存在修改的文件必须保留在原路径，不能通过移动到回收站来制造干净工作树；应通过正常提交、审阅或用户明确授权的恢复流程处理。
+4. 回收站默认永久保留，不自动清空。每次移动后运行 `git status --short`，确认没有误删受管理文件，也没有隐藏应发布的新文件。
+
 ## 重复问题处理
 
 1. 遇到已经出现过、或明显可能反复出现的问题时，先回看本文件和相关项目文档，确认是否已有处理约定。
@@ -116,6 +123,8 @@ pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m pytest tests/test_struct
 40. 触发场景：源 DOCX 的自动列表编号可能只存在于 `w:numPr`，不出现在段落文本中。短独立段若保留 `@lvl_N`、高加粗比例且旧导入链已识别为对应标题，authoritative decoder 不得被普通正文候选覆盖；超过 40 字的列表继承正文不按该规则升级。批处理必须对比源结构线索与输出类型，报告“源标题线索数/未保留数”，只记录段落号、类型、证据和文字哈希，不记录完整正文。
 41. 触发场景：附件说明、落款单位和落款日期在源文档中交错，或被无内容空段隔开时，非 strict 导出必须整理为“附件说明及附件项 → 落款单位 → 日期”，并删除该尾部块内部无结构含义的空段。若同一物理段落包含“编号标题 + 正文 + 多个软换行 + 末行落款单位”，且下一物理段落首个可见行是日期，也必须在标题/正文拆分后继续拆出落款单位，不能让标题正文分支吞掉尾部结构。识别到落款单位和日期后，最终渲染计划必须保证二者相邻；批处理报告“落款连续性问题数”，附件不得出现在二者之间。
 42. 触发场景：讲话稿开头和正文结尾都出现独立称呼时，开场称呼继续使用“称呼”配置的段前 1 行；一旦正文流已经开始，后续 `addressing`（例如文末再次称呼）段前、段后均强制为 0，不得因共用 `DCT-Recipient` 样式再次产生空一行。源段落中的连续手动空行仍按结构拆分规则清理。修改后至少运行 `tests/test_engine_heading_spacing.py tests/test_processing_flags.py tests/test_segment_boundaries.py`，并复排讲话专项稿检查最终 OOXML 的 `w:beforeLines`。
+43. 触发场景：主标题后的职务姓名和日期时间地点继承了 Word 标题样式时，全文文首分析器确认的 `role_name`、`date_line` 结构事实必须优先于 `main_title/title_continuation` 视觉候选及 Beam 的“主标题 → 标题续行”加分；旧类型或 Word 样式本身不得触发该硬约束。数字两侧的时间或比例冒号（如 `11:00`、`1:2`）不是结构标签分隔符，`时间：11:00`仍按第一个中文冒号识别键值。职务形态由通用职务、姓名后缀、文首位置及后接日期或称呼共同验证，不维护具体姓名、单位或地区名单。修改后至少运行 `tests/test_colon_structure.py tests/test_recognition_decoder.py tests/test_processing_flags.py tests/test_segmentation_soft_breaks.py tests/test_sdk.py`，并复排讲话专项稿核验文首类型及 SDK 子范围。
+44. 触发场景：正文尾部通过软换行粘连“短组织落款 + 同行日期后缀 + 附件说明/附件页”时，结构分段必须将同行落款和日期拆为独立 `sign_org`、`sign_date` 子范围，再按“附件说明及续项 → 落款单位 → 日期 → 附件正文页”整理；不得让同行日期残留在正文中。进入附件正文区后，独立“附件 N”即使紧跟上一附件标题（上一附件没有正文）也必须重新识别为 `attachment_page_mark`；其后短独立行可为 `attachment_title`，长文本或多行文本直接为 `attachment_body`。每个附件页标记由渲染器统一写入一次 `pageBreakBefore`，不得依赖自然分页或重复分页符。修改后至少运行 `tests/test_signature_detection.py tests/test_signature_attachment_detection.py tests/test_segment_boundaries.py tests/test_body_order_export.py tests/test_structured_layout_quality.py`，并复排标准集 008、028 后逐页检查附件边界。
 43. 触发场景：冒号结构不得在 importer、特征提取、候选和解码器中各自维护不同规则。统一由 `recognition/colon.py` 输出结构证据：文首独立标签可成为主送机关候选，明确称呼加冒号后接正文可拆为 `addressing + body`，正文区机构标签和解释性冒号正文保持正文或正文标签，责任单位、联系人等结构字段走键值候选。标题编号重复、倒序、跳号或缺少父标题时，最终类型可按最高综合分应用，但必须进入 `review` 并记录 `HEADING_SEQUENCE_CONFLICT`；不得通过具体单位、人名或完整句子白名单修复。修改后至少运行：
 
 ```pwsh
@@ -248,3 +257,4 @@ pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m ruff check src tests scr
 3. SDK 默认不得返回正文。只有本机离线 `local-agent → WPS` 内存链路可显式 `include_text=True`；`recognized_text` 不得进入 command-service、日志、报告、PluginStorage 或联网接口。
 4. WPS 端只允许完整物理哈希、物理出现序号、UTF-16 子范围和子范围哈希全部验证后创建目标；禁止 dense/non-empty/裸序号 fallback。没有正式表格合同前跳过表格单元格。
 5. 同一物理段落包含多个角色或单一角色未覆盖整段时，只允许子 Range 预览并标记 `mixed_structure / review_only`；正式排版必须在命令生成和事务开始前返回 `MIXED_PARAGRAPH_REQUIRES_SPLIT`。
+6. 尾部规范化可能把附件说明移动到落款单位和日期之前；SDK 的 block 数组保持最终排版顺序，但同一物理段落的 `segment_index`、范围重叠检查和宿主绑定顺序必须按原始 UTF-16 起止位置计算。不得因最终顺序与原文顺序不同，把本来可回读的落款、日期或附件范围误报为 `SOURCE_RANGE_OVERLAP`。

@@ -81,4 +81,27 @@ Phase A-2 只抽取导入后规范化编排与物理读取职责，保持现有 
 - 下一待拆模块：Recognition 内部 `candidates.py`、`global_context.py`、`decoder.py`；本轮未进入。
 - 一条 `python-docx` 样式 ID 弃用警告来自既有测试依赖，未改变阶段行为。
 
+## Phase A-3 Module 2 补记
+
+状态：passed
+
+- 候选提供器迁移到 `recognition/providers/`；`candidates.py` 保留注册顺序和旧 helper facade。
+- 全文上下文迁移到 `recognition/context/`；`global_context.py` 保留公开模型、分析器和旧 helper facade。
+- Beam 解码迁移到 `recognition/decoding/`；`decoder.py` 保留 `apply_recognition` 和 `DEFAULT_PROVIDERS` patch 点。
+- Recognition 与直接上下游统一门禁通过；修改文件 Ruff、`compileall` 和 `git diff --check` 通过。
+- 固定 6 份脱敏样本在 3 种模式下共 18 个迁移前后案例，快照 SHA-256 完全一致，差异为 0。
+- 下一待拆模块：Web app 收口；本轮不进入。
+
+## Phase A-3 Final Looper 补记
+
+状态：passed
+
+- Web 已拆为 bootstrap、runtime state、动态 compatibility facade 和 Handler；`web.app` 保留旧 import、monkeypatch 和薄启动入口。
+- Engine 已拆为共享 render context、特殊对象分派、段落渲染器、导出最终化和薄 pipeline；`engine.core.export_doc` 保留公开签名和旧 patch surface。
+- Web 模块门禁 433 项通过，Node 11 项通过，HTTP 和 import-time 契约快照差异为 0。
+- Engine 模块门禁 197 项通过，固定 6 篇、3 种模式完整 package 快照差异为 0。
+- Phase A 最终门禁在 Python 3.8、3.10 分别完成 1138 项测试；全量 Ruff、compileall、Node、wheel/sdist、隔离 wheel 冒烟均通过。
+- 固定 50 个标准稿和 5 个专项稿在 3 种模式下共 165 个迁移前后案例差异为 0；15 篇文档和 1 个模板完成视觉渲染，失败为 0。
+- Phase A 文件拆分至此收口；后续功能准确率和模板 P1 归因只允许在 Phase B 独立处理。
+
 后续每一项迁移必须在本文件补充：职责、文件位置、执行命令、结果、快照差异数和是否已停止。

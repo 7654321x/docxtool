@@ -47,6 +47,7 @@
 - [`migration/README.md`](migration/README.md)：迁移文档目录说明、状态更新方式和新阶段模板。
 - [`migration/codex-workflow.md`](migration/codex-workflow.md)：机械迁移的快速门禁、模块门禁、里程碑门禁、快照与报告格式。
 - [`migration/phase-a2-checklist.md`](migration/phase-a2-checklist.md)：Phase A-2 已完成项、待办项、文件位置和验证记录。
+- [`migration/phase-a3-final-looper-log.md`](migration/phase-a3-final-looper-log.md)：Phase A-3 Web、Engine 与最终门禁 checkpoint。
 
 ## 唯一职责
 
