@@ -334,7 +334,13 @@ Web 服务启动顺序、启动日志、TCP_NODELAY 设置和 KeyboardInterrupt 
 - `soft_breaks.py`：根据编号、文号、键值段、日期、附件、职务姓名和落款证据，判断软换行是否应形成逻辑段边界；其中职务姓名和文首职务日期组合由本模块提供通用形态判断，不维护具体姓名名单，也不决定最终段落类型。
 - `body_tail.py`：根据 importer 注入的附件、成文日期、附件项和附件页标记判断函数，扫描逻辑行中的最后正文候选位置；该模块只提供尾部边界事实，不写入最终类型。
 
-当前 importer 保留兼容 facade 与识别编排；软换行、标题正文粘连和尾部软换行的边界实现已由 segmentation 消费既有回调。后续迁移必须继续保持文字覆盖、不重叠和不丢失。
+当前 importer 只保留兼容 facade、旧私有回调和 `DocxImporter.load` 薄入口；完整文档调用顺序由 `document/pipeline/document_pipeline.py` 通过 importer facade 注入的既有回调执行。软换行、标题正文粘连和尾部软换行的边界实现继续由 segmentation 消费既有回调。后续迁移必须继续保持文字覆盖、不重叠和不丢失。
+
+`src/docxtool/document/pipeline/` 承接 Importer 主链的纯编排职责：
+
+- `options.py`：保持原优先级解析 strict、structural、normalize、Recognition、编号和标点开关，并构造原文本/token 策略。
+- `paragraph_materialization.py`：把旧逻辑流 tuple 机械转换为 `ParagraphData`，保留 source locator、inline token、sectPr 和 Legacy provenance。
+- `document_pipeline.py`：按原顺序调用物理读取、逻辑分段、Legacy/Core、Recognition 和 Recognition 后规范化；所有旧 monkeypatch 点通过 importer 模块 facade 动态注入，不形成第二套实现。
 
 ## 目录
 
@@ -351,9 +357,12 @@ Web 服务启动顺序、启动日志、TCP_NODELAY 设置和 KeyboardInterrupt 
 - `opening_speech.py`：提供文首“在……上的讲话”主标题证据和误推断一级编号剥离 helper；只生成识别证据，不写入最终类型。
 - `numbering.py`：提供字面编号、Word 多级列表/标题样式、损坏编号标题、“一是/一要”正文引导句和旧编号标题候选分事实映射；只返回候选类型、编号前缀、位置或分值，不更新上下文状态。
 - `selection.py`：构建旧 importer 兼容的骨架层、文种覆盖层和兜底层 scorer registry，并执行三阶段 scorer 选择；只返回候选类型、meta、前缀和得分日志，不执行 Repair 或推进上下文。
+- `core_adapter.py`：把已 materialize 的段落机械转换为 Core classifier 输入，并回写原有诊断 metadata；不改变最终类型。
 - `signature.py`：提供落款单位否定前缀、通用组织后缀、正文尾部上下文和下一段日期组合事实；只判断短行是否像落款单位，不写最终类型。
 - `state.py`：提供旧 importer 兼容 Flow 状态允许表、标题层级 Repair、最后结构事实记录和识别上下文推进；只消费最终类型，不重新打分或改写最终类型。
 - `tail_structure.py`：承接旧 importer 尾部固定结构状态机，通过回调消费附件、落款、日期和附件页事实，保持旧返回契约并避免反向依赖 importer。
+- `legacy/classifier.py`：按原顺序执行 Legacy scorer、Flow、Repair、metadata 和上下文更新；全部具体规则仍由 importer 兼容回调注入。
+- `legacy/pipeline.py`：执行旧 paragraph stream 的标题层级封顶和结构状态推进，不生成新候选或改写分数。
 - `global_context.py`：文首结构、正文边界和同级标题族的全文只读分析。
 - `decoder.py`：硬结构否决、标题序列冲突复核和宽度可配置的确定性 Beam Search；默认宽度为 12。
 - `compatibility.py`：内部段落类型到旧渲染 `type_id` 的唯一映射边界。
@@ -382,7 +391,9 @@ physical reader -> logical segmentation -> legacy/core metadata -> Recognition
 -> post-recognition normalization -> renderer
 ```
 
-The importer still owns the legacy/core classification call and the Recognition invocation.
+The extracted document pipeline owns only the legacy/core classification call order and the
+Recognition invocation. `DocxImporter.load()` delegates to that pipeline while the importer
+module remains the compatibility and monkeypatch facade.
 `normalization/pipeline.py` starts only after Recognition returns; it receives every action as
 an injected importer callback so it cannot silently acquire authority over candidates, state,
 final types, text rewriting or ordering rules.
@@ -394,6 +405,22 @@ part, content type and relationship, and rejects missing internal relationship t
 JSON stores only text length and SHA-256 values. The provider experiment toggles only
 `LegacyCandidateProvider` at the decoder boundary; importer Legacy preprocessing remains enabled
 in both runs and is explicitly reported as outside that experiment.
+
+## Phase A-3 Importer Closure
+
+Phase A-3 Module 1 mechanically moved processing options, paragraph materialization, Legacy
+single-paragraph orchestration, Core adaptation and the document call chain out of
+`document/importer.py`. The observable order remains:
+
+```text
+DocxImporter facade -> physical reader -> logical segmentation -> Legacy/Core metadata
+-> Recognition -> post-recognition normalization
+```
+
+The facade continues to expose stable models, Legacy scoring types, private helper names and
+the patch points used by migration snapshots and tests. The extracted pipeline reads those
+hooks dynamically from the facade, so patching the old importer path still changes the real
+execution rather than a dormant copy.
 
 ## 关键规则
 

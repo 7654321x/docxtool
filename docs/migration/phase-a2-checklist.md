@@ -65,6 +65,20 @@ Phase A-2 只抽取导入后规范化编排与物理读取职责，保持现有 
 ## 已知非阻断说明
 
 - 两条 ZIP 重复成员警告来自安全校验 fixture，属于测试构造的预期警告。
+
+## Phase A-3 Module 1 补记
+
+状态：passed
+
+- `document/importer.py` 已收口为稳定模型/私有 helper re-export、monkeypatch facade 和薄 `DocxImporter.load` 入口。
+- 处理模式与文本/token 策略迁移到 `document/pipeline/options.py`。
+- ParagraphData 构造迁移到 `document/pipeline/paragraph_materialization.py`。
+- Legacy 单段分类和 stream 上下文推进迁移到 `recognition/legacy/classifier.py`、`recognition/legacy/pipeline.py`。
+- Core adapter 迁移到 `recognition/core_adapter.py`。
+- 文档主链迁移到 `document/pipeline/document_pipeline.py`；导入、分段、Legacy/Core、Recognition 和 Normalization 顺序不变。
+- 模块直接与上下游门禁共 `202 tests` 通过；修改文件 Ruff、`compileall` 和 `git diff --check` 通过。
+- 6 份脱敏样本在 3 种模式下共 18 个迁移前后案例，所有快照与 package/relationship 比较差异为 0。
+- 下一待拆模块：Recognition 内部 `candidates.py`、`global_context.py`、`decoder.py`；本轮未进入。
 - 一条 `python-docx` 样式 ID 弃用警告来自既有测试依赖，未改变阶段行为。
 
 后续每一项迁移必须在本文件补充：职责、文件位置、执行命令、结果、快照差异数和是否已停止。

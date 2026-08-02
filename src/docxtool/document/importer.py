@@ -12,9 +12,7 @@
 
 from __future__ import annotations
 
-import hashlib
-import re
-from types import SimpleNamespace
+import sys
 from typing import List, Optional, Tuple
 
 from docxtool.document.classifier import ClassificationOptions, classify_paragraphs
@@ -27,6 +25,13 @@ from docxtool.document.models import (
     ParagraphFeatures,
     SegmentBoundaryCandidate,
     SourceRun,
+)
+from docxtool.document.pipeline.options import resolve_import_processing_options
+from docxtool.document.pipeline.document_pipeline import run_document_pipeline
+from docxtool.document.pipeline.paragraph_materialization import (
+    materialize_non_text_item as _materialize_non_text_item,
+    materialize_text_paragraph as _materialize_text_paragraph,
+    next_text_and_features as _next_text_and_features,
 )
 from docxtool.document.normalization.tail import (
     normalize_tail_structures as _normalize_tail_structures,
@@ -87,6 +92,9 @@ from docxtool.document.importing.reader import (
 )
 from docxtool.document.importing.relationships import repair_broken_rels as _repair_broken_rels
 from docxtool.document.recognition import apply_recognition
+from docxtool.document.recognition.core_adapter import (
+    apply_core_classification as _recognition_apply_core_classification,
+)
 from docxtool.document.recognition.attachment import (
     can_start_attachment_note as _recognition_can_start_attachment_note,
     is_attachment_boundary_text as _recognition_is_attachment_boundary_text,
@@ -140,6 +148,12 @@ from docxtool.document.recognition.tail_structure import (
 )
 from docxtool.document.recognition.version import RECOGNITION_VERSION_TAG
 from docxtool.document.recognition.legacy import DetectionContext, ScoreBoard, ScoreDetail
+from docxtool.document.recognition.legacy.classifier import (
+    classify_legacy_paragraph as _legacy_classify_paragraph,
+)
+from docxtool.document.recognition.legacy.pipeline import (
+    advance_legacy_context as _advance_legacy_context,
+)
 from docxtool.document.segmentation.source_locator import (
     apply_segment_format_features as _apply_segment_format_features,
     inherit_source_locator as _inherit_source_locator,
@@ -176,6 +190,28 @@ from docxtool.document.segmentation.soft_breaks import (
 from docxtool.document.style_config import (
     logger, ImportError,
     StyleRule,
+)
+
+# The extracted document pipeline reads these names from this module so legacy
+# monkeypatch paths still intercept the real execution. Keep the registry
+# explicit; static analysis cannot infer attribute reads through the module.
+_PIPELINE_COMPATIBILITY_HOOKS = (
+    resolve_import_processing_options,
+    _materialize_non_text_item,
+    _materialize_text_paragraph,
+    _next_text_and_features,
+    _normalize_tail_structures,
+    _sync_recognition_consistency,
+    _normalization_apply_post_recognition_normalization,
+    _normalization_capture_pre_normalization_snapshot,
+    _open_docx_document,
+    _read_body_blocks,
+    _repair_broken_rels,
+    apply_recognition,
+    RECOGNITION_VERSION_TAG,
+    _advance_legacy_context,
+    _build_logical_lines,
+    _find_last_body_candidate_index,
 )
 
 # ═══════════════════════════════════════════════════════════════
@@ -649,98 +685,35 @@ def detect_paragraph_type(text: str, feats: ParagraphFeatures,
 
     返回 (type_id, meta_patch, prefix)，与原接口完全兼容。
     """
-    ctx.para_index = feats.paragraph_index
-    meta: dict = {}
-    prefix: str = ""
-    from_word_structure = False
-    score_log = []  # 收集各 scorer 得分
-    unbound_object_label = _is_object_caption_text(text)
-
-    # 未紧邻对象的“表1/图2...”不再具备题注语义，应作为正文清理
-    # 直接格式；真正题注已在 raw_blocks 阶段转换为受保护对象。
-    if unbound_object_label:
-        type_id = "body"
-        score_log.append("unbound_object_label:100")
-    elif opening_speech_title := _opening_speech_title_text(text, ctx):
-        # Word's built-in Heading 1 is often pasted onto the first line of a
-        # speech manuscript.  A first-line “在……上的讲话” is a main title,
-        # not the first numbered section.
-        type_id = "title"
-        meta["is_title"] = True
-        if opening_speech_title != text.strip():
-            meta["strip_inferred_speech_numbering"] = True
-        score_log.append("opening_speech_title:100")
-    else:
-        # ── 先检查 Word 样式/多级列表 ──
-        style_tid, style_prefix = _match_style_or_lvl(text, feats)
-        if style_tid:
-            type_id = style_tid
-            prefix = style_prefix
-            from_word_structure = True
-        else:
-            type_id, meta, prefix, score_log = _recognition_select_legacy_scored_type(
-                text,
-                feats,
-                ctx,
-                structure_scorers=_STRUCTURE_SCORERS,
-                mode_scorers=_MODE_SCORERS,
-                fallback_scorers=_FALLBACK_SCORERS,
-                detect_doc_type_func=_detect_doc_type,
-                flow_allows_func=_flow_allows,
-            )
-
-    # ── Repair ──
-    type_id = _repair_heading4_colon(type_id, text, feats, ctx)
-    if not from_word_structure:
-        type_id = _repair_level(type_id, feats, ctx)
-
-    repaired_type_id = _recognition_legacy_repair_ocr_heading(
-        type_id,
+    return _legacy_classify_paragraph(
         text,
-        has_seen_body=ctx.has_seen_body,
-        unbound_object_label=unbound_object_label,
-        looks_like_heading_func=_looks_like_heading,
-    )
-    if repaired_type_id != type_id:
-        type_id = repaired_type_id
-        logger.debug("[修复] OCR 标题升级 chars=%s", len(text))
-
-    # ── 打分日志 ──
-    scores_str = ' → '.join(score_log) if score_log else 'by_style'
-    logger.info("[打分] chars=%s text_sha256=%s | %s → %s", len(text), hashlib.sha256(text.encode("utf-8")).hexdigest()[:12], scores_str, type_id)
-
-    repaired_type_id = _recognition_legacy_repair_heading2_continuation(
-        type_id,
-        text,
-        ctx.prev_type_id,
-        meta,
-    )
-    if repaired_type_id != type_id:
-        type_id = repaired_type_id
-        logger.debug("[修复] heading2 续行 chars=%s", len(text))
-
-    meta = _recognition_enrich_legacy_type_metadata(
-        text,
-        type_id,
         feats,
         ctx,
-        meta,
+        rules,
+        is_object_caption_text_func=_is_object_caption_text,
+        opening_speech_title_text_func=_opening_speech_title_text,
+        match_style_or_level_func=_match_style_or_lvl,
+        select_scored_type_func=_recognition_select_legacy_scored_type,
+        structure_scorers=_STRUCTURE_SCORERS,
+        mode_scorers=_MODE_SCORERS,
+        fallback_scorers=_FALLBACK_SCORERS,
+        detect_doc_type_func=_detect_doc_type,
+        flow_allows_func=_flow_allows,
+        repair_heading4_colon_func=_repair_heading4_colon,
+        repair_level_func=_repair_level,
+        repair_ocr_heading_func=_recognition_legacy_repair_ocr_heading,
+        looks_like_heading_func=_looks_like_heading,
+        repair_heading2_continuation_func=_recognition_legacy_repair_heading2_continuation,
+        enrich_type_metadata_func=_recognition_enrich_legacy_type_metadata,
         heading_has_inline_body_func=_heading_has_inline_body,
         find_numbered_bold_pos_func=_find_numbered_bold_pos,
         colon_bold_match_func=_colon_bold_match,
-        starts_report_heading_or_addressing_func=_recognition_starts_report_heading_or_addressing,
+        starts_report_heading_or_addressing_func=(
+            _recognition_starts_report_heading_or_addressing
+        ),
+        update_context_after_type_func=_recognition_legacy_update_context_after_type,
+        logger=logger,
     )
-
-    _recognition_legacy_update_context_after_type(
-        ctx,
-        type_id,
-        text,
-        meta,
-        detect_doc_type_func=_detect_doc_type,
-    )
-
-    logger.debug(f"[决策] para={ctx.para_index} → {type_id} meta={meta}")
-    return type_id, meta, prefix
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -783,318 +756,18 @@ class DocxImporter:
         except ImportError:
             raise ImportError("请安装 python-docx: pip install python-docx")
 
-        features = features or {}
-        processing_options = features.get("processing", {}) if isinstance(features.get("processing", {}), dict) else {}
-        requested_strategy = str(
-            processing_options.get("strategy")
-            or processing_options.get("mode")
-            or ""
-        ).strip().lower()
-        requested_strategy = {"smart": "structural"}.get(requested_strategy, requested_strategy)
-        if requested_strategy:
-            if requested_strategy not in {"strict", "structural", "normalize"}:
-                raise ImportError("处理模式必须为 strict、smart、structural 或 normalize")
-            processing_strategy = requested_strategy
-        elif "strict_preservation" in processing_options:
-            processing_strategy = "strict" if _feature_bool(
-                processing_options.get("strict_preservation"), strict_preservation
-            ) else "normalize"
-        else:
-            # Preserve the public importer default for library callers.  The
-            # web configuration explicitly selects smart/structural mode.
-            processing_strategy = "strict" if strict_preservation else "normalize"
-        strict_preservation = processing_strategy == "strict"
-        structural_preservation = processing_strategy == "structural"
-        # A numbered heading followed by prose is rendered as title/body
-        # paragraphs. The splitter only permits its first heading boundary;
-        # later font changes inside the body cannot create extra paragraphs.
-        split_inline_heading_body = structural_preservation and _feature_bool(
-            processing_options.get("split_inline_heading_body", True), True
-        )
-        recognition_options = features.get("recognition", {}) if isinstance(features.get("recognition", {}), dict) else {}
-        recognition_mode = str(recognition_options.get("mode", recognition_mode) or recognition_mode).lower()
-        if recognition_mode not in {"legacy", "shadow", "authoritative"}:
-            raise ImportError("识别模式必须为 legacy、shadow 或 authoritative")
-        punctuation_options = features.get("punctuation", {}) if isinstance(features.get("punctuation", {}), dict) else {}
-        numbering_options = features.get("numbering", {}) if isinstance(features.get("numbering", {}), dict) else {}
-        numbering_enabled = _feature_bool(numbering_options.get("enabled", False), False)
-        new_punctuation_enabled = _feature_bool(punctuation_options.get("enabled", False), False)
-        punctuation_mode = str(punctuation_options.get("mode", "safe") or "safe")
-        punctuation_enabled = _feature_bool(features.get("punctuation_enabled", True), True)
-        punctuation_requested = new_punctuation_enabled or punctuation_enabled
-
-        def normalize_text(text: str) -> str:
-            if not text:
-                return text
-            if strict_preservation:
-                return text
-            if structural_preservation and not punctuation_requested:
-                return text
-            if new_punctuation_enabled:
-                from docxtool.document.engine.punctuation import normalize_punctuation_text
-
-                return normalize_punctuation_text(_normalize_text(text), mode=punctuation_mode)
-            if punctuation_enabled:
-                return _to_chinese_punctuation(_normalize_quotes(_normalize_text(text)))
-            return text
-
-        def normalize_tokens(tokens: List[InlineToken]) -> List[InlineToken]:
-            if strict_preservation:
-                return list(tokens or [])
-            if structural_preservation and not punctuation_requested:
-                return list(tokens or [])
-            normalized = _normalize_inline_tokens(tokens, punctuation_enabled and not new_punctuation_enabled)
-            if not new_punctuation_enabled:
-                if not punctuation_enabled:
-                    return normalized
-                return [
-                    InlineToken(token.kind, _normalize_text(token.text)) if token.kind == "text" else token
-                    for token in normalized
-                ]
-            return [
-                InlineToken(token.kind, normalize_text(token.text)) if token.kind == "text" else token
-                for token in normalized
-            ]
-
-        # 物理文件打开与关系修复副本清理由 importing.reader 负责；传入
-        # 旧回调，保留 importer 私有入口可被既有调用方和回归测试替换。
-        original_filepath = filepath
-        doc = _open_docx_document(
+        return run_document_pipeline(
             filepath,
-            document_factory=DocxDocument,
-            repair_broken_rels_func=_repair_broken_rels,
-            import_error_type=ImportError,
-            cleanup_warning=logger.warning,
-        )
-
-        data = DocumentData(
-            filepath=original_filepath,
-            strict_preservation=strict_preservation,
-            processing_strategy=processing_strategy,
-            recognition_mode=recognition_mode,
-        )
-        source_visible_texts = [paragraph.text for paragraph in doc.paragraphs if paragraph.text]
-        from docxtool.document.engine.letterhead import detect_letterhead
-
-        data.letterhead_detection = detect_letterhead(doc)
-        protected_letterhead_indexes = set(data.letterhead_detection.protected_body_indexes)
-
-        # 第一步：只提取物理 body 事实；Reader 不处理逻辑边界或类型。
-        raw_blocks = _read_body_blocks(
-            doc,
-            data,
-            strict_preservation=strict_preservation,
-            protected_letterhead_indexes=protected_letterhead_indexes,
-            extract_features_func=extract_features,
-        )
-
-        # 第二步：只按原始 source span 形成逻辑行。结构条件与顺序仍由
-        # 原有 segmentation 规则决定，Importer 随后才开始旧链路和 Recognition。
-        flat_lines = _build_logical_lines(
-            raw_blocks,
-            strict_preservation=strict_preservation,
-            structural_preservation=structural_preservation,
-            split_inline_heading_body_enabled=split_inline_heading_body,
-            normalize_text_func=normalize_text,
-            source_starts_body_region_func=_source_starts_body_region,
-            split_inline_heading_body_spans_func=_split_inline_heading_body_spans,
-            validate_numbered_heading_body_split_func=_validate_numbered_heading_body_split,
-            should_split_structural_line_breaks_func=_should_split_structural_line_breaks,
-            split_structural_tail_after_numbered_heading_func=(
-                _split_structural_tail_after_numbered_heading
-            ),
-            validate_source_span_partition_func=_validate_source_span_partition,
-            detect_numbering_prefix_func=_detect_numbering_prefix,
-            inline_lead_bold_func=_has_inline_lead_bold_transition,
-        )
-
-        ctx = DetectionContext()
-        # 预扫描只生成尾部边界事实，后续最终类型仍由识别链路决定。
-        last_body_idx = _find_last_body_candidate_index(
-            [item[1] if item[0] == "text" else "" for item in flat_lines],
-            is_attachment_start_func=lambda text: bool(re.match(r'^附件', text)),
-            is_sign_date_func=_normalization_is_sign_date_text,
-            is_attachment_item_func=lambda text: bool(re.match(r'^\d+[.．、]', text)),
-            is_attachment_page_mark_func=_is_attachment_page_mark,
-        )
-        for i, item in enumerate(flat_lines):
-            ctx._remaining_has_no_body = (i >= last_body_idx)
-            if item[0] == "table":
-                pd = ParagraphData(text="", type_id="__table__",
-                                   original_text="", features=None,
-                                   meta={"table": item[1]})
-                data.paragraphs.append(pd)
-                continue
-            if item[0] == "paragraph_xml":
-                pd = ParagraphData(text="", type_id="__image__",
-                                   original_text="", features=None,
-                                   meta={"image_xml": item[1]})
-                data.paragraphs.append(pd)
-                continue
-            if item[0] == "protected_paragraph_xml":
-                caption_text = item[1].text
-                pd = ParagraphData(text=caption_text, type_id="__object_caption__",
-                                   original_text=caption_text, features=item[2],
-                                   meta={"paragraph_xml": item[1]})
-                data.paragraphs.append(pd)
-                continue
-            if item[0] == "letterhead_paragraph_xml":
-                pd = ParagraphData(
-                    text="",
-                    type_id="__letterhead__",
-                    original_text="",
-                    features=None,
-                    meta={"paragraph_xml": item[1]},
-                )
-                data.paragraphs.append(pd)
-                continue
-
-            _, line, sub_pf, inline_tokens, sectPr = item
-            next_line = ""
-            next_pf = None
-            for next_item in flat_lines[i + 1:]:
-                if next_item[0] == "text":
-                    next_line = next_item[1]
-                    next_pf = next_item[2]
-                    break
-
-            # 受管版头输出重新处理时，固定主标题样式优先于普通物理特征打分。
-            managed_title = (
-                data.letterhead_detection.status == "managed"
-                and sub_pf.style_name == "Docxtool Title"
-                and not ctx.has_seen_real_body
-            )
-            if managed_title:
-                type_id = "title" if not ctx.title_texts else "title_cont"
-                meta_patch = {"is_title": True} if type_id == "title" else {}
-                prefix = ""
-                clean_text = line
-            else:
-                # 结构检测优先
-                st, sm, sp, ft = detect_structural_type(line, next_line, ctx, sub_pf, next_pf)
-                if st:
-                    sm.pop("numbering", None)
-                    type_id = st
-                    meta_patch = sm
-                    prefix = sp
-                    clean_text = ft
-                    ctx.prev_type_id = st
-                else:
-                    type_id, meta_patch, prefix = detect_paragraph_type(line, sub_pf, ctx, rules)
-                    clean_text = strip_numbering(line, prefix)
-
-            if strict_preservation or structural_preservation:
-                clean_text = line
-                meta_patch = dict(meta_patch or {})
-                meta_patch.pop("numbering", None)
-                if meta_patch.get("strip_inferred_speech_numbering"):
-                    clean_text = _strip_inferred_speech_numbering(line)
-
-            if ctx.attachment_page_mode and type_id == "body":
-                type_id = "attachment_body"
-
-            # 跳级修正
-            if type_id.startswith("heading") and not type_id == "heading1_report":
-                lvl = int(type_id[-1])
-                prev_lvl = ctx.current_level
-                if lvl == getattr(ctx, '_last_detected_lvl', 0):
-                    capped = prev_lvl
-                else:
-                    capped = min(lvl, prev_lvl + 1)
-                if capped != lvl:
-                    type_id = f"heading{capped}"
-                ctx.current_level = capped
-                ctx._last_detected_lvl = lvl
-            elif type_id == "heading1_report":
-                ctx.current_level = 1
-            ctx.prev_type_id = type_id
-
-            # 结构状态跟踪
-            if type_id in ("body", "addressing", "responsibility_line"):
-                ctx.has_seen_real_body = True
-                _record_structural(ctx, "body", clean_text)
-            elif type_id.startswith("heading") or type_id in ("title", "title2"):
-                if meta_patch.get("heading_inline_body"):
-                    ctx.has_seen_real_body = True
-                    _record_structural(ctx, "body", clean_text)
-                else:
-                    _record_structural(ctx, type_id, clean_text)
-            else:
-                _record_structural(ctx, type_id, clean_text)
-            if type_id == "sign_date":
-                ctx.signature_complete = True
-                ctx.attachment_page_mode = False
-
-            if sectPr is not None:
-                meta_patch = dict(meta_patch or {})
-                meta_patch["sectPr"] = sectPr
-            meta_patch = dict(meta_patch or {})
-            meta_patch["legacy_type_id"] = {
-                "value": type_id,
-                "source": "legacy_importer",
-                "recognition_version": RECOGNITION_VERSION_TAG,
-            }
-            pd = ParagraphData(
-                text=clean_text, type_id=type_id,
-                original_text=line, features=sub_pf, meta=meta_patch,
-                inline_tokens=inline_tokens if strict_preservation or clean_text == line else [],
-            )
-            data.paragraphs.append(pd)
-            text_hash = hashlib.sha256(clean_text.encode("utf-8")).hexdigest()[:12]
-            logger.info(
-                "[识别] #%s type=%s chars=%s text_sha256=%s",
-                len(data.paragraphs) - 1,
-                type_id,
-                len(clean_text),
-                text_hash,
-            )
-            # (body_blocks removed — tables/images now use paragraph stream placeholders)
-
-        data.doc_mode = ctx.doc_mode
-        before_normalization = _normalization_capture_pre_normalization_snapshot(
-            data,
-            source_visible_texts,
-        )
-        if strict_preservation:
-            self._record_strict_normalization_suggestions(data)
-        self._apply_core_classification(data, features)
-        from dataclasses import replace
-        from docxtool.document.recognition.config import DEFAULT_CONFIG
-
-        apply_recognition(data, replace(DEFAULT_CONFIG, mode=recognition_mode))
-        _normalization_apply_post_recognition_normalization(
-            data,
             rules,
-            doc.paragraphs,
+            features or {},
             strict_preservation=strict_preservation,
-            structural_preservation=structural_preservation,
-            processing_strategy=processing_strategy,
-            numbering_enabled=numbering_enabled,
-            before_normalization=before_normalization,
-            normalize_tail_structures_func=_normalize_tail_structures,
-            reorder_attachment_note_before_signature_func=(
-                self._reorder_attachment_note_before_signature
-            ),
-            assign_numbering_func=self._assign_numbering,
-            merge_siblings_func=self._merge_siblings,
-            record_applied_normalization_changes_func=(
-                self._record_applied_normalization_changes
-            ),
-            fix_numbering_gaps_func=self._fix_numbering_gaps,
-            strip_auto_numbering_func=self._strip_auto_numbering,
-            sync_recognition_consistency_func=_sync_recognition_consistency,
+            recognition_mode=recognition_mode,
+            importer=self,
+            compatibility=sys.modules[__name__],
+            document_factory=DocxDocument,
+            import_error_type=ImportError,
+            logger=logger,
         )
-        # (old classification loop removed — replaced by flat_lines single pass above)
-
-        logger.info(
-            "[导入] file_sha256=%s paragraphs=%s tables=%s strategy=%s recognition=%s",
-            hashlib.sha256(str(original_filepath).encode("utf-8")).hexdigest()[:12],
-            len(data.paragraphs),
-            len(data.tables),
-            processing_strategy,
-            recognition_mode,
-        )
-        return data
 
     def _record_strict_normalization_suggestions(self, data: DocumentData) -> None:
         """兼容旧私有入口，传入文档数据，记录 strict 模式规范化建议。"""
@@ -1114,41 +787,14 @@ class DocxImporter:
         _normalization_record_applied_normalization_changes(data, before)
 
     def _apply_core_classification(self, data: DocumentData, features: dict) -> None:
-        classification_options = features.get("classification", {}) if isinstance(features.get("classification", {}), dict) else {}
-        if not _feature_bool(classification_options.get("enabled", True), True):
-            return
-        threshold = classification_options.get("minimum_auto_format_confidence", 0.85)
-        try:
-            threshold = float(threshold)
-        except (TypeError, ValueError):
-            threshold = 0.85
-        candidates = []
-        indexes = []
-        for index, paragraph in enumerate(data.paragraphs):
-            if paragraph.type_id.startswith("__"):
-                continue
-            pf = paragraph.features or ParagraphFeatures()
-            candidates.append(
-                SimpleNamespace(
-                    text=paragraph.original_text or paragraph.text,
-                    style_name=pf.style_name,
-                    alignment=pf.alignment,
-                    first_line_indent=pf.first_line_indent,
-                    font_size_pt=pf.font_size_pt,
-                    bold=pf.bold,
-                    native_numbering=bool(pf.numbering_prefix),
-                )
-            )
-            indexes.append(index)
-        if not candidates:
-            return
-        results = classify_paragraphs(candidates, ClassificationOptions(auto_format_threshold=threshold))
-        for paragraph_index, result in zip(indexes, results):
-            meta = dict(data.paragraphs[paragraph_index].meta or {})
-            meta["classification_kind"] = result.kind.value
-            meta["classification_confidence"] = round(result.confidence, 3)
-            meta["classification_auto_format"] = bool(result.auto_format)
-            data.paragraphs[paragraph_index].meta = meta
+        _recognition_apply_core_classification(
+            data,
+            features,
+            feature_bool_func=_feature_bool,
+            classify_paragraphs_func=classify_paragraphs,
+            classification_options_type=ClassificationOptions,
+            paragraph_features_type=ParagraphFeatures,
+        )
 
     def _reorder_attachment_note_before_signature(self, paragraphs: list) -> None:
         """兼容旧私有入口，传入段落列表，按正式尾部顺序原地重排。"""

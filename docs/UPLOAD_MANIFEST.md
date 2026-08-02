@@ -135,7 +135,11 @@ https://github.com/7654321x/docxtool.git
 | `src/docxtool/sdk/` | 面向第三方的只读识别 SDK | 返回脱敏结构计划，不操作宿主文档 |
 | `src/docxtool/sdk/binding.py` | 宿主无关的识别计划绑定 | 对本地段落快照保序验证，不调用 WPS API |
 | `src/docxtool/document/__init__.py` | 文档处理包入口 |
-| `src/docxtool/document/importer.py` | DOCX 结构识别、段落分类、元数据生成 |
+| `src/docxtool/document/importer.py` | DOCX 导入兼容 facade | 保留稳定模型、私有 helper、monkeypatch 路径和薄 `DocxImporter.load` 入口 |
+| `src/docxtool/document/pipeline/__init__.py` | 文档主链包入口 | 导出处理选项和主链入口 |
+| `src/docxtool/document/pipeline/options.py` | Importer 处理策略构建 | 保持 strict、structural、normalize、标点、编号和 token 策略原优先级 |
+| `src/docxtool/document/pipeline/paragraph_materialization.py` | ParagraphData 机械构造 | 保留逻辑流占位对象、source locator、inline token、sectPr 和 Legacy provenance |
+| `src/docxtool/document/pipeline/document_pipeline.py` | 文档主链编排 | 按原顺序调用 importing、segmentation、Legacy/Core、Recognition 和 normalization |
 | `src/docxtool/document/importing/__init__.py` | DOCX 物理导入层包入口 | 标记 importing 模块 |
 | `src/docxtool/document/importing/features.py` | 段落物理格式特征提取 | 只读取文本 locator、run 字体字号、加粗比例、缩进、图片和 Word 编号事实，不判断最终类型 |
 | `src/docxtool/document/importing/images.py` | 图片和题注物理事实判断 | 只读取段落文本、样式和 OOXML 图片尺寸，不判断最终类型 |
@@ -159,6 +163,7 @@ https://github.com/7654321x/docxtool.git
 | `src/docxtool/document/classifier.py` | 文档模式和段落结构分类 |
 | `src/docxtool/document/letterhead_config.py` | 版头配置归一化和安全校验 |
 | `src/docxtool/document/recognition/` | 候选、Beam 解码、诊断、验证和兼容映射 |
+| `src/docxtool/document/recognition/core_adapter.py` | Core classifier 输入适配 | 只转换已导入段落并回写既有分类诊断 metadata |
 | `src/docxtool/document/recognition/attachment.py` | 附件结构形态和状态证据 | 只判断附件说明、续项、附件边界和附件说明起点许可，不写最终类型 |
 | `src/docxtool/document/recognition/colon.py` | 共享冒号存在判断、标签加粗位置和结构分析 | 只输出称呼、机构标签、键值和解释性正文证据，不直接定型 |
 | `src/docxtool/document/recognition/document_mode.py` | 文种覆盖层和报告标题证据 | 只判断旧 scorer 兼容文种、标题关键词、报告回顾标题、正文小标题、名词解释和称呼候选分，不写最终类型 |
@@ -172,6 +177,8 @@ https://github.com/7654321x/docxtool.git
 | `src/docxtool/document/recognition/state.py` | 旧 Flow 状态约束、标题层级修复和上下文推进 | 只消费已选最终类型来记录旧上下文状态，不重新打分或改写最终类型 |
 | `src/docxtool/document/recognition/tail_structure.py` | 旧尾部固定结构状态机兼容入口 | 通过回调接收附件、落款、日期、附件页和规范化事实，返回旧 importer 兼容结构结果 |
 | `src/docxtool/document/recognition/legacy/__init__.py` | 旧识别兼容包入口 | 暴露 legacy 评分数据模型 |
+| `src/docxtool/document/recognition/legacy/classifier.py` | Legacy 单段分类编排 | 按原顺序调度 scorer、Flow、Repair、metadata 和上下文回调 |
+| `src/docxtool/document/recognition/legacy/pipeline.py` | Legacy stream 上下文推进 | 保留标题层级封顶和结构状态更新顺序 |
 | `src/docxtool/document/recognition/legacy/scoring.py` | 旧 importer 评分数据模型 | 保存 ScoreBoard、ScoreDetail 和 DetectionContext，不实现新识别规则 |
 | `src/docxtool/document/style_config.py` | 样式规则、页面设置、日志配置、默认配置读取 |
 | `src/docxtool/resources/__init__.py` | 打包资源包入口 |

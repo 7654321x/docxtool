@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.6 - 2026-08-02
+
+- Completed Phase A-3 Module 1 by reducing `DocxImporter.load` to a compatibility facade and moving the unchanged document call chain into focused pipeline modules.
+- Extracted processing options, paragraph materialization, Legacy stream orchestration, and Core classifier adaptation while preserving old imports and monkeypatch paths.
+- Verified 202 directly related tests and 18 strict, structural, and normalize migration snapshots with no structural, recognition, package, or relationship differences.
+
 ## 2.5 - 2026-08-02
 
 - Completed the Phase A mechanical importing and segmentation responsibility boundaries while preserving the existing importer and pipeline compatibility facades.
