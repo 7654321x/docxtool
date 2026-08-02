@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from docxtool.document.recognition.signature import (
+    blocks_independent_sign_date,
     has_signature_org_shape,
+    is_body_tail_context,
+    is_signature_org_candidate,
     starts_with_signature_negative,
 )
 
@@ -26,3 +29,47 @@ def test_signature_org_shape_respects_length_boundary() -> None:
     text = "测试市人民政府办公室"
     assert has_signature_org_shape(text, max_length=20)
     assert not has_signature_org_shape(text, max_length=4)
+
+
+def test_signature_body_tail_context_uses_final_structural_type() -> None:
+    """尾部落款上下文只依赖最终结构类型，返回是否可继续识别尾部结构。"""
+    assert is_body_tail_context("body")
+    assert is_body_tail_context("attachment_note_item")
+    assert not is_body_tail_context("title")
+    assert not is_body_tail_context(None)
+
+
+def test_blocks_independent_sign_date_keeps_key_value_exception() -> None:
+    """独立日期阻断判断接收上一结构文本，返回是否阻止日期单独成尾部日期。"""
+    assert not blocks_independent_sign_date("")
+    assert not blocks_independent_sign_date("责任单位：办公室")
+    assert blocks_independent_sign_date("以上情况请审阅")
+    assert blocks_independent_sign_date("联系人：张三")
+
+
+def test_signature_org_candidate_requires_body_context_and_next_date() -> None:
+    """落款候选判断接收当前行和上下文事实，返回是否具备落款单位候选资格。"""
+    assert is_signature_org_candidate(
+        "测试市人民政府办公室",
+        "2025年10月15日",
+        last_structural_type="body",
+        is_attachment_note=False,
+        current_is_sign_date=False,
+        next_is_sign_date=True,
+    )
+    assert not is_signature_org_candidate(
+        "测试市人民政府办公室",
+        "下一段正文",
+        last_structural_type="body",
+        is_attachment_note=False,
+        current_is_sign_date=False,
+        next_is_sign_date=False,
+    )
+    assert not is_signature_org_candidate(
+        "测试市人民政府办公室",
+        "2025年10月15日",
+        last_structural_type="title",
+        is_attachment_note=False,
+        current_is_sign_date=False,
+        next_is_sign_date=True,
+    )

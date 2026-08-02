@@ -6,6 +6,7 @@ import re
 from typing import Any, Callable, Optional, Tuple
 
 from docxtool.document.style_config import NB_FIXED, NB_SUFFIXES
+from docxtool.document.recognition.document_mode import starts_report_heading
 
 HEADING_PATTERNS = (
     (re.compile(r'^[一二三四五六七八九十百]+[、.．]+'), "heading1"),
@@ -84,3 +85,26 @@ def match_style_or_level(
     if prefix.startswith("@style_"):
         return prefix[7:], ""
     return None, None
+
+
+def legacy_numbered_heading_score(
+    text: str,
+    type_id: str | None,
+    prefix: str | None,
+    *,
+    document_mode: str,
+    contains_colon: bool,
+) -> int:
+    """传入编号类型、前缀、文种和冒号事实，返回旧 importer 编号标题候选分。"""
+    if type_id == "heading1":
+        body = (text or "")[len(prefix or ""):].lstrip() if prefix else (text or "")
+        if document_mode == "REPORT" and starts_report_heading(body):
+            return 0
+        return 100
+    if type_id == "heading2":
+        return 100
+    if type_id == "heading3":
+        return 90
+    if type_id == "heading4":
+        return 0 if contains_colon else 90
+    return 0

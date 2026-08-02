@@ -3,6 +3,7 @@ from __future__ import annotations
 from docxtool.document.models import ParagraphFeatures
 from docxtool.document.recognition.numbering import (
     find_numbered_bold_pos,
+    legacy_numbered_heading_score,
     looks_like_damaged_heading,
     match_numbering,
     match_style_or_level,
@@ -56,3 +57,18 @@ def test_find_numbered_bold_pos_and_damaged_heading_are_structure_facts() -> Non
     assert find_numbered_bold_pos("普通正文", normalize_text=_normalize_text) == -1
     assert looks_like_damaged_heading("一，加强领导")
     assert not looks_like_damaged_heading("一是加强领导。后接正文")
+
+
+def test_legacy_numbered_heading_score_preserves_importer_scores() -> None:
+    """编号标题评分接收编号类型和文种事实，返回旧 importer 候选分。"""
+    assert legacy_numbered_heading_score("一、工作安排", "heading1", "一、", document_mode="NORMAL", contains_colon=False) == 100
+    assert legacy_numbered_heading_score("（一）工作安排", "heading2", "（一）", document_mode="NORMAL", contains_colon=False) == 100
+    assert legacy_numbered_heading_score("1.工作安排", "heading3", "1.", document_mode="NORMAL", contains_colon=False) == 90
+    assert legacy_numbered_heading_score("（1）工作安排", "heading4", "（1）", document_mode="NORMAL", contains_colon=False) == 90
+
+
+def test_legacy_numbered_heading_score_keeps_report_and_colon_exceptions() -> None:
+    """编号标题评分接收 REPORT 和冒号事实，返回回顾类避让或四级降级结果。"""
+    assert legacy_numbered_heading_score("一、一年来。正文", "heading1", "一、", document_mode="REPORT", contains_colon=False) == 0
+    assert legacy_numbered_heading_score("（1）责任单位：办公室", "heading4", "（1）", document_mode="NORMAL", contains_colon=True) == 0
+    assert legacy_numbered_heading_score("普通正文", None, None, document_mode="NORMAL", contains_colon=False) == 0

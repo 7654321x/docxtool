@@ -3,8 +3,8 @@
 职责边界：
   - 按 Word body XML 顺序提取段落/表格/图片段落
   - 标点规范化（引号/括号/英文标点→中文）
-  - 19 步 scorer 优先级的段落分类
-  - FLOW 状态机控制层级跳转
+  - 兼容调用旧 scorer 优先级的段落分类
+  - 兼容转发 Recognition 层旧 Flow 状态约束
   - 附件/落款/日期固定结构识别（正文→附件说明→落款→日期→附件页）
   - 编号分配 + 同级合并 + 连续性修复
   - 不负责排版渲染（由 engine.py 负责）
@@ -88,19 +88,45 @@ from docxtool.document.recognition.colon import (
     contains_colon as _recognition_contains_colon,
     is_standalone_addressing_text,
 )
+from docxtool.document.recognition.document_mode import (
+    detect_legacy_doc_type as _recognition_detect_legacy_doc_type,
+    has_title_keyword as _recognition_has_title_keyword,
+    legacy_glossary_item_score as _recognition_legacy_glossary_item_score,
+    legacy_glossary_title_score as _recognition_legacy_glossary_title_score,
+    legacy_heading_addressing_score as _recognition_legacy_heading_addressing_score,
+    legacy_report_addressing_score as _recognition_legacy_report_addressing_score,
+    legacy_report_heading_score as _recognition_legacy_report_heading_score,
+    legacy_title2_score as _recognition_legacy_title2_score,
+    starts_report_heading_or_addressing as _recognition_starts_report_heading_or_addressing,
+)
+from docxtool.document.recognition.front_matter import (
+    legacy_author_line_score as _recognition_legacy_author_line_score,
+    legacy_date_line_score as _recognition_legacy_date_line_score,
+    legacy_role_name_score as _recognition_legacy_role_name_score,
+    legacy_title_cont_score as _recognition_legacy_title_cont_score,
+    legacy_title_score as _recognition_legacy_title_score,
+)
 from docxtool.document.recognition.opening_speech import (
     opening_speech_title_text as _recognition_opening_speech_title_text,
     strip_inferred_speech_numbering as _recognition_strip_inferred_speech_numbering,
 )
 from docxtool.document.recognition.numbering import (
     find_numbered_bold_pos as _recognition_find_numbered_bold_pos,
+    legacy_numbered_heading_score as _recognition_legacy_numbered_heading_score,
     looks_like_damaged_heading as _recognition_looks_like_damaged_heading,
     match_numbering as _recognition_match_numbering,
     match_style_or_level as _recognition_match_style_or_level,
 )
 from docxtool.document.recognition.signature import (
+    blocks_independent_sign_date as _recognition_blocks_independent_sign_date,
     has_signature_org_shape as _recognition_has_signature_org_shape,
-    starts_with_signature_negative as _recognition_starts_with_signature_negative,
+    is_body_tail_context as _recognition_is_body_tail_context,
+    is_signature_org_candidate as _recognition_is_signature_org_candidate,
+)
+from docxtool.document.recognition.state import (
+    legacy_flow_allows as _recognition_legacy_flow_allows,
+    legacy_repair_heading4_colon as _recognition_legacy_repair_heading4_colon,
+    legacy_repair_heading_level as _recognition_legacy_repair_heading_level,
 )
 from docxtool.document.recognition.version import RECOGNITION_VERSION_TAG
 from docxtool.document.recognition.legacy import DetectionContext, ScoreBoard, ScoreDetail
@@ -323,11 +349,9 @@ def _detect_numbering_prefix(text: str) -> str:
 # ═══════════════════════════════════════════════════════════════
 
 # ── 附件 / 落款 结构事实 ──
-_REPORT_HEADING_STARTS = ("一年来", "五年来")
 def _is_body_context(ctx) -> bool:
     """判断识别上下文是否已经处在正文或正文后结构中。"""
-    return ctx.last_structural_type in ("body", "addressing",
-        "attachment_note", "attachment_note_item", "attachment_body")
+    return _recognition_is_body_tail_context(ctx.last_structural_type)
 
 def _cn2int(s: str):
     """兼容旧私有入口，传入数字文本，返回整数或 None。"""
@@ -365,31 +389,19 @@ def _record_structural(ctx, type_id: str, text: str) -> None:
 
 def _blocks_independent_sign_date(ctx) -> bool:
     """判断上一结构文本是否阻止当前日期作为独立尾部日期。"""
-    prev = (ctx.last_structural_text or "").strip()
-    if not prev:
-        return False
-    if prev.replace(" ", "").replace("\u3000", "").startswith("责任单位："):
-        return False
-    if _recognition_starts_with_signature_negative(prev):
-        return True
-    return _contains_colon(prev)
+    return _recognition_blocks_independent_sign_date(ctx.last_structural_text)
 
 def _looks_like_sign_org(text: str, next_text: str, ctx) -> bool:
     """综合上下文、下一段日期和机构形态判断落款单位候选。"""
     t = (text or "").strip()
-    if not t or len(t) > 30:
-        return False
-    if _recognition_starts_with_signature_negative(t):
-        return False
-    if any(c in t for c in ("。","；",";","：",":")):
-        return False
-    if _recognition_match_attachment_note(t) or _normalization_is_sign_date_text(t):
-        return False
-    if not _is_body_context(ctx):
-        return False
-    if not _normalization_is_sign_date_text(next_text or ""):
-        return False
-    return _recognition_has_signature_org_shape(t, max_length=30)
+    return _recognition_is_signature_org_candidate(
+        t,
+        next_text,
+        last_structural_type=ctx.last_structural_type,
+        is_attachment_note=bool(_recognition_match_attachment_note(t)),
+        current_is_sign_date=_normalization_is_sign_date_text(t),
+        next_is_sign_date=_normalization_is_sign_date_text(next_text or ""),
+    )
 
 def _heading_has_inline_body(text: str) -> bool:
     """兼容旧私有入口，传入标题候选文本，返回是否粘连正文。"""
@@ -685,98 +697,53 @@ def _match_style_or_lvl(text: str, feats):
 
 def _score_01_title(text: str, feats, ctx) -> Tuple[int, dict, str]:
     """① title（方正小标宋 二号 居中）：首个可分类正文段 + 无编号无冒号。"""
-    if ctx.has_seen_body:
-        return 0, {}, ""
-    # 已识别版头、前导空段和受保护对象不属于正文分类序列。版头后的
-    # 首个可分类文本仍应作为公文标题候选。
-    if ctx.prev_type_id:
-        return 0, {}, ""
-    # 含文种关键词放宽到 60 字
-    _TITLE_KW = '对照检查|述职报告|工作总结|工作计划|实施方案|提纲|发言稿|主持词|致辞|讲话稿|汇报材料|调研报告'
-    max_len = 60 if re.search(_TITLE_KW, text) else 40
-    if len(text) >= max_len and (len(text) > 100 or re.search(r'[。！？；]', text)):
-        return 0, {}, ""
-    if _contains_colon(text):
-        return 0, {}, ""
     tid, _ = _match_numbering(text)
-    if tid:
-        return 0, {}, ""
-    if text.startswith('（'):
-        return 0, {}, ""
-    return 100, {"is_title": True}, ""
+    score = _recognition_legacy_title_score(
+        text,
+        ctx.prev_type_id,
+        has_seen_body=ctx.has_seen_body,
+        contains_colon=_contains_colon(text),
+        has_numbering=bool(tid),
+    )
+    return (score, {"is_title": True}, "") if score else (0, {}, "")
 
 
 def _score_02_title_cont(text: str, feats, ctx) -> Tuple[int, dict, str]:
     """② title续行：头部区域内 + 短行 + 无特征，兜底为标题续行。"""
-    if ctx.has_seen_body:
-        return 0, {}, ""
-    # 上段是标题/日期/作者时，短行可能是标题续行（role_name 之后不再续）
-    if ctx.prev_type_id not in ("title", "title_cont", "date_line", "author_line"):
-        return 0, {}, ""
-    if len(text) >= 40:
-        return 0, {}, ""
-    if re.search(r'[。！？；]$', text):
-        return 0, {}, ""
-    if _contains_colon(text):
-        return 0, {}, ""
     tid, _ = _match_numbering(text)
-    if tid:
-        return 0, {}, ""
-    if text.startswith('（'):
-        return 0, {}, ""
-    if re.search(r'\S\s{2,}\S', text):  # 含连续空格 → 留给职务人名
-        return 0, {}, ""
-    # 含文种关键词 → 必然是标题（如 "对照检查材料"），不避让 date_line
-    _TITLE_KW = '对照检查|述职报告|工作总结|工作计划|实施方案|提纲|发言稿|主持词|致辞|讲话稿|汇报材料|调研报告'
-    if re.search(_TITLE_KW, text):
-        return 90, {}, ""
-    # 含年份或日期特征 → 留给 date_line（但以上文种关键词优先）
-    if re.search(r'\d{4}年度', text):
-        return 90, {}, ""
-    if re.search(r'\d{4}年', text):
-        return 0, {}, ""
-    return 90, {}, ""
+    score = _recognition_legacy_title_cont_score(
+        text,
+        ctx.prev_type_id,
+        has_seen_body=ctx.has_seen_body,
+        contains_colon=_contains_colon(text),
+        has_numbering=bool(tid),
+    )
+    return (score, {}, "") if score else (0, {}, "")
 
 
 def _score_03_date_line(text: str, feats, ctx) -> Tuple[int, dict, str]:
     """③ 日期行（楷体 居中）：上段 title/续行/署名 + 括号开头或含年份 + <50字。"""
-    if ctx.has_seen_body:
-        return 0, {}, ""
-    if ctx.prev_type_id not in ("title", "title_cont", "role_name", "author_line"):
-        return 0, {}, ""
     tid, _ = _match_numbering(text)
-    if tid:
-        return 0, {}, ""
-    if len(text) >= 50:  # 长段落如"按照《中共四川省纪委...》"不是日期行
-        return 0, {}, ""
-    # 含文种关键词 → 不是日期行，是标题（如 "2025年度民主生活会对照检查材料"）
-    _TITLE_KW = '对照检查|述职报告|工作总结|工作计划|实施方案|提纲|发言稿|主持词|致辞|讲话稿|汇报材料|调研报告'
-    if re.search(_TITLE_KW, text):
-        return 0, {}, ""
-    is_date = text.startswith('（') or re.search(r'\d{4}年', text)
-    if not is_date:
-        return 0, {}, ""
-    return 85, {}, ""
+    score = _recognition_legacy_date_line_score(
+        text,
+        ctx.prev_type_id,
+        has_seen_body=ctx.has_seen_body,
+        has_numbering=bool(tid),
+    )
+    return (score, {}, "") if score else (0, {}, "")
 
 
 def _score_04_author_line(text: str, feats, ctx) -> Tuple[int, dict, str]:
     """④ 署名行（楷体 加粗 居中）：上段是日期行 + <20字 + 无编号无冒号 + 无连续空格。"""
-    if ctx.has_seen_body:
-        return 0, {}, ""
-    if ctx.prev_type_id != "date_line":  # 仅在日期行之后
-        return 0, {}, ""
-    if len(text) >= 20:
-        return 0, {}, ""
-    if _contains_colon(text):
-        return 0, {}, ""
     tid, _ = _match_numbering(text)
-    if tid:
-        return 0, {}, ""
-    if text.startswith(('（', *_REPORT_HEADING_STARTS, '各位委员', '各位同志')):
-        return 0, {}, ""
-    if re.search(r'\S\s{2,}\S', text):  # 含连续空格 → 留给职务人名
-        return 0, {}, ""
-    return 80, {}, ""
+    score = _recognition_legacy_author_line_score(
+        text,
+        ctx.prev_type_id,
+        has_seen_body=ctx.has_seen_body,
+        contains_colon=_contains_colon(text),
+        has_numbering=bool(tid),
+    )
+    return (score, {}, "") if score else (0, {}, "")
 
 
 def _score_05_role_name(text: str, feats, ctx) -> Tuple[int, dict, str]:
@@ -785,177 +752,123 @@ def _score_05_role_name(text: str, feats, ctx) -> Tuple[int, dict, str]:
         return 0, {}, ""
     if ctx.prev_type_id not in ("title", "title_cont", "date_line", "author_line"):
         return 0, {}, ""
-    role_name_match = re.fullmatch(r"[\u4e00-\u9fff、，,·]{2,28}\s{2,}[\u4e00-\u9fff·]{2,6}", text)
-    role_keyword_match = re.fullmatch(
-        r"[\u4e00-\u9fff、，,·]{2,28}\s+[\u4e00-\u9fff·]{2,6}",
-        text,
-    )
-    if len(text) >= 20 and not role_name_match:
-        return 0, {}, ""
-    if _contains_colon(text):
-        return 0, {}, ""
-    # 含连续空格 → 署名（如 "韩 双 林"）
-    if role_name_match or re.search(r'\S\s{2,}\S', text):
-        return 80, {}, ""
-    # 含职务关键词 → 署名/职务行
-    _ROLE_KW = ('局长|主任|书记|主席|部长|处长|科长|司长|厅长|市长|县长'
-                '|区长|镇长|乡长|院长|校长|政委|总工|组长|队长|秘书长'
-                '|委员|常委|召集人|负责人|联系人|审定人|审核人|签发人')
-    if re.search(_ROLE_KW, text) and role_keyword_match:
-        return 110, {}, ""
-    if re.search(_ROLE_KW, text) and not re.search(r"\s", text):
-        prev_title = ctx.title_texts[-1] if ctx.title_texts else ""
-        if re.search(r"发言|讲话|致辞|主持词", prev_title):
-            return 95, {}, ""
-        return 80, {}, ""
-    # 上段标题含文种关键词（汇报/总结/方案/报告）→ 当前短行大概率是署名
-    _DOC_TYPE_KW = ('对照检查|述职报告|工作总结|工作计划|实施方案|提纲|发言稿'
-                     '|主持词|致辞|讲话稿|汇报材料|调研报告'
-                     '|汇报|总结|方案|报告|要点|计划|规划|意见|通知|通报'
-                     '|请示|批复|函|纪要|公报|条例|规定|办法|细则')
     prev_title = ctx.title_texts[-1] if ctx.title_texts else ""
-    # 发言/讲话类材料常见头部为“标题 → 姓名 → 日期”，姓名通常是 2-4 个中文字符。
-    if (re.search(r'发言|讲话|致辞|主持词', prev_title)
-            and re.fullmatch(r'[\u4e00-\u9fff]{2,6}', text)):
-        return 92, {}, ""
-    # Some meeting manuscripts use a combined “职务、职务姓名” line rather
-    # than a bare name.  It must outrank title continuation before the next
-    # parenthesized meeting date is classified.
-    if re.search(_DOC_TYPE_KW, prev_title) and len(text) < 20 and not _contains_colon(text):
-        return 75, {}, ""
-    return 0, {}, ""
+    score = _recognition_legacy_role_name_score(text, prev_title, contains_colon=_contains_colon(text))
+    return (score, {}, "") if score else (0, {}, "")
 
 
 def _score_06_heading1_cn(text: str, feats, ctx) -> Tuple[int, dict, str]:
     """⑥ heading1（黑体 左对齐 有编号）：^一、~^二十、，但跳过报告模式的回顾类标题。"""
     tid, prefix = _match_numbering(text)
-    if tid != "heading1":
-        return 0, {}, ""
-    # REPORT 模式：编号后紧跟回顾类标题 → 留给 heading1_report 处理（无编号）
     mode = ctx.doc_mode or _detect_doc_type(ctx)
-    if mode == "REPORT":
-        stripped = text[len(prefix):].lstrip()
-        if stripped.startswith(_REPORT_HEADING_STARTS):
-            return 0, {}, ""
-    return 100, {}, prefix
+    score = _recognition_legacy_numbered_heading_score(
+        text,
+        tid,
+        prefix,
+        document_mode=mode,
+        contains_colon=_contains_colon(text),
+    )
+    return (score, {}, prefix) if score and tid == "heading1" else (0, {}, "")
 
 
 def _score_07_heading2_cn(text: str, feats, ctx) -> Tuple[int, dict, str]:
     """⑦ heading2（楷体 加粗 左对齐）：^（一）~^（二十）"""
     tid, prefix = _match_numbering(text)
-    if tid != "heading2":
-        return 0, {}, ""
-    return 100, {}, prefix
+    score = _recognition_legacy_numbered_heading_score(
+        text,
+        tid,
+        prefix,
+        document_mode=ctx.doc_mode or _detect_doc_type(ctx),
+        contains_colon=_contains_colon(text),
+    )
+    return (score, {}, prefix) if score and tid == "heading2" else (0, {}, "")
 
 
 def _score_08_heading3_digit(text: str, feats, ctx) -> Tuple[int, dict, str]:
     """⑧ heading3（仿宋 左对齐）：^1.~"""
     tid, prefix = _match_numbering(text)
-    if tid != "heading3":
-        return 0, {}, ""
-    return 90, {}, prefix
+    score = _recognition_legacy_numbered_heading_score(
+        text,
+        tid,
+        prefix,
+        document_mode=ctx.doc_mode or _detect_doc_type(ctx),
+        contains_colon=_contains_colon(text),
+    )
+    return (score, {}, prefix) if score and tid == "heading3" else (0, {}, "")
 
 
 def _score_09_heading4_digit(text: str, feats, ctx) -> Tuple[int, dict, str]:
     """⑨ heading4（仿宋 左对齐 无冒号）：^（1）~"""
     tid, prefix = _match_numbering(text)
-    if tid != "heading4":
-        return 0, {}, ""
-    if _contains_colon(text):
-        return 0, {}, ""
-    return 90, {}, prefix
+    score = _recognition_legacy_numbered_heading_score(
+        text,
+        tid,
+        prefix,
+        document_mode=ctx.doc_mode or _detect_doc_type(ctx),
+        contains_colon=_contains_colon(text),
+    )
+    return (score, {}, prefix) if score and tid == "heading4" else (0, {}, "")
 
 
 def _score_10_heading1_report(text: str, feats, ctx) -> Tuple[int, dict, str]:
     """⑩ heading1 报告回顾类标题（黑体 左对齐）：段首或编号后接"一年来/五年来"。"""
     # 可能带编号前缀如"一、 一年来" / "一、 五年来"
     tid, prefix = _match_numbering(text)
-    body = text[len(prefix):].lstrip() if prefix else text
-    if not body.startswith(_REPORT_HEADING_STARTS):
+    score, should_split = _recognition_legacy_report_heading_score(text, prefix)
+    if not score:
         return 0, {}, ""
-    # 拆句号：标题部分 + body 续文（引擎侧换行渲染）
-    period = text.find('。')
-    heading_part = text[:period] if period > 0 else text
-    if len(heading_part) > 50:  # 标题部分过长 → 回退为 body
-        return 0, {}, ""
-    return 95, {"heading1_report_split": period > 0}, prefix if prefix else ""
+    return score, {"heading1_report_split": should_split}, prefix if prefix else ""
 
 
 def _score_11_title2(text: str, feats, ctx) -> Tuple[int, dict, str]:
     """⑪ title2（黑体 居中）：has_body(或 REPORT 模式) + <28字 + 非报告回顾/称呼 + 无冒号 + 无编号 + 无句号。"""
     doc_mode = ctx.doc_mode or _detect_doc_type(ctx)
-    if not ctx.has_seen_body and doc_mode != "REPORT":
-        return 0, {}, ""
-    if len(text) >= 28:
-        return 0, {}, ""
-    if _contains_colon(text):
-        return 0, {}, ""
-    if text.startswith((*_REPORT_HEADING_STARTS, '各位委员', '各位同志')):
-        return 0, {}, ""
     tid, _ = _match_numbering(text)
-    if tid:
-        return 0, {}, ""
-    # date_line 之后 → 留给 author_line
-    if ctx.prev_type_id == "date_line":
-        return 0, {}, ""
-    # 含句号 → 这是正文句子，不是标题
-    if '。' in text:
-        return 0, {}, ""
-    # "名词解释" → glossary_title
-    if '名词解释' in text or '注释' in text:
-        return 95, {}, ""
-    return 95, {}, ""
+    score = _recognition_legacy_title2_score(
+        text,
+        document_mode=doc_mode,
+        has_seen_body=ctx.has_seen_body,
+        previous_type=ctx.prev_type_id,
+        contains_colon=_contains_colon(text),
+        has_numbering=bool(tid),
+    )
+    return (score, {}, "") if score else (0, {}, "")
 
 
 def _score_glossary_title(text: str, feats, ctx) -> Tuple[int, dict, str]:
     """glossary_title（方正小标宋 二号 居中）：title2 命中且含"名词解释"。"""
     score, m, p = _score_11_title2(text, feats, ctx)
-    if score > 0 and ('名词解释' in text or '注释' in text):
-        return score, m, p
-    return 0, {}, ""
+    glossary_score = _recognition_legacy_glossary_title_score(text, title2_score=score)
+    return (glossary_score, m, p) if glossary_score else (0, {}, "")
 
 
 def _score_glossary_item(text: str, feats, ctx) -> Tuple[int, dict, str]:
     """glossary_item：glossary_mode 下含冒号段落 → 自动编号 + 关键词黑体加粗+正文仿宋。"""
-    if not ctx.glossary_mode:
-        return 0, {}, ""
     # 先检查是否有显式编号（1. / 2. 等）
     tid, prefix = _match_numbering(text)
-    if tid == "heading3":
-        body = text[len(prefix):].lstrip()
-    else:
-        # 无显式编号：只要含冒号且不是极短文本，就认定为 glossary_item
-        if not _contains_colon(text) or len(text) < 4:
-            return 0, {}, ""
-        prefix = ""  # 自动编号，不加 prefix
-        body = text
-    # 找到冒号位置
-    cp = -1
-    for c in ('：', ':'):
-        cp = body.find(c)
-        if cp > 0:
-            break
-    return 90, {"glossary_item": True, "colon_pos": cp if cp > 0 else -1}, prefix
+    return _recognition_legacy_glossary_item_score(
+        text,
+        glossary_mode=ctx.glossary_mode,
+        numbering_type=tid,
+        prefix=prefix,
+        contains_colon=_contains_colon(text),
+    )
 
 
 def _score_12_addressing_report(text: str, feats, ctx) -> Tuple[int, dict, str]:
     """⑫ addressing 报告"各位委员"（仿宋 两端对齐 缩进2字）。仅匹配短句。"""
-    if not text.startswith(("各位委员", "各位同志")):
-        return 0, {}, ""
-    if len(text) > 25:  # 长段如"各位委员...一年来..."是正文，不是纯称呼
-        return 0, {}, ""
-    return 120, {"no_indent": False}, ""
+    score = _recognition_legacy_report_addressing_score(text)
+    return (score, {"no_indent": False}, "") if score else (0, {}, "")
 
 
 def _score_13_addressing_check(text: str, feats, ctx) -> Tuple[int, dict, str]:
     """⑬ addressing 对照检查主送（仿宋 左对齐 0缩进）：heading后第一段 + 冒号结尾。"""
-    if ctx.has_seen_real_body:
-        return 0, {}, ""
-    if not ctx.prev_type_id.startswith("heading"):
-        return 0, {}, ""
-    if not text.rstrip().endswith(("：", ":")):
-        return 0, {}, ""
-    return 110, {"no_indent": True}, ""
+    score = _recognition_legacy_heading_addressing_score(
+        text,
+        ctx.prev_type_id,
+        has_seen_real_body=ctx.has_seen_real_body,
+    )
+    return (score, {"no_indent": True}, "") if score else (0, {}, "")
 
 
 
@@ -1004,57 +917,16 @@ _FALLBACK_SCORERS: List[Tuple[str, callable]] = [
 
 def _detect_doc_type(ctx) -> str:
     """从头部标题文字检测文种。仅在 has_seen_body 首次变为 True 时调用一次。"""
-    combined = " ".join(ctx.title_texts)
-    if "报告" in combined or "工作回顾" in combined:
-        return "REPORT"
-    return "NORMAL"
+    return _recognition_detect_legacy_doc_type(ctx.title_texts)
 
 
 # ═══════════════════════════════════════════════════════════════
 # Flow 层：显式状态机
 # ═══════════════════════════════════════════════════════════════
 
-# 上段类型 → 允许的下一段类型（None 表示文档开头）
-FLOW = {
-    None:               ["title", "addressing", "heading1", "body"],
-    "title":            ["title_cont", "date_line", "author_line", "role_name", "addressing", "heading1"],
-    "title_cont":       ["title_cont", "date_line", "author_line", "role_name", "addressing", "heading1", "title2"],
-    "date_line":        ["author_line", "addressing", "heading1", "heading2", "title2", "body"],
-    "author_line":      ["addressing", "heading1", "heading2", "title2", "body"],
-    "role_name":        ["date_line", "addressing", "heading1", "heading2", "title2", "body"],
-    "heading1":         ["heading1", "heading2", "heading3", "body", "addressing", "title2"],
-    "heading1_report":  ["heading2", "heading3", "body", "addressing", "title2"],
-    "heading2":         ["heading1", "heading2", "heading3", "heading4", "body", "addressing", "title2", "glossary_title"],
-    "heading3":         ["heading1", "heading2", "heading3", "heading4", "body", "addressing", "title2", "glossary_title"],
-    "heading4":         ["heading1", "heading2", "heading3", "heading4", "body", "addressing", "title2", "glossary_title"],
-    "addressing":       ["heading1", "heading2", "title2", "body"],
-    "title2":           ["heading1", "heading2", "body", "addressing", "title2"],
-    "glossary_title":   ["glossary_item", "body"],
-    "glossary_item":    ["glossary_item", "body", "title2"],
-    "body":             ["heading1", "heading2", "heading3", "heading4", "title2", "glossary_title", "addressing", "body",
-                         "attachment_note", "sign_org"],
-    "attachment_note":  ["attachment_note_item", "sign_org"],
-    "attachment_note_item": ["attachment_note_item", "sign_org"],
-    "attachment_page_mark": ["attachment_title"],
-    "attachment_title": ["attachment_body"],
-    "attachment_body":  ["attachment_body", "attachment_page_mark", "heading1", "heading2", "heading3", "heading4"],
-    "sign_org":         ["sign_date"],
-    "sign_date":        ["attachment_page_mark", "body"],
-}
-
-
 def _flow_allows(candidate: str, ctx) -> bool:
     """候选类型是否被当前上下文允许。"""
-    prev = ctx.prev_type_id if ctx.prev_type_id else None
-    allowed = FLOW.get(prev, [])
-    if not allowed:
-        return True
-    if candidate in allowed:
-        return True
-    # heading1_report 映射到 "heading1"
-    if candidate in ("heading1", "heading1_report") and "heading1" in allowed:
-        return True
-    return False
+    return _recognition_legacy_flow_allows(candidate, ctx.prev_type_id)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1063,26 +935,18 @@ def _flow_allows(candidate: str, ctx) -> bool:
 
 def _repair_level(type_id: str, feats, ctx) -> str:
     """跳级修复：heading1→heading4 不允许，提级为 heading2。"""
-    if not type_id.startswith("heading"):
-        return type_id
-    if type_id == "heading1_report":
-        return type_id  # 报告 heading1 不走跳级修复
-    lvl = int(type_id[-1])
-    expected = ctx.current_level + 1
-    if lvl > expected:
-        capped = f"heading{expected}" if expected <= 4 else type_id
-        if capped != type_id:
-            logger.debug(f"[修复] 跳级 {type_id}→{capped}")
-        return capped
-    return type_id
+    repaired = _recognition_legacy_repair_heading_level(type_id, ctx.current_level)
+    if repaired != type_id:
+        logger.debug(f"[修复] 跳级 {type_id}→{repaired}")
+    return repaired
 
 
 def _repair_heading4_colon(type_id: str, text: str, feats, ctx) -> str:
     """heading4 + 含冒号 → 回退为 body。"""
-    if type_id == "heading4" and _contains_colon(text):
+    repaired = _recognition_legacy_repair_heading4_colon(type_id, contains_colon=_contains_colon(text))
+    if repaired != type_id:
         logger.debug("[修复] heading4 含冒号→body chars=%s", len(text))
-        return "body"
-    return type_id
+    return repaired
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1197,7 +1061,7 @@ def detect_paragraph_type(text: str, feats: ParagraphFeatures,
         # 报告首句加粗（current_level==1 + 首句≤30字 + 非报告回顾/称呼）。
         # 一是/二是/三是类段落已有 numbered_bold，避免两套 run 重写规则叠加。
         if (ctx.doc_mode == "REPORT" and ctx.current_level == 1 and not meta.get("numbered_bold")
-                and not text.startswith((*_REPORT_HEADING_STARTS, '各位委员', '各位同志'))):
+                and not _recognition_starts_report_heading_or_addressing(text)):
             period = text.find('。')
             if 0 < period <= 26:  # 首句≤26字加粗
                 meta["report_first_sentence_bold"] = True

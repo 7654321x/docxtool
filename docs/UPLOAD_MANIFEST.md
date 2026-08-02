@@ -148,10 +148,13 @@ https://github.com/7654321x/docxtool.git
 | `src/docxtool/document/recognition/` | 候选、Beam 解码、诊断、验证和兼容映射 |
 | `src/docxtool/document/recognition/attachment.py` | 附件结构形态和状态证据 | 只判断附件说明、续项、附件边界和附件说明起点许可，不写最终类型 |
 | `src/docxtool/document/recognition/colon.py` | 共享冒号存在判断、标签加粗位置和结构分析 | 只输出称呼、机构标签、键值和解释性正文证据，不直接定型 |
+| `src/docxtool/document/recognition/document_mode.py` | 文种覆盖层和报告标题证据 | 只判断旧 scorer 兼容文种、标题关键词、报告回顾标题、正文小标题、名词解释和称呼候选分，不写最终类型 |
+| `src/docxtool/document/recognition/front_matter.py` | 文首标题、续行、日期、署名和职务姓名证据 | 只返回旧 scorer 兼容文首候选分，不更新上下文或最终类型 |
 | `src/docxtool/document/recognition/global_context.py` | 文首结构、正文边界和同级标题族的全文只读分析 |
 | `src/docxtool/document/recognition/opening_speech.py` | 文首讲话标题识别证据 | 只判断“在……上的讲话”主标题候选和误推断一级编号剥离，不写最终类型 |
-| `src/docxtool/document/recognition/numbering.py` | 标题编号识别证据 | 只映射字面编号、Word 列表/样式和损坏编号形态，不写最终类型 |
-| `src/docxtool/document/recognition/signature.py` | 落款单位形态证据 | 只判断通用组织后缀、否定前缀和标点边界，不写最终类型 |
+| `src/docxtool/document/recognition/numbering.py` | 标题编号识别证据和旧编号标题评分 | 只映射字面编号、Word 列表/样式、损坏编号形态和编号标题候选分，不写最终类型 |
+| `src/docxtool/document/recognition/signature.py` | 落款单位和尾部日期组合证据 | 只判断通用组织后缀、否定前缀、标点边界、正文尾部上下文和下一段日期事实，不写最终类型 |
+| `src/docxtool/document/recognition/state.py` | 旧 Flow 状态约束和标题层级修复事实 | 只判断候选类型、上一结构类型、当前层级和冒号事实，不修改上下文或最终类型 |
 | `src/docxtool/document/recognition/legacy/__init__.py` | 旧识别兼容包入口 | 暴露 legacy 评分数据模型 |
 | `src/docxtool/document/recognition/legacy/scoring.py` | 旧 importer 评分数据模型 | 保存 ScoreBoard、ScoreDetail 和 DetectionContext，不实现新识别规则 |
 | `src/docxtool/document/style_config.py` | 样式规则、页面设置、日志配置、默认配置读取 |
