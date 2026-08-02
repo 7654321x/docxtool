@@ -119,19 +119,39 @@ def is_organization_label(value: str) -> bool:
     return bool(compact and ORGANIZATION_LABEL_SUFFIX_RE.search(compact))
 
 
+def semantic_colon_position(value: str) -> int | None:
+    """Return the raw offset of the earliest colon that is not numeric punctuation."""
+    semantic_raw, semantic_offset = _strip_wrapping_quotes(value or "")
+    for index, char in enumerate(semantic_raw):
+        if char not in ":：":
+            continue
+        if (
+            0 < index < len(semantic_raw) - 1
+            and semantic_raw[index - 1].isdigit()
+            and semantic_raw[index + 1].isdigit()
+        ):
+            continue
+        return semantic_offset + index
+    return None
+
+
 def colon_bold_match(text: str) -> int:
     """传入段落文本，返回适合冒号前标签加粗的冒号位置；不匹配返回 -1。"""
     value = text or ""
     if not value or value.rstrip().endswith(("：", ":")):
         return -1
-    for colon in ("：", ":"):
-        position = value.find(colon)
-        if (
-            0 < position <= 10
-            and not is_organization_label(value[:position])
-            and not re.search(r"[，。、；]", value[:position])
-        ):
-            return position
+    position = semantic_colon_position(value)
+    if position is None:
+        return -1
+    semantic_raw, semantic_offset = _strip_wrapping_quotes(value)
+    semantic_index = position - semantic_offset
+    label = semantic_raw[:semantic_index]
+    if (
+        0 < len(compact_text(label)) <= 10
+        and not is_organization_label(label)
+        and not re.search(r"[，。、；]", label)
+    ):
+        return position
     return -1
 
 
@@ -142,17 +162,8 @@ def analyze_colon_structure(value: str) -> ColonAnalysis:
     normalized = _normalize(raw)
     single_line = "\n" not in raw and "\r" not in raw
     semantic_raw, semantic_offset = _strip_wrapping_quotes(raw)
-    indexes = [
-        index
-        for index, char in enumerate(semantic_raw)
-        if char in ":："
-        and not (
-            0 < index < len(semantic_raw) - 1
-            and semantic_raw[index - 1].isdigit()
-            and semantic_raw[index + 1].isdigit()
-        )
-    ]
-    if not indexes:
+    index = semantic_colon_position(raw)
+    if index is None:
         return ColonAnalysis(
             raw_text=raw,
             normalized_text=normalized,
@@ -162,8 +173,7 @@ def analyze_colon_structure(value: str) -> ColonAnalysis:
             kind="addressing" if is_standalone_addressing_text(raw) else "none",
         )
 
-    semantic_index = indexes[0]
-    index = semantic_offset + semantic_index
+    semantic_index = index - semantic_offset
     separator = semantic_raw[semantic_index]
     label_raw = semantic_raw[:semantic_index].strip()
     value_raw = semantic_raw[semantic_index + 1:].strip()
@@ -266,4 +276,5 @@ __all__ = [
     "contains_colon",
     "is_organization_label",
     "is_standalone_addressing_text",
+    "semantic_colon_position",
 ]

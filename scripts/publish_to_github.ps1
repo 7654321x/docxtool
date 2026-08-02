@@ -127,6 +127,8 @@ $requiredFiles = @(
     "docs/migration/phase-a2-checklist.md",
     "docs/migration/phase-a2-looper-log.md",
     "docs/migration/phase-a3-final-looper-log.md",
+    "docs/migration/phase-b0-manifest.json",
+    "docs/migration/phase-b0-report.md",
     "docs/DOCX_REGRESSION_CHECKLIST.md",
     "docs/GITHUB_UPLOAD_GUIDE.md",
     "README.md",

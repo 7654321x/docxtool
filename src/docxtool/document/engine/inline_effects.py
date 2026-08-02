@@ -16,6 +16,7 @@ from docx.shared import Pt
 
 from docxtool.document.engine.inline import copy_run_style, segment_writer
 from docxtool.document.engine.typography import set_run_fonts
+from docxtool.document.recognition.colon import colon_bold_match
 from docxtool.document.style_config import NB_FIXED, NB_SUFFIXES
 
 
@@ -82,13 +83,11 @@ def apply_colon_bold(paragraph, text: str) -> None:
     """冒号标签加粗；传入段落和文本，短标签冒号前加粗，返回 None。"""
     if not paragraph.runs:
         return
-    for colon in ("：", ":"):
-        position = text.find(colon)
-        if 0 < position <= 10:
-            write = _segment_writer(paragraph)
-            write(text[:position + 1], bold=True)
-            write(text[position + 1:], bold=False)
-            return
+    position = colon_bold_match(text)
+    if position >= 0:
+        write = _segment_writer(paragraph)
+        write(text[:position + 1], bold=True)
+        write(text[position + 1:], bold=False)
 
 
 def normalize_responsibility_lines(text: str) -> list[str]:

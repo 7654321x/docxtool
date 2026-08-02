@@ -7,6 +7,8 @@
 - [`codex-workflow.md`](codex-workflow.md)：所有机械迁移必须遵守的职责边界、门禁、快照比较和报告格式。
 - [`phase-a2-checklist.md`](phase-a2-checklist.md)：当前已登记的 Phase A-2 状态和验证结果。
 - [`phase-a2-looper-log.md`](phase-a2-looper-log.md)：Phase A-2 连续微批次的脱敏执行记录和等价验证摘要。
+- [`phase-b0-report.md`](phase-b0-report.md)：Phase B-0 功能基线、边界修复、P1 根因聚类和验证结论。
+- [`phase-b0-manifest.json`](phase-b0-manifest.json)：2.2/2.6/2.7/current 的固定样本、配置、版本和制品哈希。
 
 ## 新阶段的建立方式
 

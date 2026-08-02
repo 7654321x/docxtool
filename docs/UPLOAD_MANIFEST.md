@@ -31,6 +31,8 @@ https://github.com/7654321x/docxtool.git
 | `docs/migration/phase-a2-checklist.md` | Phase A-2 状态清单 | 已完成项、待办项、文件位置和验证记录 |
 | `docs/migration/phase-a2-looper-log.md` | Phase A-2 Looper 执行记录 | 连续微批次的脱敏结果、门禁和等价验证摘要 |
 | `docs/migration/phase-a3-final-looper-log.md` | Phase A-3 Final Looper 执行记录 | Web、Engine 和 Phase A 最终门禁 checkpoint |
+| `docs/migration/phase-b0-manifest.json` | Phase B-0 可复现基线清单 | 固定版本、样本、配置、输出和 wheel 哈希 |
+| `docs/migration/phase-b0-report.md` | Phase B-0 功能边界修复报告 | 版本差异、Finding 状态、P1 聚类和验证结果 |
 | `docs/DOCX_REGRESSION_CHECKLIST.md` | 已知公文问题和回归检查清单 | 批量测试与视觉抽查依据 |
 | `docs/SDK.md` | 本地识别 SDK 接口和集成边界 | WPS/第三方软件调用依据 |
 | `docs/INTEGRATION_CONTRACT_V1.md` | SDK 通用宿主 JSON 协议 | WPS、Word 和其他宿主共同实现依据 |

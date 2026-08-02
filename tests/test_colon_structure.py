@@ -70,3 +70,22 @@ def test_colon_analyzer_ignores_numeric_time_and_ratio_colons() -> None:
     assert labeled_time.label == "时间"
     assert labeled_time.value == "11:00"
     assert labeled_time.key_value_candidate is True
+
+
+def test_colon_bold_uses_the_earliest_non_numeric_semantic_colon() -> None:
+    assert colon_bold_match("11:00") == -1
+    assert colon_bold_match("1:2") == -1
+    assert colon_bold_match("时间：11:00") == 2
+    assert colon_bold_match("标签:内容：补充") == 2
+    assert colon_bold_match("1:2 标签：内容") == 6
+    assert colon_bold_match("“标签：内容”") == 3
+
+
+def test_analyzer_and_bold_match_share_semantic_colon_offset() -> None:
+    for value in (
+        "时间：11:00",
+        "标签:内容",
+        "1:2 标签：内容",
+        "“标签：内容”",
+    ):
+        assert colon_bold_match(value) == analyze_colon_structure(value).separator_index

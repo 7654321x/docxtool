@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import re
 
-from ...role_shape import PERSON_NAME_RE, ROLE_HINT_RE, has_compact_role_name_shape
+from ...role_shape import (
+    PERSON_NAME_RE,
+    ROLE_HINT_RE,
+    has_compact_role_name_shape,
+    is_person_name_suffix,
+)
 from ..features import ParagraphFeatures
 
 
@@ -94,14 +99,23 @@ def _head_role_name(
     # strongest and most common manuscript form.
     spaced_name = re.search(r"[\s　]+([\u4e00-\u9fff·×X]{2,4})$", text)
     has_role_hint = bool(ROLE_HINT_RE.search(compact))
-    if has_role_hint and spaced_name:
+    previous_title_anchor = previous is not None and _front_title_anchor(previous)
+    following_metadata = following is not None and (
+        _head_date_line(following) or following.recipient_match
+    )
+    if (
+        has_role_hint
+        and spaced_name
+        and is_person_name_suffix(spaced_name.group(1))
+        and (previous_title_anchor or following_metadata)
+    ):
         return True
     if (
         PERSON_NAME_RE.fullmatch(compact)
         and previous is not None
         and following is not None
-        and _front_title_anchor(previous)
-        and (_head_date_line(following) or following.recipient_match)
+        and previous_title_anchor
+        and following_metadata
     ):
         return True
     # Some speech manuscripts omit the space, for example “党组书记、主席张三”.
@@ -110,8 +124,7 @@ def _head_role_name(
     return bool(
         has_role_hint
         and has_compact_role_name_shape(compact)
-        and following is not None
-        and (_head_date_line(following) or following.recipient_match)
+        and following_metadata
     )
 
 

@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.8 - 2026-08-03
+
+- Hardened front-matter role/name recognition with structural title, date, and salutation anchors while rejecting document-shaped title and body false positives.
+- Unified semantic-colon detection across recognition and rendering so numeric ratios and times are not treated as labels or bolding boundaries.
+- Stabilized partial SDK locator ordering, overlap handling, segment counts, JSON round-trips, and host binding without changing published field names.
+- Added reproducible 2.2/2.6/2.7/current manifests and clustered the former 60 P1 findings to one shared attachment-pagination regression plus comparison-attribution cascades.
+- Verified 1164 Python tests, 11 Node tests, Ruff, compile checks, wheel-only SDK installation, and all 50 standard plus 5 special DOCX fixtures.
+
 ## 2.7 - 2026-08-02
 
 - Completed the remaining Phase A-3 mechanical module boundaries for recognition, Web, and document export while retaining the established compatibility facades and behavior.

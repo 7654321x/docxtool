@@ -2,6 +2,7 @@ from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 from docx import Document
+import pytest
 from docxtool.document.engine import export_doc
 import docxtool.document.recognition.decoder as decoder
 from docxtool.document.recognition.candidates import Candidate
@@ -1112,3 +1113,70 @@ def test_diagnostics_use_candidates_from_final_winning_beam(monkeypatch) -> None
     assert diagnostics[1]["candidate_types"] == ["heading1"]
     assert diagnostics[1]["provider"].startswith("branching:after-addressing")
     assert diagnostics[1]["selected_candidate_score"] == 1.0
+
+
+@pytest.mark.parametrize(
+    "title_text",
+    [
+        "代表委员履职报告",
+        "项目负责人 工作方案",
+        "客户经理年度总结",
+        "优秀同志 调研报告",
+    ],
+)
+def test_front_title_with_broad_role_word_is_not_role_name(title_text):
+    data = _document(
+        _paragraph(title_text, "title", 0, alignment="CENTER"),
+        _paragraph("2026年8月27日", "date_line", 1, alignment="CENTER"),
+        _paragraph("各位代表、同志们：", "addressing", 2),
+        _paragraph("现将有关事项说明如下，请认真抓好落实。", "body", 3),
+    )
+
+    apply_recognition(data)
+
+    assert data.paragraphs[0].type_id == "title"
+    context = data.recognition_diagnostics["document_context"]
+    assert not any(item["position"] == 0 for item in context["front_metadata"])
+    trace = data.recognition_diagnostics["candidate_trace"][0]
+    assert "role_name" not in [item["type"] for item in trace["candidates"]]
+
+
+@pytest.mark.parametrize(
+    "role_text",
+    [
+        "办公室主任 张三",
+        "办公室主任　李测试",
+        "党组书记、主席 欧阳测试",
+        "办公室主任王测试",
+        "会议代表 张三",
+        "项目负责人 李测试",
+    ],
+)
+def test_front_role_name_shape_survives_changed_names_and_roles(role_text):
+    data = _document(
+        _paragraph("年度重点工作会议讲话", "title", 0, alignment="CENTER"),
+        _paragraph(role_text, "body", 1, alignment="CENTER"),
+        _paragraph("2026年8月27日", "date_line", 2, alignment="CENTER"),
+        _paragraph("各位代表、同志们：", "addressing", 3),
+        _paragraph("现将有关事项说明如下，请认真抓好落实。", "body", 4),
+    )
+
+    apply_recognition(data)
+
+    assert data.paragraphs[1].type_id == "role_name"
+    context = data.recognition_diagnostics["document_context"]
+    assert {item["position"]: item["kind"] for item in context["front_metadata"]}[1] == "role_name"
+    trace = data.recognition_diagnostics["candidate_trace"][1]
+    assert "role_name" in [item["type"] for item in trace["candidates"]]
+
+
+def test_spaced_role_name_can_use_previous_title_anchor_without_date():
+    data = _document(
+        _paragraph("年度重点工作会议讲话", "title", 0, alignment="CENTER"),
+        _paragraph("办公室主任 李测试", "body", 1, alignment="CENTER"),
+        _paragraph("现将有关事项说明如下，请认真抓好落实。", "body", 2),
+    )
+
+    apply_recognition(data)
+
+    assert data.paragraphs[1].type_id == "role_name"

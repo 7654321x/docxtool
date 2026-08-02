@@ -91,6 +91,12 @@ LF 和垂直制表符统一为 LF，保留 Tab 与分页符，归一 NBSP、全�
 来源范围的数量，`segment_count_confirmed` 为确认可读回的数量。计数不完整时，
 WPS 端只能预览，不能自动应用格式。
 
+`block_index` 始终表示规范化后的最终文档顺序；同一物理段落内，拥有合法
+raw span 的片段按 `(raw_start_utf16, raw_end_utf16, stable_index)` 计算
+`segment_index`。没有合法 span 的片段稳定排在已定位片段之后，其相对顺序仍按
+`block_index`。范围重叠只在已定位片段之间检查；未定位片段不能令其他可回读范围
+降级。调用方不得把 `segment_index` 当作 `blocks` 数组下标。
+
 ## 回归与边界
 
 自动测试覆盖同段标题与正文、重复文字、宿主插入段落、NBSP、Emoji/UTF-16

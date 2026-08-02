@@ -235,42 +235,39 @@ def _build_plan(
             segments_by_physical.setdefault(physical_index, []).append(index)
     segment_meta = {}
     for physical_index, indexes in segments_by_physical.items():
-        all_located = all(
-            locators[index]["raw_start"] is not None
-            and locators[index]["raw_end"] is not None
+        located = [
+            index
             for index in indexes
-        )
+            if locators[index]["raw_start"] is not None
+            and locators[index]["raw_end"] is not None
+        ]
+        unresolved = [index for index in indexes if index not in located]
         # Tail normalization may move attachment notes ahead of signatures.
-        # Segment ordinals describe source ranges, while block_index continues
-        # to describe final document order.
-        ordered = (
-            sorted(
-                indexes,
-                key=lambda index: (
-                    locators[index]["raw_start"],
-                    locators[index]["raw_end"],
-                    index,
-                ),
-            )
-            if all_located
-            else list(indexes)
+        # Located ordinals always describe source-range order. Unresolved
+        # segments follow them in stable final-block order, while block_index
+        # continues to describe final document order.
+        ordered_located = sorted(
+            located,
+            key=lambda index: (
+                locators[index]["raw_start"],
+                locators[index]["raw_end"],
+                index,
+            ),
         )
+        ordered = ordered_located + unresolved
         previous_end = -1
-        for segment_index, index in enumerate(ordered):
+        for index in ordered_located:
             locator = locators[index]
             raw_start = locator["raw_start"]
             raw_end = locator["raw_end"]
-            if raw_start is not None and raw_end is not None and raw_start < previous_end:
+            if raw_start < previous_end:
                 locator["status"] = "unresolved"
                 locator["verified"] = False
                 locator["warnings"] = tuple(dict.fromkeys(locator["warnings"] + ("SOURCE_RANGE_OVERLAP",)))
-            if raw_end is not None:
-                previous_end = max(previous_end, raw_end)
+            previous_end = max(previous_end, raw_end)
+        for segment_index, index in enumerate(ordered):
             segment_meta[index] = (segment_index, len(ordered))
-        located_count = sum(
-            locators[index]["raw_start"] is not None and locators[index]["raw_end"] is not None
-            for index in ordered
-        )
+        located_count = len(ordered_located)
         confirmed_count = sum(locators[index]["status"] == "confirmed" for index in ordered)
         for index in ordered:
             segment_index, total = segment_meta[index]

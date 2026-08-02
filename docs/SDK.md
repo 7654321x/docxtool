@@ -89,6 +89,11 @@ print(plan.to_dict())
 `segment_count_total`、`segment_count_located` 和 `segment_count_confirmed`
 确认片段组完整；任一片段未确认时不得直接一键写入。
 
+`block_index` 是最终文档顺序，`segment_index` 是同一物理段落内的源范围顺序，
+两者在尾部重排后可以不同。部分 locator 组中，已定位片段仍按 raw UTF-16 起止
+位置排序并互相检查重叠；未定位片段排在其后且保持最终块顺序，不能使其他已确认
+locator 降级。调用方必须按字段关联块，不能把 `segment_index` 当数组下标。
+
 默认不返回文字。`include_text` 和 `include_raw_text` 必须是 JSON boolean；
 字符串 `"true"`、`"false"`、数字 `0/1`、数组或对象都会被拒绝。仅本机受控链路可使用 `include_text=True` 返回
 `recognized_text` 与 canonical 片段；`include_raw_text=True` 会额外返回

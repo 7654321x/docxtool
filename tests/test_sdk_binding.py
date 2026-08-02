@@ -107,13 +107,88 @@ def test_segment_counts_report_incomplete_source_locator_group() -> None:
         ParagraphData("乙", "body", "乙", feature(None, None, "unresolved")),
         ParagraphData("丙", "body", "丙", feature(2, 3, "confirmed")),
     ])
-    plan = _build_plan(data, "source-hash", include_text=True)
+    plan = _build_plan(data, "0" * 64, include_text=True)
 
-    assert [block.segment_index for block in plan.blocks] == [0, 1, 2]
+    assert [block.segment_index for block in plan.blocks] == [0, 2, 1]
+    assert [block.block_index for block in plan.blocks] == [0, 1, 2]
     assert {block.segment_count_total for block in plan.blocks} == {3}
     assert {block.segment_count_located for block in plan.blocks} == {2}
     assert {block.segment_count_confirmed for block in plan.blocks} == {2}
     assert [block.source_locator_status for block in plan.blocks] == ["confirmed", "unresolved", "confirmed"]
+
+
+def test_partial_locator_group_keeps_located_source_order_and_stable_unresolved_order() -> None:
+    source = "甲乙丙丁"
+
+    def feature(start: int | None, end: int | None, status: str) -> ParagraphFeatures:
+        raw = source[start:end] if start is not None and end is not None else ""
+        return ParagraphFeatures(
+            source_physical_paragraph_index=0,
+            source_physical_text=source,
+            source_start_utf16=start,
+            source_end_utf16=end,
+            source_canonical_text=source,
+            source_canonical_start_utf16=start,
+            source_canonical_end_utf16=end,
+            source_fragment_text=raw,
+            source_canonical_fragment_text=raw,
+            source_locator_status=status,
+        )
+
+    data = DocumentData(paragraphs=[
+        ParagraphData("丙", "attachment_note", "丙", feature(2, 3, "confirmed")),
+        ParagraphData("未定位一", "body", "未定位一", feature(None, None, "unresolved")),
+        ParagraphData("甲", "sign_org", "甲", feature(0, 1, "confirmed")),
+        ParagraphData("未定位二", "body", "未定位二", feature(None, None, "unresolved")),
+    ])
+    plan = _build_plan(data, "0" * 64, include_text=True)
+
+    assert [block.block_index for block in plan.blocks] == [0, 1, 2, 3]
+    assert [block.segment_index for block in plan.blocks] == [1, 2, 0, 3]
+    assert [block.source_locator_status for block in plan.blocks] == [
+        "confirmed",
+        "unresolved",
+        "confirmed",
+        "unresolved",
+    ]
+    assert {block.segment_count_total for block in plan.blocks} == {4}
+    assert {block.segment_count_located for block in plan.blocks} == {2}
+    assert {block.segment_count_confirmed for block in plan.blocks} == {2}
+    assert type(plan).from_dict(plan.to_dict()).to_dict() == plan.to_dict()
+
+
+def test_partial_locator_group_detects_overlap_only_between_located_ranges() -> None:
+    source = "甲乙丙丁"
+
+    def feature(start: int | None, end: int | None, status: str) -> ParagraphFeatures:
+        raw = source[start:end] if start is not None and end is not None else ""
+        return ParagraphFeatures(
+            source_physical_paragraph_index=0,
+            source_physical_text=source,
+            source_start_utf16=start,
+            source_end_utf16=end,
+            source_canonical_text=source,
+            source_canonical_start_utf16=start,
+            source_canonical_end_utf16=end,
+            source_fragment_text=raw,
+            source_canonical_fragment_text=raw,
+            source_locator_status=status,
+        )
+
+    data = DocumentData(paragraphs=[
+        ParagraphData("乙丙", "body", "乙丙", feature(1, 3, "confirmed")),
+        ParagraphData("未定位", "body", "未定位", feature(None, None, "unresolved")),
+        ParagraphData("甲乙", "body", "甲乙", feature(0, 2, "confirmed")),
+    ])
+    plan = _build_plan(data, "source-hash", include_text=True)
+
+    assert [block.segment_index for block in plan.blocks] == [1, 2, 0]
+    assert plan.blocks[2].source_locator_status == "confirmed"
+    assert "SOURCE_RANGE_OVERLAP" not in plan.blocks[2].source_locator_warnings
+    assert plan.blocks[0].source_locator_status == "unresolved"
+    assert "SOURCE_RANGE_OVERLAP" in plan.blocks[0].source_locator_warnings
+    assert plan.blocks[1].source_locator_status == "unresolved"
+    assert "SOURCE_RANGE_OVERLAP" not in plan.blocks[1].source_locator_warnings
 
 
 def test_sdk_uses_source_range_order_when_normalization_reorders_blocks() -> None:

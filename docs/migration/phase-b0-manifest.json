@@ -1,0 +1,397 @@
+{
+  "comparisons": {
+    "2.6_to_2.7": {
+      "aligned_unexpected_difference_count": 0,
+      "expected_groups": [
+        "front-role-date",
+        "attachment-pagination",
+        "same-line-signature-date",
+        "sdk-source-order"
+      ],
+      "raw_difference_count": 8128,
+      "report_sha256": "6a8d850050da911e3f8e86ab54f01ffb2e72d2920a222efaf6b2fd3801d3a139",
+      "v26_sdk_sha256": "5e2165e8c0878c0c3ce275733607545311979c6b5b4c3ee23313e74b9a8810d1",
+      "v27_sdk_sha256": "cb852be6fd17fa151f51a5192c2836ec4c9552a8490029f162c5cbecb04efa42"
+    }
+  },
+  "current": {
+    "config_sha256": "409e8c908bbf11a17497164546b31000ddda84609a4ff4daf9d8c5c30bd89f1f",
+    "dirty_capture_scope": "tracked binary diff plus non-ignored untracked file hashes, captured before writing this manifest",
+    "dirty_patch_sha256": "adfe76ababb1852195d6deb67c0ffe6e6e49efd290237c89d586891c94be6313",
+    "head_sha": "fe0667313ee43791f2846b8574a969b6d07bec8b",
+    "special_outputs": {
+      "file_count": 5,
+      "sha256": "316c24f96f24c243d4feca709a27b356d78ac5ecf62fd1397e235e2f1febe96b"
+    },
+    "special_report": {
+      "path": "test_docx/test2/测试结果/phase-b0-current-20260803-0010/批量测试报告.json",
+      "sha256": "1f020f85a5fd93df6c629818465f47769c7af1a815eccabbd3a49e92fff070dc"
+    },
+    "standard_outputs": {
+      "file_count": 50,
+      "sha256": "57165e3b878c4e1affac4e43245a1c3b1d7a6ea1f124f03e2047750177d7bc8d"
+    },
+    "standard_report": {
+      "path": "test_docx/tset1/test1测试结果/phase-b0-current-20260803-0010/批量测试报告.json",
+      "sha256": "d71285e29691934abcb91c16380c00b795a512e2b8e9dceb9d66f6424478af63"
+    },
+    "tree_sha": "632a22b6d3a1260c95ffcc9704e841a75f8f3f0d"
+  },
+  "fixed_fixture_set": {
+    "config_sha256": "409e8c908bbf11a17497164546b31000ddda84609a4ff4daf9d8c5c30bd89f1f",
+    "modes": [
+      "strict",
+      "structural",
+      "normalize"
+    ],
+    "source_manifest_sha256": "9b6f0622b38f72f9a28b8a84b2e8867141d5c9a0d6aaa6beb2edfc6acedafcb0",
+    "sources": [
+      {
+        "group": "standard",
+        "name": "001_005班子检查材料_乱格式测试.docx",
+        "sha256": "969e24c36e62f9a4f749e6a8b545029d6bf7064cae2555b90efd56947dca402d"
+      },
+      {
+        "group": "standard",
+        "name": "002_005班子检查材料_乱格式测试.docx",
+        "sha256": "4b912dc1dd69e575158d4413d020fefc842451070b63bf080689eaeb227bfe13"
+      },
+      {
+        "group": "standard",
+        "name": "003_005班子检查材料_乱格式测试.docx",
+        "sha256": "93970284992c6d0f29b7d4ac2f8414cbb0cac12334550ec89969835c6cbd365c"
+      },
+      {
+        "group": "standard",
+        "name": "004_005班子检查材料_乱格式测试.docx",
+        "sha256": "ccfc84fb7decc4a26b3287d61a5571a291e08fce623efb4eaa6ceec0adf4bdc8"
+      },
+      {
+        "group": "standard",
+        "name": "005_005班子检查材料_乱格式测试.docx",
+        "sha256": "fb7d60ed4cee30ec634f80bd0f8994b4c08bee9e4221c48a2d9462058a726257"
+      },
+      {
+        "group": "standard",
+        "name": "006_005班子检查材料_乱格式测试.docx",
+        "sha256": "ce33eb79fe993319bc703ab4594a24943a53e54503fb679075a051776bf4573b"
+      },
+      {
+        "group": "standard",
+        "name": "007_005班子检查材料_乱格式测试.docx",
+        "sha256": "bd7c05728c2ee22c1b3fa5a90ad0ba6f4544621043cc6339781b1fef0ce359e1"
+      },
+      {
+        "group": "standard",
+        "name": "008_005班子检查材料_乱格式测试.docx",
+        "sha256": "0f764648b6fddfa1438e879237ea0c0aa6c24a3d8d33acdb5c975a1163797d5f"
+      },
+      {
+        "group": "standard",
+        "name": "009_005班子检查材料_乱格式测试.docx",
+        "sha256": "944c9d80f57367a53a2ada341e28bbbf7c90e187c50c00605a0318af9dd1eb9c"
+      },
+      {
+        "group": "standard",
+        "name": "010_005班子检查材料_乱格式测试.docx",
+        "sha256": "eacc8fa917549717fc217191d7b7126605ad5f2741f21ca0d449134295dd1ea5"
+      },
+      {
+        "group": "standard",
+        "name": "011_005班子检查材料_乱格式测试.docx",
+        "sha256": "07fbd316bc96264084f3094f3e57ea3c8cb51d59780243a28bf43b615e045201"
+      },
+      {
+        "group": "standard",
+        "name": "012_005班子检查材料_乱格式测试.docx",
+        "sha256": "9a3b18898466efd0cfac0e5a886ca087a5ee84ba06727a6fd110855891e3f578"
+      },
+      {
+        "group": "standard",
+        "name": "013_005班子检查材料_乱格式测试.docx",
+        "sha256": "f92b19d828caf79c2286a91a8f7d3da773dfe6ed45fea84e5d2c5a57ae40d233"
+      },
+      {
+        "group": "standard",
+        "name": "014_005班子检查材料_乱格式测试.docx",
+        "sha256": "0c4946751de00b2a3f36e8f5bb335c874350bf324cb62d480c62956cf5f858c1"
+      },
+      {
+        "group": "standard",
+        "name": "015_005班子检查材料_乱格式测试.docx",
+        "sha256": "0a9c49c60fe6c09bb5a3e290ca1ce9732995d605ce1966fc1a1671fc4c496a63"
+      },
+      {
+        "group": "standard",
+        "name": "016_005班子检查材料_乱格式测试.docx",
+        "sha256": "c2a05c9dd800f8bd19841aad344975e171cb7686282f129aee56e4b414ba8acd"
+      },
+      {
+        "group": "standard",
+        "name": "017_005班子检查材料_乱格式测试.docx",
+        "sha256": "d6e0121165f7a8b34044ffd159b940ffcfdc193d095eb615c505f2b0c10a3a93"
+      },
+      {
+        "group": "standard",
+        "name": "018_005班子检查材料_乱格式测试.docx",
+        "sha256": "ca732b8a5a1ef2967ec96d4eb9ee52fd6da698a70a3696100cc4f414b8576699"
+      },
+      {
+        "group": "standard",
+        "name": "019_005班子检查材料_乱格式测试.docx",
+        "sha256": "675c9eac72e35140d7b293491999058cd22fdd0d197ab9c17af661c3fd89f412"
+      },
+      {
+        "group": "standard",
+        "name": "020_005班子检查材料_乱格式测试.docx",
+        "sha256": "6fd52f49fb9769decb87684898841800094dc3f5b02663dc8d19c3f93466d1e4"
+      },
+      {
+        "group": "standard",
+        "name": "021_005班子检查材料_乱格式测试.docx",
+        "sha256": "384b9076ef32d5cfd5744599044cbe1a4e3fa225290110c4be2a057892cd4a06"
+      },
+      {
+        "group": "standard",
+        "name": "022_005班子检查材料_乱格式测试.docx",
+        "sha256": "d65d8ea42c2eb201be0c4fb680c79e88ee72d11403c57bca324fc85cbc444147"
+      },
+      {
+        "group": "standard",
+        "name": "023_005班子检查材料_乱格式测试.docx",
+        "sha256": "9c23c03a9ddea863721b3372d6920f7b668560e89b7f8de7832d06f27c842e77"
+      },
+      {
+        "group": "standard",
+        "name": "024_005班子检查材料_乱格式测试.docx",
+        "sha256": "518371a276885ce330fd252db9ed9453ad7ff10fd7ce77eccb643d2e7afdb134"
+      },
+      {
+        "group": "standard",
+        "name": "025_005班子检查材料_乱格式测试.docx",
+        "sha256": "5933efd881826701735499561e70e5a30748cf1dde07085837d2173aced16dd0"
+      },
+      {
+        "group": "standard",
+        "name": "026_005班子检查材料_乱格式测试.docx",
+        "sha256": "6eb2dc95211acb7de1a0a0b5d5ac71652df9b556fdd717e3592e067b42a12974"
+      },
+      {
+        "group": "standard",
+        "name": "027_005班子检查材料_乱格式测试.docx",
+        "sha256": "4b1624e65d9ebf08e0cc7e357530789e0fb1d00898a025289da5db1f90dd090d"
+      },
+      {
+        "group": "standard",
+        "name": "028_005班子检查材料_乱格式测试.docx",
+        "sha256": "22b605379fbd0d76f51e49de64b3f978ad143a2d764f03fd572c096f0377e501"
+      },
+      {
+        "group": "standard",
+        "name": "029_005班子检查材料_乱格式测试.docx",
+        "sha256": "8a3182be784c2fa3cc31baf35e1ecbab68094a1ffd5dddc7e5197207dbc37ba2"
+      },
+      {
+        "group": "standard",
+        "name": "030_005班子检查材料_乱格式测试.docx",
+        "sha256": "eb2d5207ea906756cb787065cf22c645e4215b1dcfea241a16eda5e6ad4da9b0"
+      },
+      {
+        "group": "standard",
+        "name": "031_005班子检查材料_乱格式测试.docx",
+        "sha256": "f29fc3ae580331dea787c32e2a64fb26e55f277dcfc38cdfc2ab7814fd6b2039"
+      },
+      {
+        "group": "standard",
+        "name": "032_005班子检查材料_乱格式测试.docx",
+        "sha256": "a7a19424b5ecf908160f944dbd8e27691cd9d12da599a2c00818d51676e15847"
+      },
+      {
+        "group": "standard",
+        "name": "033_005班子检查材料_乱格式测试.docx",
+        "sha256": "5fa8567650310735524a3518a88dda3b36aa0389970c29dc4eaaa753c1d8fc54"
+      },
+      {
+        "group": "standard",
+        "name": "034_005班子检查材料_乱格式测试.docx",
+        "sha256": "28b2f34b0a50984c123fe83fe24f1c386eb7224905c14ddfffdab4cf07ea6aed"
+      },
+      {
+        "group": "standard",
+        "name": "035_005班子检查材料_乱格式测试.docx",
+        "sha256": "f4123a0af5b010830b6ded28df32eb2989b7f2ffe6ff5d8cee67b2da55f1c158"
+      },
+      {
+        "group": "standard",
+        "name": "036_005班子检查材料_乱格式测试.docx",
+        "sha256": "c69b417e3ec174822c329f8adeafc11d225589428df2faa3bf9def87677c373c"
+      },
+      {
+        "group": "standard",
+        "name": "037_005班子检查材料_乱格式测试.docx",
+        "sha256": "1862b7c34a141ce482777b051d04f486435add6b6129c370d0e79e672d768954"
+      },
+      {
+        "group": "standard",
+        "name": "038_005班子检查材料_乱格式测试.docx",
+        "sha256": "a89bce46d47cb1619d42e2c0af6d4670b6b218e0633f8883031b44570d2be104"
+      },
+      {
+        "group": "standard",
+        "name": "039_005班子检查材料_乱格式测试.docx",
+        "sha256": "adb1c3176aedf2dbb0ada4a9fe4faec0350fc71423803c860db9b6e8b2863026"
+      },
+      {
+        "group": "standard",
+        "name": "040_005班子检查材料_乱格式测试.docx",
+        "sha256": "651cc3645b3f4daf21c681eee2ea7c571a852522ba8a7ff78ca26e293413ef42"
+      },
+      {
+        "group": "standard",
+        "name": "041_005班子检查材料_乱格式测试.docx",
+        "sha256": "494469eb3ffb1167cd4f1c1357a6d92a60bdc188f3be3cabce3547f5ffd89046"
+      },
+      {
+        "group": "standard",
+        "name": "042_005班子检查材料_乱格式测试.docx",
+        "sha256": "fe1215420dad8154bdf2f71fec2e3575e5760576f34c0e81f1711d4e221cf373"
+      },
+      {
+        "group": "standard",
+        "name": "043_005班子检查材料_乱格式测试.docx",
+        "sha256": "2c6e629a24b0f3097a516d35f728a7af96a5745942119c03836dc036096ea009"
+      },
+      {
+        "group": "standard",
+        "name": "044_005班子检查材料_乱格式测试.docx",
+        "sha256": "b768081baa24b8dbcc459f7e3d6c3411579c3e963f7030312a6d0983ec09ec08"
+      },
+      {
+        "group": "standard",
+        "name": "045_005班子检查材料_乱格式测试.docx",
+        "sha256": "67c5b8878495fa68567fcb532a6aa8bf1d1f1a63874a293eb49544319e0e1189"
+      },
+      {
+        "group": "standard",
+        "name": "046_005班子检查材料_乱格式测试.docx",
+        "sha256": "aeff292fa34e0d80254e4093e95e200a80ae50e440445d1241376208ee038708"
+      },
+      {
+        "group": "standard",
+        "name": "047_005班子检查材料_乱格式测试.docx",
+        "sha256": "559cb7366ba894e9c01d5bcd38380df02be1df13bc25299951fa791f6fce245f"
+      },
+      {
+        "group": "standard",
+        "name": "048_005班子检查材料_乱格式测试.docx",
+        "sha256": "e1b90f69a5b0074a485e7641331e2176a60d0ebef247cd2f576476070226ac89"
+      },
+      {
+        "group": "standard",
+        "name": "049_005班子检查材料_乱格式测试.docx",
+        "sha256": "e4a0caea0d54e27a93b6794704a6ab1d9668c71918431ac2582273796f3e8ee3"
+      },
+      {
+        "group": "standard",
+        "name": "050_005班子检查材料_乱格式测试.docx",
+        "sha256": "5b7adc41b66589dbdcd2c20289f0f50164eaa86012699ad7f3efd25894e95382"
+      },
+      {
+        "group": "special",
+        "name": "2021-2026区政协工作总结(2).docx",
+        "sha256": "5adc1bb06e5cee6e82c7d0b60e5796b9ec639374174aee5b9c103f58bec5684f"
+      },
+      {
+        "group": "special",
+        "name": "关于园区订单式人才培养工作推进情况的汇报(3).docx",
+        "sha256": "41b1478e4ffb19ecdab54ec592f5864344b953c4bf03f4ab9a367624a98134fe"
+      },
+      {
+        "group": "special",
+        "name": "在区政协九届一次会议召集人会议上的讲话（区委副书记）.docx",
+        "sha256": "6cf5b3f229d773bb0ff771d10842faf6f7152433f43a8f7e741bdf7b820da6ee"
+      },
+      {
+        "group": "special",
+        "name": "在区政协九届一次会议闭幕会上的讲话(政协主席).docx",
+        "sha256": "ef9f9c0c3c927e8edc694c75807113a5c2c6d0590a8962bb6578e48a4a63bb91"
+      },
+      {
+        "group": "special",
+        "name": "在区政协九届一次会议闭幕大会上的讲话（区委书记）_排版.docx",
+        "sha256": "f45f2420b0480c3b35f53eb0e3c2ad9be64f7b7630b88a65e50fa6f6a9d5eb64"
+      }
+    ],
+    "special_count": 5,
+    "standard_count": 50
+  },
+  "generated_at": "2026-08-03T00:13:00+08:00",
+  "notes": [
+    "The 2.2 snapshot used the same privacy-preserving snapshot schema with a compatibility adapter because the later private capture aliases did not yet exist. Public importer result and exported package snapshots were captured.",
+    "Visual rendering was not requested for the current 55-fixture batch."
+  ],
+  "privacy": "hashes, counts, structural identifiers, and fixture filenames only; no document body text",
+  "runtime": {
+    "dependencies": {
+      "jsonschema": "4.23.0",
+      "lxml": "6.1.1",
+      "pytest": "8.3.5",
+      "python-docx": "1.1.2",
+      "ruff": "0.11.0"
+    },
+    "implementation": "CPython",
+    "platform": "Windows-10-10.0.26200-SP0",
+    "python": "3.8.10"
+  },
+  "schema": "docxtool-phase-b0-manifest-v1",
+  "versions": {
+    "2.2": {
+      "commit_sha": "bf831c5c809141ae7a02070f3685dcc7d2e82bf9",
+      "config_sha256": "409e8c908bbf11a17497164546b31000ddda84609a4ff4daf9d8c5c30bd89f1f",
+      "dirty_patch_sha256": null,
+      "output_aggregate": {
+        "file_count": 165,
+        "sha256": "4cfc71be667aecf3dcca7de08d609d6a857185ccbba952a8ccfc7e491403e426"
+      },
+      "snapshot_sha256": "d596c4b7b31e226369e27b9b300074540c0ae4f784992e86bd88790de5c5b9a6",
+      "tree_sha": "bc498e7eff8b11027c5c3104186d664fd57ecba4"
+    },
+    "2.6": {
+      "commit_sha": "bfaf7f38763463e40edbe0ac074af7d4d61d7eba",
+      "config_sha256": "409e8c908bbf11a17497164546b31000ddda84609a4ff4daf9d8c5c30bd89f1f",
+      "dirty_patch_sha256": null,
+      "output_aggregate": {
+        "file_count": 165,
+        "sha256": "83fcf8191b54c9d420b0573a88f71b9a2c5ac38ba6323b5ed3b3c84dfb9175c8"
+      },
+      "snapshot_sha256": "99f000af4fc97f74ed9ecac032a807755c981fb2b1b4f3f297a9aa94c967260a",
+      "tree_sha": "a1257ad873183422b19a84eb5f79f683f6ec6263"
+    },
+    "2.7": {
+      "commit_sha": "3a768b1c33a122a8ead445f3a0da67cc66aeaf65",
+      "config_sha256": "409e8c908bbf11a17497164546b31000ddda84609a4ff4daf9d8c5c30bd89f1f",
+      "dirty_patch_sha256": null,
+      "output_aggregate": {
+        "file_count": 165,
+        "sha256": "b28b765441382a6c16be5696970e26a96a12e39704ca5752098ad98f2c50dea6"
+      },
+      "snapshot_sha256": "952a9c41cf9ef6b91c71158cfb42d8fa8197de6715d3a070fd7a0c62695c4524",
+      "tree_sha": "3400c6bbc3301936b5cfae342f046383037f2996"
+    }
+  },
+  "wheel": {
+    "built_outside_repository": true,
+    "clean_python": "3.8.10",
+    "filename": "docxtool-2.7-py3-none-any.whl",
+    "sha256": "01093c16860dfff199ccf0ab663ff8f4bfb549d7eac5c25204fc926f36a7aaf2",
+    "smoke": [
+      "SDK import",
+      "Schema resource",
+      "CLI manifest envelope",
+      "minimal recognition",
+      "RecognitionPlan JSON round-trip",
+      "minimal confirmed binding",
+      "RecognitionBinding JSON round-trip"
+    ]
+  }
+}
