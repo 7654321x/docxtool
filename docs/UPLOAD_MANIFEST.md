@@ -237,6 +237,7 @@ https://github.com/7654321x/docxtool.git
 | `scripts/benchmark_recognition.py` | 无正文识别性能基准 |
 | `scripts/compare_recognition_runs.py` | 安全识别差分和确定性检查 |
 | `scripts/phase_a_equivalence_snapshot.py` | Phase A 机械迁移脱敏等价快照 | 比较物理块、逻辑段、provider 开关前后输入/输出，以及完整 OPC package 部件和关系；不写入正文或用户 DOCX |
+| `scripts/check_public_metadata.py` | 公开发布元数据隐私扫描 | 阻止 fixture 文件名、测试路径、绝对路径和源文档 SHA 进入公开 B0 manifest/report |
 | `scripts/analyze_end_format.py` | 排版结果与正确模板的无正文格式差异分析 |
 | `scripts/analyze_letterhead_batch.py` | 批量版头状态与问题归类 |
 | `scripts/batch_test_docx.py` | 编号测试文档批处理、结构对齐模板比较与可选视觉渲染抽查 |

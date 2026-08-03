@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.9 - 2026-08-03
+
+- Tightened front-matter role/name parsing so role expressions must end at the person-name boundary and remain supported by title, date, or salutation structure.
+- Made numeric-colon detection whitespace-aware across spaces, tabs, NBSP, full-width spaces, and other Unicode whitespace while preserving original offsets.
+- Limited colon-label bolding to the true semantic label range when a numeric time or ratio precedes a later label.
+- Removed private fixture metadata from public Phase B reports and added release-time metadata scanning.
+- Verified Python 3.8 and 3.10 with 1206 tests each, 11 Node tests, wheel-only SDK behavior, all three 50+5 processing modes, relationship integrity, and targeted visual rendering.
+
 ## 2.8 - 2026-08-03
 
 - Hardened front-matter role/name recognition with structural title, date, and salutation anchors while rejecting document-shaped title and body false positives.

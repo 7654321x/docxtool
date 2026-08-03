@@ -119,17 +119,36 @@ def is_organization_label(value: str) -> bool:
     return bool(compact and ORGANIZATION_LABEL_SUFFIX_RE.search(compact))
 
 
+def _nearest_non_whitespace(value: str, start: int, step: int) -> str | None:
+    index = start
+    while 0 <= index < len(value):
+        char = value[index]
+        if not char.isspace():
+            return char
+        index += step
+    return None
+
+
+def _semantic_label(value: str) -> tuple[str, int]:
+    match = re.match(
+        r"^\s*\d+\s*[:：]\s*\d+\s+(?P<label>.+)$",
+        value,
+        re.DOTALL,
+    )
+    if match is None:
+        return value, 0
+    return match.group("label"), match.start("label")
+
+
 def semantic_colon_position(value: str) -> int | None:
     """Return the raw offset of the earliest colon that is not numeric punctuation."""
     semantic_raw, semantic_offset = _strip_wrapping_quotes(value or "")
     for index, char in enumerate(semantic_raw):
         if char not in ":：":
             continue
-        if (
-            0 < index < len(semantic_raw) - 1
-            and semantic_raw[index - 1].isdigit()
-            and semantic_raw[index + 1].isdigit()
-        ):
+        previous = _nearest_non_whitespace(semantic_raw, index - 1, -1)
+        following = _nearest_non_whitespace(semantic_raw, index + 1, 1)
+        if previous is not None and following is not None and previous.isdigit() and following.isdigit():
             continue
         return semantic_offset + index
     return None
@@ -137,22 +156,29 @@ def semantic_colon_position(value: str) -> int | None:
 
 def colon_bold_match(text: str) -> int:
     """传入段落文本，返回适合冒号前标签加粗的冒号位置；不匹配返回 -1。"""
+    matched = colon_bold_range(text)
+    return matched[1] if matched is not None else -1
+
+
+def colon_bold_range(text: str) -> tuple[int, int] | None:
+    """Return the raw start and colon offsets for a semantic label."""
     value = text or ""
     if not value or value.rstrip().endswith(("：", ":")):
-        return -1
+        return None
     position = semantic_colon_position(value)
     if position is None:
-        return -1
+        return None
     semantic_raw, semantic_offset = _strip_wrapping_quotes(value)
     semantic_index = position - semantic_offset
-    label = semantic_raw[:semantic_index]
+    label, label_offset = _semantic_label(semantic_raw[:semantic_index])
     if (
         0 < len(compact_text(label)) <= 10
         and not is_organization_label(label)
         and not re.search(r"[，。、；]", label)
     ):
-        return position
-    return -1
+        start = semantic_offset + label_offset if label_offset else 0
+        return start, position
+    return None
 
 
 def analyze_colon_structure(value: str) -> ColonAnalysis:
@@ -175,7 +201,8 @@ def analyze_colon_structure(value: str) -> ColonAnalysis:
 
     semantic_index = index - semantic_offset
     separator = semantic_raw[semantic_index]
-    label_raw = semantic_raw[:semantic_index].strip()
+    label_raw, _label_offset = _semantic_label(semantic_raw[:semantic_index])
+    label_raw = label_raw.strip()
     value_raw = semantic_raw[semantic_index + 1:].strip()
     label = compact_text(_normalize(label_raw))
     after = _normalize(value_raw)
@@ -272,6 +299,7 @@ __all__ = [
     "STRUCTURAL_KEY_VALUE_LABELS",
     "analyze_colon_structure",
     "colon_bold_match",
+    "colon_bold_range",
     "compact_text",
     "contains_colon",
     "is_organization_label",

@@ -1142,11 +1142,82 @@ def test_front_title_with_broad_role_word_is_not_role_name(title_text):
 
 
 @pytest.mark.parametrize(
+    "value",
+    [
+        "人大代表履职情况 专题调研",
+        "项目负责人履职情况 工作部署",
+        "委员联系群众情况 调研分析",
+        "主席会议制度建设 经验交流",
+    ],
+)
+@pytest.mark.parametrize(
+    "context_kind",
+    ["previous_title", "following_date", "following_addressing", "heading_style", "centered"],
+)
+def test_front_role_words_not_adjacent_to_name_do_not_form_role_name(value, context_kind):
+    candidate = _paragraph(value, "body", 1)
+    paragraphs = []
+    if context_kind == "previous_title":
+        paragraphs.append(_paragraph("年度专题材料", "title", 0, alignment="CENTER"))
+        candidate.features.alignment = "CENTER"
+        paragraphs.extend([candidate, _paragraph("正文内容已经开始。", "body", 2)])
+    elif context_kind == "following_date":
+        candidate.features.alignment = "CENTER"
+        candidate.features.paragraph_index = 0
+        paragraphs.extend([
+            candidate,
+            _paragraph("2026年8月27日", "date_line", 1, alignment="CENTER"),
+            _paragraph("正文内容已经开始。", "body", 2),
+        ])
+    elif context_kind == "following_addressing":
+        candidate.features.alignment = "CENTER"
+        candidate.features.paragraph_index = 0
+        paragraphs.extend([
+            candidate,
+            _paragraph("各位代表、同志们：", "addressing", 1),
+            _paragraph("正文内容已经开始。", "body", 2),
+        ])
+    elif context_kind == "heading_style":
+        candidate.features.style_name = "Heading 1"
+        candidate.features.paragraph_index = 0
+        paragraphs.extend([
+            candidate,
+            _paragraph("2026年8月27日", "date_line", 1, alignment="CENTER"),
+            _paragraph("正文内容已经开始。", "body", 2),
+        ])
+    else:
+        candidate.features.alignment = "CENTER"
+        candidate.features.paragraph_index = 0
+        paragraphs.extend([
+            candidate,
+            _paragraph("2026年8月27日", "date_line", 1, alignment="CENTER"),
+            _paragraph("正文内容已经开始。", "body", 2),
+        ])
+
+    data = _document(*paragraphs)
+    apply_recognition(data)
+
+    candidate_index = data.paragraphs.index(candidate)
+    assert candidate.type_id != "role_name"
+    context = data.recognition_diagnostics["document_context"]
+    assert not any(
+        item["position"] == candidate_index and item["kind"] == "role_name"
+        for item in context["front_metadata"]
+    )
+    trace = data.recognition_diagnostics["candidate_trace"][candidate_index]
+    assert "role_name" not in [item["type"] for item in trace["candidates"]]
+
+
+@pytest.mark.parametrize(
     "role_text",
     [
         "办公室主任 张三",
+        "办公室主任 李测试",
+        "办公室主任 欧阳测试",
+        "办公室主任 阿·明",
         "办公室主任　李测试",
         "党组书记、主席 欧阳测试",
+        "某某机构办公室主任 张三",
         "办公室主任王测试",
         "会议代表 张三",
         "项目负责人 李测试",

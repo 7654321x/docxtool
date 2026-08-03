@@ -49,6 +49,32 @@ def test_colon_bold_ignores_numeric_colon_and_uses_later_semantic_colon() -> Non
     ]
 
 
+def test_colon_bold_uses_raw_offset_with_whitespace_around_colons() -> None:
+    numeric_doc = Document()
+    numeric = numeric_doc.add_paragraph("11　：　00")
+    apply_colon_bold(numeric, numeric.text)
+    assert [(run.text, run.font.bold) for run in numeric.runs if run.text] == [
+        ("11　：　00", None),
+    ]
+
+    labeled_doc = Document()
+    labeled = labeled_doc.add_paragraph("时间 ： 11:00")
+    apply_colon_bold(labeled, labeled.text)
+    assert [(run.text, run.font.bold) for run in labeled.runs if run.text] == [
+        ("时间 ：", True),
+        (" 11:00", False),
+    ]
+
+    prefixed_doc = Document()
+    prefixed = prefixed_doc.add_paragraph("1 : 2 标签：内容")
+    apply_colon_bold(prefixed, prefixed.text)
+    assert [(run.text, run.font.bold) for run in prefixed.runs if run.text] == [
+        ("1 : 2 ", False),
+        ("标签：", True),
+        ("内容", False),
+    ]
+
+
 def test_responsibility_line_splits_repeated_labels_and_clears_indent() -> None:
     doc = Document()
     paragraph = doc.add_paragraph("责任单位：区政府责任单位：商务局")

@@ -85,6 +85,7 @@ pwsh -NoProfile -Command "git ls-remote https://github.com/7654321x/docxtool.git
 - `stats.db`、`var/data/*.db`、`*.db`、`*.sqlite`、`*.sqlite3`
 - `logs/`、`outputs/`、`runtime/`、`var/logs/*`、`var/outputs/*`、`var/runtime/*`
 - `.venv/`、缓存、构建产物、临时依赖包
+- `local_recycle/private_manifests/` 中的真实 fixture 文件名、源文档 SHA 和本地关联映射
 - 根目录用户 `.docx`
 - 未脱敏的测试 Word、用户 Word、日志正文
 - `wps/` 下的 wheel、Python 运行时、构建产物和插件私有文件；当前仅允许 `wps/公文格式规范.md`
@@ -108,6 +109,8 @@ pwsh -NoProfile -File .\scripts\publish_to_github.ps1 -Verify -CommitMessage "�
 ```
 
 脚本自动完成：复制允许文件、敏感文件扫描、差异检查、提交、推送和远程提交号核验。它不会 force push；如果发布期间远端分支发生变化，脚本会停止。
+
+发布扫描还会执行 `scripts/check_public_metadata.py`，阻止公开 B0 manifest 或报告包含 DOCX 文件名、测试目录、绝对路径、源文档 SHA 和可识别的 fixture 名称。commit、tree、wheel、配置和输出聚合哈希不受影响。完整私有映射仅保存在被 Git 忽略的 `local_recycle/private_manifests/`，发布脚本不复制该目录。
 
 仅在需要时使用：
 

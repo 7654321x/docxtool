@@ -1,128 +1,136 @@
-# Phase B-0 功能基线与边界修复报告
+# Phase B-0 / B-0.1 功能基线与收口报告
 
 ## Looper 状态
 
-状态：`completed`。B0-1 至 B0-5 均完成；未触发无法解释差异、文字守恒失败、
-Schema 破坏性变化或连续 blocked。固定输入、配置、版本、输出和报告哈希见
-`phase-b0-manifest.json`。
+状态：`completed`。公开元数据、正式 2.8 制品证据、角色姓名邻接、
+空白数字冒号、三模式回归和受影响页面抽查均已收口。
 
 | Finding | 状态 | 结论 |
 |---|---|---|
-| B0-1 2.6 → 2.7 功能差异 | fixed | 源范围对齐后只有四组预期差异，非预期差异为 0 |
-| B0-2 文首角色/姓名宽匹配 | fixed | 角色词必须与姓名 suffix 相邻，并由标题、日期或称呼结构锚点支持 |
-| B0-3 数字冒号与冒号加粗 | fixed | 识别和渲染共享最早有效语义冒号位置 |
-| B0-4 SDK 部分 locator 排序 | fixed | 已定位范围始终按源顺序；未定位片段不污染有效 locator |
-| B0-5 60 项 P1 聚类 | already_fixed | 一次附件分页状态回退被旧比较器放大为 60 条；当前 50 篇报告 P1 为 0 |
+| F-001 发布制品证据 | fixed | 已从正式 2.8 commit/tree 构建并验证 wheel；当前未提交目标 wheel 另行标记，不冒充 clean release |
+| F-002 公开 fixture 元数据 | fixed | 公开 manifest 和报告只保留匿名 ID、数量和聚合哈希，发布扫描为 0 finding |
+| F-003 角色姓名邻接 | fixed | 角色表达必须在姓名边界结束，并由文首结构锚点支持 |
+| F-004 空白数字冒号 | fixed | 检查冒号两侧最近非空白字符，原文 offset 和真实标签范围均保留 |
 
-## 2.6 到 2.7
+## 公开元数据
 
-直接按数组下标比较得到 8128 个路径差异；按物理段和 source span 对齐后，
-语义差异只剩以下四组：
+- 公开 fixture 使用 `standard-001`至`standard-050`及 5 个结构类别匿名 ID。
+- 公开文件不包含源文件名、测试目录、源文档哈希、绝对路径或正文。
+- 私有映射仅保留在 Git 忽略的本地回收站中，发布脚本不会上传。
+- 发布扫描已覆盖 DOCX 名、私有测试路径、Windows/POSIX 绝对路径、源哈希和业务化 fixture 名称。
 
-| 分组 | 样本和模式 | 2.6 | 2.7 / 人工期望 |
-|---|---|---|---|
-| front-role-date | 专项讲话稿，structural/normalize | 职务姓名为标题续行，日期时间地点为正文 | `role_name`、`date_line` |
-| attachment-pagination | 50 篇标准稿，structural/normalize | 一个附件页标记为 `attachment_body` | `attachment_page_mark` |
-| same-line-signature-date | 标准稿 021–030，structural | 同行落款和日期留在正文范围 | 正文缩短并增加 `sign_org`、`sign_date` |
-| sdk-source-order | 上述同物理段拆分结果 | locator 序号和状态受最终块顺序影响 | 源范围序号、可回读状态和计数一致 |
+## Git 历史说明
 
-`strict` 模式无语义差异；package relationships 差异为 0；源范围对齐后的
-unexpected 差异为 0。
+当前分支内容已清理；旧提交历史仍包含已发布元数据；本轮未擅自重写 Git 历史。
+
+## Wheel 制品
+
+| 制品 | 版本 | SHA-256 | 证据 |
+|---|---:|---|---|
+| 正式 release wheel | 2.8 | `0def6d8382e4f58ca1451d4ff8798262ee958ede00677a93db50921b53be83f0` | commit `63908cf137bf779c59e8b37581e222b2ad7d5922`，tree `9232389d1329b0a44aefa0321ff48dbc5626af82` |
+| 当前目标 wheel | 2.9 | `0b969548123231c7168ef06209ea499a96545da3767b55c367deaf9ea2949545` | 未提交目标树聚合 SHA `f44ae8affafe7486e668953c3f1281b8684a76fb95dabf339db9d96c8c180335` |
+
+正式 2.8 wheel 用于证明 Release 2.8 的 clean commit/tree；当前 2.9 wheel
+用于验证 B-0.1 修复和新版本一致性。
+
+## Wheel-only 验证
+
+在仓库外 Python 3.8 干净环境中只安装 wheel 及其声明依赖，源码目录未进入
+`PYTHONPATH`。以下全部通过：
+
+- 当前目标包元数据版本、`package_version()` 和 SDK manifest 均为 `2.9`；
+- 8 个 Schema 资源可读，`docxtool-sdk --help` 和 `manifest` 通过；
+- 最小 RecognitionPlan、Plan JSON 往返、RecognitionBinding 和 Binding JSON 往返通过；
+- 部分 locator 顺序为 `[1, 2, 0, 3]`，`block_index` 保持最终文档顺序；
+- 5 类角色姓名正例、4 类反例、5 类空白数字冒号和 4 类语义冒号通过；
+- 前置比例后的标签范围为 `(6, 8)`，仅标签及冒号加粗。
 
 ## 角色姓名矩阵
 
-正例均保持 `role_name`：普通空格、全角空格、2/3/4 字姓名、多个角色组合、
-紧凑角色姓名、后接日期、后接称呼、仅前接主标题锚点。角色和姓名均使用脱敏
-占位，未维护姓名或单位名单。
-
-反例均保持标题或正文：角色词出现在履职报告、工作方案、年度总结、调研报告中；
-角色词出现在正文描述中；错误 Legacy `role_name` 但全文结构明确为标题。
+| 类别 | 结果 |
+|---|---|
+| 普通/全角空格 | `role_name` |
+| 2、3、4 字姓名，复姓和间隔点 | `role_name` |
+| 多角色、组织限定语、紧凑角色姓名 | `role_name` |
+| 前接主标题、后接日期或称呼 | `role_name` |
+| 角色词后仍有履职、制度、工作或调研结构 | 标题/正文，非 `role_name` |
+| 仅 Word 标题样式或居中 | 不足以成为 `role_name` |
 
 ## 冒号矩阵
 
-| 输入形态 | 语义位置 | 结果 |
-|---|---:|---|
-| `11:00`、`1:2` | 无 | 不生成标签候选，不加粗 |
-| `时间：11:00` | 第一个中文冒号 | 键值结构，标签加粗 |
-| `标签:内容` | 英文冒号 | 现有键值/正文条件不变 |
-| 数字冒号后再有语义冒号 | 后一个冒号 | 跳过数字冒号 |
-| 中英文冒号同时存在 | 最早有效位置 | 识别与渲染一致 |
-| 外层引号包裹 | 保留原 offset | 标签范围不偏移 |
+| 输入形态 | 结果 |
+|---|---|
+| 数字冒号无空白 | 非语义分隔，不加粗 |
+| 普通空格、Tab、NBSP、全角空格包围数字冒号 | 非语义分隔，不加粗 |
+| 标签冒号后接数字时间/比例 | 使用第一个语义冒号 |
+| 数字冒号后再出现语义冒号 | 跳过数字冒号，保留后一冒号原始 offset |
+| 前置数字表达后接标签 | 前置表达不加粗，仅真实标签范围加粗 |
+| 外层引号 | 返回相对原文的 offset，不压缩文本 |
 
-## SDK Locator
+## 三模式 50+5
 
-- `block_index` 保持最终文档顺序。
-- 已定位片段按 `(raw_start, raw_end, stable_index)` 计算 `segment_index`。
-- 未定位片段排在已定位片段之后，并保持自身 `block_index` 相对顺序。
-- “后段、未定位、前段”的 segment 序号为 `[1, 2, 0]`。
-- “前段、未定位、后段”的 segment 序号为 `[0, 2, 1]`。
-- 两个未定位片段的案例为 `[1, 2, 0, 3]`，有效 locator 均保持 confirmed。
-- 真实 overlap 只降级冲突的已定位范围；未定位片段不参与 overlap 扫描。
-- 全定位尾部重排、UTF-16 surrogate pair、同行落款日期、Plan/Binding JSON
-  round-trip 和 confirmed binding 均通过。
+| 模式 | 标准/专项 | P0 | P1 | P2 | P3 | 标题线索未保留 | 落款连续性 | 缺失关系目标 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| strict | 50/50，5/5 | 0 | 0 | 400 | 0 | 0 / 2 | 0 | 0 |
+| structural | 50/50，5/5 | 0 | 0 | 0 | 0 | 0 / 0 | 0 | 0 |
+| normalize | 50/50，5/5 | 0 | 550 | 0 | 0 | 0 / 0 | 0 | 0 |
 
-## 60 项 P1 聚类
+`strict` 的 400 项是源对齐与规范模板的左对齐/两端对齐差异；`normalize`
+的 550 项是比较器将主动文字规范化仍按 source-preservation 记为新增/丢失。
+用正式 Release 2.8 和同一固定输入复跑后，三模式的计数与归因完全相同，
+因此两组不是 B-0.1 新回归。`structural` 仍为 P0–P3 全零。
 
-021–030 每篇均有同一物理段 44、同一组 source span 和同样六条 P1，总计 60。
+三模式各 55 个输出包的 ZIP 完整性、关系 XML 解析和内部目标存在性均通过。
+输出聚合 SHA 和两份报告 SHA 见公开 manifest。
 
-| 根因 cluster | 条数 | 范围摘要 | 最早阶段 | 产品判断 |
-|---|---:|---|---|---|
-| recognition type | 20 | 第三附件页标记 raw span `761..764` | 2.6 尾部附件状态转换 | 真实共享问题，2.7/current 已修复 |
-| output added / missing | 20 | 同一 `8f42...` 哈希同时被记新增和缺失 | 模板保序对齐 | 比较归因级联，不是真实增删 |
-| text loss / duplication | 20 | 同一 `ad5a...` 哈希同时被记新增和丢失 | source-preservation 对齐 | 比较归因级联，文字实际守恒 |
-| normalization reorder | 0 | 无 | 无 | 无 |
-| template expectation | 0 独立项 | 旧报告把错位后的期望类型记为 attachment title | 比较归因 | 不应作为独立产品修复 |
-| other | 0 | 无 | 无 | 无 |
+## 视觉抽查
 
-版本行为：2.2 将该范围识别为 `attachment_page_mark`；2.6 回退为
-`attachment_body`；2.7 恢复 `attachment_page_mark`。正确模板使用附件页标记样式，
-人工真值明确。旧报告中的 60 条可由一个共享状态修复解决，不能逐样本加补丁。
-`attachment-pagination-fix-20260802-2245` 和本轮当前批次均为 P1=0。
+- LibreOffice + PyMuPDF 成功渲染 10 个标准匿名样本、5 个专项匿名样本和
+  1 个模板，共 239 页；转换失败 0，自动疑似页 0。
+- 人工查看了角色/日期文首、时间冒号、附件起页、同行落款日期和稀疏签名页，
+  未见文首类型错位、页面裁切、文字重叠或异常空白。
+- 额外渲染 1 页脱敏合成空白数字冒号样例：数字比例保持普通字重，
+  时间标签和比例后语义标签的加粗范围正确。该页因为仅有 30 个可见字符
+  被阈值标记为稀疏页，人工复核为预期测试布局。
 
 ## 修改文件
 
-本轮行为修改：
+本轮直接修改：
 
 - `src/docxtool/document/role_shape.py`
 - `src/docxtool/document/recognition/context/front.py`
 - `src/docxtool/document/recognition/colon.py`
 - `src/docxtool/document/engine/inline_effects.py`
-- `src/docxtool/sdk/recognition.py`
-
-本轮测试和契约说明：
-
 - `tests/test_recognition_decoder.py`
 - `tests/test_colon_structure.py`
 - `tests/test_engine_inline_effects.py`
-- `tests/test_sdk_binding.py`
+- `scripts/check_public_metadata.py`
+- `tests/test_public_metadata_scan.py`
+- `scripts/publish_to_github.ps1`
+- `.gitignore`
 - `AGENTS.md`
 - `docs/DOCX_REGRESSION_CHECKLIST.md`
-- `docs/RECOGNITION_SOURCE_LOCATORS.md`
-- `docs/SDK.md`
+- `docs/GITHUB_UPLOAD_GUIDE.md`
+- `docs/UPLOAD_MANIFEST.md`
 - `docs/migration/phase-b0-manifest.json`
 - `docs/migration/phase-b0-report.md`
 
-这些文件中的 Phase A 拆分及其他开始前改动仍属于既有 dirty worktree；本轮只增加
-上述边界修复、测试和说明，没有恢复或覆盖开始前修改。
+`src/docxtool/sdk/recognition.py` 等 Phase B-0 与 Phase A 文件在开始前已处于 dirty/untracked
+状态，本轮未恢复、删除或覆盖这些既有修改。
 
 ## 验证结果
 
-- 直接相关模块：142 tests passed。
-- 全量 Python：1164 tests passed，3 个已知 warning。
-- Ruff：`src tests scripts` 全部通过。
-- `compileall`：通过。
-- Node：11 tests passed。
-- `git diff --check`：通过，仅有既有 LF/CRLF 提示。
-- 标准稿：50/50 成功，P0/P1/P2/P3 均为 0，源标题线索未保留 0，落款连续性 0。
-- 专项稿：5/5 成功，结构复核和关键结构复核均为 0。
-- wheel-only：Python 3.8 干净环境通过 SDK 导入、Schema、CLI、最小识别、
-  Plan/Binding JSON 往返和 confirmed 绑定。
-- wheel：`docxtool-2.7-py3-none-any.whl`，SHA-256
-  `01093c16860dfff199ccf0ab663ff8f4bfb549d7eac5c25204fc926f36a7aaf2`。
-
-当前批次未请求视觉渲染，不能据此断言没有页面级空白、裁切或 WPS 显示差异。
+- Python 3.8：`1206 passed, 3 warnings`。
+- Python 3.10：`1206 passed, 3 warnings`。
+- 直接冒号/渲染测试：26 passed。
+- 角色姓名、解码、软换行和处理策略相关测试：通过。
+- Ruff：`src tests scripts` 通过。
+- `compileall`、`git diff --check`：通过；仅有既有 LF/CRLF 提示。
+- Node：11 passed。
+- 公开元数据扫描：0 finding。
+- wheel-only SDK 与正式 2.8 wheel 元数据验证：通过。
 
 本轮未继续拆分文件。
 本轮未加入具体姓名、单位或样本白名单。
-本轮未执行 git commit。
-本轮未执行 git push。
+本轮未重写 Git 历史。
+B-0.1 实现阶段未直接执行 git commit 或 git push；后续发布由独立安全脚本执行。

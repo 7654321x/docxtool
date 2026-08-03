@@ -1,7 +1,14 @@
 from __future__ import annotations
 
+import pytest
+
 from docxtool.document.importer import _colon_bold_match, _contains_colon
-from docxtool.document.recognition.colon import analyze_colon_structure, colon_bold_match, contains_colon
+from docxtool.document.recognition.colon import (
+    analyze_colon_structure,
+    colon_bold_match,
+    contains_colon,
+    semantic_colon_position,
+)
 
 
 def test_contains_colon_helper_keeps_importer_facade_compatible() -> None:
@@ -89,3 +96,46 @@ def test_analyzer_and_bold_match_share_semantic_colon_offset() -> None:
         "“标签：内容”",
     ):
         assert colon_bold_match(value) == analyze_colon_structure(value).separator_index
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "11 : 00",
+        "1 ： 2",
+        "11　：　00",
+        "11\t:\t00",
+        "11\u00a0:\u00a000",
+    ],
+)
+def test_semantic_colon_ignores_numeric_punctuation_across_whitespace(value: str) -> None:
+    analysis = analyze_colon_structure(value)
+
+    assert semantic_colon_position(value) is None
+    assert colon_bold_match(value) == -1
+    assert analysis.has_colon is False
+    assert analysis.explanatory_body_candidate is False
+
+
+@pytest.mark.parametrize(
+    ("value", "expected_position", "expected_label", "expected_value"),
+    [
+        ("时间 ： 11:00", 3, "时间", "11:00"),
+        ("比例：1 ： 2", 2, "比例", "1 : 2"),
+        ("1 : 2 标签：内容", 8, "标签", "内容"),
+        ("“时间 ： 11:00”", 4, "时间", "11:00"),
+    ],
+)
+def test_semantic_colon_preserves_raw_offset_after_skipping_spaced_numeric_colons(
+    value: str,
+    expected_position: int,
+    expected_label: str,
+    expected_value: str,
+) -> None:
+    analysis = analyze_colon_structure(value)
+
+    assert semantic_colon_position(value) == expected_position
+    assert colon_bold_match(value) == expected_position
+    assert analysis.separator_index == expected_position
+    assert analysis.label == expected_label
+    assert analysis.value == expected_value

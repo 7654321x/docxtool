@@ -372,6 +372,7 @@ $requiredFiles = @(
     "scripts/compare_recognition_runs.py",
     "scripts/phase_a_equivalence_snapshot.py",
     "scripts/phase_a_web_contract_snapshot.py",
+    "scripts/check_public_metadata.py",
     "scripts/generate_005_format_fixtures.py",
     "scripts/generate_wps_validation_fixtures.py",
     "scripts/normalize_correct_template_role_spacing.py",
@@ -410,8 +411,20 @@ try {
 
         Assert-NoForbiddenFiles -CloneRoot $tempRoot
 
+        $sourceVenvPython = Join-Path $SourceRoot ".venv\Scripts\python.exe"
+        $scanPython = if (Test-Path -LiteralPath $sourceVenvPython -PathType Leaf) {
+            $sourceVenvPython
+        }
+        else {
+            (Get-Command python -ErrorAction Stop).Source
+        }
+        Invoke-Checked $scanPython @(
+            "scripts/check_public_metadata.py",
+            "docs/migration/phase-b0-manifest.json",
+            "docs/migration/phase-b0-report.md"
+        )
+
         if ($Verify) {
-            $sourceVenvPython = Join-Path $SourceRoot ".venv\Scripts\python.exe"
             $testPython = if (Test-Path -LiteralPath $sourceVenvPython -PathType Leaf) {
                 $sourceVenvPython
             }

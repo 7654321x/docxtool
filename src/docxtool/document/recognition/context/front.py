@@ -7,8 +7,7 @@ import re
 from ...role_shape import (
     PERSON_NAME_RE,
     ROLE_HINT_RE,
-    has_compact_role_name_shape,
-    is_person_name_suffix,
+    parse_role_name_shape,
 )
 from ..features import ParagraphFeatures
 
@@ -95,19 +94,12 @@ def _head_role_name(
         or any(mark in compact for mark in "：:；;")
     ):
         return False
-    # A role and name separated by ordinary or full-width whitespace is the
-    # strongest and most common manuscript form.
-    spaced_name = re.search(r"[\s　]+([\u4e00-\u9fff·×X]{2,4})$", text)
-    has_role_hint = bool(ROLE_HINT_RE.search(compact))
     previous_title_anchor = previous is not None and _front_title_anchor(previous)
     following_metadata = following is not None and (
         _head_date_line(following) or following.recipient_match
     )
-    if (
-        has_role_hint
-        and spaced_name
-        and is_person_name_suffix(spaced_name.group(1))
-        and (previous_title_anchor or following_metadata)
+    if parse_role_name_shape(text) is not None and (
+        previous_title_anchor or following_metadata
     ):
         return True
     if (
@@ -118,14 +110,7 @@ def _head_role_name(
         and following_metadata
     ):
         return True
-    # Some speech manuscripts omit the space, for example “党组书记、主席张三”.
-    # Require a date or salutation immediately after it before accepting this
-    # more ambiguous compact form.
-    return bool(
-        has_role_hint
-        and has_compact_role_name_shape(compact)
-        and following_metadata
-    )
+    return False
 
 
 def _title_metadata(
