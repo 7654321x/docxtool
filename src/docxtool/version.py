@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from importlib import metadata
 
-_SOURCE_VERSION = "2.9"
+_SOURCE_VERSION = "3.0"
 
 
 def package_version() -> str:

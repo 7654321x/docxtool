@@ -1209,6 +1209,118 @@ def test_front_role_words_not_adjacent_to_name_do_not_form_role_name(value, cont
 
 
 @pytest.mark.parametrize(
+    "value",
+    [
+        "项目负责人 专题调研",
+        "会议代表 经验交流",
+        "办公室主任 工作部署",
+        "分管领导 情况分析",
+    ],
+)
+@pytest.mark.parametrize(
+    "context_kind",
+    [
+        "previous_title",
+        "following_date",
+        "following_addressing",
+        "previous_title_and_date",
+        "centered",
+        "heading_style",
+    ],
+)
+def test_weak_four_character_suffix_is_not_role_name_without_complete_byline_context(
+    value,
+    context_kind,
+):
+    candidate = _paragraph(value, "body", 1)
+    if context_kind == "previous_title":
+        paragraphs = [
+            _paragraph("年度专题材料", "title", 0, alignment="CENTER"),
+            candidate,
+            _paragraph("正文内容已经开始。", "body", 2),
+        ]
+    elif context_kind == "following_date":
+        candidate.features.paragraph_index = 0
+        paragraphs = [
+            candidate,
+            _paragraph("2026年8月27日", "date_line", 1, alignment="CENTER"),
+            _paragraph("正文内容已经开始。", "body", 2),
+        ]
+    elif context_kind == "following_addressing":
+        candidate.features.paragraph_index = 0
+        paragraphs = [
+            candidate,
+            _paragraph("各位代表、同志们：", "addressing", 1),
+            _paragraph("正文内容已经开始。", "body", 2),
+        ]
+    elif context_kind == "previous_title_and_date":
+        paragraphs = [
+            _paragraph("年度专题材料", "title", 0, alignment="CENTER"),
+            candidate,
+            _paragraph("2026年8月27日", "date_line", 2, alignment="CENTER"),
+            _paragraph("正文内容已经开始。", "body", 3),
+        ]
+    elif context_kind == "centered":
+        candidate.features.alignment = "CENTER"
+        candidate.features.paragraph_index = 0
+        paragraphs = [candidate, _paragraph("正文内容已经开始。", "body", 1)]
+    else:
+        candidate.features.style_name = "Heading 1"
+        candidate.features.paragraph_index = 0
+        paragraphs = [candidate, _paragraph("正文内容已经开始。", "body", 1)]
+
+    data = _document(*paragraphs)
+    apply_recognition(data)
+
+    candidate_index = data.paragraphs.index(candidate)
+    assert candidate.type_id != "role_name"
+    assert not any(
+        item["position"] == candidate_index and item["kind"] == "role_name"
+        for item in data.recognition_diagnostics["document_context"]["front_metadata"]
+    )
+
+
+def test_weak_four_character_person_name_requires_complete_centered_byline_context():
+    candidate = _paragraph("办公室主任 林小测试", "body", 1, alignment="CENTER")
+    data = _document(
+        _paragraph("年度重点工作会议讲话", "title", 0, alignment="CENTER"),
+        candidate,
+        _paragraph("2026年8月27日", "date_line", 2, alignment="CENTER"),
+        _paragraph("各位代表、同志们：", "addressing", 3),
+    )
+
+    apply_recognition(data)
+
+    assert candidate.type_id == "role_name"
+
+
+def test_compound_surname_four_character_name_remains_strong_with_title_anchor():
+    candidate = _paragraph("办公室主任 欧阳测试", "body", 1, alignment="CENTER")
+    data = _document(
+        _paragraph("年度重点工作会议讲话", "title", 0, alignment="CENTER"),
+        candidate,
+        _paragraph("正文内容已经开始。", "body", 2),
+    )
+
+    apply_recognition(data)
+
+    assert candidate.type_id == "role_name"
+
+
+def test_compact_role_name_prefers_strong_short_name_over_weak_long_suffix():
+    candidate = _paragraph("办公室党组书记、主席张三", "body", 1)
+    data = _document(
+        _paragraph("年度重点工作会议讲话", "title", 0, alignment="CENTER"),
+        candidate,
+        _paragraph("2026年8月27日", "date_line", 2, alignment="CENTER"),
+    )
+
+    apply_recognition(data)
+
+    assert candidate.type_id == "role_name"
+
+
+@pytest.mark.parametrize(
     "role_text",
     [
         "办公室主任 张三",

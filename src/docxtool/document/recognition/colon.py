@@ -60,6 +60,8 @@ class ColonAnalysis:
     normalized_text: str
     has_colon: bool
     separator_index: int | None = None
+    label_start_index: int | None = None
+    label_end_index: int | None = None
     separator: str = ""
     label: str = ""
     value: str = ""
@@ -130,14 +132,14 @@ def _nearest_non_whitespace(value: str, start: int, step: int) -> str | None:
 
 
 def _semantic_label(value: str) -> tuple[str, int]:
-    match = re.match(
-        r"^\s*\d+\s*[:：]\s*\d+\s+(?P<label>.+)$",
-        value,
-        re.DOTALL,
-    )
-    if match is None:
-        return value, 0
-    return match.group("label"), match.start("label")
+    label_start = 0
+    for match in re.finditer(r"\d+\s*[:：]\s*\d+\s+", value):
+        if value[match.end():].strip():
+            label_start = match.end()
+    label = value[label_start:]
+    leading = len(label) - len(label.lstrip())
+    label_start += leading
+    return value[label_start:], label_start
 
 
 def semantic_colon_position(value: str) -> int | None:
@@ -165,19 +167,19 @@ def colon_bold_range(text: str) -> tuple[int, int] | None:
     value = text or ""
     if not value or value.rstrip().endswith(("：", ":")):
         return None
-    position = semantic_colon_position(value)
-    if position is None:
-        return None
-    semantic_raw, semantic_offset = _strip_wrapping_quotes(value)
-    semantic_index = position - semantic_offset
-    label, label_offset = _semantic_label(semantic_raw[:semantic_index])
+    analysis = analyze_colon_structure(value)
     if (
-        0 < len(compact_text(label)) <= 10
-        and not is_organization_label(label)
-        and not re.search(r"[，。、；]", label)
+        not analysis.has_colon
+        or analysis.separator_index is None
+        or analysis.label_start_index is None
     ):
-        start = semantic_offset + label_offset if label_offset else 0
-        return start, position
+        return None
+    if (
+        0 < analysis.label_length <= 10
+        and not analysis.organization_label
+        and not re.search(r"[，。、；]", analysis.label)
+    ):
+        return analysis.label_start_index, analysis.separator_index
     return None
 
 
@@ -201,7 +203,7 @@ def analyze_colon_structure(value: str) -> ColonAnalysis:
 
     semantic_index = index - semantic_offset
     separator = semantic_raw[semantic_index]
-    label_raw, _label_offset = _semantic_label(semantic_raw[:semantic_index])
+    label_raw, label_offset = _semantic_label(semantic_raw[:semantic_index])
     label_raw = label_raw.strip()
     value_raw = semantic_raw[semantic_index + 1:].strip()
     label = compact_text(_normalize(label_raw))
@@ -270,6 +272,8 @@ def analyze_colon_structure(value: str) -> ColonAnalysis:
         normalized_text=normalized,
         has_colon=True,
         separator_index=index,
+        label_start_index=semantic_offset + label_offset,
+        label_end_index=index,
         separator=separator,
         label=label,
         value=after,

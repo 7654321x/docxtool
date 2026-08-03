@@ -16,6 +16,7 @@ import sys
 import tempfile
 import time
 from typing import Any, Iterable
+import unicodedata
 import zipfile
 
 from docx import Document
@@ -35,7 +36,7 @@ OUTPUT_DIR = ROOT / "test_docx" / "tset1" / "test1测试结果"
 SPECIAL_INPUT_DIR = ROOT / "test_docx" / "test2" / "test2"
 SPECIAL_TEMPLATE_DIR = ROOT / "test_docx" / "test2" / "test2正确格式"
 SPECIAL_OUTPUT_DIR = ROOT / "test_docx" / "test2" / "测试结果"
-COMPARISON_VERSION = "structural-alignment-v3"
+COMPARISON_VERSION = "structural-alignment-v4"
 _DISPATCH_NUMBER_RE = re.compile(r"^(?P<agency_code>.+?)〔(?P<year>\d{4})〕(?P<sequence>\d+)号$")
 _PAGE_NUMBER_RE = re.compile(r"^[—–－\-\s]*\d{1,4}[—–－\-\s]*$")
 _DATE_RE = re.compile(
@@ -716,6 +717,120 @@ def _mark_project_config_differences(differences: list[dict[str, Any]]) -> Count
     return marked
 
 
+def _mode_text_key(item: dict[str, Any]) -> str:
+    text = _normalized_text(str(item.get("_text", "")))
+    date_identity = _date_identity(text)
+    if date_identity:
+        return date_identity
+    heading_content, had_prefix = _heading_content(text)
+    if _is_heading(item) or had_prefix:
+        text = heading_content
+    normalized = unicodedata.normalize("NFKC", text)
+    return "".join(
+        char for char in normalized
+        if not char.isspace() and unicodedata.category(char)[0] not in {"P", "Z"}
+    )
+
+
+def _mode_conservation_key(snapshot: dict[str, Any]) -> str:
+    return "".join(_mode_text_key(item) for item in snapshot.get("paragraphs", []))
+
+
+def _mark_expected_mode_differences(
+    differences: list[dict[str, Any]],
+    actual: dict[str, dict[str, Any]],
+    expected: dict[str, dict[str, Any]],
+    source_recognition: dict[str, Any] | None,
+    processing_strategy: str | None,
+) -> int:
+    if processing_strategy not in {"strict", "normalize"}:
+        return 0
+
+    marked = 0
+    if processing_strategy == "strict":
+        physical_by_index = {
+            item["index"]: item for item in actual["physical"].get("paragraphs", [])
+        }
+        for item in differences:
+            if (
+                item.get("expected_change")
+                or item.get("comparison_source") != "physical"
+                or item.get("category") != "alignment"
+                or item.get("actual_style_id") != "DCT-Heading2"
+            ):
+                continue
+            paragraph = physical_by_index.get(item.get("actual_paragraph_index"))
+            text = _normalized_text(str((paragraph or {}).get("_text", "")))
+            period = text.find("。")
+            if (
+                not re.match(r"^[（(][一二三四五六七八九十百千零〇0-9]+[）)]", text)
+                or period < 0
+                or len(text[period + 1:].strip()) < 5
+            ):
+                continue
+            _mark_expected(
+                item,
+                reason="expected_mode_difference",
+                origin="expected_mode_difference",
+                rule_basis="strict_physical_paragraph_contract",
+            )
+            item["match_reason"] = "strict_inline_heading_body_alignment"
+            marked += 1
+        return marked
+
+    if (
+        source_recognition is not None
+        and _mode_conservation_key(actual["recognition"])
+        == _mode_conservation_key(source_recognition)
+    ):
+        for item in differences:
+            if (
+                not item.get("expected_change")
+                and item.get("category") in {"source_text_addition", "source_text_loss"}
+            ):
+                _mark_expected(
+                    item,
+                    reason="expected_mode_difference",
+                    origin="expected_mode_difference",
+                    rule_basis="normalize_text_and_structure_contract",
+                )
+                item["match_reason"] = "normalize_character_conservation"
+                marked += 1
+
+    expected_by_index = {
+        item["index"]: item for item in expected["recognition"].get("paragraphs", [])
+    }
+    actual_by_index = {
+        item["index"]: item for item in actual["recognition"].get("paragraphs", [])
+    }
+    missing_keys: Counter[tuple[str, str]] = Counter()
+    for item in differences:
+        if item.get("category") != "template_missing":
+            continue
+        paragraph = expected_by_index.get(item.get("expected_paragraph_index"))
+        if paragraph is not None:
+            missing_keys[(_mode_text_key(paragraph), str(paragraph.get("type", "")))] += 1
+    for item in differences:
+        if item.get("expected_change") or item.get("category") != "output_addition":
+            continue
+        paragraph = actual_by_index.get(item.get("actual_paragraph_index"))
+        if paragraph is None:
+            continue
+        key = (_mode_text_key(paragraph), str(paragraph.get("type", "")))
+        if not key[0] or missing_keys[key] <= 0:
+            continue
+        missing_keys[key] -= 1
+        _mark_expected(
+            item,
+            reason="expected_mode_difference",
+            origin="expected_mode_difference",
+            rule_basis="normalize_text_and_structure_contract",
+        )
+        item["match_reason"] = "normalize_alignment_attribution"
+        marked += 1
+    return marked
+
+
 def _mark_protected_source_differences(
     differences: list[dict[str, Any]], actual_snapshot: dict[str, Any], source_snapshot: dict[str, Any],
 ) -> int:
@@ -752,6 +867,7 @@ def compare_documents(
     actual: dict[str, dict[str, Any]], expected: dict[str, dict[str, Any]],
     *, source_recognition: dict[str, Any] | None = None,
     source_physical: dict[str, Any] | None = None,
+    processing_strategy: str | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     recognition_diffs, recognition_stats = compare_snapshots(
         actual["recognition"], expected["recognition"], source="recognition",
@@ -779,6 +895,13 @@ def compare_documents(
             differences, actual["physical"], source_physical,
         )
     project_config_differences = _mark_project_config_differences(differences)
+    expected_mode_differences = _mark_expected_mode_differences(
+        differences,
+        actual,
+        expected,
+        source_recognition,
+        processing_strategy,
+    )
     for item in differences:
         item["severity"] = severity(item["category"], expected_change=bool(item["expected_change"]))
     real = [item for item in differences if not item["expected_change"]]
@@ -797,6 +920,7 @@ def compare_documents(
         "source_preservation": preservation_stats,
         "protected_source_differences": protected_source_differences,
         "project_config_differences": dict(project_config_differences),
+        "expected_mode_differences": expected_mode_differences,
         "unexpected_differences": len(real),
         "real_issue_counts": dict(Counter(item["severity"] for item in real)),
         "difference_origin_counts": dict(Counter(item["difference_origin"] for item in differences)),
@@ -1294,6 +1418,7 @@ def main(argv: list[str] | None = None) -> int:
                     actual, expected,
                     source_recognition=source_recognition,
                     source_physical=source_physical,
+                    processing_strategy=processing_strategy,
                 )
         except Exception as exc:
             record["错误"] = f"{type(exc).__name__}: {exc}"

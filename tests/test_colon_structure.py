@@ -6,6 +6,7 @@ from docxtool.document.importer import _colon_bold_match, _contains_colon
 from docxtool.document.recognition.colon import (
     analyze_colon_structure,
     colon_bold_match,
+    colon_bold_range,
     contains_colon,
     semantic_colon_position,
 )
@@ -139,3 +140,27 @@ def test_semantic_colon_preserves_raw_offset_after_skipping_spaced_numeric_colon
     assert analysis.separator_index == expected_position
     assert analysis.label == expected_label
     assert analysis.value == expected_value
+
+
+@pytest.mark.parametrize(
+    ("value", "expected_range"),
+    [
+        ("时间11:00 标签：内容", (8, 10)),
+        ("版本1:2 标签：内容", (6, 8)),
+        ("会议时间 11 : 00 标签：内容", (13, 15)),
+        ("序号1：2 标签：内容", (6, 8)),
+        ("1 : 2 标签：内容", (6, 8)),
+        ("“标签：内容”", (1, 3)),
+    ],
+)
+def test_prefixed_numeric_expression_keeps_true_label_raw_range(
+    value: str,
+    expected_range: tuple[int, int],
+) -> None:
+    analysis = analyze_colon_structure(value)
+
+    assert colon_bold_range(value) == expected_range
+    assert analysis.label_start_index == expected_range[0]
+    assert analysis.label_end_index == expected_range[1]
+    assert analysis.separator_index == expected_range[1]
+    assert analysis.label == "标签"

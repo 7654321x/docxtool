@@ -20,6 +20,16 @@ _ROLE_CONNECTION_SUFFIX_RE = re.compile(r"(?:[、，,/／&]|兼|及|和|与)+$")
 _SPACED_NAME_RE = re.compile(
     r"(?P<separator>[\s\u3000]+)(?P<name>" + _PERSON_NAME_PATTERN + r")$"
 )
+_COMPOUND_SURNAMES = frozenset({
+    "欧阳", "太史", "端木", "上官", "司马", "东方", "独孤", "南宫",
+    "万俟", "闻人", "夏侯", "诸葛", "尉迟", "公羊", "赫连", "澹台",
+    "皇甫", "宗政", "濮阳", "公冶", "太叔", "申屠", "公孙", "慕容",
+    "仲孙", "钟离", "长孙", "宇文", "司徒", "鲜于", "司空", "闾丘",
+    "子车", "亓官", "司寇", "巫马", "公西", "颛孙", "壤驷", "公良",
+    "漆雕", "乐正", "宰父", "谷梁", "拓跋", "夹谷", "轩辕", "令狐",
+    "段干", "百里", "呼延", "东郭", "南门", "羊舌", "微生", "梁丘",
+    "左丘", "东门", "西门", "第五",
+})
 
 
 def has_role_hint(text: str) -> bool:
@@ -31,6 +41,18 @@ def is_person_name_suffix(text: str) -> bool:
     """Return whether a short suffix is name-shaped rather than document-shaped."""
     value = re.sub(r"\s+", "", text or "")
     return bool(PERSON_NAME_RE.fullmatch(value) and not NON_PERSON_SUFFIX_RE.search(value))
+
+
+def person_name_shape_strength(text: str) -> str | None:
+    """Return ``strong`` or ``weak`` for a structurally valid name suffix."""
+    value = re.sub(r"\s+", "", text or "")
+    if not is_person_name_suffix(value):
+        return None
+    if len(value) <= 3 or "·" in value or any(mark in value for mark in "×X"):
+        return "strong"
+    if len(value) == 4 and value[:2] in _COMPOUND_SURNAMES:
+        return "strong"
+    return "weak"
 
 
 def _role_expression_ends_at_boundary(value: str) -> bool:
@@ -57,6 +79,7 @@ def parse_role_name_shape(text: str) -> tuple[str, str] | None:
         return None
 
     compact = re.sub(r"\s+", "", value)
+    weak_candidate: tuple[str, str] | None = None
     for start in range(max(1, len(compact) - 5), len(compact)):
         person_name = compact[start:]
         role_expression = compact[:start]
@@ -64,8 +87,11 @@ def parse_role_name_shape(text: str) -> tuple[str, str] | None:
             is_person_name_suffix(person_name)
             and _role_expression_ends_at_boundary(role_expression)
         ):
-            return role_expression, person_name
-    return None
+            candidate = (role_expression, person_name)
+            if person_name_shape_strength(person_name) == "strong":
+                return candidate
+            weak_candidate = candidate
+    return weak_candidate
 
 
 def has_compact_role_name_shape(text: str) -> bool:

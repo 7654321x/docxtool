@@ -8,6 +8,7 @@ from ...role_shape import (
     PERSON_NAME_RE,
     ROLE_HINT_RE,
     parse_role_name_shape,
+    person_name_shape_strength,
 )
 from ..features import ParagraphFeatures
 
@@ -98,10 +99,18 @@ def _head_role_name(
     following_metadata = following is not None and (
         _head_date_line(following) or following.recipient_match
     )
-    if parse_role_name_shape(text) is not None and (
-        previous_title_anchor or following_metadata
-    ):
-        return True
+    parsed = parse_role_name_shape(text)
+    if parsed is not None:
+        strength = person_name_shape_strength(parsed[1])
+        if strength == "strong" and (previous_title_anchor or following_metadata):
+            return True
+        if (
+            strength == "weak"
+            and previous_title_anchor
+            and following_metadata
+            and feature.is_centered
+        ):
+            return True
     if (
         PERSON_NAME_RE.fullmatch(compact)
         and previous is not None

@@ -106,12 +106,13 @@
       "wheel_sha256": "0def6d8382e4f58ca1451d4ff8798262ee958ede00677a93db50921b53be83f0",
       "wheel_python": "3.8.10"
     },
-    "current_target": {
-      "base_commit_sha": "63908cf137bf779c59e8b37581e222b2ad7d5922",
-      "clean_release": false,
-      "target_tree_aggregate_sha256": "f44ae8affafe7486e668953c3f1281b8684a76fb95dabf339db9d96c8c180335",
+    "2.9": {
+      "commit_sha": "597138dd3e6b75b2abde839d7b99dff144b61e9e",
+      "tree_sha": "d45080bf5c9db6b6e7480f894970f08cfb0bead8",
+      "dirty_patch_sha256": null,
+      "clean_release": true,
       "wheel_filename": "docxtool-2.9-py3-none-any.whl",
-      "wheel_sha256": "0b969548123231c7168ef06209ea499a96545da3767b55c367deaf9ea2949545",
+      "wheel_sha256": "a8a1c779110075de0a226782e929f892fe58254af231d6e85e40252f930abea6",
       "wheel_python": "3.8.10"
     }
   },
@@ -205,6 +206,44 @@
       "rendered_pages": 239,
       "suspected_pages": 0,
       "synthetic_spaced_colon_pages": 1,
+      "manual_review_passed": true
+    }
+  },
+  "phase_b02_tests": {
+    "formal_release": {
+      "version": "2.9",
+      "commit_sha": "597138dd3e6b75b2abde839d7b99dff144b61e9e",
+      "tree_sha": "d45080bf5c9db6b6e7480f894970f08cfb0bead8",
+      "wheel_sha256": "a8a1c779110075de0a226782e929f892fe58254af231d6e85e40252f930abea6",
+      "wheel_members": 225,
+      "target_wheel_sha256": "0b969548123231c7168ef06209ea499a96545da3767b55c367deaf9ea2949545",
+      "content_difference_count": 0,
+      "timestamp_only_difference_count": 225
+    },
+    "python": {
+      "3.8": {"passed": 1246, "failed": 0, "warnings": 3},
+      "3.10": {"passed": 1246, "failed": 0, "warnings": 3}
+    },
+    "node": {"passed": 10, "failed": 0},
+    "current_worktree_wheel_only": {
+      "formal_release": false,
+      "wheel_sha256": "1ff4dd9589a40a6882eed3997ba4037b24883ed3d303a2392c5598db042fb87f",
+      "schema_resources": 8,
+      "plan_round_trip": true,
+      "binding_round_trip": true,
+      "partial_locator_order": [1, 2, 0, 3],
+      "role_cases": 8,
+      "colon_cases": 6
+    },
+    "modes": {
+      "structural": {"standard_passed": 50, "special_passed": 5, "failed": 0, "p0": 0, "p1": 0, "p2": 0, "p3": 0, "expected_mode_differences": 0},
+      "strict": {"standard_passed": 50, "special_passed": 5, "failed": 0, "p0": 0, "p1": 0, "p2": 0, "p3": 0, "expected_mode_differences": 400},
+      "normalize": {"standard_passed": 50, "special_passed": 5, "failed": 0, "p0": 0, "p1": 0, "p2": 0, "p3": 0, "expected_mode_differences": 550}
+    },
+    "visual_review": {
+      "synthetic_documents": 2,
+      "rendered_pages": 2,
+      "suspected_pages": 0,
       "manual_review_passed": true
     }
   },

@@ -353,6 +353,94 @@ def test_output_loss_not_visible_in_template_is_still_reported() -> None:
     assert summary["unexpected_differences"] == 1
 
 
+def test_normalize_mode_marks_only_character_conserving_changes_as_expected() -> None:
+    source = _recognition_snapshot([
+        _recognition_item(0, "一、测试标题。这里是正文", "heading1"),
+        _recognition_item(1, "2025年十月15日", "sign_date"),
+        _recognition_item(2, "附件1", "attachment_page_mark"),
+    ])
+    actual_recognition = _recognition_snapshot([
+        _recognition_item(0, "一、测试标题", "heading1"),
+        _recognition_item(1, "这里是正文"),
+        _recognition_item(2, "2025年10月15日", "sign_date"),
+        _recognition_item(3, "附件 1", "attachment_page_mark"),
+    ])
+    empty_physical = {
+        "paragraphs": [], "tables": 0, "sections": 1, "inline_shapes": 0,
+        "headers": 0, "footers": 0,
+    }
+
+    differences, summary = batch_test_docx.compare_documents(
+        {"recognition": actual_recognition, "physical": empty_physical},
+        {"recognition": actual_recognition, "physical": empty_physical},
+        source_recognition=source,
+        processing_strategy="normalize",
+    )
+
+    mode_differences = [
+        item for item in differences
+        if item.get("expected_reason") == "expected_mode_difference"
+    ]
+    assert mode_differences
+    assert summary["expected_mode_differences"] == len(mode_differences)
+    assert summary["unexpected_differences"] == 0
+
+
+def test_normalize_mode_does_not_hide_real_character_loss() -> None:
+    source = _recognition_snapshot([_recognition_item(0, "完整正文内容")])
+    actual = _recognition_snapshot([_recognition_item(0, "完整正文")])
+    empty_physical = {
+        "paragraphs": [], "tables": 0, "sections": 1, "inline_shapes": 0,
+        "headers": 0, "footers": 0,
+    }
+
+    differences, summary = batch_test_docx.compare_documents(
+        {"recognition": actual, "physical": empty_physical},
+        {"recognition": actual, "physical": empty_physical},
+        source_recognition=source,
+        processing_strategy="normalize",
+    )
+
+    assert any(
+        item["category"] == "source_text_loss" and not item["expected_change"]
+        for item in differences
+    )
+    assert summary["expected_mode_differences"] == 0
+    assert summary["unexpected_differences"] > 0
+
+
+def test_strict_inline_heading_body_alignment_is_an_expected_mode_difference() -> None:
+    text = "（一）测试标题。这里是同段正文内容"
+    recognition = _recognition_snapshot([_recognition_item(0, text, "heading2")])
+    actual_physical = {
+        "paragraphs": [{
+            "index": 0, "_text": text, "text_hash": batch_test_docx.text_hash(text),
+            "style": "标题 2", "style_id": "DCT-Heading2", "alignment": "LEFT (0)",
+            "region": "body",
+        }],
+        "tables": 0, "sections": 1, "inline_shapes": 0, "headers": 0, "footers": 0,
+    }
+    expected_physical = {
+        "paragraphs": [{
+            "index": 0, "_text": text, "text_hash": batch_test_docx.text_hash(text),
+            "style": "标题 2", "style_id": "template-heading2", "alignment": "JUSTIFY (3)",
+            "region": "body",
+        }],
+        "tables": 0, "sections": 1, "inline_shapes": 0, "headers": 0, "footers": 0,
+    }
+
+    differences, summary = batch_test_docx.compare_documents(
+        {"recognition": recognition, "physical": actual_physical},
+        {"recognition": recognition, "physical": expected_physical},
+        processing_strategy="strict",
+    )
+
+    alignment = next(item for item in differences if item["category"] == "alignment")
+    assert alignment["expected_reason"] == "expected_mode_difference"
+    assert alignment["severity"] == "P3"
+    assert summary["unexpected_differences"] == 0
+
+
 def test_reordered_content_does_not_match_across_the_sequence() -> None:
     actual = _recognition_snapshot([_recognition_item(0, "乙"), _recognition_item(1, "甲")])
     expected = _recognition_snapshot([_recognition_item(0, "甲"), _recognition_item(1, "乙")])

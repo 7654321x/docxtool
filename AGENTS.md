@@ -137,6 +137,8 @@ pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m ruff check src tests scr
 pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m pytest -q tests/test_recognition_decoder.py tests/test_processing_flags.py tests/test_signature_detection.py tests/test_importer_heading_flow.py tests/test_segment_boundaries.py tests/test_audit_hardening.py"
 pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m ruff check src tests scripts"
 ```
+45. 触发场景：职务后任意四字纯汉字短语不能仅凭前标题、后日期、后称呼、居中或 Word 标题样式单项证据认作姓名。普通四字姓名属于弱形状，必须同时具备前标题、后日期/称呼和居中；复姓、间隔点、占位符及 2—3 字姓名属于强形状，沿用既有前后结构锚点。紧凑“职务+姓名”存在多种切分时优先采用强姓名形状，不得加入具体姓名或业务短语黑名单。修改后运行 `tests/test_recognition_decoder.py tests/test_processing_flags.py`。
+46. 触发场景：`时间11:00 标签：内容`、`版本1:2 标签：内容`等带文字前缀的数字时间/比例后仍有语义标签时，统一冒号分析必须返回原文中的 `separator_index`、`label_start_index`和`label_end_index`；渲染只加粗真实标签及语义冒号，数字表达及其文字前缀保持普通字重。修改后运行 `tests/test_colon_structure.py tests/test_engine_inline_effects.py`。
 
 ## 可移动服务器部署
 
@@ -226,6 +228,8 @@ GitHub 发布的目标是同步**全部符合发布范围的项目修改**，而
 执行批量测试时，按文件编号顺序读取 `test_docx/tset1/test1` 中全部测试 DOCX，使用 `test_docx/tset1/test1正确格式` 中按编号匹配的模板作为对照；只有一个模板时可作为统一标准。不得修改原始测试文档和模板，不得覆盖 `test_docx/tset1/test1测试结果` 中已有同名结果。单篇结果必须先写入临时文件，完成 ZIP/DOCX 完整性和文字提取检查后再改名为正式结果；单篇失败不得中断其余文件，且不得留下伪装成功的半成品。
 
 模板对比只比较稳定结构和格式字段，不比较 DOCX 二进制、ZIP 时间戳、关系 ID、临时文件名或机器绝对路径。段落必须按版头、文首、正文、落款、附件等区域作保序对齐；不得按固定段落下标比较，以免版头或空行插入导致后续级联误报。至少对比文档模式、段落文本和顺序、标题层级、版头、发文字号、正文、落款、日期、附件、字体、字号、加粗、对齐、缩进、行距、段前段后、分页、页眉页脚、页码、表格、图片、分节和空段。每项差异记录文件编号、输出与模板段落编号、类别、实际值、模板值、匹配依据、是否预期修复和严重级别（P0 文档/数据损坏，P1 核心结构，P2 局部格式，P3 轻微视觉差异）。
+
+`strict`中未拆分的“二级标题句 + 同段正文”整段左对齐，以及`normalize`中的结构拆分、标题句号、日期数字化和结构编号空格，只能在模式明确、结构形状匹配且规范化后字符守恒时标记为`expected_mode_difference`。原始 P1/P2 差异记录和数量必须保留；字符丢失、重复或不符合模式契约时仍按真实问题报告，禁止整体降低严重度。
 
 批量测试必须在 `test_docx/tset1/test1测试结果` 生成 JSON 和文字报告，记录总数、成功/失败数、各级问题数、模板匹配、段落和标题统计、版头/落款/附件识别、文字新增/丢失、表格图片、空白页、处理耗时和错误信息。报告不得包含完整正文、密钥、Cookie 或完整日志。发布前或用户要求“全部测试”时，使用 `scripts/batch_test_docx.py --render-review --require-render` 抽查标准集 10 篇和专项集全部文档；渲染图、PDF 与疑似空白页清单写入对应结果目录。若没有可用渲染器，必须明确记录“未执行视觉渲染检查”，不能据此断言没有空白页。
 

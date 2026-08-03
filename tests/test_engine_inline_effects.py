@@ -1,3 +1,4 @@
+import pytest
 from docx import Document
 from docx.oxml.ns import qn
 
@@ -70,6 +71,31 @@ def test_colon_bold_uses_raw_offset_with_whitespace_around_colons() -> None:
     apply_colon_bold(prefixed, prefixed.text)
     assert [(run.text, run.font.bold) for run in prefixed.runs if run.text] == [
         ("1 : 2 ", False),
+        ("标签：", True),
+        ("内容", False),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("value", "prefix"),
+    [
+        ("时间11:00 标签：内容", "时间11:00 "),
+        ("版本1:2 标签：内容", "版本1:2 "),
+        ("会议时间 11 : 00 标签：内容", "会议时间 11 : 00 "),
+        ("序号1：2 标签：内容", "序号1：2 "),
+    ],
+)
+def test_colon_bold_keeps_prefixed_numeric_expression_normal(
+    value: str,
+    prefix: str,
+) -> None:
+    doc = Document()
+    paragraph = doc.add_paragraph(value)
+
+    apply_colon_bold(paragraph, paragraph.text)
+
+    assert [(run.text, run.font.bold) for run in paragraph.runs if run.text] == [
+        (prefix, False),
         ("标签：", True),
         ("内容", False),
     ]

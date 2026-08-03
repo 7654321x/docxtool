@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.0 - 2026-08-03
+
+- Hardened four-character front-matter name detection with strong/weak name shapes and complete structural context, while preserving compact role-name forms without name or organization allowlists.
+- Unified semantic-colon label start/end offsets across recognition and rendering so prefixed time, ratio, and version expressions remain normal weight.
+- Reclassified strict and normalize comparison findings only when the processing-mode contract and normalized character conservation both prove the differences are expected.
+- Bound the formal 2.9 commit, tree, and clean wheel in the public Phase B manifest, including normalized wheel-content comparison evidence.
+- Verified 1246 Python tests on Python 3.8 and 3.10, 10 Node tests, wheel-only SDK behavior, all three 50+5 processing modes, and targeted role/colon visual rendering.
+
 ## 2.9 - 2026-08-03
 
 - Tightened front-matter role/name parsing so role expressions must end at the person-name boundary and remain supported by title, date, or salutation structure.
