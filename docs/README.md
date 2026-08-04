@@ -7,6 +7,7 @@
 | 场景 | 先阅读 | 继续阅读 |
 | --- | --- | --- |
 | 任意代码或文档修改 | [`../AGENTS.md`](../AGENTS.md) | 本表对应的专项文档 |
+| 查找项目文件或理解目录职责 | [`PROJECT_FILE_TREE.md`](PROJECT_FILE_TREE.md) | [`ARCHITECTURE_DAG.md`](ARCHITECTURE_DAG.md)、[`RECOGNITION_ARCHITECTURE.md`](RECOGNITION_ARCHITECTURE.md) |
 | 识别、导入、分段、规范化或渲染 | [`RECOGNITION_ARCHITECTURE.md`](RECOGNITION_ARCHITECTURE.md) | [`DOCX_REGRESSION_CHECKLIST.md`](DOCX_REGRESSION_CHECKLIST.md)、[`RECOGNITION_RELEASE.md`](RECOGNITION_RELEASE.md) |
 | 机械迁移或行为保持重构 | [`migration/README.md`](migration/README.md) | [`migration/codex-workflow.md`](migration/codex-workflow.md)、当前阶段清单 |
 | Web API、前端或部署 | [`API.md`](API.md) 或 [`DEPLOY.md`](DEPLOY.md) | [`ARCHITECTURE_DAG.md`](ARCHITECTURE_DAG.md) |
@@ -27,6 +28,7 @@
 ### 文档识别与公文排版
 
 - [`RECOGNITION_ARCHITECTURE.md`](RECOGNITION_ARCHITECTURE.md)：识别主链路、职责边界、状态和兼容 facade。
+- [`PROJECT_FILE_TREE.md`](PROJECT_FILE_TREE.md)：项目根目录、生产源码、SDK、Web、脚本、文档和测试的逐文件中文职责树。
 - [`ARCHITECTURE_DAG.md`](ARCHITECTURE_DAG.md)：Web、任务队列、SDK 和宿主适配的数据流图。
 - [`DOCX_REGRESSION_CHECKLIST.md`](DOCX_REGRESSION_CHECKLIST.md)：已确认问题、回归场景和批量测试要求。
 - [`RECOGNITION_RELEASE.md`](RECOGNITION_RELEASE.md)：发布门禁、快照比较、回滚和发布前验证。
@@ -55,6 +57,7 @@
 | --- | --- |
 | 跨任务强制协作规则 | `AGENTS.md` |
 | 文档导航与归档位置 | 本文件 |
+| 项目文件树和逐文件职责 | `PROJECT_FILE_TREE.md` |
 | 识别链路和模块职责 | `RECOGNITION_ARCHITECTURE.md` |
 | 运行时数据流 | `ARCHITECTURE_DAG.md` |
 | 已知 DOCX 问题与回归要求 | `DOCX_REGRESSION_CHECKLIST.md` |

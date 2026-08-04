@@ -7,6 +7,7 @@ import re
 from ...role_shape import (
     PERSON_NAME_RE,
     ROLE_HINT_RE,
+    is_person_name_suffix,
     parse_role_name_shape,
     person_name_shape_strength,
 )
@@ -111,14 +112,23 @@ def _head_role_name(
             and feature.is_centered
         ):
             return True
-    if (
-        PERSON_NAME_RE.fullmatch(compact)
-        and previous is not None
-        and following is not None
-        and previous_title_anchor
-        and following_metadata
-    ):
-        return True
+    if previous is not None and following is not None:
+        strength = (
+            person_name_shape_strength(compact)
+            if is_person_name_suffix(compact)
+            else None
+        )
+        if previous_title_anchor and following_metadata:
+            if strength == "strong":
+                return True
+            style = _style_name(feature.style_name)
+            weak_title_evidence = bool(
+                feature.legacy_type_id in {"title", "title_cont"}
+                or style in _TITLE_STYLE_NAMES
+                or style in _HEADING_STYLE_NAMES
+            )
+            if strength == "weak" and feature.is_centered and not weak_title_evidence:
+                return True
     return False
 
 

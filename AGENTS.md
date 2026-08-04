@@ -51,6 +51,12 @@ pwsh -NoProfile -Command "node --test tests/worker-routing.test.mjs"
 4. 新增长期维护文档时，必须在 `docs/README.md` 登记职责和阅读入口；如属于发布范围，还必须同步更新 `docs/UPLOAD_MANIFEST.md`、`docs/GITHUB_UPLOAD_GUIDE.md` 和 `scripts/publish_to_github.ps1`。
 5. 每份规范文档必须明确适用范围、唯一职责、上位规则和验证入口；不得写入用户正文、真实密钥、绝对用户路径或运行日志原文。
 
+## 接口与依赖边界回归
+
+1. 调用可替换导出器时，只能在执行前通过 `inspect.signature()` 或明确 adapter 适配旧参数；不得捕获导出器函数体中的任意 `TypeError` 后用精简参数重试。每个任务最多调用导出器一次，内部 `TypeError` 必须进入正常任务错误边界。
+2. `web.handler` 和 `web.compatibility` 必须能在全新解释器中独立导入。旧 `web.app` monkeypatch 通过中立 hook provider 在调用时同步，禁止在模块加载时读取 `sys.modules["docxtool.web.app"]`。
+3. 文档层保持 `models/analysis/text → importing/segmentation → recognition → normalization → engine` 的单向依赖；`document/pipeline`、`document/recognition`不得导入`document/engine`，`document/engine`不得从 importer facade 获取共享模型。修改相关边界后运行 `tests/test_architecture_docs.py tests/test_importer_facade.py tests/test_application_process_document.py tests/test_web_app_facade.py`，并执行全模块独立导入扫描。
+
 ## 本地回收站
 
 1. 仓库根目录 `local_recycle/` 是仅供本机使用的回收站，已整体加入 `.gitignore`，不得提交或通过发布脚本上传。
@@ -137,7 +143,7 @@ pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m ruff check src tests scr
 pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m pytest -q tests/test_recognition_decoder.py tests/test_processing_flags.py tests/test_signature_detection.py tests/test_importer_heading_flow.py tests/test_segment_boundaries.py tests/test_audit_hardening.py"
 pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m ruff check src tests scripts"
 ```
-45. 触发场景：职务后任意四字纯汉字短语不能仅凭前标题、后日期、后称呼、居中或 Word 标题样式单项证据认作姓名。普通四字姓名属于弱形状，必须同时具备前标题、后日期/称呼和居中；复姓、间隔点、占位符及 2—3 字姓名属于强形状，沿用既有前后结构锚点。紧凑“职务+姓名”存在多种切分时优先采用强姓名形状，不得加入具体姓名或业务短语黑名单。修改后运行 `tests/test_recognition_decoder.py tests/test_processing_flags.py`。
+45. 触发场景：职务后任意四字纯汉字短语不能仅凭前标题、后日期、后称呼、居中或 Word 标题样式单项证据认作姓名。裸姓名 fallback 也必须统一调用 `is_person_name_suffix()` 和 `person_name_shape_strength()`，不得直接用宽泛正则确认。普通四字姓名属于弱形状，必须同时具备前标题、后日期/称呼和居中；弱裸姓名自身若已有 `title/title_cont` 类型或 Title、Subtitle、Heading 样式，则保留在标题/正文裁决中，不得写入 `front_metadata role_name`。复姓、间隔点、占位符及 2—3 字姓名属于强形状，沿用既有前后结构锚点。紧凑“职务+姓名”存在多种切分时优先采用强姓名形状，文档形状后缀不得成为姓名，不得加入具体姓名或业务短语黑名单。修改后运行 `tests/test_recognition_decoder.py tests/test_processing_flags.py`。
 46. 触发场景：`时间11:00 标签：内容`、`版本1:2 标签：内容`等带文字前缀的数字时间/比例后仍有语义标签时，统一冒号分析必须返回原文中的 `separator_index`、`label_start_index`和`label_end_index`；渲染只加粗真实标签及语义冒号，数字表达及其文字前缀保持普通字重。修改后运行 `tests/test_colon_structure.py tests/test_engine_inline_effects.py`。
 
 ## 可移动服务器部署

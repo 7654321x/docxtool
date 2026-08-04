@@ -9,7 +9,7 @@ from typing import Any
 
 from lxml import etree
 
-from docxtool.document.engine.punctuation import PunctuationReplacement, plan_punctuation_replacements
+from docxtool.document.text.punctuation import PunctuationReplacement, plan_punctuation_replacements
 from docxtool.security.docx_integrity import validate_docx_integrity
 
 

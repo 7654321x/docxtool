@@ -773,7 +773,7 @@ class DocxImporter:
 
     def _record_strict_normalization_suggestions(self, data: DocumentData) -> None:
         """兼容旧私有入口，传入文档数据，记录 strict 模式规范化建议。"""
-        from docxtool.document.engine.punctuation import normalize_punctuation_text
+        from docxtool.document.text.punctuation import normalize_punctuation_text
 
         _normalization_record_strict_normalization_suggestions(
             data,

@@ -100,7 +100,7 @@ def resolve_import_processing_options(
         if structural_preservation and not punctuation_requested:
             return text
         if new_punctuation_enabled:
-            from docxtool.document.engine.punctuation import normalize_punctuation_text
+            from docxtool.document.text.punctuation import normalize_punctuation_text
 
             return normalize_punctuation_text(
                 normalize_basic_text_func(text), mode=punctuation_mode

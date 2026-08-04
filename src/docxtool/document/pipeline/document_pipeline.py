@@ -59,7 +59,7 @@ def run_document_pipeline(
     )
     source_visible_texts = [paragraph.text for paragraph in doc.paragraphs if paragraph.text]
 
-    from docxtool.document.engine.letterhead import detect_letterhead
+    from docxtool.document.analysis.letterhead import detect_letterhead
 
     data.letterhead_detection = detect_letterhead(doc)
     protected_letterhead_indexes = set(data.letterhead_detection.protected_body_indexes)

@@ -8,8 +8,35 @@
 from __future__ import annotations
 
 import os
+import inspect
 import time
-from typing import Callable
+from typing import Any, Callable, Mapping, Sequence
+
+
+def _call_exporter_compat(
+    exporter: Callable[..., Any],
+    positional_args: Sequence[Any],
+    full_kwargs: Mapping[str, Any],
+) -> Any:
+    """Call one exporter once after adapting only inspectable legacy kwargs."""
+    try:
+        signature = inspect.signature(exporter)
+    except (TypeError, ValueError):
+        return exporter(*positional_args, **dict(full_kwargs))
+
+    parameters = signature.parameters
+    if any(parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()):
+        kwargs = dict(full_kwargs)
+    else:
+        kwargs = {
+            name: value
+            for name, value in full_kwargs.items()
+            if name in parameters
+            and parameters[name].kind
+            in {inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY}
+        }
+    signature.bind(*positional_args, **kwargs)
+    return exporter(*positional_args, **kwargs)
 
 
 def _count_heading_paragraphs(doc_data) -> int:
@@ -142,29 +169,20 @@ def process_uploaded_docx_task(
         os.makedirs(output_dir, exist_ok=True)
         output_path = ensure_path_within(output_dir, task_output_path(task_id))
         download_name = safe_download_filename(orig_name)
-        try:
-            export_stats = export_doc_func(
-                doc_data,
-                rules,
-                settings,
-                output_path,
-                numbered_bold_enabled=features["numbered_bold_enabled"],
-                page_number_enabled=features["page_number_enabled"],
-                numbering_options=features.get("numbering"),
-                page_number_options=features.get("page_number"),
-                signature_block_options=features.get("signature_block"),
-                table_format_options=features.get("table_format"),
-                cleanup_options=features.get("cleanup"),
-                letterhead_options=features.get("letterhead"),
-            )
-        except TypeError:
-            export_stats = export_doc_func(
-                doc_data,
-                rules,
-                settings,
-                output_path,
-                numbered_bold_enabled=features["numbered_bold_enabled"],
-            )
+        export_stats = _call_exporter_compat(
+            export_doc_func,
+            (doc_data, rules, settings, output_path),
+            {
+                "numbered_bold_enabled": features["numbered_bold_enabled"],
+                "page_number_enabled": features["page_number_enabled"],
+                "numbering_options": features.get("numbering"),
+                "page_number_options": features.get("page_number"),
+                "signature_block_options": features.get("signature_block"),
+                "table_format_options": features.get("table_format"),
+                "cleanup_options": features.get("cleanup"),
+                "letterhead_options": features.get("letterhead"),
+            },
+        )
         export_stats = export_stats or {}
         try:
             validate_docx_integrity(output_path)

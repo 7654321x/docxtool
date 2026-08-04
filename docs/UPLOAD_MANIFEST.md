@@ -24,6 +24,7 @@ https://github.com/7654321x/docxtool.git
 | `docs/DEPLOY.md` | 生产部署说明 | Cloudflare Pages + Python 后端 |
 | `docs/API.md` | HTTP 接口、鉴权、错误码 | 前后端联调和排错 |
 | `docs/RECOGNITION_ARCHITECTURE.md` | 识别架构和稳定边界 | 识别层维护依据 |
+| `docs/PROJECT_FILE_TREE.md` | 项目逐文件中文架构树 | 定位源码、脚本、文档和测试职责 |
 | `docs/ARCHITECTURE_DAG.md` | Web 处理链和 SDK 宿主适配 DAG | 解释队列、worker、子进程和绑定协议边界 |
 | `docs/RECOGNITION_RELEASE.md` | 识别发布门禁和回滚 | 发布验收依据 |
 | `docs/migration/codex-workflow.md` | 机械迁移执行工作流 | 快速、模块和里程碑门禁及快照规则 |
@@ -93,6 +94,7 @@ https://github.com/7654321x/docxtool.git
 | `src/docxtool/web/bootstrap.py` | Web import-time 配置装配 | 保持环境读取、路径创建、默认值和异常发生顺序 |
 | `src/docxtool/web/runtime_state.py` | Web 进程内共享状态工厂 | 只创建 app、Handler 和 worker 共用的一组锁、队列和缓存 |
 | `src/docxtool/web/compatibility.py` | 旧 Web 函数动态兼容 facade | 每次调用从 `web.app` 同步 patch 点，不保留第二套实现 |
+| `src/docxtool/web/hooks.py` | Web 兼容 hook provider | 延迟解析 composition root，保持独立导入和旧 app monkeypatch 可见性 |
 | `src/docxtool/web/handler.py` | HTTP Handler 实现 | 保留路由顺序、请求响应契约和旧 app monkeypatch 可见性 |
 | `src/docxtool/web/database_schema.py` | Web SQLite 建表、旧库轻量迁移和默认数据初始化编排 | 通过注入连接器、锁和 seed 函数工作，不处理 HTTP 或 DOCX |
 | `src/docxtool/web/file_api_auth.py` | 文件 API 代理密钥和本机调试授权 | 只消费请求头、客户端地址和密钥比较函数，不读取文件 |
@@ -195,6 +197,11 @@ https://github.com/7654321x/docxtool.git
 | `src/docxtool/resources/__init__.py` | 打包资源包入口 |
 | `src/docxtool/resources/config/default-format.json` | 默认公文格式配置，随 wheel 安装 |
 | `src/docxtool/resources/schemas/` | SDK JSON Schema 资源 | 随 wheel 安装，作为跨语言协议来源 |
+| `src/docxtool/document/analysis/__init__.py` | 中立只读文档分析包入口 |
+| `src/docxtool/document/analysis/document_structure.py` | 只读结构化公文板块模型与边界分析 |
+| `src/docxtool/document/analysis/letterhead.py` | 首页正文流已有版头的只读结构检测 |
+| `src/docxtool/document/text/__init__.py` | 中立纯文本转换包入口 |
+| `src/docxtool/document/text/punctuation.py` | 不依赖 OOXML 和渲染状态的安全标点算法 |
 | `src/docxtool/document/engine/__init__.py` | 排版引擎导出入口 |
 | `src/docxtool/document/engine/core.py` | DOCX 导出公开兼容入口 | 保留旧 import、helper 和 monkeypatch surface，委托薄导出主链 |
 | `src/docxtool/document/engine/export_pipeline.py` | DOCX 导出薄编排 | 固定执行上下文准备、项目渲染和最终化顺序 |
@@ -203,14 +210,14 @@ https://github.com/7654321x/docxtool.git
 | `src/docxtool/document/engine/paragraph_renderer.py` | 普通段落渲染主循环 | 保持段落创建、样式、编号、行内效果、日志和降级顺序 |
 | `src/docxtool/document/engine/export_finalize.py` | DOCX 导出最终化 | 保持后处理、分节、页码、校验、保存和统计顺序 |
 | `src/docxtool/document/engine/context_candidate.py` | 基于原始元素事实和局部邻接的独立上下文候选 |
-| `src/docxtool/document/engine/document_structure.py` | 只读结构化公文板块模型与边界识别 |
+| `src/docxtool/document/engine/document_structure.py` | 结构分析旧导入兼容 facade |
 | `src/docxtool/document/engine/header_footer.py` | 渲染阶段页眉页脚兼容辅助和旧 PAGE 域页码写入 |
 | `src/docxtool/document/engine/heading_body_split.py` | 渲染阶段可靠标题正文拆分输出和相邻完整性校验 |
 | `src/docxtool/document/engine/inline.py` | 渲染阶段行内 run 写入、inline token 恢复和正文冗余分页符清理 |
 | `src/docxtool/document/engine/inline_effects.py` | 渲染阶段段内文本效果；特殊加粗、责任单位、键值行、名词解释和行内标题粗细 |
 | `src/docxtool/document/engine/normal.py` | 常规文种规则分派 |
 | `src/docxtool/document/engine/preservation.py` | 渲染阶段源 OOXML 对象保留；复制表格、图片、题注、已有版头和页眉页脚关系，不参与识别定型 |
-| `src/docxtool/document/engine/letterhead.py` | 版头、发文字号、签发人和红色分隔线 |
+| `src/docxtool/document/engine/letterhead.py` | 版头、发文字号、签发人和红色分隔线渲染，并 re-export 检测入口 |
 | `src/docxtool/document/engine/style_catalog.py` | 结构化 Word 样式目录 |
 | `src/docxtool/document/engine/page_number.py` | 字段页码和奇偶页外侧位置 |
 | `src/docxtool/document/engine/numbering.py` | 结构序号规范化 |
@@ -220,7 +227,7 @@ https://github.com/7654321x/docxtool.git
 | `src/docxtool/document/engine/render_options.py` | 渲染阶段功能开关解析；归一 enabled 配置，不执行业务逻辑 |
 | `src/docxtool/document/engine/render_text.py` | 渲染阶段纯文本辅助；附件回行列计算和标题旧编号清理 |
 | `src/docxtool/document/engine/render_types.py` | 渲染阶段 type_id 到样式行映射和正文流分组 |
-| `src/docxtool/document/engine/punctuation.py` | 标点规范化核心 |
+| `src/docxtool/document/engine/punctuation.py` | 中立标点算法旧导入兼容 facade |
 | `src/docxtool/document/engine/punctuation_docx.py` | DOCX 标点安全处理 |
 | `src/docxtool/document/engine/sections.py` | 渲染阶段分节页面布局、文档网格和页眉页脚引用保留 |
 | `src/docxtool/document/engine/signature_block.py` | 落款单位、成文日期、附件尾部顺序校验和结构排版 |

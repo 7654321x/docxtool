@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 
@@ -28,3 +29,26 @@ def test_architecture_dag_does_not_add_runtime_dag_dependency() -> None:
 
     for package_name in ("airflow", "prefect", "dagster", "networkx"):
         assert package_name not in dependency_text
+
+
+def _package_imports(package: Path) -> set[str]:
+    imports = set()
+    for path in package.rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imports.update(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imports.add(node.module)
+    return imports
+
+
+def test_document_layers_have_no_reverse_engine_or_importer_dependencies() -> None:
+    document = ROOT / "src" / "docxtool" / "document"
+    pipeline_imports = _package_imports(document / "pipeline")
+    recognition_imports = _package_imports(document / "recognition")
+    engine_imports = _package_imports(document / "engine")
+
+    assert not any(name.startswith("docxtool.document.engine") for name in pipeline_imports)
+    assert not any(name.startswith("docxtool.document.engine") for name in recognition_imports)
+    assert "docxtool.document.importer" not in engine_imports

@@ -1,5 +1,14 @@
 # Changelog
 
+## 4.0 - 2026-08-04
+
+- Released the recognition-first wheel contract for WPS, Office.js, VSTO, and other local hosts while keeping formatting writes inside each host adapter.
+- Stabilized `RecognitionRequest`, `RecognitionPlan`, `HostSnapshot`, and `RecognitionBinding` with JSON Schema validation, UTF-16 source locators, privacy-safe defaults, stable IDs, and write preconditions.
+- Fixed exporter compatibility so an internal `TypeError` is never hidden by a second export attempt, and preserved inspectable legacy exporter signatures with one call only.
+- Removed Web and document-layer reverse dependencies by moving shared letterhead, punctuation, structure analysis, and models to neutral modules while retaining public compatibility facades.
+- Added the complete Chinese project file tree, updated the GitHub publish allowlist, and retained Python 3.8 through 3.10 compatibility.
+- Verified 1269 Python tests on Python 3.8 and 3.10, 10 Node tests, Ruff, independent imports, 55 documents across three processing modes, 50+5 structural regression documents, and 239 rendered review pages.
+
 ## 3.0 - 2026-08-03
 
 - Hardened four-character front-matter name detection with strong/weak name shapes and complete structural context, while preserving compact role-name forms without name or organization allowlists.

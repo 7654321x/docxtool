@@ -712,6 +712,10 @@ _is_ipv4 = _client_is_ipv4
 
 
 
+from docxtool.web.hooks import register_app_provider
+
+register_app_provider(sys.modules[__name__])
+
 from docxtool.web.compatibility import (
     cors_headers_for_request,
     _sql,

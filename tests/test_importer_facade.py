@@ -6,6 +6,17 @@ from docx import Document
 
 import docxtool.document.importer as importer_module
 from docxtool.document.models import DocumentData, ParagraphData, ParagraphFeatures
+from docxtool.document.analysis.document_structure import (
+    analyze_document_structure as analyze_document_structure_canonical,
+)
+from docxtool.document.analysis.letterhead import detect_letterhead as detect_letterhead_canonical
+from docxtool.document.engine import core as engine_core
+from docxtool.document.engine.document_structure import analyze_document_structure
+from docxtool.document.engine.letterhead import detect_letterhead
+from docxtool.document.engine.punctuation import normalize_punctuation_text
+from docxtool.document.text.punctuation import (
+    normalize_punctuation_text as normalize_punctuation_text_canonical,
+)
 from docxtool.document.recognition.legacy import DetectionContext
 
 
@@ -48,6 +59,11 @@ def test_importer_facade_reexports_stable_models_and_legacy_context() -> None:
     assert importer_module.ParagraphData is ParagraphData
     assert importer_module.ParagraphFeatures is ParagraphFeatures
     assert importer_module.DetectionContext is DetectionContext
+    assert engine_core.DocumentData is DocumentData
+    assert engine_core.ParagraphData is ParagraphData
+    assert analyze_document_structure is analyze_document_structure_canonical
+    assert detect_letterhead is detect_letterhead_canonical
+    assert normalize_punctuation_text is normalize_punctuation_text_canonical
 
 
 def test_importer_pipeline_uses_legacy_reader_and_segmentation_patch_points(

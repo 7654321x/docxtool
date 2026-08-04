@@ -9,7 +9,7 @@ from typing import Iterable
 
 from docx.oxml.ns import qn
 
-from docxtool.document.engine.document_structure import ElementKind
+from docxtool.document.analysis.document_structure import ElementKind
 
 
 _DATE_RE = re.compile(r"^(?:19|20)\d{2}年\d{1,2}月\d{1,2}日$")

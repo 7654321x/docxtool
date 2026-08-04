@@ -387,7 +387,7 @@ def apply_recognition(
         }
     )
     try:
-        from docxtool.document.engine.document_structure import analyze_document_structure
+        from docxtool.document.analysis.document_structure import analyze_document_structure
 
         setattr(data, "recognition_structure", analyze_document_structure(data))
         report["structure_tree"] = "built"

@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+import functools
 from pathlib import Path
 
-from docxtool.application.process_document import process_uploaded_docx_task
+import pytest
+
+from docxtool.application.process_document import (
+    _call_exporter_compat,
+    process_uploaded_docx_task,
+)
 
 
 class _Paragraph:
@@ -170,6 +176,116 @@ def test_process_uploaded_docx_task_returns_sanitized_internal_error(tmp_path: P
     assert result["recognition_summary"] == {}
     assert state["reset_tokens"]
     assert logger.errors
+
+
+def test_process_task_does_not_retry_exporter_internal_type_error(tmp_path: Path) -> None:
+    calls = []
+
+    def exporter(*_args, **kwargs):
+        calls.append(kwargs)
+        raise TypeError("internal exporter bug")
+
+    result, _state, _logger = _process_task(tmp_path, export_doc_func=exporter)
+
+    assert result["status"] == "error"
+    assert result["error_code"] == "TASK_PROCESSING_ERROR"
+    assert calls == [
+        {
+            "numbered_bold_enabled": True,
+            "page_number_enabled": True,
+            "numbering_options": None,
+            "page_number_options": None,
+            "signature_block_options": None,
+            "table_format_options": None,
+            "cleanup_options": {"enabled": True},
+            "letterhead_options": None,
+        }
+    ]
+
+
+def test_exporter_internal_type_error_is_not_retried() -> None:
+    calls = []
+
+    def exporter(_doc, _rules, _settings, _output, **kwargs):
+        calls.append(kwargs)
+        raise TypeError("internal exporter bug")
+
+    with pytest.raises(TypeError, match="internal exporter bug"):
+        _call_exporter_compat(exporter, (1, 2, 3, 4), {"page_number_enabled": True})
+
+    assert calls == [{"page_number_enabled": True}]
+
+
+def test_legacy_exporter_receives_only_supported_kwargs_once() -> None:
+    calls = []
+
+    def exporter(_doc, _rules, _settings, _output, numbered_bold_enabled=True):
+        calls.append(numbered_bold_enabled)
+        return {"legacy": True}
+
+    result = _call_exporter_compat(
+        exporter,
+        (1, 2, 3, 4),
+        {"numbered_bold_enabled": False, "page_number_enabled": True},
+    )
+
+    assert result == {"legacy": True}
+    assert calls == [False]
+
+
+def test_kwargs_exporter_receives_complete_kwargs_once() -> None:
+    calls = []
+
+    def exporter(*args, **kwargs):
+        calls.append((args, kwargs))
+        return kwargs
+
+    expected = {"numbered_bold_enabled": True, "page_number_enabled": False}
+    assert _call_exporter_compat(exporter, (1, 2, 3, 4), expected) == expected
+    assert calls == [((1, 2, 3, 4), expected)]
+
+
+def test_partial_and_callable_exporters_use_inspectable_signatures() -> None:
+    calls = []
+
+    def legacy(prefix, _doc, _rules, _settings, _output, numbered_bold_enabled=True):
+        calls.append((prefix, numbered_bold_enabled))
+
+    partial_exporter = functools.partial(legacy, "partial")
+    _call_exporter_compat(
+        partial_exporter,
+        (1, 2, 3, 4),
+        {"numbered_bold_enabled": False, "page_number_enabled": True},
+    )
+
+    class CallableExporter:
+        def __call__(self, _doc, _rules, _settings, _output, *, cleanup_options=None):
+            calls.append(("callable", cleanup_options))
+
+    _call_exporter_compat(
+        CallableExporter(),
+        (1, 2, 3, 4),
+        {"cleanup_options": {"enabled": True}, "page_number_enabled": True},
+    )
+
+    assert calls == [("partial", False), ("callable", {"enabled": True})]
+
+
+def test_uninspectable_exporter_uses_full_contract_without_retry(monkeypatch) -> None:
+    calls = []
+
+    def exporter(*args, **kwargs):
+        calls.append((args, kwargs))
+        return "ok"
+
+    monkeypatch.setattr(
+        "docxtool.application.process_document.inspect.signature",
+        lambda _value: (_ for _ in ()).throw(ValueError("no signature")),
+    )
+    expected = {"page_number_enabled": True, "cleanup_options": {"enabled": True}}
+
+    assert _call_exporter_compat(exporter, (1, 2, 3, 4), expected) == "ok"
+    assert calls == [((1, 2, 3, 4), expected)]
 
 
 class _StepClock:

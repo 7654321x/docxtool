@@ -1294,6 +1294,88 @@ def test_weak_four_character_person_name_requires_complete_centered_byline_conte
     assert candidate.type_id == "role_name"
 
 
+@pytest.mark.parametrize(
+    ("value", "following_text", "following_type"),
+    [
+        ("专题调研", "2026年8月3日", "date_line"),
+        ("工作报告", "2026年8月3日", "date_line"),
+        ("情况分析", "各位代表、同志们：", "addressing"),
+    ],
+)
+def test_bare_four_character_title_continuation_does_not_become_role_name(
+    value,
+    following_text,
+    following_type,
+):
+    candidate = _paragraph(value, "title_cont", 1, alignment="CENTER")
+    data = _document(
+        _paragraph("主标题", "title", 0, alignment="CENTER"),
+        candidate,
+        _paragraph(following_text, following_type, 2),
+        _paragraph("正文内容已经开始。", "body", 3),
+    )
+
+    apply_recognition(data)
+
+    assert candidate.type_id in {"title", "title_cont", "body"}
+    assert candidate.type_id != "role_name"
+    context = data.recognition_diagnostics["document_context"]
+    assert not any(
+        item["position"] == 1 and item["kind"] == "role_name"
+        for item in context["front_metadata"]
+    )
+    trace = data.recognition_diagnostics["candidate_trace"][1]
+    assert not any(
+        item["type"] == "role_name"
+        and (
+            item.get("source") == "front-metadata"
+            or item.get("provider", "").startswith("front-metadata:")
+        )
+        for item in trace["candidates"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("value", "centered", "expected_role"),
+    [
+        ("甲乙", False, True),
+        ("甲乙丙", False, True),
+        ("甲乙丙丁", True, True),
+        ("甲乙丙丁", False, False),
+        ("欧阳甲乙", False, True),
+        ("甲·乙", False, True),
+        ("XXX", False, True),
+    ],
+)
+def test_bare_person_name_fallback_uses_shared_shape_strength(
+    value,
+    centered,
+    expected_role,
+):
+    candidate = _paragraph(
+        value,
+        "body",
+        1,
+        alignment="CENTER" if centered else "",
+    )
+    data = _document(
+        _paragraph("主标题", "title", 0, alignment="CENTER"),
+        candidate,
+        _paragraph("2026年8月3日", "date_line", 2, alignment="CENTER"),
+        _paragraph("正文内容已经开始。", "body", 3),
+    )
+
+    apply_recognition(data)
+
+    assert (candidate.type_id == "role_name") is expected_role
+    context_roles = {
+        item["position"]
+        for item in data.recognition_diagnostics["document_context"]["front_metadata"]
+        if item["kind"] == "role_name"
+    }
+    assert (1 in context_roles) is expected_role
+
+
 def test_compound_surname_four_character_name_remains_strong_with_title_anchor():
     candidate = _paragraph("办公室主任 欧阳测试", "body", 1, alignment="CENTER")
     data = _document(

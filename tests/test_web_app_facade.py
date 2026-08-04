@@ -3,6 +3,8 @@ from __future__ import annotations
 import subprocess
 import sys
 
+import pytest
+
 from docxtool.web import app
 from docxtool.web import handler
 
@@ -23,6 +25,28 @@ def test_runtime_state_objects_are_shared_with_app_facade() -> None:
 
 def test_handler_is_reexported_from_app_facade() -> None:
     assert app.Handler is handler.Handler
+
+
+@pytest.mark.parametrize(
+    "imports",
+    [
+        "import docxtool.web.handler",
+        "import docxtool.web.compatibility",
+        "import docxtool.web.handler; import docxtool.web.app",
+        "import docxtool.web.compatibility; import docxtool.web.app",
+        "import docxtool.web.app",
+        "import docxtool.web.handler; import docxtool.web.handler",
+    ],
+)
+def test_web_facades_are_independently_importable(imports: str) -> None:
+    completed = subprocess.run(
+        [sys.executable, "-c", imports],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_app_reload_rebuilds_one_runtime_state_and_keeps_facades() -> None:

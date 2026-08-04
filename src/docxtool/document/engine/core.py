@@ -17,7 +17,7 @@ from typing import List
 from docxtool.document.style_config import (
     StyleRule, PageSettings, logger, ExportError,
 )
-from docxtool.document.importer import DocumentData, ParagraphData
+from docxtool.document.models import DocumentData, ParagraphData
 from docxtool.document.engine.normal import resolve as _resolve_rule
 from docxtool.document.engine.cleanup import cleanup_styles
 from docxtool.document.engine.header_footer import apply_header_footer

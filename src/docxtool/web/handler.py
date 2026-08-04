@@ -4,16 +4,13 @@
 from __future__ import annotations
 
 import functools
-import sys
+from http.server import BaseHTTPRequestHandler
 
-
-_APP_MODULE = sys.modules["docxtool.web.app"]
+from docxtool.web.hooks import sync_app_namespace
 
 
 def _sync_from_app() -> None:
-    for name, value in vars(_APP_MODULE).items():
-        if not name.startswith("__"):
-            globals()[name] = value
+    sync_app_namespace(globals())
 
 
 def _dynamic_method(function):
@@ -23,9 +20,6 @@ def _dynamic_method(function):
         return function(*args, **kwargs)
 
     return wrapped
-
-
-_sync_from_app()
 
 
 class Handler(BaseHTTPRequestHandler):

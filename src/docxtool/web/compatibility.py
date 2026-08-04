@@ -4,16 +4,11 @@
 from __future__ import annotations
 
 import functools
-import sys
-
-
-_APP_MODULE = sys.modules["docxtool.web.app"]
+from docxtool.web.hooks import sync_app_namespace
 
 
 def _sync_from_app() -> None:
-    for name, value in vars(_APP_MODULE).items():
-        if not name.startswith("__"):
-            globals()[name] = value
+    sync_app_namespace(globals())
 
 
 def _dynamic_compatibility(function):
@@ -23,9 +18,6 @@ def _dynamic_compatibility(function):
         return function(*args, **kwargs)
 
     return wrapped
-
-
-_sync_from_app()
 
 
 def cors_headers_for_request(origin_header: str, frontend_origin: str = None) -> dict:
@@ -156,7 +148,7 @@ def _read_exact(rfile, length: int, timeout: int = 10) -> bytes:
     """兼容旧入口：从请求流读取指定字节数并返回 bytes。"""
     return _stream_read_exact(rfile, length, timeout)
 
-def _read_exact_to_file(rfile, path: str, length: int, timeout: int = 10, chunk_size: int = UPLOAD_READ_CHUNK_SIZE) -> int:
+def _read_exact_to_file(rfile, path: str, length: int, timeout: int = 10, chunk_size: int = 64 * 1024) -> int:
     """兼容旧入口：从请求流读取指定字节数写入文件并返回写入量。"""
     return _stream_read_exact_to_file(rfile, path, length, timeout, chunk_size)
 

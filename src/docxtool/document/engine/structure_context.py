@@ -13,7 +13,7 @@ from docxtool.document.engine.context_candidate import (
     build_raw_element_facts,
     classify_context_candidate,
 )
-from docxtool.document.engine.document_structure import BlockKind, DocumentStructure, ElementKind
+from docxtool.document.analysis.document_structure import BlockKind, DocumentStructure, ElementKind
 
 
 CONFIRMED_THRESHOLD = 0.85
