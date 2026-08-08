@@ -1,6 +1,8 @@
 node_modules/
 logs/
 runtime/runtime-config.js
+runtime/transaction-state.json
+runtime/transaction-state.tmp
 __pycache__/
 .pytest_cache/
 *.pyc
