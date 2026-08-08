@@ -1,0 +1,16 @@
+{
+  "name": "docxtool-wps-app",
+  "version": "0.1.0",
+  "private": true,
+  "addonType": "wps",
+  "scripts": {
+    "start": "python main.py start",
+    "control": "python main.py control",
+    "verify": "python main.py verify",
+    "publish": "wpsjs debug -s",
+    "unpublish": "wpsjs unpublish"
+  },
+  "devDependencies": {
+    "wpsjs": "^2.2.3"
+  }
+}
