@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import sys
 import threading
-from typing import List
+from typing import List, Tuple
 
 APP_ROOT = Path(__file__).resolve().parent
 REPO_ROOT = APP_ROOT.parent.parent
@@ -68,22 +68,23 @@ def _wpsjs_command() -> List[str]:
     return [pwsh, "-NoProfile", "-Command", f"& '{quoted}' debug -s"]
 
 
-def _start_control(port: int):
+def _start_control(port: int) -> Tuple[object, int]:
     token = secrets.token_urlsafe(32)
     server = create_server(APP_ROOT, token, port)
+    actual_port = int(server.server_address[1])
     try:
-        write_runtime_config(port, token)
+        write_runtime_config(actual_port, token)
     except Exception:
         server.server_close()
         raise
-    return server
+    return server, actual_port
 
 
 def control_only(port: int) -> None:
     verify_files()
     configure_wps_logging(APP_ROOT)
-    server = _start_control(port)
-    log_event("INFO", "launcher", "control.start", "WPS Control Server 前台运行", {"port": port})
+    server, actual_port = _start_control(port)
+    log_event("INFO", "launcher", "control.start", "WPS Control Server 前台运行", {"port": actual_port})
     try:
         server.serve_forever(poll_interval=0.25)
     finally:
@@ -96,10 +97,10 @@ def start(port: int) -> None:
     verify_files()
     configure_wps_logging(APP_ROOT)
     command = _wpsjs_command()
-    server = _start_control(port)
+    server, actual_port = _start_control(port)
     thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.25}, daemon=True)
     thread.start()
-    log_event("INFO", "launcher", "session.start", "DocxTool WPS 本地会话已启动", {"control_port": port})
+    log_event("INFO", "launcher", "session.start", "DocxTool WPS 本地会话已启动", {"control_port": actual_port})
     try:
         subprocess.run(command, cwd=str(APP_ROOT), check=True, shell=False)
     finally:
@@ -113,7 +114,7 @@ def start(port: int) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="DocxTool WPS app launcher")
     parser.add_argument("action", choices=("start", "control", "verify"))
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT)
+    parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="0 表示自动选择空闲 loopback 端口")
     args = parser.parse_args()
     if args.action == "verify":
         verify_files()
