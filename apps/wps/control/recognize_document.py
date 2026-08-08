@@ -17,7 +17,7 @@ def recognize_document(
     log_dir: Path,
     format_config: Optional[dict] = None,
 ) -> Dict[str, Any]:
-    """Run authoritative recognition without writing formatting to WPS."""
+    """Run authoritative recognition and return text-free verified host locators."""
     source = Path(source_path).expanduser().resolve()
     if source.suffix.lower() != ".docx" or not source.is_file():
         raise ValueError("INVALID_DOCX_INPUT")
@@ -45,6 +45,10 @@ def recognize_document(
                     "block_id": block.block_id,
                     "block_index": block.block_index,
                     "physical_paragraph_index": block.physical_paragraph_index,
+                    "physical_text_sha256": block.physical_text_sha256,
+                    "raw_start_utf16": block.raw_start_utf16,
+                    "raw_end_utf16": block.raw_end_utf16,
+                    "text_sha256": block.text_sha256,
                     "type_id": block.type_id,
                     "format_role": block.format_role,
                     "review_level": block.review_level,
