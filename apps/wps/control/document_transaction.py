@@ -2,13 +2,15 @@
 
 DocxTool renders to a temporary DOCX while WPS keeps the source open. Only
 after WPS closes the document does this module replace the source. A backup is
-kept until WPS confirms that the formatted file reopened successfully.
+kept until WPS confirms that the formatted file reopened successfully. A small
+local journal lets a restarted Control Server recover an interrupted replace.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+import json
 import os
 from pathlib import Path
 import shutil
@@ -50,9 +52,67 @@ class DocumentTransactionManager:
 
     def __init__(self, log_dir: Path) -> None:
         self.log_dir = Path(log_dir)
+        self.runtime_dir = self.log_dir.parent / "runtime"
+        self.runtime_dir.mkdir(parents=True, exist_ok=True)
+        self.journal_path = self.runtime_dir / "transaction-state.json"
         self._operations: Dict[str, FormatOperation] = {}
         self._preparing = False
         self._lock = threading.RLock()
+        self._recover_stale_transaction()
+
+    def _write_journal(self, operation: FormatOperation) -> None:
+        payload = {
+            "version": 1,
+            "operation_id": operation.operation_id,
+            "state": operation.state,
+            "source_path": str(operation.source_path),
+            "temporary_path": str(operation.temporary_path),
+            "backup_path": str(operation.backup_path),
+        }
+        temporary = self.journal_path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        os.replace(temporary, self.journal_path)
+
+    def _clear_journal(self) -> None:
+        self.journal_path.unlink(missing_ok=True)
+        self.journal_path.with_suffix(".tmp").unlink(missing_ok=True)
+
+    def _recover_stale_transaction(self) -> None:
+        if not self.journal_path.is_file():
+            return
+        try:
+            payload = json.loads(self.journal_path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict) or payload.get("version") != 1:
+                raise ValueError("invalid journal")
+            state = str(payload.get("state", ""))
+            source = Path(str(payload.get("source_path", "")))
+            temporary = Path(str(payload.get("temporary_path", "")))
+            backup = Path(str(payload.get("backup_path", "")))
+            if source.suffix.lower() != ".docx":
+                raise ValueError("invalid source")
+        except Exception as exc:
+            raise DocumentTransactionError("WPS_TRANSACTION_JOURNAL_INVALID") from exc
+
+        file_id = file_identity(source)
+        if state == "prepared":
+            temporary.unlink(missing_ok=True)
+            backup.unlink(missing_ok=True)
+        elif state in {"commit_started", "committed"}:
+            if backup.is_file():
+                os.replace(backup, source)
+            elif not source.is_file():
+                raise DocumentTransactionError("WPS_TRANSACTION_RECOVERY_SOURCE_MISSING")
+            temporary.unlink(missing_ok=True)
+        else:
+            raise DocumentTransactionError("WPS_TRANSACTION_JOURNAL_INVALID")
+        self._clear_journal()
+        log_event(
+            "WARNING",
+            "transaction",
+            "startup.recovered",
+            "Control Server 启动时已恢复未完成的 WPS 排版事务",
+            {"file_id": file_id, "previous_state": state},
+        )
 
     def _claim_prepare(self) -> None:
         with self._lock:
@@ -86,6 +146,7 @@ class DocumentTransactionManager:
             operation = FormatOperation(operation_id=operation_id, source_path=source, source_sha256=source_hash, temporary_path=temporary, backup_path=backup, format_result=result)
             with self._lock:
                 self._operations[operation_id] = operation
+                self._write_journal(operation)
             log_event("INFO", "transaction", "prepare.completed", "WPS 排版临时文档已生成，等待宿主关闭原文档", {"operation_id": operation_id[:8], "file_id": file_identity(source)})
             return operation
         finally:
@@ -108,13 +169,18 @@ class DocumentTransactionManager:
             if not operation.temporary_path.is_file():
                 raise DocumentTransactionError("WPS_FORMAT_OUTPUT_MISSING")
             log_event("INFO", "transaction", "commit.start", "宿主已关闭原文档，开始原子替换", {"operation_id": operation_id[:8], "file_id": file_identity(operation.source_path)})
+            operation.state = "commit_started"
+            self._write_journal(operation)
             shutil.copy2(operation.source_path, operation.backup_path)
             try:
                 os.replace(operation.temporary_path, operation.source_path)
             except Exception:
                 operation.backup_path.unlink(missing_ok=True)
+                operation.state = "prepared"
+                self._write_journal(operation)
                 raise
             operation.state = "committed"
+            self._write_journal(operation)
         log_event("INFO", "transaction", "commit.completed", "格式化文档已替换原文件，等待 WPS 重新打开确认", {"operation_id": operation_id[:8], "file_id": file_identity(operation.source_path)})
         return operation
 
@@ -126,6 +192,7 @@ class DocumentTransactionManager:
             operation.backup_path.unlink(missing_ok=True)
             operation.state = "finalized"
             self._operations.pop(operation_id, None)
+            self._clear_journal()
         log_event("INFO", "transaction", "finalize.completed", "WPS 已重新打开格式化文档，事务完成", {"operation_id": operation_id[:8], "file_id": file_identity(operation.source_path)})
 
     def rollback(self, operation_id: str) -> None:
@@ -133,12 +200,14 @@ class DocumentTransactionManager:
             operation = self.get(operation_id)
             if operation.state == "prepared":
                 operation.temporary_path.unlink(missing_ok=True)
-            elif operation.state == "committed":
+            elif operation.state in {"commit_started", "committed"}:
                 if not operation.backup_path.is_file():
                     raise DocumentTransactionError("WPS_TRANSACTION_BACKUP_MISSING")
                 os.replace(operation.backup_path, operation.source_path)
+                operation.temporary_path.unlink(missing_ok=True)
             else:
                 raise DocumentTransactionError("WPS_TRANSACTION_INVALID_STATE")
             operation.state = "rolled_back"
             self._operations.pop(operation_id, None)
+            self._clear_journal()
         log_event("WARNING", "transaction", "rollback.completed", "WPS 排版事务已回滚", {"operation_id": operation_id[:8], "file_id": file_identity(operation.source_path)})
