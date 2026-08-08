@@ -81,9 +81,9 @@ def document_log_context(
     log_dir: Path,
     operation_id: str,
 ) -> Iterator[str]:
-    """Route DocxTool core logs for one WPS operation to a document log."""
+    """Route DocxTool core logs for one WPS operation to a filename-safe log."""
     log_path = make_document_log_path(
-        Path(source_path).name,
+        "document",
         log_dir=str(log_dir),
         suffix=f"wps-{operation_id[:8]}",
     )
