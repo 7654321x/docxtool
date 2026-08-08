@@ -5,6 +5,7 @@
   const config = window.DocxToolWpsConfig || {};
   const STATE_KEY = "docxtool_wps_state_v1";
   const REQUEST_KEY = "docxtool_wps_request_v1";
+  const TASKPANE_KEY = "docxtool_wps_taskpane_id_v1";
   let lastUpdated = "";
 
   function node(id) {
@@ -22,23 +23,39 @@
     if (!config.controlBaseUrl || !config.sessionToken || typeof fetch !== "function") return;
     void fetch(`${config.controlBaseUrl}/v1/log`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${config.sessionToken}`
-      },
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${config.sessionToken}` },
       body: JSON.stringify({ level, component: "taskpane", event, message, details: details || {} })
     }).catch(() => undefined);
   }
 
   function request(commandName) {
     const requestId = `pane-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
-    storage().setItem(REQUEST_KEY, JSON.stringify({
-      request_id: requestId,
-      command_name: commandName,
-      created_at: new Date().toISOString()
-    }));
+    storage().setItem(REQUEST_KEY, JSON.stringify({ request_id: requestId, command_name: commandName, created_at: new Date().toISOString() }));
     node("message").textContent = "命令已发送，等待 WPS 主上下文处理…";
     log("INFO", "request.created", "任务窗格命令已发送", { command: commandName, request_id: requestId });
+  }
+
+  function focusDocument() {
+    try {
+      const document = app && app.ActiveDocument;
+      if (document && typeof document.Activate === "function") document.Activate();
+      if (document && document.ActiveWindow && typeof document.ActiveWindow.Activate === "function") document.ActiveWindow.Activate();
+      log("INFO", "focus.document", "已请求返回当前文档");
+    } catch (error) {
+      log("WARN", "focus.document.failed", "返回当前文档失败", { error_code: error && error.message ? error.message : "UNKNOWN" });
+    }
+  }
+
+  function closePanel() {
+    try {
+      const saved = storage().getItem(TASKPANE_KEY);
+      if (!saved || !app || typeof app.GetTaskPane !== "function") return;
+      const pane = app.GetTaskPane(Number(saved));
+      if (pane) pane.Visible = false;
+      log("INFO", "panel.closed", "任务窗格已隐藏");
+    } catch (error) {
+      log("WARN", "panel.close.failed", "任务窗格隐藏失败", { error_code: error && error.message ? error.message : "UNKNOWN" });
+    }
   }
 
   function render(state) {
@@ -51,7 +68,7 @@
       node("rows").replaceChildren();
       return;
     }
-    node("summary").textContent = `文档模式 ${recognition.document_mode || "UNKNOWN"}；识别 ${recognition.block_count || 0} 项；建议复核 ${recognition.review_count || 0}；未定位 ${recognition.unresolved_count || 0}`;
+    node("summary").textContent = `文档模式 ${recognition.document_mode || "UNKNOWN"}；识别 ${recognition.block_count || 0} 项；预览批注 ${state.preview_comment_count || 0}；建议复核 ${recognition.review_count || 0}；未定位 ${recognition.unresolved_count || 0}`;
     const rows = Array.isArray(state.recognition_rows) ? state.recognition_rows : [];
     node("rows").replaceChildren(...rows.map((item) => {
       const row = document.createElement("div");
@@ -77,9 +94,9 @@
     }
   }
 
-  ["preview", "apply", "clear_preview", "health"].forEach((id) => {
-    node(id).addEventListener("click", () => request(id));
-  });
+  ["preview", "apply", "clear_preview", "health"].forEach((id) => node(id).addEventListener("click", () => request(id)));
+  node("focus_document").addEventListener("click", focusDocument);
+  node("close_panel").addEventListener("click", closePanel);
 
   setInterval(poll, 300);
   poll();
