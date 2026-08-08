@@ -58,25 +58,33 @@
     }
   }
 
+  function formatWarning(value) {
+    if (typeof value === "string") return value;
+    if (!value || typeof value !== "object") return String(value || "");
+    return Object.entries(value).map(([key, item]) => `${key}=${String(item)}`).join("；");
+  }
+
   function render(state) {
     node("status").textContent = state.status || "READY";
     node("message").textContent = state.message || "就绪";
     node("error").textContent = state.error_code || "";
+    const warnings = Array.isArray(state.compatibility_warnings) ? state.compatibility_warnings : [];
+    node("warnings").textContent = warnings.length ? `兼容性提示：${warnings.map(formatWarning).join("；")}` : "";
     const recognition = state.recognition;
     if (!recognition) {
       node("summary").textContent = "尚未识别。";
       node("rows").replaceChildren();
       return;
     }
-    node("summary").textContent = `文档模式 ${recognition.document_mode || "UNKNOWN"}；识别 ${recognition.block_count || 0} 项；预览批注 ${state.preview_comment_count || 0}；建议复核 ${recognition.review_count || 0}；未定位 ${recognition.unresolved_count || 0}`;
+    node("summary").textContent = `文档模式 ${recognition.document_mode || "UNKNOWN"}；识别 ${recognition.block_count || 0} 项；安全批注 ${state.preview_comment_count || 0}；绑定复核 ${recognition.binding_review_count || 0}；未定位 ${recognition.unresolved_count || 0}`;
     const rows = Array.isArray(state.recognition_rows) ? state.recognition_rows : [];
     node("rows").replaceChildren(...rows.map((item) => {
       const row = document.createElement("div");
       row.className = "row";
       const paragraph = Number.isInteger(item.paragraph_index) ? `段落 ${item.paragraph_index + 1}` : "结构项";
       const confidence = Math.round(Number(item.confidence || 0) * 100);
-      const locator = item.locator_verified ? "已定位" : "未定位";
-      row.textContent = `${paragraph} · ${item.role_name || item.type_id || "未知"} · ${confidence}% · ${locator}${item.review_level === "review" || item.review_level === "critical_review" ? " · 建议复核" : ""}`;
+      const binding = item.binding_status === "confirmed" ? "已确认" : item.binding_status === "review" ? "需复核" : "未定位";
+      row.textContent = `${paragraph} · ${item.role_name || item.type_id || "未知"} · ${confidence}% · ${binding}${item.review_level === "review" || item.review_level === "critical_review" ? " · 识别建议复核" : ""}`;
       return row;
     }));
   }
