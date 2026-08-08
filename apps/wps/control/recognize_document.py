@@ -86,8 +86,17 @@ def bind_preview(
     plan: RecognitionPlan,
     host_snapshot: Mapping[str, Any],
 ) -> Dict[str, Any]:
-    """Bind a plan to the current WPS snapshot and return text-free ranges."""
-    binding = bind_recognition_plan(plan, host_snapshot, strict=True)
+    """Bind a plan to the current WPS snapshot and return text-free ranges.
+
+    ``bind_recognition_plan`` intentionally defaults to normal validation.  Do
+    not enable ``strict=True`` here: RecognitionPlan/HostSnapshot serializers
+    retain documented compatibility aliases, while strict schema mode rejects
+    unknown compatibility fields.  Normal Binder validation still verifies the
+    SDK/schema contract versions, locator/text contracts, offset encoding,
+    paragraph alignment, hashes and per-range preconditions before a block can
+    become ``confirmed``.
+    """
+    binding = bind_recognition_plan(plan, host_snapshot)
     source_by_id = {block.block_id: block for block in plan.blocks}
     items: List[Dict[str, Any]] = []
     for bound in binding.blocks:
