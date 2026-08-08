@@ -6,20 +6,24 @@ executed by the existing DocxTool package in the same Python process.
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
+import threading
 from typing import Any, Dict
 
+from docxtool.sdk import RecognitionPlan
 from docxtool.version import package_version
 
 from .document_transaction import DocumentTransactionError, DocumentTransactionManager
 from .logging_adapter import configure_wps_logging, log_event
-from .recognize_document import recognize_document
+from .recognize_document import bind_preview, recognize_document
 
 HOST = "127.0.0.1"
 DEFAULT_PORT = 0
 MAX_BODY_BYTES = 1024 * 1024
+MAX_RECOGNITION_PLANS = 8
 
 
 def _error_code(error: Exception) -> str:
@@ -32,12 +36,46 @@ def _error_code(error: Exception) -> str:
     return "WPS_CONTROL_ERROR"
 
 
+def _safe_warnings(value: Any) -> list[Any]:
+    if not isinstance(value, (list, tuple)):
+        return []
+    result: list[Any] = []
+    for item in value[:50]:
+        if isinstance(item, str):
+            result.append(item[:500])
+        elif isinstance(item, dict):
+            result.append(
+                {
+                    str(key)[:80]: raw
+                    for key, raw in item.items()
+                    if isinstance(raw, (str, int, float, bool)) or raw is None
+                }
+            )
+    return result
+
+
 class WpsControlApplication:
     def __init__(self, app_root: Path, session_token: str) -> None:
         self.app_root = Path(app_root)
         self.session_token = session_token
         self.log_dir = configure_wps_logging(self.app_root)
         self.transactions = DocumentTransactionManager(self.log_dir)
+        self._plans: "OrderedDict[str, RecognitionPlan]" = OrderedDict()
+        self._plans_lock = threading.RLock()
+
+    def _remember_plan(self, plan: RecognitionPlan) -> None:
+        with self._plans_lock:
+            self._plans[plan.plan_id] = plan
+            self._plans.move_to_end(plan.plan_id)
+            while len(self._plans) > MAX_RECOGNITION_PLANS:
+                self._plans.popitem(last=False)
+
+    def _get_plan(self, plan_id: str) -> RecognitionPlan:
+        with self._plans_lock:
+            plan = self._plans.get(plan_id)
+            if plan is None:
+                raise DocumentTransactionError("WPS_RECOGNITION_PLAN_NOT_FOUND")
+            return plan
 
     def health(self) -> Dict[str, Any]:
         return {
@@ -49,11 +87,23 @@ class WpsControlApplication:
 
     def dispatch(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
         if path == "/v1/recognize":
-            return recognize_document(
+            session = recognize_document(
                 str(body.get("source_path", "")),
                 log_dir=self.log_dir,
-                format_config=body.get("format_config") if isinstance(body.get("format_config"), dict) else None,
+                format_config=(
+                    body.get("format_config")
+                    if isinstance(body.get("format_config"), dict)
+                    else None
+                ),
             )
+            self._remember_plan(session.plan)
+            return session.public_result
+        if path == "/v1/recognize/bind":
+            plan_id = str(body.get("plan_id", ""))
+            host_snapshot = body.get("host_snapshot")
+            if not isinstance(host_snapshot, dict):
+                raise DocumentTransactionError("WPS_HOST_SNAPSHOT_REQUIRED")
+            return bind_preview(self._get_plan(plan_id), host_snapshot)
         if path == "/v1/format/prepare":
             operation = self.transactions.prepare(
                 str(body.get("source_path", "")),
@@ -67,6 +117,9 @@ class WpsControlApplication:
                 "paragraph_count": result.paragraph_count,
                 "heading_count": result.heading_count,
                 "body_count": result.body_count,
+                "compatibility_warnings": _safe_warnings(
+                    result.export_stats.get("compatibility_warnings", [])
+                ),
                 "log_file": result.log_path.name,
             }
         if path == "/v1/format/commit":
