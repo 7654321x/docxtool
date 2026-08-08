@@ -1,22 +1,23 @@
 # DocxTool WPS App
 
-This directory contains the WPS host application layer for DocxTool.
+This directory is the WPS host application layer.
 
-## Responsibility
+Responsibilities:
 
-`apps/wps` is responsible for:
-
-- WPS Ribbon and task pane UI
-- WPS host lifecycle (open/save/close/reopen)
+- Ribbon and task pane integration
+- WPS document lifecycle
 - local runtime orchestration
 - preview interaction
-- logging and diagnostics
+- diagnostics
 
-## Boundary
+The WPS layer does not implement:
 
-The WPS app calls DocxTool core capabilities but does not implement document recognition, normalization, or formatting rules.
+- DOCX recognition rules
+- normalization rules
+- formatting rules
+- a second formatting engine
 
-Core pipeline remains:
+The document pipeline remains in `src/docxtool`:
 
 ```
 Importer
@@ -26,8 +27,8 @@ Importer
   -> Engine
 ```
 
-No WPS-specific dependency should be introduced into `src/docxtool`.
+Migration rule:
 
-## Migration status
-
-Initial app boundary created. Migration should move only WPS host code from the former plugin project. The old WPS formatting engine must not be migrated as a second formatting implementation.
+- move WPS host code here
+- keep core independent from WPS
+- do not migrate the old WPS formatting command engine
