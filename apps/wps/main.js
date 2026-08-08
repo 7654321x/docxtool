@@ -7,8 +7,10 @@
   const STATE_KEY = "docxtool_wps_state_v1";
   const REQUEST_KEY = "docxtool_wps_request_v1";
   const TASKPANE_KEY = "docxtool_wps_taskpane_id_v1";
-  const PREVIEW_KEY = "docxtool_wps_preview_v1";
+  const PREVIEW_KEY_PREFIX = "docxtool_wps_preview_v2:";
   const PREVIEW_BATCH_SIZE = 5;
+  const SAVE_WAIT_ATTEMPTS = 30;
+  const REOPEN_WAIT_ATTEMPTS = 30;
   let busy = false;
   let lastRequestId = "";
 
@@ -40,6 +42,10 @@
   function randomId() {
     if (globalObject.crypto && typeof globalObject.crypto.randomUUID === "function") return globalObject.crypto.randomUUID();
     return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  }
+
+  function sleep(milliseconds) {
+    return new Promise((resolve) => setTimeout(resolve, milliseconds));
   }
 
   function safeDetails(details) {
@@ -83,17 +89,39 @@
     return document;
   }
 
+  function normalizePath(value) {
+    return String(value || "").replace(/\//g, "\\").toLowerCase();
+  }
+
   function savedDocxPath() {
     const path = String(activeDocument().FullName || "");
     if (!path || !path.toLowerCase().endsWith(".docx")) throw new Error("DOCUMENT_MUST_BE_SAVED_AS_DOCX");
     return path;
   }
 
-  function saveActiveDocument() {
+  async function saveActiveDocument() {
     const document = activeDocument();
     if (typeof document.Save !== "function") throw new Error("DOCUMENT_SAVE_UNSUPPORTED");
     document.Save();
-    return savedDocxPath();
+    for (let attempt = 0; attempt < SAVE_WAIT_ATTEMPTS; attempt += 1) {
+      if (document.Saved === true) return savedDocxPath();
+      await sleep(100);
+    }
+    throw new Error("DOCUMENT_SAVE_TIMEOUT");
+  }
+
+  async function waitForActiveDocument(expectedPath) {
+    const expected = normalizePath(expectedPath);
+    for (let attempt = 0; attempt < REOPEN_WAIT_ATTEMPTS; attempt += 1) {
+      const current = app && app.ActiveDocument ? normalizePath(app.ActiveDocument.FullName) : "";
+      if (current === expected) return;
+      await sleep(100);
+    }
+    throw new Error("DOCUMENT_REOPEN_TIMEOUT");
+  }
+
+  function sourceIsActive(sourcePath) {
+    return Boolean(app && app.ActiveDocument && normalizePath(app.ActiveDocument.FullName) === normalizePath(sourcePath));
   }
 
   async function sha256(value) {
@@ -122,45 +150,91 @@
     throw new Error("HOST_RANGE_UTF16_BOUNDARY_INVALID");
   }
 
+  async function currentDocumentPathHash() {
+    return sha256(normalizePath(savedDocxPath()));
+  }
+
+  function previewStorageKey(documentPathHash) {
+    return `${PREVIEW_KEY_PREFIX}${documentPathHash}`;
+  }
+
+  async function buildHostSnapshot() {
+    const document = activeDocument();
+    const paragraphsCollection = document.Paragraphs;
+    if (!paragraphsCollection || typeof paragraphsCollection.Item !== "function") throw new Error("HOST_PARAGRAPHS_UNSUPPORTED");
+    const count = Number(paragraphsCollection.Count || 0);
+    const documentHasTables = Boolean(document.Tables && Number(document.Tables.Count || 0) > 0);
+    const paragraphs = [];
+    for (let index = 0; index < count; index += 1) {
+      const paragraph = paragraphsCollection.Item(index + 1);
+      const range = paragraph && paragraph.Range;
+      if (!range) throw new Error("HOST_PARAGRAPH_RANGE_UNAVAILABLE");
+      let isInTable = false;
+      if (range.Tables && typeof range.Tables.Count !== "undefined") {
+        isInTable = Number(range.Tables.Count || 0) > 0;
+      } else if (documentHasTables) {
+        throw new Error("HOST_TABLE_MEMBERSHIP_UNSUPPORTED");
+      }
+      paragraphs.push({
+        host_paragraph_id: `main:${String(index).padStart(6, "0")}`,
+        host_paragraph_index: index,
+        story_id: "main",
+        story_type: "main",
+        story_paragraph_index: index,
+        section_index: null,
+        is_in_table: isInTable,
+        raw_text: stripWpsTerminator(range.Text)
+      });
+    }
+    const documentIdentity = await currentDocumentPathHash();
+    const revision = await sha256(paragraphs.map((item) => item.raw_text).join("\u241e"));
+    return {
+      schema_version: "host-snapshot-v1",
+      integration_contract_version: "integration-contract-v1",
+      snapshot_id: `wps-${randomId()}`,
+      document_identity: documentIdentity,
+      document_revision: revision,
+      host: { kind: "wps", platform: "windows" },
+      host_type: "wps",
+      text_contract_version: "host-text-v1",
+      offset_encoding: "utf16_code_unit",
+      paragraphs
+    };
+  }
+
   async function previewRange(document, item) {
-    if (!item.locator_verified || !Number.isInteger(item.physical_paragraph_index)) throw new Error("PREVIEW_LOCATOR_UNVERIFIED");
-    if (!Number.isInteger(item.raw_start_utf16) || !Number.isInteger(item.raw_end_utf16) || item.raw_end_utf16 <= item.raw_start_utf16) throw new Error("PREVIEW_RANGE_INVALID");
-    const paragraph = document.Paragraphs && document.Paragraphs.Item ? document.Paragraphs.Item(item.physical_paragraph_index + 1) : null;
+    if (!item.preview_eligible || item.binding_status !== "confirmed") throw new Error("PREVIEW_BINDING_UNCONFIRMED");
+    if (!Number.isInteger(item.host_paragraph_index)) throw new Error("PREVIEW_HOST_PARAGRAPH_UNRESOLVED");
+    if (!Number.isInteger(item.host_raw_start_utf16) || !Number.isInteger(item.host_raw_end_utf16) || item.host_raw_end_utf16 <= item.host_raw_start_utf16) throw new Error("PREVIEW_RANGE_INVALID");
+    const paragraph = document.Paragraphs && document.Paragraphs.Item ? document.Paragraphs.Item(item.host_paragraph_index + 1) : null;
     const paragraphRange = paragraph && paragraph.Range;
     if (!paragraphRange) throw new Error("PREVIEW_PARAGRAPH_NOT_FOUND");
     const raw = stripWpsTerminator(paragraphRange.Text);
-    if (await sha256(raw) !== item.physical_text_sha256) throw new Error("PREVIEW_PARAGRAPH_CHANGED");
-    if (item.raw_end_utf16 > raw.length) throw new Error("PREVIEW_RANGE_INVALID");
-    const fragment = raw.slice(item.raw_start_utf16, item.raw_end_utf16);
-    if (await sha256(fragment) !== item.text_sha256) throw new Error("PREVIEW_RANGE_HASH_MISMATCH");
+    if (!item.host_paragraph_raw_sha256 || await sha256(raw) !== item.host_paragraph_raw_sha256) throw new Error("PREVIEW_PARAGRAPH_CHANGED");
+    if (item.host_raw_end_utf16 > raw.length) throw new Error("PREVIEW_RANGE_INVALID");
+    const fragment = raw.slice(item.host_raw_start_utf16, item.host_raw_end_utf16);
+    if (!item.raw_fragment_sha256 || await sha256(fragment) !== item.raw_fragment_sha256) throw new Error("PREVIEW_RANGE_HASH_MISMATCH");
     const characters = paragraphRange.Characters;
     if (!characters || typeof characters.Item !== "function") throw new Error("PREVIEW_CHARACTERS_UNSUPPORTED");
-    const firstOrdinal = characterOrdinalAtUtf16Offset(raw, item.raw_start_utf16);
-    const endOrdinal = characterOrdinalAtUtf16Offset(raw, item.raw_end_utf16);
+    const firstOrdinal = characterOrdinalAtUtf16Offset(raw, item.host_raw_start_utf16);
+    const endOrdinal = characterOrdinalAtUtf16Offset(raw, item.host_raw_end_utf16);
     const first = characters.Item(firstOrdinal + 1);
     const last = characters.Item(endOrdinal);
     if (!first || !last || typeof first.SetRange !== "function") throw new Error("PREVIEW_RANGE_BOUNDARY_INVALID");
     first.SetRange(Number(first.Start), Number(last.End));
-    if (await sha256(stripWpsTerminator(first.Text)) !== item.text_sha256) throw new Error("PREVIEW_RANGE_READBACK_MISMATCH");
+    if (await sha256(stripWpsTerminator(first.Text)) !== item.raw_fragment_sha256) throw new Error("PREVIEW_RANGE_READBACK_MISMATCH");
     return first;
-  }
-
-  async function currentDocumentPathHash() {
-    return sha256(savedDocxPath().toLowerCase());
   }
 
   async function clearPreviewComments(options) {
     const silent = Boolean(options && options.silent);
-    const raw = storage().getItem(PREVIEW_KEY);
+    const currentHash = await currentDocumentPathHash();
+    const key = previewStorageKey(currentHash);
+    const raw = storage().getItem(key);
     if (!raw) return 0;
     let session;
     try { session = JSON.parse(raw); }
-    catch (_) { storage().setItem(PREVIEW_KEY, ""); return 0; }
-    const currentHash = await currentDocumentPathHash();
-    if (currentHash !== session.document_path_hash) {
-      if (silent) return 0;
-      throw new Error("DOCUMENT_CHANGED");
-    }
+    catch (_) { storage().setItem(key, ""); return 0; }
     const comments = activeDocument().Comments;
     if (!comments || typeof comments.Item !== "function") throw new Error("COMMENT_PREVIEW_UNSUPPORTED");
     let deleted = 0;
@@ -171,8 +245,8 @@
       comment.Delete();
       deleted += 1;
     }
-    storage().setItem(PREVIEW_KEY, "");
-    log("INFO", "preview.comments.cleared", "预览批注已清除", { deleted_count: deleted });
+    storage().setItem(key, "");
+    if (!silent || deleted) log("INFO", "preview.comments.cleared", "预览批注已清除", { deleted_count: deleted });
     return deleted;
   }
 
@@ -188,7 +262,7 @@
     let applied = 0;
     try {
       for (const item of result.items || []) {
-        if (!item.locator_verified) continue;
+        if (!item.preview_eligible) continue;
         const range = await previewRange(document, item);
         const role = roleNames[item.type_id] || item.type_id || "未知";
         const confidence = Math.round(Number(item.confidence || 0) * 100);
@@ -199,7 +273,7 @@
         comment.Initial = initial;
         created.push(comment);
         applied += 1;
-        if (applied % PREVIEW_BATCH_SIZE === 0) await new Promise((resolve) => setTimeout(resolve, 0));
+        if (applied % PREVIEW_BATCH_SIZE === 0) await sleep(0);
       }
     } catch (error) {
       for (let index = created.length - 1; index >= 0; index -= 1) {
@@ -207,7 +281,8 @@
       }
       throw error;
     }
-    storage().setItem(PREVIEW_KEY, JSON.stringify({ session_id: sessionId, author, initial, document_path_hash: await currentDocumentPathHash() }));
+    const currentHash = await currentDocumentPathHash();
+    storage().setItem(previewStorageKey(currentHash), JSON.stringify({ session_id: sessionId, author, initial }));
     log("INFO", "preview.comments.applied", "预览批注写入完成", { applied_count: applied });
     return applied;
   }
@@ -229,24 +304,28 @@
   }
 
   async function runPreview() {
-    const sourcePath = saveActiveDocument();
+    const sourcePath = await saveActiveDocument();
     writeState({ status: "RUNNING", stage: "recognition", message: "正在识别当前文档…", error_code: "" });
-    const result = await api("/v1/recognize", { source_path: sourcePath });
-    writeState({ status: "RUNNING", stage: "preview_comments", message: "识别完成，正在写入预览批注…" });
+    const recognition = await api("/v1/recognize", { source_path: sourcePath });
+    writeState({ status: "RUNNING", stage: "host_binding", message: "识别完成，正在验证当前 WPS 文档位置…" });
+    const hostSnapshot = await buildHostSnapshot();
+    const result = await api("/v1/recognize/bind", { plan_id: recognition.plan_id, host_snapshot: hostSnapshot });
+    writeState({ status: "RUNNING", stage: "preview_comments", message: "宿主位置验证完成，正在写入预览批注…" });
     const applied = await applyPreviewComments(result);
     const rows = (result.items || []).map((item) => ({
-      block_index: item.block_index, paragraph_index: item.physical_paragraph_index,
+      block_index: item.block_index, paragraph_index: item.host_paragraph_index,
       type_id: item.type_id, role_name: roleNames[item.type_id] || item.type_id,
       confidence: item.confidence, review_level: item.review_level,
-      locator_verified: item.locator_verified, segment_index: item.segment_index, segment_count: item.segment_count
+      locator_verified: item.preview_eligible, binding_status: item.binding_status,
+      segment_index: item.segment_index, segment_count: item.segment_count
     }));
     writeState({
       status: "PASS", stage: "preview_completed",
-      message: `预览完成：识别 ${result.block_count} 项；批注 ${applied} 项；建议复核 ${result.review_count}；未定位 ${result.unresolved_count}`,
+      message: `预览完成：识别 ${result.block_count} 项；安全批注 ${applied} 项；绑定复核 ${result.binding_review_count}；未定位 ${result.unresolved_count}`,
       recognition: result, recognition_rows: rows, preview_comment_count: applied, error_code: ""
     });
     openTaskpane();
-    log("INFO", "preview.completed", "预览排版完成", { blocks: result.block_count, comments: applied, review: result.review_count, unresolved: result.unresolved_count });
+    log("INFO", "preview.completed", "预览排版完成", { blocks: result.block_count, comments: applied, review: result.binding_review_count, unresolved: result.unresolved_count });
   }
 
   async function clearPreview() {
@@ -257,10 +336,35 @@
     });
   }
 
+  async function recoverFormat(operationId, sourcePath, committed) {
+    if (!operationId) return;
+    if (committed && sourceIsActive(sourcePath)) {
+      const current = activeDocument();
+      if (typeof current.Close !== "function") throw new Error("WPS_FORMAT_RECOVERY_REQUIRED");
+      current.Close(0);
+    }
+    try {
+      await api("/v1/format/rollback", { operation_id: operationId });
+    } catch (error) {
+      log("ERROR", "format.rollback.failed", "一键排版回滚失败", { error_code: error && error.message ? error.message : "UNKNOWN" });
+      throw new Error("WPS_FORMAT_RECOVERY_REQUIRED");
+    }
+    if (!sourceIsActive(sourcePath)) {
+      if (!app.Documents || typeof app.Documents.Open !== "function") throw new Error("WPS_FORMAT_RECOVERY_REQUIRED");
+      app.Documents.Open(sourcePath);
+      await waitForActiveDocument(sourcePath);
+    }
+    log("WARNING", "format.rollback.completed", "一键排版失败后已恢复原文档");
+  }
+
+  function warningCount(prepared) {
+    return Array.isArray(prepared.compatibility_warnings) ? prepared.compatibility_warnings.length : 0;
+  }
+
   async function runFormat() {
     const document = activeDocument();
     await clearPreviewComments({ silent: true });
-    const sourcePath = saveActiveDocument();
+    const sourcePath = await saveActiveDocument();
     let operationId = "";
     let committed = false;
     writeState({ status: "RUNNING", stage: "format_prepare", message: "正在调用 DocxTool Engine 排版…", error_code: "" });
@@ -275,24 +379,26 @@
       committed = true;
       if (!app.Documents || typeof app.Documents.Open !== "function") throw new Error("DOCUMENT_OPEN_UNSUPPORTED");
       app.Documents.Open(sourcePath);
+      await waitForActiveDocument(sourcePath);
       await api("/v1/format/finalize", { operation_id: operationId });
+      operationId = "";
       committed = false;
+      const warnings = warningCount(prepared);
       writeState({
         status: "PASS", stage: "completed",
-        message: `排版完成：${prepared.paragraph_count} 个段落，${prepared.heading_count} 个标题。`,
-        format_result: prepared, error_code: "", operation_id: "", preview_comment_count: 0
+        message: `排版完成：${prepared.paragraph_count} 个段落，${prepared.heading_count} 个标题${warnings ? `；兼容性提示 ${warnings} 项` : ""}。`,
+        format_result: prepared, compatibility_warnings: prepared.compatibility_warnings || [],
+        error_code: "", operation_id: "", preview_comment_count: 0
       });
-      log("INFO", "format.completed", "一键排版完成", { paragraphs: prepared.paragraph_count, headings: prepared.heading_count });
+      log("INFO", "format.completed", "一键排版完成", { paragraphs: prepared.paragraph_count, headings: prepared.heading_count, compatibility_warnings: warnings });
     } catch (error) {
       const code = error && error.message ? error.message : "WPS_FORMAT_FAILED";
-      if (operationId) {
-        try { await api("/v1/format/rollback", { operation_id: operationId }); committed = false; }
-        catch (rollbackError) { log("ERROR", "format.rollback.failed", "一键排版回滚失败", { error_code: rollbackError && rollbackError.message ? rollbackError.message : "UNKNOWN" }); }
+      try {
+        await recoverFormat(operationId, sourcePath, committed);
+      } catch (recoveryError) {
+        log("ERROR", "format.recovery.required", "一键排版失败且自动恢复未完成", { error_code: recoveryError && recoveryError.message ? recoveryError.message : "WPS_FORMAT_RECOVERY_REQUIRED", primary_error_code: code });
+        throw recoveryError;
       }
-      if (app.Documents && typeof app.Documents.Open === "function") {
-        try { app.Documents.Open(sourcePath); } catch (_) { /* keep primary error */ }
-      }
-      if (committed) log("ERROR", "format.recovery.required", "文档替换后恢复状态未确认", { error_code: code });
       throw new Error(code);
     }
   }
@@ -342,7 +448,7 @@
 
   globalObject.OnAddinLoad = function (ribbonUI) {
     if (app) app.ribbonUI = ribbonUI;
-    writeState({ status: "READY", stage: "ready", message: "DocxTool WPS 已就绪", recognition_rows: [], error_code: "" });
+    writeState({ status: "READY", stage: "ready", message: "DocxTool WPS 已就绪", recognition_rows: [], compatibility_warnings: [], error_code: "" });
     setInterval(pollTaskpaneRequests, 250);
     log("INFO", "addin.loaded", "DocxTool WPS 插件已加载");
   };
