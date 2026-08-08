@@ -1,13 +1,4 @@
-"""Launcher for the DocxTool WPS app.
-
-Run from the DocxTool repository root:
-
-    python apps/wps/main.py start
-
-The launcher starts the loopback control service, writes a short-lived runtime
-configuration for the add-in, then delegates WPS registration/resource serving
-to the established ``wpsjs`` CLI.
-"""
+"""Launcher for the DocxTool WPS app."""
 
 from __future__ import annotations
 
@@ -19,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import threading
+from typing import List
 
 APP_ROOT = Path(__file__).resolve().parent
 REPO_ROOT = APP_ROOT.parent.parent
@@ -37,10 +29,7 @@ RUNTIME_CONFIG = RUNTIME_DIR / "runtime-config.js"
 
 def write_runtime_config(port: int, token: str) -> None:
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "controlBaseUrl": f"http://127.0.0.1:{port}",
-        "sessionToken": token,
-    }
+    payload = {"controlBaseUrl": f"http://127.0.0.1:{port}", "sessionToken": token}
     text = "window.DocxToolWpsConfig=Object.freeze(" + json.dumps(payload, ensure_ascii=False) + ");\n"
     temporary = RUNTIME_CONFIG.with_suffix(".tmp")
     temporary.write_text(text, encoding="utf-8")
@@ -53,17 +42,10 @@ def clear_runtime_config() -> None:
 
 def verify_files() -> None:
     required = [
-        "package.json",
-        "manifest.xml",
-        "ribbon.xml",
-        "index.html",
-        "main.js",
-        "taskpane.html",
-        "taskpane.js",
-        "control/server.py",
-        "control/format_current_document.py",
-        "control/document_transaction.py",
-        "control/logging_adapter.py",
+        "package.json", "manifest.xml", "ribbon.xml", "index.html", "main.js",
+        "taskpane.html", "taskpane.js", "control/server.py",
+        "control/format_current_document.py", "control/document_transaction.py",
+        "control/logging_adapter.py", "control/recognize_document.py",
     ]
     missing = [item for item in required if not (APP_ROOT / item).is_file()]
     if missing:
@@ -73,20 +55,7 @@ def verify_files() -> None:
     from docxtool.sdk import recognize_docx  # noqa: F401
 
 
-def control_only(port: int) -> None:
-    verify_files()
-    token = secrets.token_urlsafe(32)
-    write_runtime_config(port, token)
-    server = create_server(APP_ROOT, token, port)
-    log_event("INFO", "launcher", "control.start", "WPS Control Server 前台运行", {"port": port})
-    try:
-        server.serve_forever(poll_interval=0.25)
-    finally:
-        server.server_close()
-        clear_runtime_config()
-
-
-def _wpsjs_command() -> list[str]:
+def _wpsjs_command() -> List[str]:
     wpsjs = APP_ROOT / "node_modules" / ".bin" / ("wpsjs.cmd" if sys.platform == "win32" else "wpsjs")
     if not wpsjs.exists():
         raise RuntimeError("WPSJS_NOT_INSTALLED: 请先在 apps/wps 执行 npm install。")
@@ -99,23 +68,38 @@ def _wpsjs_command() -> list[str]:
     return [pwsh, "-NoProfile", "-Command", f"& '{quoted}' debug -s"]
 
 
+def _start_control(port: int):
+    token = secrets.token_urlsafe(32)
+    server = create_server(APP_ROOT, token, port)
+    try:
+        write_runtime_config(port, token)
+    except Exception:
+        server.server_close()
+        raise
+    return server
+
+
+def control_only(port: int) -> None:
+    verify_files()
+    configure_wps_logging(APP_ROOT)
+    server = _start_control(port)
+    log_event("INFO", "launcher", "control.start", "WPS Control Server 前台运行", {"port": port})
+    try:
+        server.serve_forever(poll_interval=0.25)
+    finally:
+        server.server_close()
+        clear_runtime_config()
+        log_event("INFO", "launcher", "control.stop", "WPS Control Server 已停止")
+
+
 def start(port: int) -> None:
     verify_files()
     configure_wps_logging(APP_ROOT)
     command = _wpsjs_command()
-
-    token = secrets.token_urlsafe(32)
-    write_runtime_config(port, token)
-    server = create_server(APP_ROOT, token, port)
+    server = _start_control(port)
     thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.25}, daemon=True)
     thread.start()
-    log_event(
-        "INFO",
-        "launcher",
-        "session.start",
-        "DocxTool WPS 本地会话已启动",
-        {"control_port": port},
-    )
+    log_event("INFO", "launcher", "session.start", "DocxTool WPS 本地会话已启动", {"control_port": port})
     try:
         subprocess.run(command, cwd=str(APP_ROOT), check=True, shell=False)
     finally:
