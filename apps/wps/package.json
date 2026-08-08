@@ -12,5 +12,8 @@
   },
   "devDependencies": {
     "wpsjs": "2.2.3"
+  },
+  "overrides": {
+    "wpsjs-rpc-sdk-new": "1.1.0"
   }
 }
