@@ -7,28 +7,18 @@
   const STATE_KEY = "docxtool_wps_state_v1";
   const REQUEST_KEY = "docxtool_wps_request_v1";
   const TASKPANE_KEY = "docxtool_wps_taskpane_id_v1";
+  const PREVIEW_KEY = "docxtool_wps_preview_v1";
+  const PREVIEW_BATCH_SIZE = 5;
   let busy = false;
   let lastRequestId = "";
 
   const roleNames = {
-    main_title: "主标题",
-    title_continuation: "主标题续行",
-    heading1: "一级标题",
-    heading2: "二级标题",
-    heading3: "三级标题",
-    heading4: "四级标题",
-    body: "正文",
-    recipient: "称呼",
-    role_name: "职务姓名",
-    attachment_note: "附件说明",
-    attachment_note_item: "附件说明续项",
-    attachment_title: "附件正文标题",
-    attachment_page_mark: "附件正文标记",
-    attachment_body: "附件正文",
-    signature_org: "落款署名",
-    signature_date: "落款日期",
-    caption: "对象题注",
-    unknown: "未知"
+    main_title: "主标题", title_continuation: "主标题续行",
+    heading1: "一级标题", heading2: "二级标题", heading3: "三级标题", heading4: "四级标题",
+    body: "正文", recipient: "称呼", role_name: "职务姓名",
+    attachment_note: "附件说明", attachment_note_item: "附件说明续项",
+    attachment_title: "附件正文标题", attachment_page_mark: "附件正文标记", attachment_body: "附件正文",
+    signature_org: "落款署名", signature_date: "落款日期", caption: "对象题注", unknown: "未知"
   };
 
   function storage() {
@@ -37,18 +27,19 @@
   }
 
   function readState() {
-    try {
-      const value = storage().getItem(STATE_KEY);
-      return value ? JSON.parse(value) : {};
-    } catch (_) {
-      return {};
-    }
+    try { const value = storage().getItem(STATE_KEY); return value ? JSON.parse(value) : {}; }
+    catch (_) { return {}; }
   }
 
   function writeState(patch) {
     const state = Object.assign({}, readState(), patch, { updated_at: new Date().toISOString() });
     storage().setItem(STATE_KEY, JSON.stringify(state));
     return state;
+  }
+
+  function randomId() {
+    if (globalObject.crypto && typeof globalObject.crypto.randomUUID === "function") return globalObject.crypto.randomUUID();
+    return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
   }
 
   function safeDetails(details) {
@@ -69,10 +60,7 @@
     if (!config.controlBaseUrl || !config.sessionToken || typeof fetch !== "function") return;
     void fetch(`${config.controlBaseUrl}/v1/log`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${config.sessionToken}`
-      },
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${config.sessionToken}` },
       body: JSON.stringify({ level, component: "host", event, message, details: safeDetails(details) })
     }).catch(() => undefined);
   }
@@ -81,10 +69,7 @@
     if (!config.controlBaseUrl || !config.sessionToken) throw new Error("WPS_CONTROL_NOT_CONFIGURED");
     const response = await fetch(`${config.controlBaseUrl}${path}`, {
       method: method || "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${config.sessionToken}`
-      },
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${config.sessionToken}` },
       body: method === "GET" ? undefined : JSON.stringify(body || {})
     });
     const payload = await response.json();
@@ -99,8 +84,7 @@
   }
 
   function savedDocxPath() {
-    const document = activeDocument();
-    const path = String(document.FullName || "");
+    const path = String(activeDocument().FullName || "");
     if (!path || !path.toLowerCase().endsWith(".docx")) throw new Error("DOCUMENT_MUST_BE_SAVED_AS_DOCX");
     return path;
   }
@@ -112,23 +96,130 @@
     return savedDocxPath();
   }
 
-  function taskpaneUrl() {
-    return new URL("taskpane.html", globalObject.location.href).href;
+  async function sha256(value) {
+    if (!globalObject.crypto || !globalObject.crypto.subtle) throw new Error("WEB_CRYPTO_UNAVAILABLE");
+    const digest = await globalObject.crypto.subtle.digest("SHA-256", new TextEncoder().encode(String(value)));
+    return Array.from(new Uint8Array(digest), (item) => item.toString(16).padStart(2, "0")).join("");
   }
+
+  function stripWpsTerminator(value) {
+    let text = String(value || "");
+    if (text.endsWith("\r\f")) text = text.slice(0, -2);
+    if (text.endsWith("\x07")) text = text.slice(0, -1);
+    if (text.endsWith("\r")) text = text.slice(0, -1);
+    return text;
+  }
+
+  function characterOrdinalAtUtf16Offset(value, offset) {
+    let position = 0;
+    let ordinal = 0;
+    for (const character of value) {
+      if (position === offset) return ordinal;
+      position += character.length;
+      ordinal += 1;
+    }
+    if (position === offset) return ordinal;
+    throw new Error("HOST_RANGE_UTF16_BOUNDARY_INVALID");
+  }
+
+  async function previewRange(document, item) {
+    if (!item.locator_verified || !Number.isInteger(item.physical_paragraph_index)) throw new Error("PREVIEW_LOCATOR_UNVERIFIED");
+    if (!Number.isInteger(item.raw_start_utf16) || !Number.isInteger(item.raw_end_utf16) || item.raw_end_utf16 <= item.raw_start_utf16) throw new Error("PREVIEW_RANGE_INVALID");
+    const paragraph = document.Paragraphs && document.Paragraphs.Item ? document.Paragraphs.Item(item.physical_paragraph_index + 1) : null;
+    const paragraphRange = paragraph && paragraph.Range;
+    if (!paragraphRange) throw new Error("PREVIEW_PARAGRAPH_NOT_FOUND");
+    const raw = stripWpsTerminator(paragraphRange.Text);
+    if (await sha256(raw) !== item.physical_text_sha256) throw new Error("PREVIEW_PARAGRAPH_CHANGED");
+    if (item.raw_end_utf16 > raw.length) throw new Error("PREVIEW_RANGE_INVALID");
+    const fragment = raw.slice(item.raw_start_utf16, item.raw_end_utf16);
+    if (await sha256(fragment) !== item.text_sha256) throw new Error("PREVIEW_RANGE_HASH_MISMATCH");
+    const characters = paragraphRange.Characters;
+    if (!characters || typeof characters.Item !== "function") throw new Error("PREVIEW_CHARACTERS_UNSUPPORTED");
+    const firstOrdinal = characterOrdinalAtUtf16Offset(raw, item.raw_start_utf16);
+    const endOrdinal = characterOrdinalAtUtf16Offset(raw, item.raw_end_utf16);
+    const first = characters.Item(firstOrdinal + 1);
+    const last = characters.Item(endOrdinal);
+    if (!first || !last || typeof first.SetRange !== "function") throw new Error("PREVIEW_RANGE_BOUNDARY_INVALID");
+    first.SetRange(Number(first.Start), Number(last.End));
+    if (await sha256(stripWpsTerminator(first.Text)) !== item.text_sha256) throw new Error("PREVIEW_RANGE_READBACK_MISMATCH");
+    return first;
+  }
+
+  async function currentDocumentPathHash() {
+    return sha256(savedDocxPath().toLowerCase());
+  }
+
+  async function clearPreviewComments(options) {
+    const silent = Boolean(options && options.silent);
+    const raw = storage().getItem(PREVIEW_KEY);
+    if (!raw) return 0;
+    let session;
+    try { session = JSON.parse(raw); }
+    catch (_) { storage().setItem(PREVIEW_KEY, ""); return 0; }
+    const currentHash = await currentDocumentPathHash();
+    if (currentHash !== session.document_path_hash) {
+      if (silent) return 0;
+      throw new Error("DOCUMENT_CHANGED");
+    }
+    const comments = activeDocument().Comments;
+    if (!comments || typeof comments.Item !== "function") throw new Error("COMMENT_PREVIEW_UNSUPPORTED");
+    let deleted = 0;
+    for (let index = Number(comments.Count || 0); index >= 1; index -= 1) {
+      const comment = comments.Item(index);
+      if (String(comment.Author || "") !== session.author || String(comment.Initial || "") !== session.initial) continue;
+      if (typeof comment.Delete !== "function") throw new Error("PREVIEW_COMMENT_DELETE_UNSUPPORTED");
+      comment.Delete();
+      deleted += 1;
+    }
+    storage().setItem(PREVIEW_KEY, "");
+    log("INFO", "preview.comments.cleared", "预览批注已清除", { deleted_count: deleted });
+    return deleted;
+  }
+
+  async function applyPreviewComments(result) {
+    await clearPreviewComments({ silent: true });
+    const document = activeDocument();
+    const comments = document.Comments;
+    if (!comments || typeof comments.Add !== "function") throw new Error("COMMENT_PREVIEW_UNSUPPORTED");
+    const sessionId = randomId();
+    const author = `DocxTool·${sessionId.slice(-8)}`;
+    const initial = "DCT";
+    const created = [];
+    let applied = 0;
+    try {
+      for (const item of result.items || []) {
+        if (!item.locator_verified) continue;
+        const range = await previewRange(document, item);
+        const role = roleNames[item.type_id] || item.type_id || "未知";
+        const confidence = Math.round(Number(item.confidence || 0) * 100);
+        const review = item.review_level === "review" || item.review_level === "critical_review" ? "；建议人工复核" : "";
+        const comment = comments.Add(range, `DocxTool 预览：${role}；置信度 ${confidence}%${review}。正式格式由 DocxTool Engine 统一生成。`);
+        if (!comment) throw new Error("PREVIEW_COMMENT_CREATE_FAILED");
+        comment.Author = author;
+        comment.Initial = initial;
+        created.push(comment);
+        applied += 1;
+        if (applied % PREVIEW_BATCH_SIZE === 0) await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+    } catch (error) {
+      for (let index = created.length - 1; index >= 0; index -= 1) {
+        try { if (created[index] && typeof created[index].Delete === "function") created[index].Delete(); } catch (_) {}
+      }
+      throw error;
+    }
+    storage().setItem(PREVIEW_KEY, JSON.stringify({ session_id: sessionId, author, initial, document_path_hash: await currentDocumentPathHash() }));
+    log("INFO", "preview.comments.applied", "预览批注写入完成", { applied_count: applied });
+    return applied;
+  }
+
+  function taskpaneUrl() { return new URL("taskpane.html", globalObject.location.href).href; }
 
   function openTaskpane() {
     if (!app || typeof app.CreateTaskPane !== "function") throw new Error("TASKPANE_UNSUPPORTED");
     const current = storage().getItem(TASKPANE_KEY);
     if (current && typeof app.GetTaskPane === "function") {
-      try {
-        const pane = app.GetTaskPane(Number(current));
-        if (pane) {
-          pane.Visible = true;
-          return pane;
-        }
-      } catch (_) {
-        storage().setItem(TASKPANE_KEY, "");
-      }
+      try { const pane = app.GetTaskPane(Number(current)); if (pane) { pane.Visible = true; return pane; } }
+      catch (_) { storage().setItem(TASKPANE_KEY, ""); }
     }
     const pane = app.CreateTaskPane(taskpaneUrl(), "DocxTool");
     pane.Visible = true;
@@ -141,43 +232,34 @@
     const sourcePath = saveActiveDocument();
     writeState({ status: "RUNNING", stage: "recognition", message: "正在识别当前文档…", error_code: "" });
     const result = await api("/v1/recognize", { source_path: sourcePath });
+    writeState({ status: "RUNNING", stage: "preview_comments", message: "识别完成，正在写入预览批注…" });
+    const applied = await applyPreviewComments(result);
     const rows = (result.items || []).map((item) => ({
-      block_index: item.block_index,
-      paragraph_index: item.physical_paragraph_index,
-      type_id: item.type_id,
-      role_name: roleNames[item.type_id] || item.type_id,
-      confidence: item.confidence,
-      review_level: item.review_level,
-      locator_verified: item.locator_verified,
-      segment_index: item.segment_index,
-      segment_count: item.segment_count
+      block_index: item.block_index, paragraph_index: item.physical_paragraph_index,
+      type_id: item.type_id, role_name: roleNames[item.type_id] || item.type_id,
+      confidence: item.confidence, review_level: item.review_level,
+      locator_verified: item.locator_verified, segment_index: item.segment_index, segment_count: item.segment_count
     }));
     writeState({
-      status: "PASS",
-      stage: "recognition_completed",
-      message: `识别完成：${result.block_count} 项；建议复核 ${result.review_count}；未定位 ${result.unresolved_count}`,
-      recognition: result,
-      recognition_rows: rows,
-      error_code: ""
+      status: "PASS", stage: "preview_completed",
+      message: `预览完成：识别 ${result.block_count} 项；批注 ${applied} 项；建议复核 ${result.review_count}；未定位 ${result.unresolved_count}`,
+      recognition: result, recognition_rows: rows, preview_comment_count: applied, error_code: ""
     });
     openTaskpane();
-    log("INFO", "preview.completed", "预览识别完成", { blocks: result.block_count, review: result.review_count, unresolved: result.unresolved_count });
+    log("INFO", "preview.completed", "预览排版完成", { blocks: result.block_count, comments: applied, review: result.review_count, unresolved: result.unresolved_count });
   }
 
-  function clearPreview() {
+  async function clearPreview() {
+    const deleted = await clearPreviewComments({ silent: false });
     writeState({
-      status: "PASS",
-      stage: "preview_cleared",
-      message: "预览结果已清除；未修改文档格式或用户批注。",
-      recognition: null,
-      recognition_rows: [],
-      error_code: ""
+      status: "PASS", stage: "preview_cleared", message: `预览已清除：删除 ${deleted} 条 DocxTool 批注。`,
+      recognition: null, recognition_rows: [], preview_comment_count: 0, error_code: ""
     });
-    log("INFO", "preview.cleared", "预览状态已清除");
   }
 
   async function runFormat() {
     const document = activeDocument();
+    await clearPreviewComments({ silent: true });
     const sourcePath = saveActiveDocument();
     let operationId = "";
     let committed = false;
@@ -189,36 +271,28 @@
       writeState({ status: "RUNNING", stage: "document_close", message: "排版结果已生成，正在安全替换当前文档…", operation_id: operationId });
       if (typeof document.Close !== "function") throw new Error("DOCUMENT_CLOSE_UNSUPPORTED");
       document.Close(0);
-
       await api("/v1/format/commit", { operation_id: operationId });
       committed = true;
       if (!app.Documents || typeof app.Documents.Open !== "function") throw new Error("DOCUMENT_OPEN_UNSUPPORTED");
       app.Documents.Open(sourcePath);
       await api("/v1/format/finalize", { operation_id: operationId });
+      committed = false;
       writeState({
-        status: "PASS",
-        stage: "completed",
+        status: "PASS", stage: "completed",
         message: `排版完成：${prepared.paragraph_count} 个段落，${prepared.heading_count} 个标题。`,
-        format_result: prepared,
-        error_code: "",
-        operation_id: ""
+        format_result: prepared, error_code: "", operation_id: "", preview_comment_count: 0
       });
       log("INFO", "format.completed", "一键排版完成", { paragraphs: prepared.paragraph_count, headings: prepared.heading_count });
     } catch (error) {
       const code = error && error.message ? error.message : "WPS_FORMAT_FAILED";
       if (operationId) {
-        try {
-          await api("/v1/format/rollback", { operation_id: operationId });
-          committed = false;
-        } catch (rollbackError) {
-          log("ERROR", "format.rollback.failed", "一键排版回滚失败", { error_code: rollbackError && rollbackError.message ? rollbackError.message : "UNKNOWN" });
-        }
+        try { await api("/v1/format/rollback", { operation_id: operationId }); committed = false; }
+        catch (rollbackError) { log("ERROR", "format.rollback.failed", "一键排版回滚失败", { error_code: rollbackError && rollbackError.message ? rollbackError.message : "UNKNOWN" }); }
       }
-      if (committed && app.Documents && typeof app.Documents.Open === "function") {
-        try { app.Documents.Open(sourcePath); } catch (_) { /* source recovery is already server-owned */ }
-      } else if (app.Documents && typeof app.Documents.Open === "function") {
-        try { app.Documents.Open(sourcePath); } catch (_) { /* original may still be open or reopening may be unnecessary */ }
+      if (app.Documents && typeof app.Documents.Open === "function") {
+        try { app.Documents.Open(sourcePath); } catch (_) { /* keep primary error */ }
       }
+      if (committed) log("ERROR", "format.recovery.required", "文档替换后恢复状态未确认", { error_code: code });
       throw new Error(code);
     }
   }
@@ -232,22 +306,19 @@
 
   async function runCommand(name) {
     if (busy && name !== "panel") throw new Error("WPS_COMMAND_BUSY");
-    if (name === "panel") {
-      openTaskpane();
-      return;
-    }
+    if (name === "panel") { openTaskpane(); return; }
     busy = true;
     try {
       if (name === "preview") await runPreview();
       else if (name === "apply") await runFormat();
-      else if (name === "clear_preview") clearPreview();
+      else if (name === "clear_preview") await clearPreview();
       else if (name === "health") await runHealth();
       else throw new Error("WPS_COMMAND_UNKNOWN");
     } catch (error) {
       const code = error && error.message ? error.message : "WPS_COMMAND_FAILED";
       writeState({ status: "FAIL", stage: "failed", message: `失败：${code}`, error_code: code });
       log("ERROR", "command.failed", "WPS 命令执行失败", { command: name, error_code: code });
-      try { openTaskpane(); } catch (_) { /* primary error is already persisted */ }
+      try { openTaskpane(); } catch (_) {}
       throw error;
     } finally {
       busy = false;
@@ -284,10 +355,7 @@
   globalObject.GetActionEnabled = function (control) {
     const id = control && (control.Id || control.id) ? String(control.Id || control.id) : "";
     if (id === "panel" || id === "health") return !busy;
-    try {
-      return !busy && savedDocxPath().toLowerCase().endsWith(".docx");
-    } catch (_) {
-      return false;
-    }
+    try { return !busy && savedDocxPath().toLowerCase().endsWith(".docx"); }
+    catch (_) { return false; }
   };
 })();
