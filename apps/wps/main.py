@@ -25,6 +25,8 @@ from apps.wps.control.server import DEFAULT_PORT, create_server  # noqa: E402
 
 RUNTIME_DIR = APP_ROOT / "runtime"
 RUNTIME_CONFIG = RUNTIME_DIR / "runtime-config.js"
+EXPECTED_WPSJS_VERSION = "2.2.3"
+EXPECTED_RPC_VERSION = "1.1.0"
 
 
 def write_runtime_config(port: int, token: str) -> None:
@@ -40,6 +42,13 @@ def clear_runtime_config() -> None:
     RUNTIME_CONFIG.unlink(missing_ok=True)
 
 
+def _read_json(path: Path) -> dict:
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise RuntimeError("WPS_PACKAGE_JSON_INVALID")
+    return value
+
+
 def verify_files() -> None:
     required = [
         "package.json", "manifest.xml", "ribbon.xml", "index.html", "main.js",
@@ -50,15 +59,34 @@ def verify_files() -> None:
     missing = [item for item in required if not (APP_ROOT / item).is_file()]
     if missing:
         raise RuntimeError("WPS_APP_FILES_MISSING: " + ", ".join(missing))
+    package = _read_json(APP_ROOT / "package.json")
+    dependencies = package.get("devDependencies")
+    overrides = package.get("overrides")
+    if not isinstance(dependencies, dict) or dependencies.get("wpsjs") != EXPECTED_WPSJS_VERSION:
+        raise RuntimeError("WPSJS_VERSION_NOT_PINNED")
+    if not isinstance(overrides, dict) or overrides.get("wpsjs-rpc-sdk-new") != EXPECTED_RPC_VERSION:
+        raise RuntimeError("WPSJS_RPC_VERSION_NOT_PINNED")
     from docxtool.document.importer import DocxImporter  # noqa: F401
     from docxtool.document.engine import export_doc  # noqa: F401
-    from docxtool.sdk import recognize_docx  # noqa: F401
+    from docxtool.sdk import bind_recognition_plan, recognize_docx  # noqa: F401
+
+
+def _verify_installed_node_runtime() -> None:
+    wpsjs_package = APP_ROOT / "node_modules" / "wpsjs" / "package.json"
+    rpc_package = APP_ROOT / "node_modules" / "wpsjs-rpc-sdk-new" / "package.json"
+    if not wpsjs_package.is_file() or not rpc_package.is_file():
+        raise RuntimeError("WPSJS_NOT_INSTALLED: 请先在 apps/wps 执行 npm install。")
+    if str(_read_json(wpsjs_package).get("version", "")) != EXPECTED_WPSJS_VERSION:
+        raise RuntimeError("WPSJS_INSTALLED_VERSION_MISMATCH")
+    if str(_read_json(rpc_package).get("version", "")) != EXPECTED_RPC_VERSION:
+        raise RuntimeError("WPSJS_RPC_INSTALLED_VERSION_MISMATCH")
 
 
 def _wpsjs_command() -> List[str]:
+    _verify_installed_node_runtime()
     wpsjs = APP_ROOT / "node_modules" / ".bin" / ("wpsjs.cmd" if sys.platform == "win32" else "wpsjs")
     if not wpsjs.exists():
-        raise RuntimeError("WPSJS_NOT_INSTALLED: 请先在 apps/wps 执行 npm install。")
+        raise RuntimeError("WPSJS_EXECUTABLE_MISSING")
     if sys.platform != "win32":
         return [str(wpsjs), "debug", "-s"]
     pwsh = shutil.which("pwsh")
