@@ -19,7 +19,6 @@ import shutil
 import subprocess
 import sys
 import threading
-import urllib.request
 
 APP_ROOT = Path(__file__).resolve().parent
 REPO_ROOT = APP_ROOT.parent.parent
@@ -63,6 +62,8 @@ def verify_files() -> None:
         "taskpane.js",
         "control/server.py",
         "control/format_current_document.py",
+        "control/document_transaction.py",
+        "control/logging_adapter.py",
     ]
     missing = [item for item in required if not (APP_ROOT / item).is_file()]
     if missing:
@@ -85,15 +86,23 @@ def control_only(port: int) -> None:
         clear_runtime_config()
 
 
-def start(port: int) -> None:
-    verify_files()
-    configure_wps_logging(APP_ROOT)
-    npx = shutil.which("npx")
-    if not npx:
-        raise RuntimeError("NPX_NOT_FOUND: 请先安装 Node.js，并在 apps/wps 执行 npm install。")
+def _wpsjs_command() -> list[str]:
     wpsjs = APP_ROOT / "node_modules" / ".bin" / ("wpsjs.cmd" if sys.platform == "win32" else "wpsjs")
     if not wpsjs.exists():
         raise RuntimeError("WPSJS_NOT_INSTALLED: 请先在 apps/wps 执行 npm install。")
+    if sys.platform != "win32":
+        return [str(wpsjs), "debug", "-s"]
+    pwsh = shutil.which("pwsh")
+    if not pwsh:
+        raise RuntimeError("POWERSHELL7_NOT_FOUND: Windows 启动 WPS 插件需要 PowerShell 7 (pwsh)。")
+    quoted = str(wpsjs).replace("'", "''")
+    return [pwsh, "-NoProfile", "-Command", f"& '{quoted}' debug -s"]
+
+
+def start(port: int) -> None:
+    verify_files()
+    configure_wps_logging(APP_ROOT)
+    command = _wpsjs_command()
 
     token = secrets.token_urlsafe(32)
     write_runtime_config(port, token)
@@ -108,12 +117,7 @@ def start(port: int) -> None:
         {"control_port": port},
     )
     try:
-        subprocess.run(
-            [npx, "--no-install", "wpsjs", "debug", "-s"],
-            cwd=str(APP_ROOT),
-            check=True,
-            shell=False,
-        )
+        subprocess.run(command, cwd=str(APP_ROOT), check=True, shell=False)
     finally:
         server.shutdown()
         server.server_close()
