@@ -22,7 +22,9 @@ from .recognize_document import bind_preview, recognize_document
 
 HOST = "127.0.0.1"
 DEFAULT_PORT = 0
-MAX_BODY_BYTES = 1024 * 1024
+# HostSnapshot intentionally carries the current document's raw paragraph text
+# to the local Binder. Keep a hard cap, but size it for large office documents.
+MAX_BODY_BYTES = 16 * 1024 * 1024
 MAX_RECOGNITION_PLANS = 8
 
 
