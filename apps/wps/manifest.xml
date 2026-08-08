@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<JsPlugin>
+  <ApiVersion>1.0.0</ApiVersion>
+  <Name>DocxTool WPS</Name>
+  <Description>调用 DocxTool Core 的本地 WPS 公文识别与排版插件</Description>
+</JsPlugin>
