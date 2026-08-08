@@ -11,6 +11,6 @@
     "unpublish": "wpsjs unpublish"
   },
   "devDependencies": {
-    "wpsjs": "^2.2.3"
+    "wpsjs": "2.2.3"
   }
 }
