@@ -77,6 +77,27 @@ class DocumentTransactionManager:
         self.journal_path.unlink(missing_ok=True)
         self.journal_path.with_suffix(".tmp").unlink(missing_ok=True)
 
+    @staticmethod
+    def _validated_journal_paths(payload: dict) -> tuple[str, str, Path, Path, Path]:
+        operation_id = str(payload.get("operation_id", ""))
+        state = str(payload.get("state", ""))
+        if len(operation_id) != 32 or any(char not in "0123456789abcdef" for char in operation_id):
+            raise ValueError("invalid operation id")
+        source = Path(str(payload.get("source_path", ""))).expanduser().resolve()
+        temporary = Path(str(payload.get("temporary_path", ""))).expanduser().resolve()
+        backup = Path(str(payload.get("backup_path", ""))).expanduser().resolve()
+        if source.suffix.lower() != ".docx":
+            raise ValueError("invalid source")
+        expected_temporary = source.with_name(
+            f".{source.stem}.docxtool-{operation_id[:12]}.docx"
+        )
+        expected_backup = source.with_name(
+            f".{source.stem}.docxtool-backup-{operation_id[:12]}.docx"
+        )
+        if temporary != expected_temporary or backup != expected_backup:
+            raise ValueError("unexpected transaction paths")
+        return operation_id, state, source, temporary, backup
+
     def _recover_stale_transaction(self) -> None:
         if not self.journal_path.is_file():
             return
@@ -84,28 +105,31 @@ class DocumentTransactionManager:
             payload = json.loads(self.journal_path.read_text(encoding="utf-8"))
             if not isinstance(payload, dict) or payload.get("version") != 1:
                 raise ValueError("invalid journal")
-            state = str(payload.get("state", ""))
-            source = Path(str(payload.get("source_path", "")))
-            temporary = Path(str(payload.get("temporary_path", "")))
-            backup = Path(str(payload.get("backup_path", "")))
-            if source.suffix.lower() != ".docx":
-                raise ValueError("invalid source")
+            _operation_id, state, source, temporary, backup = self._validated_journal_paths(payload)
         except Exception as exc:
             raise DocumentTransactionError("WPS_TRANSACTION_JOURNAL_INVALID") from exc
 
         file_id = file_identity(source)
-        if state == "prepared":
-            temporary.unlink(missing_ok=True)
-            backup.unlink(missing_ok=True)
-        elif state in {"commit_started", "committed"}:
-            if backup.is_file():
-                os.replace(backup, source)
-            elif not source.is_file():
-                raise DocumentTransactionError("WPS_TRANSACTION_RECOVERY_SOURCE_MISSING")
-            temporary.unlink(missing_ok=True)
-        else:
-            raise DocumentTransactionError("WPS_TRANSACTION_JOURNAL_INVALID")
-        self._clear_journal()
+        try:
+            if state == "prepared":
+                temporary.unlink(missing_ok=True)
+                backup.unlink(missing_ok=True)
+            elif state in {"commit_started", "committed"}:
+                if backup.is_file():
+                    os.replace(backup, source)
+                elif not source.is_file():
+                    raise DocumentTransactionError(
+                        "WPS_TRANSACTION_RECOVERY_SOURCE_MISSING"
+                    )
+                temporary.unlink(missing_ok=True)
+            else:
+                raise DocumentTransactionError("WPS_TRANSACTION_JOURNAL_INVALID")
+            self._clear_journal()
+        except DocumentTransactionError:
+            raise
+        except OSError as exc:
+            # Keep the journal intact so closing WPS and restarting can retry.
+            raise DocumentTransactionError("WPS_TRANSACTION_RECOVERY_REQUIRED") from exc
         log_event(
             "WARNING",
             "transaction",
