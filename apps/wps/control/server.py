@@ -9,7 +9,7 @@ from __future__ import annotations
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from docxtool.version import package_version
 
@@ -18,7 +18,7 @@ from .logging_adapter import configure_wps_logging, log_event
 from .recognize_document import recognize_document
 
 HOST = "127.0.0.1"
-DEFAULT_PORT = 3890
+DEFAULT_PORT = 0
 MAX_BODY_BYTES = 1024 * 1024
 
 
@@ -179,12 +179,13 @@ def create_server(app_root: Path, session_token: str, port: int = DEFAULT_PORT) 
 
 def run_server(app_root: Path, session_token: str, port: int = DEFAULT_PORT) -> None:
     server = create_server(app_root, session_token, port)
+    actual_port = int(server.server_address[1])
     log_event(
         "INFO",
         "control",
         "server.start",
         "WPS Control Server 已启动",
-        {"host": HOST, "port": port, "docxtool_version": package_version()},
+        {"host": HOST, "port": actual_port, "docxtool_version": package_version()},
     )
     try:
         server.serve_forever(poll_interval=0.25)
