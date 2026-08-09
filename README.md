@@ -237,6 +237,10 @@ docxtool-sdk bind --plan plan.json --snapshot snapshot.json --output binding.jso
 docxtool-sdk validate --kind recognition-binding --input binding.json
 ```
 
+在 Windows 开发环境中，`.venv\Scripts\docxtool-recognize.exe` 和
+`.venv\Scripts\docxtool-sdk.exe` 由安装 wheel 生成；如果入口缺失，可执行
+`.\scripts\build-local-recognition-runtime.ps1` 重新安装并做冒烟验证。
+
 详细接口、数据边界和宿主接入方式见 [docs/SDK.md](docs/SDK.md)、
 [docs/INTEGRATION_CONTRACT_V1.md](docs/INTEGRATION_CONTRACT_V1.md) 和
 [docs/HOST_ADAPTER_GUIDE.md](docs/HOST_ADAPTER_GUIDE.md)。本仓库只提供 wheel/SDK 通用接口，

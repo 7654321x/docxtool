@@ -66,9 +66,10 @@ pwsh -NoProfile -Command "git ls-remote https://github.com/7654321x/docxtool.git
 - 管理员、文件 API 和 preset 修改路由的鉴权响应位于 `src/docxtool/web/route_authorization.py`。
 - DOCX 上传限流、落盘、安全校验和任务入队编排位于 `src/docxtool/web/upload_route_handlers.py`。
 - 已校验上传任务的 queued 记录和内存队列入队位于 `src/docxtool/web/task_queue.py`。
-- 脚本：`scripts/generate_secrets.py`、`scripts/benchmark_recognition.py`、`scripts/compare_recognition_runs.py`、`scripts/analyze_end_format.py`、`scripts/analyze_letterhead_batch.py`、`scripts/batch_test_docx.py`、`scripts/generate_005_format_fixtures.py`、`scripts/normalize_correct_template_role_spacing.py`、`scripts/phase_a_equivalence_snapshot.py`、`scripts/phase_a_web_contract_snapshot.py`、`scripts/migrate_legacy_database.ps1`、`scripts/publish_to_github.ps1`
+- 脚本：`scripts/generate_secrets.py`、`scripts/benchmark_recognition.py`、`scripts/compare_recognition_runs.py`、`scripts/analyze_end_format.py`、`scripts/analyze_letterhead_batch.py`、`scripts/batch_test_docx.py`、`scripts/generate_005_format_fixtures.py`、`scripts/normalize_correct_template_role_spacing.py`、`scripts/phase_a_equivalence_snapshot.py`、`scripts/phase_a_web_contract_snapshot.py`、`scripts/build-local-recognition-runtime.ps1`、`scripts/migrate_legacy_database.ps1`、`scripts/publish_to_github.ps1`
 - 前端和 Cloudflare Pages：`resources/frontend/pages/index.html`、`resources/frontend/pages/_worker.js`
 - 运行目录占位：`var/data/.gitkeep`、`var/logs/.gitkeep`、`var/outputs/.gitkeep`、`var/runtime/.gitkeep`
+- WPS 应用：`apps/wps` 下的公开 Python/JavaScript/HTML/XML 源码、`package.json`、`package-lock.json`、README、测试和验证脚本；同步 bootstrap 必须包含 `host-runtime.js`、`js/bootstrap-log.js`、`js/bootstrap-complete.js`、`js/ribbon.js`
 - 测试：`tests/test_*.py`、`tests/*.test.mjs`
 
 当前唯一生产前端源入口是 `resources/frontend/pages/index.html`。重构前的旧前端入口和 legacy 页面已移除。
@@ -88,7 +89,8 @@ pwsh -NoProfile -Command "git ls-remote https://github.com/7654321x/docxtool.git
 - `local_recycle/private_manifests/` 中的真实 fixture 文件名、源文档 SHA 和本地关联映射
 - 根目录用户 `.docx`
 - 未脱敏的测试 Word、用户 Word、日志正文
-- `wps/` 下的 wheel、Python 运行时、构建产物和插件私有文件；当前仅允许 `wps/公文格式规范.md`
+- `wps/` 下的 wheel、Python 运行时、构建产物和插件私有文件；当前仅允许 `wps/公文格式规范.md`。该限制不适用于正式源码目录 `apps/wps/`
+- `apps/wps/node_modules/`、`apps/wps/logs/`、`apps/wps/runtime/runtime-config.js` 和本机 WPS `publish.xml`、`authaddin.json`
 
 `.gitignore` 只影响未跟踪文件。已经被 Git 跟踪或已经进入历史的文件，不会因为写入 `.gitignore` 自动消失。
 

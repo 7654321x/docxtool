@@ -268,3 +268,9 @@ pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m ruff check src tests scr
 4. WPS 端只允许完整物理哈希、物理出现序号、UTF-16 子范围和子范围哈希全部验证后创建目标；禁止 dense/non-empty/裸序号 fallback。没有正式表格合同前跳过表格单元格。
 5. 同一物理段落包含多个角色或单一角色未覆盖整段时，只允许子 Range 预览并标记 `mixed_structure / review_only`；正式排版必须在命令生成和事务开始前返回 `MIXED_PARAGRAPH_REQUIRES_SPLIT`。
 6. 尾部规范化可能把附件说明移动到落款单位和日期之前；SDK 的 block 数组保持最终排版顺序，但同一物理段落的 `segment_index`、范围重叠检查和宿主绑定顺序必须按原始 UTF-16 起止位置计算。不得因最终顺序与原文顺序不同，把本来可回读的落款、日期或附件范围误报为 `SOURCE_RANGE_OVERLAP`。
+
+## WPS 调试进程收尾
+
+1. 启动 `apps/wps/main.py`、`wpsjs debug` 或 WPS Control Server 前，记录本轮进程 PID 和监听端口；验证结束或任务停止时，必须关闭本轮创建的 Python、Node、PowerShell、cmd 进程树并删除生成的 `apps/wps/runtime/runtime-config.js`。
+2. 收尾后检查本轮端口不再监听，且不存在命令行指向当前仓库 `apps/wps` 的残留启动器。不得默认终止用户开始前已有的 WPS 进程；只有用户明确要求关闭时才处理。
+3. WPS 加载项注册只保留当前项目 `docxtool-wps-app`；清理重复项前先备份 `publish.xml` 和 `authaddin.json` 到 `local_recycle/`，不得删除项目源码或 WPS 系统加载项。

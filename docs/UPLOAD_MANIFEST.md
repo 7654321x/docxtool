@@ -62,6 +62,19 @@ https://github.com/7654321x/docxtool.git
 | `ruff.toml` | Ruff 配置 | 代码检查配置 |
 | `.github/workflows/ci.yml` | GitHub Actions | CI 测试 |
 
+## WPS 应用
+
+`apps/wps/` 的公开源码、Ribbon/TaskPane 资源、Control Server、测试、依赖清单和验证脚本属于正式发布范围。必须包含同步 bootstrap 新文件：
+
+```text
+apps/wps/host-runtime.js
+apps/wps/js/bootstrap-log.js
+apps/wps/js/bootstrap-complete.js
+apps/wps/js/ribbon.js
+```
+
+同时保留 `apps/wps/main.js`、`index.html`、`main.py`、`manifest.xml`、`ribbon.xml`、`taskpane.*`、`control/*.py`、`tests/test_wps_app.py`、`scripts/verify.ps1`、`package.json`、`package-lock.json`、`README.md` 和 `AGENTS.md`。不得上传 `apps/wps/node_modules/`、`logs/`、运行时生成的 `runtime/runtime-config.js` 或本机 WPS 注册文件。
+
 ## 2. 后端和排版核心
 
 | 文件路径 | 作用 |
@@ -252,6 +265,7 @@ https://github.com/7654321x/docxtool.git
 | `scripts/generate_wps_validation_fixtures.py` | 生成脱敏 WPS 手工验收 DOCX |
 | `scripts/normalize_correct_template_role_spacing.py` | 正确模板职务姓名空段归一化 |
 | `scripts/migrate_legacy_database.ps1` | 旧数据库复制迁移辅助脚本，默认 dry run |
+| `scripts/build-local-recognition-runtime.ps1` | 安装本地识别 runtime、重建 console entry point 并做冒烟验证 |
 | `scripts/publish_to_github.ps1` | 安全发布到 GitHub 的脚本 |
 
 ## 3. 前端和 Cloudflare Pages

@@ -13,7 +13,7 @@ from docxtool.document.importer import DocxImporter
 from docxtool.document.style_config import load_rules_and_settings
 from docxtool.paths import default_format_config_path
 from docxtool.sdk import InvalidRequestError, RecognitionInputError, recognize_docx
-from docxtool.sdk.cli import main as sdk_main
+from docxtool.sdk.cli import main as sdk_main, recognize_main
 
 
 def _source_document(path: Path) -> None:
@@ -116,6 +116,18 @@ def test_sdk_cli_writes_json_plan(tmp_path: Path) -> None:
     _source_document(source)
 
     assert sdk_main([str(source), "--output", str(output)]) == 0
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["ok"] is True
+    assert payload["data"]["schema_version"] == "recognition-plan-v1"
+    assert payload["data"]["blocks"]
+
+
+def test_sdk_legacy_entry_point_writes_json_plan(tmp_path: Path) -> None:
+    source = tmp_path / "source.docx"
+    output = tmp_path / "legacy-plan.json"
+    _source_document(source)
+
+    assert recognize_main([str(source), "--output", str(output)]) == 0
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["ok"] is True
     assert payload["data"]["schema_version"] == "recognition-plan-v1"
