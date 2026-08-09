@@ -68,6 +68,12 @@ id_ed25519
 # WPS integration keeps its reusable format specification in source control,
 # but locally copied SDK wheels must not be published with the plugin source.
 /wps/*.whl
+/apps/wps/node_modules/
+/apps/wps/logs/
+/apps/wps/runtime/runtime-config.js
+/apps/wps/__pycache__/
+/apps/wps/control/__pycache__/
+/apps/wps/tests/__pycache__/
 
 # IDE and OS files
 .idea/
