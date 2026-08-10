@@ -3,7 +3,7 @@
     <tabs>
       <tab id="docxtoolTab" label="DocxTool">
         <group id="docxtoolPanel" label="DocxTool">
-          <button id="panel" label="打开侧边栏" onAction="OnAction" size="large"/>
+          <button id="panel" label="打开侧边栏" onAction="OnAction" getImage="GetImage" size="large"/>
         </group>
       </tab>
     </tabs>

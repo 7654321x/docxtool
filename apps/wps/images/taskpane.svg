@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <title>打开侧边栏</title>
+  <style>
+    .skinbaseDark { fill: #404040; opacity: 0.82; }
+    .skinthemeDark { fill: #5789D9; }
+    .skinbaseLight { fill: #FFFFFF; }
+  </style>
+  <path class="skinbaseDark" fill-rule="evenodd" d="M2 3h20v18H2V3zm1.25 1.25v15.5h17.5V4.25H3.25z"/>
+  <path class="skinbaseDark" d="M14.75 4.25H16v15.5h-1.25zM5 7h7.5v1.25H5zm0 3.25h7.5v1.25H5zm0 3.25h5.5v1.25H5z"/>
+  <rect class="skinthemeDark" x="17.25" y="6" width="2.25" height="12" rx="0.65"/>
+  <path class="skinbaseLight" d="M18 8h.75v2.25H18zm0 3.25h.75v4.75H18z"/>
+</svg>

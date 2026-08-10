@@ -4,16 +4,16 @@
 <meta charset="utf-8">
 <title>DocxTool</title>
 <style>
-  html,body{max-width:100%;overflow-x:hidden}body{font:14px/1.55 system-ui;margin:0;color:#172033;background:#fff}
-  header{position:sticky;top:0;padding:10px 14px;border-bottom:1px solid #dce3ee;background:#fff}.toolbar{display:flex;justify-content:space-between;gap:8px;align-items:center}.toolbar-actions{white-space:nowrap}
-  main{padding:12px 14px}.panel{border:1px solid #dce3ee;border-radius:8px;padding:12px;margin:10px 0}
+  html,body{height:100%;max-width:100%;overflow:hidden}body{display:flex;flex-direction:column;font:14px/1.55 system-ui;margin:0;color:#172033;background:#fff}
+  header{flex:0 0 auto;padding:10px 14px;border-bottom:1px solid #dce3ee;background:#fff}.toolbar{display:flex;justify-content:space-between;gap:8px;align-items:center}.toolbar-actions{white-space:nowrap}
+  main{flex:1 1 auto;min-height:0;overflow-y:auto;box-sizing:border-box;padding:12px 14px}.panel{border:1px solid #dce3ee;border-radius:8px;padding:12px;margin:10px 0}
   button{padding:7px 10px;margin:3px;border:1px solid #cbd5e1;border-radius:5px;background:#fff}button.primary{background:#1769aa;color:#fff;border-color:#1769aa}
   .meta{font-size:12px;color:#5c6676}.error{color:#b42318}.warning{color:#8a5a00}.rows{max-height:320px;overflow:auto}.row{padding:7px 0;border-top:1px solid #eef1f5;overflow-wrap:anywhere}
 </style>
 </head>
 <body>
-<header><div class="toolbar"><div><strong>DocxTool WPS</strong><div id="status" class="meta">正在连接宿主…</div></div><div class="toolbar-actions"><button id="focus_document">返回文档</button><button id="close_panel">关闭</button></div></div></header>
-<main>
+<header id="taskpane_header"><div class="toolbar"><div><strong>DocxTool WPS</strong><div id="status" class="meta">Connecting</div></div><div class="toolbar-actions"><button id="close_panel">关闭</button></div></div></header>
+<main id="content">
   <div class="panel">
     <button id="preview">预览排版</button>
     <button id="apply" class="primary">一键排版</button>
@@ -24,6 +24,6 @@
   <div class="panel"><strong>识别结果</strong><div id="summary" class="meta">尚未识别。</div><div id="rows" class="rows"></div></div>
 </main>
 <script src="./runtime/runtime-config.js"></script>
-<script src="./taskpane.js"></script>
+  <script src="./taskpane.js?v=9"></script>
 </body>
 </html>

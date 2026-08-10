@@ -13,7 +13,8 @@ function onAddinLoad(ribbonUI) {
     if (!window.Application) throw new Error("WPS_APPLICATION_UNAVAILABLE");
     stage = "lookup_host_runtime";
     if (!window.DocxToolHostRuntime) throw new Error("LOCAL_APPLICATION_RUNTIME_NOT_READY");
-    window.Application.ribbonUI = ribbonUI;
+    stage = "store_ribbon_ui";
+    window.DocxToolHostRuntime.setRibbonUI(ribbonUI);
     stage = "host_start";
     window.DocxToolEarlyLog("INFO", "ribbon", "ribbon.addin.host_start.call", "开始调用 Host Runtime", {});
     window.DocxToolHostRuntime.start();
@@ -34,7 +35,8 @@ function onAddinLoad(ribbonUI) {
 
 function onAction(control) {
   var id = control && (control.Id || control.id) ? String(control.Id || control.id) : "";
-  return window.DocxToolHostRuntime.handleRibbonAction(id);
+  window.DocxToolHostRuntime.handleRibbonAction(id);
+  return true;
 }
 
 function getActionEnabled(control) {
@@ -42,7 +44,11 @@ function getActionEnabled(control) {
   return window.DocxToolHostRuntime.getActionEnabled(id);
 }
 
-window.DocxToolRibbonCallbacks = Object.freeze({ onAddinLoad, onAction, getActionEnabled });
+function getImage() {
+  return "images/taskpane.svg";
+}
+
+window.DocxToolRibbonCallbacks = Object.freeze({ onAddinLoad, onAction, getActionEnabled, getImage });
 window.DocxToolEarlyLog("INFO", "ribbon", "ribbon.script.loaded", "Ribbon 回调实现已加载", {
   callbacks_registered: true
 });

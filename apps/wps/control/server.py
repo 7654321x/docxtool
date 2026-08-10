@@ -18,6 +18,7 @@ from docxtool.sdk import RecognitionPlan
 from docxtool.version import package_version
 
 from .document_transaction import DocumentTransactionError, DocumentTransactionManager
+from .host_bridge import HostBridge
 from .logging_adapter import configure_wps_logging, log_event, sanitize_wps_log_fields
 from .monitor import CommandMonitor
 from .recognize_document import bind_preview, recognize_document
@@ -41,6 +42,20 @@ BUSINESS_ROUTES = frozenset(
         "/v1/format/rollback",
     }
 )
+BRIDGE_ROUTES = frozenset(
+    {
+        "/v1/bridge/host/register",
+        "/v1/bridge/host/wait",
+        "/v1/bridge/command",
+        "/v1/bridge/state",
+        "/v1/bridge/state/wait",
+    }
+)
+BRIDGE_WAIT_ROUTES = frozenset(
+    {"/v1/bridge/host/wait", "/v1/bridge/state/wait"}
+)
+
+
 def _error_code(error: Exception) -> str:
     code = getattr(error, "code", "")
     if isinstance(code, str) and code:
@@ -87,15 +102,46 @@ def _request_failure_event(code: str) -> str:
         "WPS_CONTROL_ROUTE_NOT_FOUND": "control.route.not_found",
         "WPS_COMMAND_BUSY": "control.command.busy",
         "WPS_MONITOR_NOT_RUNNING": "control.monitor.unavailable",
+        "WPS_HOST_NOT_REGISTERED": "bridge.host.not_registered",
+        "WPS_HOST_NOT_READY": "bridge.host.not_ready",
+        "WPS_HOST_CONTEXT_MISMATCH": "bridge.host.context_mismatch",
+        "WPS_HOST_CONTEXT_REPLACED": "bridge.host.context_replaced",
+        "WPS_HOST_CONTEXT_REQUIRED": "bridge.host.context_required",
+        "WPS_HOST_GENERATION_MISMATCH": "bridge.host.generation_mismatch",
+        "WPS_HOST_GENERATION_INVALID": "bridge.host.generation_invalid",
+        "WPS_REQUEST_ID_MISSING": "bridge.command.request_id_missing",
+        "WPS_REQUEST_COMMAND_MISSING": "bridge.command.command_missing",
+        "WPS_REQUEST_COMMAND_INVALID": "bridge.command.invalid",
+        "WPS_PANE_INSTANCE_ID_MISSING": "bridge.command.pane_instance_missing",
+        "WPS_BRIDGE_STATE_OBJECT_REQUIRED": "bridge.state.object_required",
+        "WPS_BRIDGE_STATE_REVISION_INVALID": "bridge.state.revision_invalid",
+        "WPS_BRIDGE_CLOSED": "bridge.closed",
+        "WPS_BRIDGE_WAIT_TIMEOUT_INVALID": "bridge.wait.timeout_invalid",
     }.get(code, "control.request.execution_failed")
 
 
 class WpsControlHttpServer(ThreadingHTTPServer):
-    def __init__(self, server_address: tuple[str, int], handler: type, monitor: CommandMonitor) -> None:
+    daemon_threads = True
+
+    def __init__(
+        self,
+        server_address: tuple[str, int],
+        handler: type,
+        monitor: CommandMonitor,
+        host_bridge: HostBridge,
+    ) -> None:
         self.command_monitor = monitor
+        self.host_bridge = host_bridge
         super().__init__(server_address, handler)
 
     def server_close(self) -> None:
+        self.host_bridge.close()
+        log_event(
+            "INFO",
+            "bridge",
+            "bridge.waiters.closed",
+            "WPS 通信桥等待请求已关闭",
+        )
         self.command_monitor.stop()
         super().server_close()
 
@@ -106,6 +152,7 @@ class WpsControlApplication:
         self.session_token = session_token
         self.log_dir = configure_wps_logging(self.app_root)
         self.transactions = DocumentTransactionManager(self.log_dir)
+        self.host_bridge = HostBridge()
         self._plans: "OrderedDict[str, RecognitionPlan]" = OrderedDict()
         self._plans_lock = threading.RLock()
 
@@ -130,6 +177,114 @@ class WpsControlApplication:
             "docxtool_version": package_version(),
             "host": HOST,
         }
+
+    def dispatch_bridge(
+        self,
+        path: str,
+        body: Dict[str, Any],
+        request_id: str = "",
+    ) -> Dict[str, Any]:
+        if path == "/v1/bridge/host/register":
+            result = self.host_bridge.register_host(body.get("host_context_id"))
+            log_event(
+                "INFO",
+                "bridge",
+                (
+                    "bridge.host.replaced"
+                    if result["replaced"]
+                    else "bridge.host.registered"
+                ),
+                "WPS Host 通信上下文已注册",
+                {
+                    "request_id": request_id,
+                    "host_generation": result["host_generation"],
+                    "state_revision": result["state_revision"],
+                    "replaced": result["replaced"],
+                },
+            )
+            return result
+        if path == "/v1/bridge/host/wait":
+            result = self.host_bridge.wait_command(
+                body.get("host_context_id"),
+                body.get("host_generation"),
+                body.get("timeout_seconds"),
+            )
+            command = result.get("command")
+            if isinstance(command, dict):
+                log_event(
+                    "INFO",
+                    "bridge",
+                    "bridge.command.delivered",
+                    "WPS Host 已领取通信桥命令",
+                    {
+                        "request_id": str(command.get("request_id", "")),
+                        "command": str(command.get("command", "")),
+                        "command_sequence": int(
+                            command.get("command_sequence", 0)
+                        ),
+                        "host_generation": int(
+                            command.get("host_generation", 0)
+                        ),
+                    },
+                )
+            return result
+        if path == "/v1/bridge/command":
+            result = self.host_bridge.enqueue_command(
+                body.get("request_id"),
+                body.get("command"),
+                body.get("pane_instance_id"),
+                body.get("host_generation"),
+            )
+            log_event(
+                "INFO",
+                "bridge",
+                "bridge.command.enqueued",
+                "任务窗格命令已进入通信桥",
+                {
+                    "request_id": result["request_id"],
+                    "command": str(body.get("command", "")),
+                    "command_sequence": result["command_sequence"],
+                    "host_generation": int(body.get("host_generation", 0)),
+                    "state_revision": result["state_revision"],
+                },
+            )
+            return result
+        if path == "/v1/bridge/state":
+            result = self.host_bridge.publish_state(
+                body.get("host_context_id"),
+                body.get("host_generation"),
+                body.get("state"),
+            )
+            state = body.get("state")
+            log_event(
+                "INFO",
+                "bridge",
+                "bridge.state.published",
+                "WPS Host 状态已发布到通信桥",
+                {
+                    "request_id": request_id,
+                    "host_generation": result["host_generation"],
+                    "state_revision": result["state_revision"],
+                    "current_status": (
+                        str(state.get("status", ""))
+                        if isinstance(state, dict)
+                        else ""
+                    ),
+                    "stage": (
+                        str(state.get("stage", ""))
+                        if isinstance(state, dict)
+                        else ""
+                    ),
+                },
+            )
+            return result
+        if path == "/v1/bridge/state/wait":
+            return self.host_bridge.wait_state(
+                body.get("after_revision"),
+                body.get("host_generation"),
+                body.get("timeout_seconds"),
+            )
+        raise DocumentTransactionError("WPS_CONTROL_ROUTE_NOT_FOUND")
 
     def dispatch(
         self,
@@ -420,6 +575,9 @@ def create_server(app_root: Path, session_token: str, port: int = DEFAULT_PORT) 
             self._cors()
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(data)))
+            request_id = self._request_id()
+            if request_id:
+                self.send_header("X-DocxTool-Request-Id", request_id)
             self.end_headers()
             try:
                 self.wfile.write(data)
@@ -468,13 +626,13 @@ def create_server(app_root: Path, session_token: str, port: int = DEFAULT_PORT) 
             return value
 
         def do_OPTIONS(self) -> None:  # noqa: N802
-            is_log_route = self.path == "/v1/log"
-            if not is_log_route:
+            is_quiet_route = self.path == "/v1/log" or self.path in BRIDGE_ROUTES
+            if not is_quiet_route:
                 log_event("DEBUG", "control", "request.start", "WPS Control 预检请求开始", {"method": "OPTIONS", "path": self.path})
             self.send_response(204)
             self._cors()
             self.end_headers()
-            if not is_log_route:
+            if not is_quiet_route:
                 log_event("DEBUG", "control", "request.completed", "WPS Control 预检请求完成", {"method": "OPTIONS", "path": self.path, "http_status": 204})
 
         def do_GET(self) -> None:  # noqa: N802
@@ -499,7 +657,9 @@ def create_server(app_root: Path, session_token: str, port: int = DEFAULT_PORT) 
             started_at = time.monotonic()
             request_id = self._request_id()
             is_log_route = self.path == "/v1/log"
-            if not is_log_route:
+            is_bridge_route = self.path in BRIDGE_ROUTES
+            is_quiet_route = is_log_route or is_bridge_route
+            if not is_quiet_route:
                 log_event("INFO", "control", "request.start", "WPS Control 请求开始", {"method": "POST", "path": self.path, "request_id": request_id})
             if not self._authorized():
                 self._json(401, {"ok": False, "error_code": "WPS_CONTROL_UNAUTHORIZED"})
@@ -512,12 +672,16 @@ def create_server(app_root: Path, session_token: str, port: int = DEFAULT_PORT) 
                 body = self._read_body()
                 if is_log_route:
                     data = application.dispatch(self.path, body, request_id=request_id)
+                elif is_bridge_route:
+                    data = application.dispatch_bridge(
+                        self.path, body, request_id=request_id
+                    )
                 elif self.path in BUSINESS_ROUTES:
                     data = monitor.submit(self.path, body, request_id=request_id)
                 else:
                     raise DocumentTransactionError("WPS_CONTROL_ROUTE_NOT_FOUND")
                 self._json(200, {"ok": True, "data": data})
-                if not is_log_route:
+                if not is_quiet_route:
                     log_event(
                         "INFO", "control", "request.completed", "WPS Control 请求完成",
                         {"method": "POST", "path": self.path, "request_id": request_id, "http_status": 200, "duration_ms": int((time.monotonic() - started_at) * 1000)},
@@ -540,11 +704,13 @@ def create_server(app_root: Path, session_token: str, port: int = DEFAULT_PORT) 
                 self._json(status, {"ok": False, "error_code": code})
 
         def log_message(self, format: str, *args: object) -> None:
-            if self.path == "/v1/log":
+            if self.path == "/v1/log" or self.path in BRIDGE_ROUTES:
                 return
             log_event("DEBUG", "http", "access", format % args)
 
-    server = WpsControlHttpServer((HOST, int(port)), Handler, monitor)
+    server = WpsControlHttpServer(
+        (HOST, int(port)), Handler, monitor, application.host_bridge
+    )
     try:
         monitor.start()
     except Exception:

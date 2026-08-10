@@ -13,6 +13,7 @@ import logging
 import math
 import os as _os
 import re
+import sys
 
 from docxtool.paths import default_format_config_path
 import contextvars
@@ -308,15 +309,26 @@ class _ContextFileHandler(logging.Handler):
             self.handleError(record)
 
 
+class _BelowWarningFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return record.levelno < logging.WARNING
+
+
 def _ensure_console_handler(logger: logging.Logger) -> None:
     if any(isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler)
            for h in logger.handlers):
         return
     logger.setLevel(logging.DEBUG)
-    ch = logging.StreamHandler()
-    ch.setLevel(logging.DEBUG)
-    ch.setFormatter(logging.Formatter(LOG_FORMAT))
-    logger.addHandler(ch)
+    formatter = logging.Formatter(LOG_FORMAT)
+    normal_handler = logging.StreamHandler(sys.stdout)
+    normal_handler.setLevel(logging.DEBUG)
+    normal_handler.addFilter(_BelowWarningFilter())
+    normal_handler.setFormatter(formatter)
+    logger.addHandler(normal_handler)
+    problem_handler = logging.StreamHandler(sys.stderr)
+    problem_handler.setLevel(logging.WARNING)
+    problem_handler.setFormatter(formatter)
+    logger.addHandler(problem_handler)
 
 
 def _ensure_context_file_handler(logger: logging.Logger) -> None:

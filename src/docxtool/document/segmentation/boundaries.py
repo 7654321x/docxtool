@@ -97,8 +97,23 @@ def segment_boundary_candidates(
         body_start, body_end = trim_source_span(source, boundary, end)
         left = source[start:boundary]
         body_count = visible_character_count(source[body_start:body_end])
-        numbered = bool(detect_numbering_prefix_func(left))
+        literal_numbered = bool(detect_numbering_prefix_func(left))
         visual_transition = has_format_transition(features, start, boundary, end)
+        source_numbering = str(
+            getattr(features, "segment_numbering_features", "")
+            or getattr(features, "numbering_prefix", "")
+            or ""
+        )
+        native_list_heading = (
+            source_numbering.startswith("@lvl_") and visual_transition
+        )
+        numbered = literal_numbered or native_list_heading
+        if literal_numbered:
+            boundary_evidence = "NUMBERED_HEADING_TERMINATOR"
+        elif native_list_heading:
+            boundary_evidence = "SOURCE_LIST_HEADING_TERMINATOR"
+        else:
+            boundary_evidence = "VISUAL_TITLE_TERMINATOR"
         if body_count >= 5 and (numbered or visual_transition):
             candidates.append(SegmentBoundaryCandidate(
                 raw_start=start,
@@ -107,7 +122,7 @@ def segment_boundary_candidates(
                 right_type_hint="body",
                 confidence=0.99 if numbered else 0.84,
                 evidence=(
-                    "NUMBERED_HEADING_TERMINATOR" if numbered else "VISUAL_TITLE_TERMINATOR",
+                    boundary_evidence,
                     "VISIBLE_BODY_AFTER_TERMINATOR",
                 ),
             ))

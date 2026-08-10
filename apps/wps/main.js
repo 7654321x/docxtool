@@ -17,9 +17,14 @@ function GetActionEnabled(control) {
   return ribbonCallbacks().getActionEnabled(control);
 }
 
+function GetImage(control) {
+  return ribbonCallbacks().getImage(control);
+}
+
 window.OnAddinLoad = OnAddinLoad;
 window.OnAction = OnAction;
 window.GetActionEnabled = GetActionEnabled;
+window.GetImage = GetImage;
 
 (function () {
   "use strict";

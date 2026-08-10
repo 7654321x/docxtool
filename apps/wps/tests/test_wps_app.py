@@ -1129,6 +1129,137 @@ def test_wps_log_accepts_document_name_but_not_document_path():
     assert fields == {"document_name": "sample.docx"}
 
 
+def test_wps_log_accepts_taskpane_scroll_diagnostics():
+    fields = sanitize_wps_log_fields(
+        {
+            "stage": "load_settled",
+            "root_scroll_top": 80,
+            "body_scroll_top": 80,
+            "content_scroll_top": 80,
+            "inner_width": 390,
+            "inner_height": 720,
+            "header_top": -64,
+            "header_height": 64,
+            "header_clipped_top": True,
+            "document_has_focus": True,
+            "active_element_tag": "BODY",
+            "top_element_id": "taskpane_header",
+            "scheduled_delay_ms": 100,
+            "timer_drift_ms": 4,
+            "state_wait_in_flight": True,
+        }
+    )
+    assert fields == {
+        "stage": "load_settled",
+        "root_scroll_top": 80,
+        "body_scroll_top": 80,
+        "content_scroll_top": 80,
+        "inner_width": 390,
+        "inner_height": 720,
+        "header_top": -64,
+        "header_height": 64,
+        "header_clipped_top": True,
+        "document_has_focus": True,
+        "active_element_tag": "BODY",
+        "top_element_id": "taskpane_header",
+        "scheduled_delay_ms": 100,
+        "timer_drift_ms": 4,
+        "state_wait_in_flight": True,
+    }
+
+
+def test_wps_log_accepts_taskpane_host_properties():
+    fields = sanitize_wps_log_fields(
+        {
+            "page_version": "7",
+            "pane_branch": "created",
+            "pane_dock_position": 2,
+            "pane_expected_dock_position": 2,
+            "pane_found": True,
+            "pane_id": "1",
+            "pane_visible": True,
+            "pane_width": 390,
+        }
+    )
+    assert fields == {
+        "page_version": "7",
+        "pane_branch": "created",
+        "pane_dock_position": 2,
+        "pane_expected_dock_position": 2,
+        "pane_found": True,
+        "pane_id": "1",
+        "pane_visible": True,
+        "pane_width": 390,
+    }
+
+
+def test_wps_log_accepts_taskpane_transition_diagnostics():
+    fields = sanitize_wps_log_fields(
+        {
+            "checkpoint": "after_target_activated",
+            "observed_delay_ms": 500,
+            "active_document_present": True,
+            "active_window_present": True,
+            "document_matches_expected": True,
+            "pane_width_before": 640,
+            "pane_width_requested": 390,
+            "pane_width_after": 325,
+            "pane_width_effective": False,
+            "window_screen_x": 80,
+            "window_screen_y": 120,
+            "screen_width": 1920,
+            "screen_avail_height": 1040,
+            "physical_header_height": 104,
+            "window_top_is_self": True,
+            "frame_element_present": False,
+            "header_transform": "none",
+            "source_path": r"C:\\fixtures\\sample.docx",
+        }
+    )
+    assert fields == {
+        "checkpoint": "after_target_activated",
+        "observed_delay_ms": 500,
+        "active_document_present": True,
+        "active_window_present": True,
+        "document_matches_expected": True,
+        "pane_width_before": 640,
+        "pane_width_requested": 390,
+        "pane_width_after": 325,
+        "pane_width_effective": False,
+        "window_screen_x": 80,
+        "window_screen_y": 120,
+        "screen_width": 1920,
+        "screen_avail_height": 1040,
+        "physical_header_height": 104,
+        "window_top_is_self": True,
+        "frame_element_present": False,
+        "header_transform": "none",
+    }
+
+
+def test_wps_log_accepts_bridge_diagnostics():
+    fields = sanitize_wps_log_fields(
+        {
+            "bridge_ready": True,
+            "command_sequence": 3,
+            "generation_changed": False,
+            "host_generation": 2,
+            "replaced": True,
+            "state_revision": 9,
+            "wait_timed_out": False,
+        }
+    )
+    assert fields == {
+        "bridge_ready": True,
+        "command_sequence": 3,
+        "generation_changed": False,
+        "host_generation": 2,
+        "replaced": True,
+        "state_revision": 9,
+        "wait_timed_out": False,
+    }
+
+
 def test_ribbon_only_keeps_the_taskpane_entry():
     ribbon_path = Path(__file__).resolve().parents[1] / "ribbon.xml"
     root = ElementTree.parse(ribbon_path).getroot()
@@ -1137,6 +1268,11 @@ def test_ribbon_only_keeps_the_taskpane_entry():
     assert [(button.get("id"), button.get("label")) for button in buttons] == [
         ("panel", "打开侧边栏")
     ]
+    assert buttons[0].get("getImage") == "GetImage"
+    icon_path = ribbon_path.parent / "images" / "taskpane.svg"
+    icon_root = ElementTree.parse(icon_path).getroot()
+    assert icon_root.tag == "{http://www.w3.org/2000/svg}svg"
+    assert icon_root.get("viewBox") == "0 0 24 24"
 
 
 def test_compatibility_warnings_are_json_safe_and_bounded():
@@ -1219,8 +1355,9 @@ def test_wps_bootstrap_structure_is_explicit():
     assert "defer" not in main_source
 
     ribbon_source = (root / "js" / "ribbon.js").read_text(encoding="utf-8")
-    for callback in ("onAddinLoad", "onAction", "getActionEnabled"):
+    for callback in ("onAddinLoad", "onAction", "getActionEnabled", "getImage"):
         assert re.search(rf"^function {callback}\(", ribbon_source, re.MULTILINE)
+    assert 'return "images/taskpane.svg"' in ribbon_source
     assert "window.DocxToolHostRuntime.start()" in ribbon_source
 
 
@@ -1232,6 +1369,15 @@ def test_wps_logging_uses_ten_mib_rotating_file(tmp_path):
         assert handler.maxBytes == 10 * 1024 * 1024
         assert handler.backupCount == 5
         assert handler.encoding.lower().replace("-", "") == "utf8"
+        logging_adapter.log_event("INFO", "test", "log.info", "normal-message")
+        logging_adapter.log_event("WARNING", "test", "log.warning", "warning-message")
+        logging_adapter.log_event("ERROR", "test", "log.error", "error-message")
+        handler.flush()
+        content = Path(handler.baseFilename).read_text(encoding="utf-8")
+        assert "normal-message" in content
+        assert "warning-message" in content
+        assert "error-message" in content
+        assert "\x1b[" not in content
     finally:
         if handler is not None:
             logging_adapter.LOGGER.removeHandler(handler)
@@ -1494,13 +1640,14 @@ def test_log_route_emits_only_the_submitted_diagnostic_event(monkeypatch, tmp_pa
         response = connection.getresponse()
         response.read()
         assert response.status == 200
+        submitted_events = list(events)
     finally:
         connection.close()
         server.shutdown()
         server.server_close()
         thread.join(timeout=3)
 
-    assert events == [
+    assert submitted_events == [
         (
             "taskpane",
             "taskpane.request.blocked",
@@ -1642,11 +1789,13 @@ def test_verify_files_requires_new_bootstrap_files(monkeypatch, tmp_path):
         "js/bootstrap-log.js",
         "js/bootstrap-complete.js",
         "js/ribbon.js",
+        "images/taskpane.svg",
         "host-runtime.js",
-        "taskpane.html",
-        "taskpane.js",
-        "control/server.py",
-        "control/format_current_document.py",
+            "taskpane.html",
+            "taskpane.js",
+            "control/server.py",
+            "control/host_bridge.py",
+            "control/format_current_document.py",
         "control/document_transaction.py",
         "control/logging_adapter.py",
         "control/recognize_document.py",
@@ -1664,18 +1813,40 @@ def test_verify_files_requires_new_bootstrap_files(monkeypatch, tmp_path):
     wps_main.verify_files()
 
 
+def test_taskpane_scrolls_content_without_moving_header():
+    source = (wps_main.APP_ROOT / "taskpane.html").read_text(encoding="utf-8")
+
+    assert "html,body{height:100%;max-width:100%;overflow:hidden}" in source
+    assert "body{display:flex;flex-direction:column" in source
+    assert "header{flex:0 0 auto" in source
+    assert "main{flex:1 1 auto;min-height:0;overflow-y:auto" in source
+    assert '<header id="taskpane_header">' in source
+    assert 'id="focus_document"' not in source
+    assert "返回文档" not in source
+    assert '<div id="status" class="meta">Connecting</div>' in source
+    assert '<main id="content">' in source
+    assert '<script src="./taskpane.js?v=9"></script>' in source
+
+
 def test_start_handles_keyboard_interrupt_without_traceback(monkeypatch):
     events = []
 
-    class FakeServer:
+    class FakeControlServer:
         def serve_forever(self, **_kwargs):
-            return None
+            pass
 
         def shutdown(self):
-            events.append("shutdown")
+            events.append("control-shutdown")
 
         def server_close(self):
-            events.append("close")
+            events.append("control-close")
+
+    class FakeWebServer:
+        def serve_forever(self, **_kwargs):
+            raise KeyboardInterrupt
+
+        def server_close(self):
+            events.append("web-close")
 
     class FakeThread:
         def __init__(self, **_kwargs):
@@ -1692,17 +1863,25 @@ def test_start_handles_keyboard_interrupt_without_traceback(monkeypatch):
 
     monkeypatch.setattr(wps_main, "verify_files", lambda: None)
     monkeypatch.setattr(wps_main, "configure_wps_logging", lambda _root: None)
-    monkeypatch.setattr(wps_main, "_require_wps_stopped", lambda: None)
-    monkeypatch.setattr(wps_main, "_wpsjs_command", lambda: ["wpsjs"])
-    monkeypatch.setattr(wps_main, "_start_control", lambda _port: (FakeServer(), 45678))
+    monkeypatch.setattr(
+        wps_main, "_start_control", lambda _port: (FakeControlServer(), 45678)
+    )
+    monkeypatch.setattr(
+        wps_main, "_start_web_server", lambda _port: (FakeWebServer(), 3889)
+    )
+    monkeypatch.setattr(
+        wps_main, "_publish_addin", lambda port: events.append(("publish", port))
+    )
     monkeypatch.setattr(wps_main.threading, "Thread", FakeThread)
-    monkeypatch.setattr(wps_main.subprocess, "run", lambda *_args, **_kwargs: (_ for _ in ()).throw(KeyboardInterrupt()))
     monkeypatch.setattr(wps_main, "clear_runtime_config", lambda: events.append("clear"))
     monkeypatch.setattr(wps_main, "log_event", lambda _level, _component, event, _message, _fields=None: events.append(event))
 
     wps_main.start(0)
 
     assert "launcher.interrupt.received" in events
+    assert ("publish", 3889) in events
+    assert "web-close" in events
+    assert "control-shutdown" in events
     assert events[-1] == "launcher.session.stop"
 
 
@@ -1719,61 +1898,64 @@ def test_runtime_config_contains_only_control_transport(tmp_path, monkeypatch):
     assert "sessionId" not in source
 
 
-def test_wpsjs_command_uses_official_debug_start_contract(tmp_path, monkeypatch):
-    executable = tmp_path / "node_modules" / ".bin" / "wpsjs"
-    executable.parent.mkdir(parents=True)
-    executable.write_text("", encoding="utf-8")
+def test_wps_static_server_serves_plugin_without_launching_wps(tmp_path, monkeypatch):
+    (tmp_path / "index.html").write_text("WPS_BACKGROUND_READY", encoding="utf-8")
     monkeypatch.setattr(wps_main, "APP_ROOT", tmp_path)
-    monkeypatch.setattr(wps_main, "_verify_installed_node_runtime", lambda: None)
-    monkeypatch.setattr(wps_main.sys, "platform", "linux")
+    monkeypatch.setattr(wps_main, "log_event", lambda *_args, **_kwargs: None)
 
-    assert wps_main._wpsjs_command() == [str(executable), "debug"]
+    server, port = wps_main._start_web_server(0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    try:
+        connection.request("GET", "/index.html")
+        response = connection.getresponse()
+        assert response.status == 200
+        assert response.getheader("Cache-Control") == (
+            "no-store, no-cache, must-revalidate, max-age=0"
+        )
+        assert response.getheader("Pragma") == "no-cache"
+        assert response.getheader("Expires") == "0"
+        assert response.read().decode("utf-8") == "WPS_BACKGROUND_READY"
+    finally:
+        connection.close()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
 
 
-def test_existing_wps_process_requires_restart(monkeypatch):
-    events = []
-    monkeypatch.setattr(wps_main, "_wps_process_count", lambda: 1)
-    monkeypatch.setattr(
-        wps_main,
-        "log_event",
-        lambda _level, _component, event, _message, fields=None: events.append(
-            (event, fields or {})
-        ),
+def test_wps_web_server_uses_stable_addin_origin():
+    assert wps_main.DEFAULT_WEB_PORT == 3889
+
+
+def test_publish_addin_updates_only_docxtool_entry(tmp_path, monkeypatch):
+    publish_path = tmp_path / "publish.xml"
+    publish_path.write_text(
+        "<jsplugins>"
+        '<jspluginonline name="another-addin" type="wps" url="http://example.test/" />'
+        '<jspluginonline name="docxtool-wps-app" type="wps" url="http://127.0.0.1:3999/" />'
+        '<jspluginonline name="docxtool-wps-app" type="wps" url="http://127.0.0.1:4000/" />'
+        "</jsplugins>",
+        encoding="utf-8",
     )
+    monkeypatch.setattr(wps_main, "_publish_xml_path", lambda: publish_path)
+    monkeypatch.setattr(wps_main, "log_event", lambda *_args, **_kwargs: None)
 
-    with pytest.raises(RuntimeError, match="WPS_RESTART_REQUIRED"):
-        wps_main._require_wps_stopped()
+    wps_main._publish_addin(3889)
 
-    assert events[-1] == (
-        "launcher.wps.restart_required",
-        {"error_code": "WPS_RESTART_REQUIRED", "process_count": 1},
-    )
-
-
-def test_wps_background_process_without_visible_window_is_ignored(monkeypatch):
-    completed = SimpleNamespace(stdout='"wps.exe","1234"\n')
-    monkeypatch.setattr(wps_main.sys, "platform", "win32")
-    monkeypatch.setattr(wps_main.subprocess, "run", lambda *_args, **_kwargs: completed)
-    monkeypatch.setattr(
-        wps_main, "_visible_top_level_window_process_ids", lambda: set()
-    )
-
-    assert wps_main._wps_process_count() == 0
-
-
-def test_only_visible_wps_writer_processes_require_restart(monkeypatch):
-    completed = SimpleNamespace(
-        stdout='"wps.exe","1234"\n"wps.exe","5678"\n"et.exe","9999"\n'
-    )
-    monkeypatch.setattr(wps_main.sys, "platform", "win32")
-    monkeypatch.setattr(wps_main.subprocess, "run", lambda *_args, **_kwargs: completed)
-    monkeypatch.setattr(
-        wps_main,
-        "_visible_top_level_window_process_ids",
-        lambda: {5678, 9999},
-    )
-
-    assert wps_main._wps_process_count() == 1
+    root = ElementTree.parse(publish_path).getroot()
+    entries = list(root)
+    assert any(node.get("name") == "another-addin" for node in entries)
+    docxtool = [node for node in entries if node.get("name") == "docxtool-wps-app"]
+    assert len(docxtool) == 1
+    assert docxtool[0].attrib == {
+        "name": "docxtool-wps-app",
+        "type": "wps",
+        "url": "http://127.0.0.1:3889/",
+        "debug": "",
+        "enable": "enable_dev",
+        "install": "null",
+    }
 
 
 def test_wps_request_context_and_preview_safety_contracts_are_present():
@@ -1783,20 +1965,28 @@ def test_wps_request_context_and_preview_safety_contracts_are_present():
 
     assert "currentRequestId" not in host
     for token in (
-        'schema_version: "wps-request-v2"',
-        "host_ready",
+        'schema_version !== "wps-command-v1"',
+        "/v1/bridge/host/register",
+        "/v1/bridge/host/wait",
+        "/v1/bridge/state",
+        "hostContextId",
+    ):
+        assert token in host
+    for token in (
+        "/v1/bridge/command",
+        "/v1/bridge/state/wait",
+        "hostGeneration",
+        "stateRevision",
         "pendingRequestId",
         "REQUEST_ACK_TIMEOUT",
     ):
         assert token in taskpane
     for token in (
-        "host.request.schema_invalid",
-        "host.request.id_missing",
-        "host.request.command_missing",
-        "taskpane.request.claimed",
+        "host.bridge.command.schema_invalid",
+        "host.bridge.command.request_id_missing",
+        "host.bridge.command.command_missing",
         "taskpane.request.completed",
         "host.start.rollback",
-        "host.storage.reset.completed",
         "PREVIEW_DOCUMENT_CHANGED",
         "preview.range.revalidate.failed",
         "document.context.changed",
@@ -1805,7 +1995,14 @@ def test_wps_request_context_and_preview_safety_contracts_are_present():
         assert token in host
     assert "config.sessionId" not in host
     assert "config.sessionId" not in taskpane
-    assert "hostContextId" not in host
+    for obsolete in (
+        "wps-request-v2",
+        "docxtool_wps_state_v1",
+        "docxtool_wps_request_v1",
+        "setInterval(",
+    ):
+        assert obsolete not in host
+        assert obsolete not in taskpane
     assert host.index("range = await previewRange(document, item)") < host.index("comments.Add(range")
 
 
@@ -1815,7 +2012,7 @@ def test_wps_entry_registers_ribbon_bridges_before_loading_children():
     ribbon_source = (root / "js" / "ribbon.js").read_text(encoding="utf-8")
 
     first_child_load = main_source.index('loadScript("js/bootstrap-log.js"')
-    for callback in ("OnAddinLoad", "OnAction", "GetActionEnabled"):
+    for callback in ("OnAddinLoad", "OnAction", "GetActionEnabled", "GetImage"):
         declaration = main_source.index(f"function {callback}(")
         assert declaration < first_child_load
     assert "DocxToolRibbonCallbacks" in main_source
@@ -1854,11 +2051,14 @@ def test_wps_diagnostic_event_contract_is_present():
             "host.start.lazy.completed",
             "host.start.lazy.failed",
             "host.start.failed",
-            "host.poll.started",
-            "host.storage.request.observed",
-            "host.request.parsed",
-            "host.request.ignored",
-            "host.request.claimed",
+            "host.bridge.register.start",
+            "host.bridge.register.completed",
+            "host.bridge.wait.started",
+            "host.bridge.wait.failed",
+            "host.bridge.command.received",
+            "host.bridge.state.published",
+            "host.bridge.state.publish_failed",
+            "host.bridge.state.flush_failed",
             "taskpane.storage_id.read_failed",
             "taskpane.storage_id.write_failed",
             "taskpane.create_call.failed",
@@ -1918,19 +2118,17 @@ def test_wps_diagnostic_event_contract_is_present():
             "taskpane.request.prepare",
             "taskpane.request.blocked.busy",
             "taskpane.request.blocked.host_not_ready",
-            "taskpane.request_slot.read_failed",
-            "taskpane.request.serialize_failed",
-            "taskpane.storage.write.start",
-            "taskpane.storage.write.completed",
-            "taskpane.storage.write.failed",
-            "taskpane.storage.write.verified",
-            "taskpane.storage.readback.failed",
-            "taskpane.storage.readback.parse_failed",
-            "taskpane.storage.write.verify_failed",
-            "taskpane.request.created",
+            "taskpane.request.claimed",
+            "taskpane.request.completed",
+            "taskpane.bridge.command.submit.start",
+            "taskpane.bridge.command.submit.completed",
+            "taskpane.bridge.command.submit.failed",
+            "taskpane.bridge.state.wait.started",
+            "taskpane.bridge.state.received",
+            "taskpane.bridge.state.wait.failed",
+            "taskpane.bridge.state.wait.stopped",
+            "taskpane.bridge.host_generation.changed",
             "taskpane.load.failed",
-            "taskpane.poll.stopped.storage_failure",
-            "taskpane.poll.stopped.state_invalid",
             "log.transport.unavailable",
         ),
     }
@@ -1968,6 +2166,12 @@ def test_wps_python_diagnostic_event_contract_is_present():
             "monitor.command.unavailable",
         ),
         "server": (
+            "bridge.host.registered",
+            "bridge.host.replaced",
+            "bridge.command.enqueued",
+            "bridge.command.delivered",
+            "bridge.state.published",
+            "bridge.waiters.closed",
             "control.auth.rejected",
             "control.body.length_invalid",
             "control.body.length_negative",
@@ -2045,13 +2249,14 @@ def test_wps_python_diagnostic_event_contract_is_present():
             "transaction.recovery.failed",
         ),
         "launcher": (
-            "launcher.wps.process_check.failed",
-            "launcher.wps.restart_required",
             "launcher.control.create.failed",
             "launcher.runtime_config.write.failed",
+            "launcher.publish.parse.failed",
+            "launcher.publish.schema.failed",
+            "launcher.publish.write.failed",
+            "launcher.web.create.failed",
+            "launcher.web.serve.failed",
             "launcher.control.thread.failed",
-            "launcher.wpsjs.start_failed",
-            "launcher.wpsjs.exit_failed",
             "launcher.control.thread.stop_timeout",
         ),
     }

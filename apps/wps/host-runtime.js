@@ -4,19 +4,26 @@
   const globalObject = window;
   const app = globalObject.Application;
   const config = globalObject.DocxToolWpsConfig || {};
-  const STATE_KEY = "docxtool_wps_state_v1";
-  const REQUEST_KEY = "docxtool_wps_request_v1";
   const TASKPANE_KEY = "docxtool_wps_taskpane_id_v1";
+  const TASKPANE_VERSION_KEY = "docxtool_wps_taskpane_version_v1";
+  const TASKPANE_PAGE_VERSION = "9";
   const PREVIEW_KEY_PREFIX = "docxtool_wps_preview_v2:";
   const PREVIEW_BATCH_SIZE = 5;
+  const TASKPANE_HOST_PROBE_DELAYS_MS = [0, 100, 500, 1000];
   const SAVE_WAIT_ATTEMPTS = 30;
   const REOPEN_WAIT_ATTEMPTS = 30;
   const DOCX_SAVE_FORMAT = 12;
+  const PANEL_READY_LAYOUT_SETTLE_MS = 150;
   let busy = false;
   let lastRequestId = "";
   let started = false;
-  let pollTimer = null;
-  let pollFirstTickLogged = false;
+  let bridgeRunning = false;
+  let bridgeReady = false;
+  let hostGeneration = 0;
+  let hostState = {};
+  let statePublishChain = Promise.resolve();
+  let statePublishError = "";
+  let ribbonUI = null;
   let logSequence = 0;
   let logTransportFailureReported = false;
   let logTransportUnavailableReported = false;
@@ -35,7 +42,16 @@
     "primary_error_code", "previous_status", "current_status", "preview_confirmed_count",
     "preview_eligible_count", "preview_review_count", "warning_code",
     "conversion_state", "inline_shape_count", "mismatch_count", "section_count",
-    "shape_count", "source_format", "target_format", "target_state"
+    "shape_count", "source_format", "target_format", "target_state",
+    "bridge_ready", "command_sequence", "generation_changed", "host_generation",
+    "replaced", "state_revision", "wait_timed_out", "page_version", "pane_branch",
+    "pane_dock_position", "pane_expected_dock_position", "pane_found", "pane_id",
+    "pane_visible", "pane_width", "active_document_present", "active_window_present",
+    "checkpoint", "document_matches_expected", "observed_delay_ms", "pane_reference_matches",
+    "pane_dock_position_before", "pane_dock_position_requested", "pane_dock_position_after",
+    "pane_dock_position_effective", "pane_width_before", "pane_width_requested",
+    "pane_width_after", "pane_width_effective", "pane_visible_before", "pane_visible_requested",
+    "pane_visible_after", "pane_visible_effective", "stored_pane_id_present"
   ]);
 
   const roleNames = {
@@ -53,30 +69,12 @@
   }
 
   function readState() {
-    let value;
-    try {
-      value = storage().getItem(STATE_KEY);
-    } catch (error) {
-      log("ERROR", "host.state.read_failed", "Host 状态读取失败", {
-        error_type: error && error.name ? error.name : "Error",
-        error_code: "WPS_STATE_READ_FAILED"
-      });
-      throw new Error("WPS_STATE_READ_FAILED");
-    }
-    if (!value) return {};
-    try {
-      return JSON.parse(value);
-    } catch (error) {
-      log("ERROR", "host.state.parse_failed", "Host 状态 JSON 无效", {
-        error_type: error && error.name ? error.name : "Error",
-        error_code: "WPS_STATE_JSON_INVALID"
-      });
-      throw new Error("WPS_STATE_JSON_INVALID");
-    }
+    return hostState;
   }
 
   function writeState(patch) {
-    const state = Object.assign({}, readState(), patch, { updated_at: new Date().toISOString() });
+    if (statePublishError) throw new Error(statePublishError);
+    const state = Object.assign({}, hostState, patch, { updated_at: new Date().toISOString() });
     let serialized;
     try {
       serialized = JSON.stringify(state);
@@ -87,15 +85,8 @@
       });
       throw new Error("WPS_STATE_SERIALIZE_FAILED");
     }
-    try {
-      storage().setItem(STATE_KEY, serialized);
-    } catch (error) {
-      log("ERROR", "host.state.write_failed", "Host 状态写入失败", {
-        error_type: error && error.name ? error.name : "Error",
-        error_code: "WPS_STATE_WRITE_FAILED"
-      });
-      throw new Error("WPS_STATE_WRITE_FAILED");
-    }
+    hostState = JSON.parse(serialized);
+    if (bridgeReady) queueStatePublication(hostState);
     return state;
   }
 
@@ -106,6 +97,7 @@
 
   const bootstrapId = String(globalObject.DocxToolBootstrapId || "");
   const hostInstanceIdShort = `host-${randomId().replace(/-/g, "").slice(0, 12)}`;
+  const hostContextId = `host-context-${randomId()}`;
 
   function sleep(milliseconds) {
     return new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -119,6 +111,322 @@
       if (SAFE_DETAIL_FIELDS.has(key) && (["string", "number", "boolean"].includes(typeof value) || value == null)) result[key] = value;
     });
     return result;
+  }
+
+  function taskpaneExpectedDockPosition() {
+    const value = app && app.Enum ? Number(app.Enum.msoCTPDockPositionRight) : NaN;
+    return Number.isFinite(value) ? value : -1;
+  }
+
+  function taskpaneDetails(pane, branch) {
+    const width = pane && "Width" in pane ? Number(pane.Width) : NaN;
+    const dockPosition = pane && "DockPosition" in pane ? Number(pane.DockPosition) : NaN;
+    return {
+      pane_branch: branch,
+      pane_id: pane && pane.ID != null ? String(pane.ID) : "",
+      pane_visible: Boolean(pane && pane.Visible === true),
+      pane_width: Number.isFinite(width) ? width : -1,
+      pane_dock_position: Number.isFinite(dockPosition) ? dockPosition : -1,
+      pane_expected_dock_position: taskpaneExpectedDockPosition()
+    };
+  }
+
+  function taskpaneHostDetails(pane, branch, checkpoint, requestContext, extras) {
+    const document = app && app.ActiveDocument;
+    const currentDocumentName = activeDocumentName();
+    const expectedDocumentName = requestContext && requestContext.document_name
+      ? String(requestContext.document_name)
+      : "";
+    const details = Object.assign({}, contextDetails(requestContext), taskpaneDetails(pane, branch), {
+      checkpoint,
+      active_document_present: Boolean(document),
+      active_window_present: Boolean(document && document.ActiveWindow),
+      document_matches_expected: !expectedDocumentName || currentDocumentName === expectedDocumentName
+    }, extras || {});
+    if (currentDocumentName) details.document_name = currentDocumentName;
+    return details;
+  }
+
+  function logStoredTaskpaneSnapshot(event, message, checkpoint, requestContext, extras) {
+    try {
+      const storedPaneId = readTaskpaneId(requestContext);
+      const pane = storedPaneId && app && typeof app.GetTaskPane === "function"
+        ? app.GetTaskPane(Number(storedPaneId))
+        : null;
+      log("INFO", event, message, taskpaneHostDetails(
+        pane,
+        "stored",
+        checkpoint,
+        requestContext,
+        Object.assign({
+          pane_found: Boolean(pane),
+          stored_pane_id_present: Boolean(storedPaneId)
+        }, extras || {})
+      ));
+    } catch (error) {
+      log("WARNING", `${event}.failed`, "任务窗格宿主状态快照采集失败", {
+        ...contextDetails(requestContext), checkpoint,
+        error_code: "WPS_TASKPANE_HOST_SNAPSHOT_FAILED",
+        error_type: error && error.name ? error.name : "Error"
+      });
+    }
+  }
+
+  function scheduleTaskpaneHostSnapshots(pane, branch, requestContext) {
+    const paneId = pane && pane.ID != null ? Number(pane.ID) : NaN;
+    TASKPANE_HOST_PROBE_DELAYS_MS.forEach((delay) => {
+      setTimeout(() => {
+        try {
+          const observedPane = Number.isFinite(paneId) && app && typeof app.GetTaskPane === "function"
+            ? app.GetTaskPane(paneId)
+            : null;
+          log("INFO", "taskpane.host_state.snapshot", "任务窗格宿主属性延时快照已采集", taskpaneHostDetails(
+            observedPane,
+            branch,
+            `after_open_${delay}ms`,
+            requestContext,
+            {
+              observed_delay_ms: delay,
+              pane_found: Boolean(observedPane),
+              pane_reference_matches: Boolean(observedPane && observedPane === pane)
+            }
+          ));
+        } catch (error) {
+          log("WARNING", "taskpane.host_state.snapshot.failed", "任务窗格宿主属性延时快照采集失败", {
+            ...contextDetails(requestContext), checkpoint: `after_open_${delay}ms`,
+            observed_delay_ms: delay,
+            error_code: "WPS_TASKPANE_HOST_SNAPSHOT_FAILED",
+            error_type: error && error.name ? error.name : "Error"
+          });
+        }
+      }, delay);
+    });
+  }
+
+  function logUnexpectedTaskpaneDock(pane, branch, requestContext) {
+    const details = taskpaneDetails(pane, branch);
+    if (details.pane_expected_dock_position < 0 || details.pane_dock_position < 0
+        || details.pane_expected_dock_position === details.pane_dock_position) return;
+    log("WARNING", "taskpane.dock_position.unexpected", "任务窗格实际停靠位置与 WPS 右侧停靠枚举不一致", {
+      ...contextDetails(requestContext), ...details,
+      error_code: "WPS_TASKPANE_DOCK_POSITION_UNEXPECTED"
+    });
+  }
+
+  function activateDocumentAfterTaskpaneOpen(requestContext, branch) {
+    const document = app && app.ActiveDocument;
+    if (!document) {
+      log("INFO", "taskpane.document_focus.skipped", "当前没有活动文档，任务窗格保持网页焦点", {
+        ...contextDetails(requestContext), pane_branch: branch, reason: "no_active_document"
+      });
+      return;
+    }
+    const startedAt = Date.now();
+    log("INFO", "taskpane.document_focus.start", "开始将焦点交还当前文档窗口", {
+      ...contextDetails(requestContext), pane_branch: branch,
+      active_document_present: true,
+      active_window_present: Boolean(document.ActiveWindow)
+    });
+    if (typeof document.Activate !== "function") {
+      log("ERROR", "taskpane.document_activate.unsupported", "WPS 当前文档不支持 Activate", {
+        ...contextDetails(requestContext), pane_branch: branch,
+        error_code: "WPS_DOCUMENT_ACTIVATE_UNSUPPORTED"
+      });
+      throw new Error("WPS_DOCUMENT_ACTIVATE_UNSUPPORTED");
+    }
+    log("INFO", "taskpane.document_activate.start", "开始激活当前 WPS 文档", {
+      ...contextDetails(requestContext), pane_branch: branch,
+      active_document_present: true
+    });
+    try {
+      document.Activate();
+    } catch (error) {
+      log("ERROR", "taskpane.document_activate.failed", "WPS 当前文档激活失败", {
+        ...contextDetails(requestContext), pane_branch: branch,
+        error_code: "WPS_DOCUMENT_ACTIVATE_FAILED",
+        error_type: error && error.name ? error.name : "Error"
+      });
+      throw new Error("WPS_DOCUMENT_ACTIVATE_FAILED");
+    }
+    log("INFO", "taskpane.document_activate.completed", "当前 WPS 文档已激活", {
+      ...contextDetails(requestContext), pane_branch: branch,
+      active_document_present: Boolean(app && app.ActiveDocument)
+    });
+    const activeWindow = document.ActiveWindow;
+    if (!activeWindow || typeof activeWindow.Activate !== "function") {
+      log("ERROR", "taskpane.document_window_activate.unsupported", "WPS 当前文档窗口不支持 Activate", {
+        ...contextDetails(requestContext), pane_branch: branch,
+        error_code: "WPS_DOCUMENT_WINDOW_ACTIVATE_UNSUPPORTED"
+      });
+      throw new Error("WPS_DOCUMENT_WINDOW_ACTIVATE_UNSUPPORTED");
+    }
+    log("INFO", "taskpane.document_window_activate.start", "开始激活当前 WPS 文档窗口", {
+      ...contextDetails(requestContext), pane_branch: branch,
+      active_window_present: true
+    });
+    try {
+      activeWindow.Activate();
+    } catch (error) {
+      log("ERROR", "taskpane.document_window_activate.failed", "WPS 当前文档窗口激活失败", {
+        ...contextDetails(requestContext), pane_branch: branch,
+        error_code: "WPS_DOCUMENT_WINDOW_ACTIVATE_FAILED",
+        error_type: error && error.name ? error.name : "Error"
+      });
+      throw new Error("WPS_DOCUMENT_WINDOW_ACTIVATE_FAILED");
+    }
+    log("INFO", "taskpane.document_window_activate.completed", "当前 WPS 文档窗口已激活", {
+      ...contextDetails(requestContext), pane_branch: branch,
+      active_window_present: Boolean(document.ActiveWindow)
+    });
+    log("INFO", "taskpane.document_focus.completed", "焦点已交还当前文档窗口", {
+      ...contextDetails(requestContext), pane_branch: branch,
+      duration_ms: Date.now() - startedAt
+    });
+  }
+
+  async function runPanelReady(requestContext) {
+    const startedAt = Date.now();
+    log("INFO", "panel_ready.start", "任务窗格加载完成，开始触发 WPS 工作区重算", {
+      ...contextDetails(requestContext), pane_branch: "panel_ready"
+    });
+    logStoredTaskpaneSnapshot(
+      "panel_ready.host_snapshot.before",
+      "工作区重算前窗格状态已采集",
+      "before_panel_ready_lifecycle",
+      requestContext,
+      { command: "panel_ready" }
+    );
+    const sourceDocument = app && app.ActiveDocument;
+    if (!sourceDocument) {
+      log("ERROR", "panel_ready.source_document.missing", "工作区重算前没有活动文档", {
+        ...contextDetails(requestContext), active_document_present: false,
+        error_code: "WPS_PANEL_READY_DOCUMENT_UNAVAILABLE"
+      });
+      throw new Error("WPS_PANEL_READY_DOCUMENT_UNAVAILABLE");
+    }
+    if (!app.Documents || typeof app.Documents.Add !== "function") {
+      log("ERROR", "panel_ready.temporary_document.create_unsupported", "WPS Documents.Add 不可用", {
+        ...contextDetails(requestContext), active_document_present: true,
+        error_code: "WPS_PANEL_READY_DOCUMENT_ADD_UNSUPPORTED"
+      });
+      throw new Error("WPS_PANEL_READY_DOCUMENT_ADD_UNSUPPORTED");
+    }
+    if (typeof sourceDocument.Activate !== "function") {
+      log("ERROR", "panel_ready.source_document.activate_unsupported", "原文档不支持重新激活", {
+        ...contextDetails(requestContext), active_document_present: true,
+        error_code: "WPS_PANEL_READY_SOURCE_DOCUMENT_ACTIVATE_UNSUPPORTED"
+      });
+      throw new Error("WPS_PANEL_READY_SOURCE_DOCUMENT_ACTIVATE_UNSUPPORTED");
+    }
+    let temporaryDocument;
+    log("INFO", "panel_ready.temporary_document.create.start", "开始创建临时空白文档", {
+      ...contextDetails(requestContext), stage: "temporary_document_create"
+    });
+    try {
+      temporaryDocument = app.Documents.Add();
+    } catch (error) {
+      log("ERROR", "panel_ready.temporary_document.create.failed", "临时空白文档创建失败", {
+        ...contextDetails(requestContext), stage: "temporary_document_create",
+        error_code: "WPS_PANEL_READY_TEMPORARY_DOCUMENT_CREATE_FAILED",
+        error_type: error && error.name ? error.name : "Error"
+      });
+      throw new Error("WPS_PANEL_READY_TEMPORARY_DOCUMENT_CREATE_FAILED");
+    }
+    if (!temporaryDocument) {
+      log("ERROR", "panel_ready.temporary_document.create.empty", "WPS 未返回临时空白文档", {
+        ...contextDetails(requestContext), stage: "temporary_document_create",
+        error_code: "WPS_PANEL_READY_TEMPORARY_DOCUMENT_UNAVAILABLE"
+      });
+      throw new Error("WPS_PANEL_READY_TEMPORARY_DOCUMENT_UNAVAILABLE");
+    }
+    if (typeof temporaryDocument.Close !== "function") {
+      log("ERROR", "panel_ready.temporary_document.close_unsupported", "临时空白文档不支持关闭", {
+        ...contextDetails(requestContext), stage: "temporary_document_create",
+        error_code: "WPS_PANEL_READY_TEMPORARY_DOCUMENT_CLOSE_UNSUPPORTED"
+      });
+      throw new Error("WPS_PANEL_READY_TEMPORARY_DOCUMENT_CLOSE_UNSUPPORTED");
+    }
+    log("INFO", "panel_ready.temporary_document.create.completed", "临时空白文档创建完成", {
+      ...contextDetails(requestContext), stage: "temporary_document_create",
+      active_document_present: Boolean(app.ActiveDocument),
+      document_matches_expected: app.ActiveDocument === temporaryDocument
+    });
+    log("INFO", "panel_ready.source_document.activate.start", "开始切回原文档", {
+      ...contextDetails(requestContext), stage: "source_document_activate"
+    });
+    try {
+      sourceDocument.Activate();
+    } catch (error) {
+      log("ERROR", "panel_ready.source_document.activate.failed", "切回原文档失败", {
+        ...contextDetails(requestContext), stage: "source_document_activate",
+        error_code: "WPS_PANEL_READY_SOURCE_DOCUMENT_ACTIVATE_FAILED",
+        error_type: error && error.name ? error.name : "Error"
+      });
+      log("INFO", "panel_ready.temporary_document.cleanup.start", "原文档激活失败，开始关闭临时空白文档", {
+        ...contextDetails(requestContext), stage: "temporary_document_cleanup",
+        primary_error_code: "WPS_PANEL_READY_SOURCE_DOCUMENT_ACTIVATE_FAILED"
+      });
+      try {
+        temporaryDocument.Close(0);
+      } catch (cleanupError) {
+        log("ERROR", "panel_ready.temporary_document.cleanup.failed", "原文档激活失败后临时文档清理失败", {
+          ...contextDetails(requestContext), stage: "temporary_document_cleanup",
+          primary_error_code: "WPS_PANEL_READY_SOURCE_DOCUMENT_ACTIVATE_FAILED",
+          error_code: "WPS_PANEL_READY_TEMPORARY_DOCUMENT_CLEANUP_FAILED",
+          error_type: cleanupError && cleanupError.name ? cleanupError.name : "Error"
+        });
+        throw new Error("WPS_PANEL_READY_TEMPORARY_DOCUMENT_CLEANUP_FAILED");
+      }
+      log("INFO", "panel_ready.temporary_document.cleanup.completed", "原文档激活失败后临时文档已关闭", {
+        ...contextDetails(requestContext), stage: "temporary_document_cleanup",
+        primary_error_code: "WPS_PANEL_READY_SOURCE_DOCUMENT_ACTIVATE_FAILED"
+      });
+      throw new Error("WPS_PANEL_READY_SOURCE_DOCUMENT_ACTIVATE_FAILED");
+    }
+    log("INFO", "panel_ready.source_document.activate.completed", "已切回原文档", {
+      ...contextDetails(requestContext), stage: "source_document_activate",
+      active_document_present: Boolean(app.ActiveDocument),
+      document_matches_expected: app.ActiveDocument === sourceDocument
+    });
+    log("INFO", "panel_ready.temporary_document.close.start", "开始关闭临时空白文档", {
+      ...contextDetails(requestContext), stage: "temporary_document_close"
+    });
+    try {
+      temporaryDocument.Close(0);
+    } catch (error) {
+      log("ERROR", "panel_ready.temporary_document.close.failed", "临时空白文档关闭失败", {
+        ...contextDetails(requestContext), stage: "temporary_document_close",
+        error_code: "WPS_PANEL_READY_TEMPORARY_DOCUMENT_CLOSE_FAILED",
+        error_type: error && error.name ? error.name : "Error"
+      });
+      throw new Error("WPS_PANEL_READY_TEMPORARY_DOCUMENT_CLOSE_FAILED");
+    }
+    log("INFO", "panel_ready.temporary_document.close.completed", "临时空白文档已关闭", {
+      ...contextDetails(requestContext), stage: "temporary_document_close",
+      active_document_present: Boolean(app.ActiveDocument),
+      document_matches_expected: app.ActiveDocument === sourceDocument
+    });
+    log("INFO", "panel_ready.layout_settle.start", "开始等待 WPS 完成工作区重算", {
+      ...contextDetails(requestContext), stage: "layout_settle",
+      interval_ms: PANEL_READY_LAYOUT_SETTLE_MS
+    });
+    const settleStartedAt = Date.now();
+    await sleep(PANEL_READY_LAYOUT_SETTLE_MS);
+    log("INFO", "panel_ready.layout_settle.completed", "WPS 工作区重算等待完成", {
+      ...contextDetails(requestContext), stage: "layout_settle",
+      duration_ms: Date.now() - settleStartedAt
+    });
+    logStoredTaskpaneSnapshot(
+      "panel_ready.host_snapshot.after",
+      "工作区重算后窗格状态已采集",
+      "after_panel_ready_lifecycle",
+      requestContext,
+      { command: "panel_ready" }
+    );
+    log("INFO", "panel_ready.completed", "任务窗格工作区重算已完成", {
+      ...contextDetails(requestContext),
+      duration_ms: Date.now() - startedAt
+    });
   }
 
   function stableErrorCode(error, fallback) {
@@ -187,29 +495,68 @@
     return details;
   }
 
-  function stopPollingForStorageFailure(errorCode) {
-    if (pollTimer) clearInterval(pollTimer);
-    pollTimer = null;
-    started = false;
-    log("ERROR", "host.poll.stopped.storage_failure", "PluginStorage 故障导致 Host 轮询停止", {
-      error_code: errorCode, host_ready: false
+  async function bridgeApi(path, body, requestContext) {
+    if (!config.controlBaseUrl || !config.sessionToken) throw new Error("WPS_CONTROL_NOT_CONFIGURED");
+    const response = await fetch(`${config.controlBaseUrl}${path}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${config.sessionToken}`,
+        "X-DocxTool-Request-Id": requestId(requestContext)
+      },
+      body: JSON.stringify(body || {})
     });
+    let payload;
+    try {
+      payload = await response.json();
+    } catch (error) {
+      throw new Error("WPS_BRIDGE_RESPONSE_INVALID");
+    }
+    if (!response.ok || !payload.ok) throw new Error(payload.error_code || "WPS_BRIDGE_REQUEST_FAILED");
+    return payload.data;
   }
 
-  function clearRequestSlot(requestContext, reason) {
-    const details = Object.assign(contextDetails(requestContext), { reason });
-    log("DEBUG", "host.request_slot.clear.start", "开始清空任务窗格请求槽", details);
-    try {
-      storage().setItem(REQUEST_KEY, "");
-    } catch (error) {
-      log("ERROR", "host.request_slot.clear.failed", "任务窗格请求槽清空失败", {
-        ...details, error_code: "WPS_REQUEST_SLOT_CLEAR_FAILED",
-        error_type: error && error.name ? error.name : "Error"
-      });
-      stopPollingForStorageFailure("WPS_REQUEST_SLOT_CLEAR_FAILED");
-      throw new Error("WPS_REQUEST_SLOT_CLEAR_FAILED");
-    }
-    log("DEBUG", "host.request_slot.clear.completed", "任务窗格请求槽已清空", details);
+  function stateRequestContext(state) {
+    const active = state && state.active_request;
+    if (!active || !active.request_id) return { request_id: "" };
+    return { request_id: active.request_id };
+  }
+
+  function queueStatePublication(state) {
+    const snapshot = JSON.parse(JSON.stringify(state));
+    statePublishChain = statePublishChain.then(async () => {
+      if (statePublishError) throw new Error(statePublishError);
+      try {
+        const result = await bridgeApi("/v1/bridge/state", {
+          host_context_id: hostContextId,
+          host_generation: hostGeneration,
+          state: snapshot
+        }, stateRequestContext(snapshot));
+        log("INFO", "host.bridge.state.published", "Host 状态已发布到通信桥", {
+          ...stateRequestContext(snapshot), host_generation: result.host_generation,
+          state_revision: result.state_revision, current_status: snapshot.status || "",
+          stage: snapshot.stage || ""
+        });
+      } catch (error) {
+        const errorCode = stableErrorCode(error, "WPS_BRIDGE_STATE_PUBLISH_FAILED");
+        statePublishError = errorCode;
+        bridgeReady = false;
+        bridgeRunning = false;
+        log("ERROR", "host.bridge.state.publish_failed", "Host 状态发布失败", {
+          ...stateRequestContext(snapshot), host_generation: hostGeneration,
+          current_status: snapshot.status || "", stage: snapshot.stage || "",
+          error_code: errorCode,
+          error_type: error && error.name ? error.name : "Error"
+        });
+        throw new Error(errorCode);
+      }
+    });
+    void statePublishChain.catch(() => {});
+  }
+
+  async function flushStatePublication() {
+    await statePublishChain;
+    if (statePublishError) throw new Error(statePublishError);
   }
 
   async function api(path, body, method, requestContext) {
@@ -772,7 +1119,7 @@
         const review = requiresReview ? "；建议人工复核" : "";
         let comment;
         try {
-          comment = comments.Add(range, `DocxTool 预览：${role}；置信度 ${confidence}%${review}。正式格式由 DocxTool Engine 统一生成。`);
+          comment = comments.Add(range, `识别格式：${role}；置信度 ${confidence}%${review}。`);
         } catch (error) {
           log("ERROR", "preview.comment.create_call.failed", "WPS Comments.Add 调用失败", {
             ...contextDetails(requestContext), block_index: item.block_index,
@@ -864,7 +1211,11 @@
     return applied;
   }
 
-  function taskpaneUrl() { return new URL("taskpane.html", globalObject.location.href).href; }
+  function taskpaneUrl() {
+    const url = new URL("taskpane.html", globalObject.location.href);
+    url.searchParams.set("v", TASKPANE_PAGE_VERSION);
+    return url.href;
+  }
 
   async function reconcileDocumentContext(requestContext, requireDocx = true) {
     const documentIdentity = await currentDocumentPathHash(requireDocx);
@@ -910,7 +1261,40 @@
     }
   }
 
+  function readTaskpaneVersion(requestContext) {
+    try {
+      return storage().getItem(TASKPANE_VERSION_KEY);
+    } catch (error) {
+      log("ERROR", "taskpane.storage_version.read_failed", "任务窗格页面版本读取失败", {
+        ...contextDetails(requestContext), error_code: "WPS_TASKPANE_VERSION_READ_FAILED",
+        error_type: error && error.name ? error.name : "Error"
+      });
+      throw new Error("WPS_TASKPANE_VERSION_READ_FAILED");
+    }
+  }
+
+  function writeTaskpaneVersion(value, requestContext) {
+    try {
+      storage().setItem(TASKPANE_VERSION_KEY, value);
+    } catch (error) {
+      log("ERROR", "taskpane.storage_version.write_failed", "任务窗格页面版本写入失败", {
+        ...contextDetails(requestContext), error_code: "WPS_TASKPANE_VERSION_WRITE_FAILED",
+        error_type: error && error.name ? error.name : "Error"
+      });
+      throw new Error("WPS_TASKPANE_VERSION_WRITE_FAILED");
+    }
+  }
+
   function openTaskpane(requestContext) {
+    const openStartedAt = Date.now();
+    requestContext = Object.assign({}, requestContext || {}, {
+      document_name: requestContext && requestContext.document_name
+        ? String(requestContext.document_name)
+        : activeDocumentName()
+    });
+    log("INFO", "taskpane.open.enter", "任务窗格打开流程已进入", {
+      ...contextDetails(requestContext), page_version: TASKPANE_PAGE_VERSION
+    });
     if (!app || typeof app.CreateTaskPane !== "function") {
       log("ERROR", "taskpane.create.unsupported", "WPS 不支持创建任务窗格", {
         ...contextDetails(requestContext), error_code: "WPS_TASKPANE_CREATE_UNSUPPORTED"
@@ -918,21 +1302,81 @@
       throw new Error("WPS_TASKPANE_CREATE_UNSUPPORTED");
     }
     void reconcileDocumentContext(requestContext, false).catch((error) => log("WARNING", "document.context.refresh.failed", "任务窗格刷新文档上下文失败", { ...contextDetails(requestContext), error_code: stableErrorCode(error, "WPS_DOCUMENT_CONTEXT_UNAVAILABLE") }));
-    const current = readTaskpaneId(requestContext);
+    let current = readTaskpaneId(requestContext);
+    const currentPageVersion = current ? readTaskpaneVersion(requestContext) : "";
+    log("INFO", "taskpane.storage_state.resolved", "任务窗格本地标识和页面版本已读取", {
+      ...contextDetails(requestContext), pane_instance_id_present: Boolean(current),
+      page_version: currentPageVersion || ""
+    });
+    if (current && currentPageVersion !== TASKPANE_PAGE_VERSION) {
+      log("INFO", "taskpane.page_version.mismatch", "已有任务窗格页面版本已过期，准备重建", {
+        ...contextDetails(requestContext), reason: "page_version_mismatch"
+      });
+      if (typeof app.GetTaskPane === "function") {
+        try {
+          const stalePane = app.GetTaskPane(Number(current));
+          if (stalePane) {
+            stalePane.Visible = false;
+            if (stalePane.Visible !== false) throw new Error("WPS_STALE_TASKPANE_NOT_HIDDEN");
+          }
+        } catch (error) {
+          log("ERROR", "taskpane.stale.hide_failed", "旧任务窗格隐藏失败", {
+            ...contextDetails(requestContext), reason: "page_version_mismatch",
+            error_code: "WPS_STALE_TASKPANE_HIDE_FAILED",
+            error_type: error && error.name ? error.name : "Error"
+          });
+          throw new Error("WPS_STALE_TASKPANE_HIDE_FAILED");
+        }
+      }
+      writeTaskpaneId("", requestContext);
+      writeTaskpaneVersion("", requestContext);
+      current = "";
+    }
     if (current && typeof app.GetTaskPane === "function") {
-      log("INFO", "taskpane.reuse.start", "开始复用任务窗格", contextDetails(requestContext));
+      const reuseStartedAt = Date.now();
+      let reusablePane = null;
+      log("INFO", "taskpane.reuse.start", "开始复用任务窗格", {
+        ...contextDetails(requestContext), page_version: currentPageVersion
+      });
       try {
         const pane = app.GetTaskPane(Number(current));
+        log("INFO", "taskpane.reuse.lookup.completed", "已有任务窗格查询完成", {
+          ...contextDetails(requestContext), pane_found: Boolean(pane),
+          ...taskpaneDetails(pane, "reused")
+        });
         if (pane) {
+          const before = taskpaneDetails(pane, "reused");
+          log("INFO", "taskpane.reuse.show.start", "开始显示已有任务窗格", {
+            ...contextDetails(requestContext), ...before,
+            pane_visible_before: before.pane_visible,
+            pane_visible_requested: true
+          });
           pane.Visible = true;
-          if (pane.Visible === true) {
-            log("INFO", "taskpane.reuse.completed", "任务窗格复用完成", contextDetails(requestContext));
-            return pane;
-          }
+          const after = taskpaneDetails(pane, "reused");
+          log("INFO", "taskpane.reuse.show.completed", "已有任务窗格显示属性已写入", {
+            ...contextDetails(requestContext), ...after,
+            pane_visible_before: before.pane_visible,
+            pane_visible_requested: true,
+            pane_visible_after: after.pane_visible,
+            pane_visible_effective: after.pane_visible === true
+          });
+          if (pane.Visible === true) reusablePane = pane;
         }
-        log("WARNING", "taskpane.reuse.failed", "已有任务窗格不可见，准备重建", { ...contextDetails(requestContext), error_code: "TASKPANE_NOT_VISIBLE" });
+        if (!reusablePane) {
+          log("WARNING", "taskpane.reuse.failed", "已有任务窗格不可见，准备重建", { ...contextDetails(requestContext), error_code: "TASKPANE_NOT_VISIBLE" });
+        }
       } catch (error) {
         log("WARNING", "taskpane.reuse.failed", "已有任务窗格不可用，准备重建", { ...contextDetails(requestContext), error_code: stableErrorCode(error, "WPS_TASKPANE_REUSE_FAILED") });
+      }
+      if (reusablePane) {
+        logUnexpectedTaskpaneDock(reusablePane, "reused", requestContext);
+        activateDocumentAfterTaskpaneOpen(requestContext, "reused");
+        log("INFO", "taskpane.reuse.completed", "任务窗格复用完成", {
+          ...contextDetails(requestContext), ...taskpaneDetails(reusablePane, "reused"),
+          duration_ms: Date.now() - reuseStartedAt
+        });
+        scheduleTaskpaneHostSnapshots(reusablePane, "reused", requestContext);
+        return reusablePane;
       }
       writeTaskpaneId("", requestContext);
     }
@@ -940,7 +1384,12 @@
     try {
       let pane;
       try {
+        const createStartedAt = Date.now();
         pane = app.CreateTaskPane(taskpaneUrl());
+        log("INFO", "taskpane.create.completed", "WPS CreateTaskPane 调用完成", {
+          ...contextDetails(requestContext), ...taskpaneDetails(pane, "created"),
+          page_version: TASKPANE_PAGE_VERSION, duration_ms: Date.now() - createStartedAt
+        });
       } catch (error) {
         log("ERROR", "taskpane.create_call.failed", "WPS CreateTaskPane 调用失败", {
           ...contextDetails(requestContext), error_code: "WPS_TASKPANE_CREATE_FAILED",
@@ -948,19 +1397,58 @@
         });
         throw new Error("WPS_TASKPANE_CREATE_FAILED");
       }
+      const expectedDockPosition = taskpaneExpectedDockPosition();
+      if (expectedDockPosition < 0 || !("DockPosition" in pane)) {
+        log("ERROR", "taskpane.dock_position.unsupported", "WPS 任务窗格不支持右侧停靠属性", {
+          ...contextDetails(requestContext), ...taskpaneDetails(pane, "created"),
+          error_code: "WPS_TASKPANE_DOCK_POSITION_UNSUPPORTED"
+        });
+        throw new Error("WPS_TASKPANE_DOCK_POSITION_UNSUPPORTED");
+      }
       try {
-        pane.Visible = true;
-        if (pane.Visible !== true) throw new Error("WPS_TASKPANE_NOT_VISIBLE");
+        const before = taskpaneDetails(pane, "created");
+        log("INFO", "taskpane.dock_position.write.start", "开始设置任务窗格右侧停靠位置", {
+          ...contextDetails(requestContext), ...before,
+          pane_dock_position_before: before.pane_dock_position,
+          pane_dock_position_requested: expectedDockPosition
+        });
+        pane.DockPosition = expectedDockPosition;
+        const after = taskpaneDetails(pane, "created");
+        if (after.pane_dock_position !== expectedDockPosition) {
+          throw new Error("WPS_TASKPANE_DOCK_POSITION_READBACK_FAILED");
+        }
+        log("INFO", "taskpane.dock_position.completed", "任务窗格右侧停靠位置已在显示前确认", {
+          ...contextDetails(requestContext), ...after,
+          pane_dock_position_before: before.pane_dock_position,
+          pane_dock_position_requested: expectedDockPosition,
+          pane_dock_position_after: after.pane_dock_position,
+          pane_dock_position_effective: after.pane_dock_position === expectedDockPosition
+        });
       } catch (error) {
-        log("ERROR", "taskpane.show.failed", "WPS 任务窗格显示失败", {
-          ...contextDetails(requestContext), error_code: "WPS_TASKPANE_SHOW_FAILED",
+        log("ERROR", "taskpane.dock_position.failed", "WPS 任务窗格右侧停靠设置失败", {
+          ...contextDetails(requestContext), error_code: "WPS_TASKPANE_DOCK_POSITION_FAILED",
           error_type: error && error.name ? error.name : "Error"
         });
-        throw new Error("WPS_TASKPANE_SHOW_FAILED");
+        throw new Error("WPS_TASKPANE_DOCK_POSITION_FAILED");
       }
       if ("Width" in pane) {
         try {
-          pane.Width = 390;
+          const requestedWidth = 390;
+          const before = taskpaneDetails(pane, "created");
+          log("INFO", "taskpane.width.write.start", "开始设置任务窗格目标宽度", {
+            ...contextDetails(requestContext), ...before,
+            pane_width_before: before.pane_width,
+            pane_width_requested: requestedWidth
+          });
+          pane.Width = requestedWidth;
+          const after = taskpaneDetails(pane, "created");
+          log("INFO", "taskpane.width.completed", "任务窗格宽度已在显示前设置完成", {
+            ...contextDetails(requestContext), ...after,
+            pane_width_before: before.pane_width,
+            pane_width_requested: requestedWidth,
+            pane_width_after: after.pane_width,
+            pane_width_effective: after.pane_width === requestedWidth
+          });
         } catch (error) {
           log("ERROR", "taskpane.width.failed", "WPS 任务窗格宽度设置失败", {
             ...contextDetails(requestContext), error_code: "WPS_TASKPANE_WIDTH_FAILED",
@@ -969,8 +1457,39 @@
           throw new Error("WPS_TASKPANE_WIDTH_FAILED");
         }
       }
+      try {
+        const before = taskpaneDetails(pane, "created");
+        log("INFO", "taskpane.show.start", "开始显示任务窗格", {
+          ...contextDetails(requestContext), ...before,
+          pane_visible_before: before.pane_visible,
+          pane_visible_requested: true
+        });
+        pane.Visible = true;
+        const after = taskpaneDetails(pane, "created");
+        if (after.pane_visible !== true) throw new Error("WPS_TASKPANE_NOT_VISIBLE");
+        log("INFO", "taskpane.show.completed", "任务窗格可见状态已确认", {
+          ...contextDetails(requestContext), ...after,
+          pane_visible_before: before.pane_visible,
+          pane_visible_requested: true,
+          pane_visible_after: after.pane_visible,
+          pane_visible_effective: after.pane_visible === true
+        });
+      } catch (error) {
+        log("ERROR", "taskpane.show.failed", "WPS 任务窗格显示失败", {
+          ...contextDetails(requestContext), error_code: "WPS_TASKPANE_SHOW_FAILED",
+          error_type: error && error.name ? error.name : "Error"
+        });
+        throw new Error("WPS_TASKPANE_SHOW_FAILED");
+      }
+      logUnexpectedTaskpaneDock(pane, "created", requestContext);
+      activateDocumentAfterTaskpaneOpen(requestContext, "created");
+      writeTaskpaneVersion(TASKPANE_PAGE_VERSION, requestContext);
       writeTaskpaneId(String(pane.ID), requestContext);
-      log("INFO", "taskpane.rebuild.completed", "任务窗格重建完成", contextDetails(requestContext));
+      log("INFO", "taskpane.rebuild.completed", "任务窗格重建完成", {
+        ...contextDetails(requestContext), ...taskpaneDetails(pane, "created"),
+        page_version: TASKPANE_PAGE_VERSION, duration_ms: Date.now() - openStartedAt
+      });
+      scheduleTaskpaneHostSnapshots(pane, "created", requestContext);
       return pane;
     } catch (error) {
       const errorCode = stableErrorCode(error, "WPS_TASKPANE_SHOW_FAILED");
@@ -1128,6 +1647,16 @@
 
   async function saveFormatBridge(document, bridgePath, requestContext) {
     log("INFO", "format.bridge.save.start", "开始创建排版桥接文档", contextDetails(requestContext));
+    logStoredTaskpaneSnapshot(
+      "format.host_context.snapshot",
+      "排版桥接文档创建前宿主状态已采集",
+      "before_bridge_save_as",
+      requestContext,
+      { command: "apply" }
+    );
+    log("INFO", "format.bridge.save_as.call.start", "开始调用 WPS Document.SaveAs2 创建桥接文档", {
+      ...contextDetails(requestContext), stage: "bridge_save_as"
+    });
     try {
       document.SaveAs2(bridgePath);
     } catch (error) {
@@ -1137,6 +1666,19 @@
       });
       throw new Error("WPS_FORMAT_BRIDGE_SAVE_FAILED");
     }
+    log("INFO", "format.bridge.save_as.call.completed", "WPS Document.SaveAs2 桥接调用完成", {
+      ...contextDetails(requestContext), stage: "bridge_save_as"
+    });
+    logStoredTaskpaneSnapshot(
+      "format.host_context.snapshot",
+      "排版桥接文档 SaveAs2 后宿主状态已采集",
+      "after_bridge_save_as",
+      requestContext,
+      { command: "apply" }
+    );
+    log("INFO", "format.bridge.activate.wait.start", "开始等待排版桥接文档成为活动文档", {
+      ...contextDetails(requestContext), stage: "format_bridge_activate"
+    });
     try {
       await waitForActiveDocument(bridgePath, requestContext, "format_bridge_activate");
     } catch (error) {
@@ -1146,10 +1688,27 @@
       });
       throw new Error("WPS_FORMAT_BRIDGE_ACTIVATE_FAILED");
     }
+    log("INFO", "format.bridge.activate.wait.completed", "排版桥接文档已成为活动文档", {
+      ...contextDetails(requestContext), stage: "format_bridge_activate"
+    });
+    logStoredTaskpaneSnapshot(
+      "format.host_context.snapshot",
+      "排版桥接文档激活后宿主状态已采集",
+      "after_bridge_activated",
+      requestContext,
+      { command: "apply" }
+    );
     log("INFO", "format.bridge.save.completed", "排版桥接文档创建完成", contextDetails(requestContext));
   }
 
   function cleanupFormatBridge(bridgeDocument, bridgePath, requestContext) {
+    logStoredTaskpaneSnapshot(
+      "format.host_context.snapshot",
+      "排版桥接文档关闭前宿主状态已采集",
+      "before_bridge_close",
+      requestContext,
+      { command: "apply" }
+    );
     log("INFO", "format.bridge.close.start", "开始关闭排版桥接文档", contextDetails(requestContext));
     try {
       bridgeDocument.Close(0);
@@ -1161,6 +1720,13 @@
       throw new Error("WPS_FORMAT_BRIDGE_CLOSE_FAILED");
     }
     log("INFO", "format.bridge.close.completed", "排版桥接文档已关闭", contextDetails(requestContext));
+    logStoredTaskpaneSnapshot(
+      "format.host_context.snapshot",
+      "排版桥接文档关闭后宿主状态已采集",
+      "after_bridge_close",
+      requestContext,
+      { command: "apply" }
+    );
     log("INFO", "format.bridge.delete.start", "开始删除排版桥接文档", contextDetails(requestContext));
     try {
       app.FileSystem.unlinkSync(bridgePath);
@@ -1172,6 +1738,13 @@
       throw new Error("WPS_FORMAT_BRIDGE_DELETE_FAILED");
     }
     log("INFO", "format.bridge.delete.completed", "排版桥接文档已删除", contextDetails(requestContext));
+    logStoredTaskpaneSnapshot(
+      "format.host_context.snapshot",
+      "排版桥接文档删除后宿主状态已采集",
+      "after_bridge_delete",
+      requestContext,
+      { command: "apply" }
+    );
     log("INFO", "format.bridge.cleanup.completed", "排版桥接文档清理完成", contextDetails(requestContext));
   }
 
@@ -1464,8 +2037,22 @@
     const totalStartedAt = Date.now();
     const document = activeDocument();
     log("INFO", "format.start", "一键排版开始", contextDetails(requestContext));
+    logStoredTaskpaneSnapshot(
+      "format.host_context.snapshot",
+      "一键排版开始时宿主状态已采集",
+      "format_start",
+      requestContext,
+      { command: "apply" }
+    );
     let stage = "preview_clear";
     log("INFO", "format.preview_clear.start", "开始清除预览批注", contextDetails(requestContext));
+    logStoredTaskpaneSnapshot(
+      "format.host_context.snapshot",
+      "清除预览批注前宿主状态已采集",
+      "before_preview_clear",
+      requestContext,
+      { command: "apply" }
+    );
     try {
       await clearPreviewComments({ silent: true, requestContext, requireDocx: false });
     } catch (error) {
@@ -1480,6 +2067,13 @@
       throw new Error(errorCode);
     }
     log("INFO", "format.preview_clear.completed", "预览批注清除完成", contextDetails(requestContext));
+    logStoredTaskpaneSnapshot(
+      "format.host_context.snapshot",
+      "清除预览批注后宿主状态已采集",
+      "after_preview_clear",
+      requestContext,
+      { command: "apply" }
+    );
     const sourcePath = documentContext.sourcePath;
     const sourceFormat = documentContext.sourceFormat;
     const legacyUpgrade = documentContext.pendingUpgrade;
@@ -1497,6 +2091,13 @@
       let prepared;
       if (legacyUpgrade) {
         stage = "transaction_prepare";
+        logStoredTaskpaneSnapshot(
+          "format.host_context.snapshot",
+          "旧格式排版事务准备前宿主状态已采集",
+          "before_transaction_prepare",
+          requestContext,
+          { command: "apply" }
+        );
         log("INFO", "document.upgrade.format.start", "开始排版升级后的临时 DOCX", {
           ...contextDetails(requestContext),
           operation_id_short: operationId.slice(0, 12)
@@ -1515,6 +2116,13 @@
         });
       } else {
         stage = "transaction_prepare";
+        logStoredTaskpaneSnapshot(
+          "format.host_context.snapshot",
+          "排版事务准备前宿主状态已采集",
+          "before_transaction_prepare",
+          requestContext,
+          { command: "apply" }
+        );
         log("INFO", "format.transaction.prepare.start", "开始准备排版事务", contextDetails(requestContext));
         prepared = await api("/v1/format/prepare", { source_path: sourcePath }, undefined, requestContext);
         operationId = prepared.operation_id;
@@ -1532,6 +2140,13 @@
       log("INFO", "format.transaction.prepare.completed", "排版事务准备完成", {
         ...contextDetails(requestContext), operation_id_short: operationId.slice(0, 12)
       });
+      logStoredTaskpaneSnapshot(
+        "format.host_context.snapshot",
+        "排版事务准备后宿主状态已采集",
+        "after_transaction_prepare",
+        requestContext,
+        { command: "apply", operation_id_short: operationId.slice(0, 12) }
+      );
       stage = "commit";
       if (legacyUpgrade) {
         log("INFO", "document.upgrade.publish.start", "开始发布升级并排版后的 DOCX", {
@@ -1540,9 +2155,23 @@
         });
       }
       log("INFO", "format.commit.start", "开始提交排版事务", contextDetails(requestContext));
+      logStoredTaskpaneSnapshot(
+        "format.host_context.snapshot",
+        "排版事务提交前宿主状态已采集",
+        "before_commit",
+        requestContext,
+        { command: "apply", operation_id_short: operationId.slice(0, 12) }
+      );
       await api("/v1/format/commit", { operation_id: operationId }, undefined, requestContext);
       committed = true;
       log("INFO", "format.commit.completed", "排版事务提交完成", contextDetails(requestContext));
+      logStoredTaskpaneSnapshot(
+        "format.host_context.snapshot",
+        "排版事务提交后宿主状态已采集",
+        "after_commit",
+        requestContext,
+        { command: "apply", operation_id_short: operationId.slice(0, 12) }
+      );
       if (legacyUpgrade) {
         log("INFO", "document.upgrade.publish.completed", "升级并排版后的 DOCX 已发布", {
           ...contextDetails(requestContext),
@@ -1551,6 +2180,16 @@
       }
       stage = "document_reopen";
       log("INFO", "format.document.reopen.start", "开始重新打开文档", contextDetails(requestContext));
+      logStoredTaskpaneSnapshot(
+        "format.host_context.snapshot",
+        "目标文档打开前宿主状态已采集",
+        "before_target_open",
+        requestContext,
+        { command: "apply", operation_id_short: operationId.slice(0, 12) }
+      );
+      log("INFO", "format.document.open_call.start", "开始调用 WPS Documents.Open 重新打开目标文档", {
+        ...contextDetails(requestContext), stage: "document_reopen"
+      });
       try {
         app.Documents.Open(targetPath);
       } catch (error) {
@@ -1560,8 +2199,25 @@
         });
         throw new Error("WPS_DOCUMENT_OPEN_FAILED");
       }
+      log("INFO", "format.document.open_call.completed", "WPS Documents.Open 调用完成", {
+        ...contextDetails(requestContext), stage: "document_reopen"
+      });
+      logStoredTaskpaneSnapshot(
+        "format.host_context.snapshot",
+        "目标文档打开调用后宿主状态已采集",
+        "after_target_open_call",
+        requestContext,
+        { command: "apply", operation_id_short: operationId.slice(0, 12) }
+      );
       await waitForActiveDocument(targetPath, requestContext, "format_reopen");
       log("INFO", "format.document.reopen.completed", "文档重新打开完成", contextDetails(requestContext));
+      logStoredTaskpaneSnapshot(
+        "format.host_context.snapshot",
+        "目标文档激活后宿主状态已采集",
+        "after_target_activated",
+        requestContext,
+        { command: "apply", operation_id_short: operationId.slice(0, 12) }
+      );
       stage = "bridge_cleanup";
       cleanupFormatBridge(bridgeDocument, bridgePath, requestContext);
       bridgeDocument = null;
@@ -1570,6 +2226,13 @@
       log("INFO", "format.finalize.start", "开始完成排版事务", contextDetails(requestContext));
       await api("/v1/format/finalize", { operation_id: operationId }, undefined, requestContext);
       log("INFO", "format.finalize.completed", "排版事务已完成", contextDetails(requestContext));
+      logStoredTaskpaneSnapshot(
+        "format.host_context.snapshot",
+        "排版事务完成后宿主状态已采集",
+        "after_finalize",
+        requestContext,
+        { command: "apply", operation_id_short: operationId.slice(0, 12) }
+      );
       operationId = "";
       committed = false;
       const warnings = warningCount(prepared);
@@ -1589,6 +2252,13 @@
         compatibility_warnings: warnings, source_format: sourceFormat, target_format: "docx",
         total_duration_ms: Date.now() - totalStartedAt
       });
+      logStoredTaskpaneSnapshot(
+        "format.host_context.snapshot",
+        "一键排版完成时宿主状态已采集",
+        "format_completed",
+        requestContext,
+        { command: "apply" }
+      );
       if (legacyUpgrade) {
         log("INFO", "document.upgrade.completed", "旧格式文档升级并排版完成", {
           ...contextDetails(requestContext), source_format: sourceFormat,
@@ -1695,7 +2365,8 @@
           writeState({ document_identity: documentIdentity });
         }
       }
-      if (name === "preview") await runPreview(requestContext, documentContext);
+      if (name === "panel_ready") await runPanelReady(requestContext);
+      else if (name === "preview") await runPreview(requestContext, documentContext);
       else if (name === "apply") await runFormat(requestContext, documentContext);
       else if (name === "clear_preview") await clearPreview(requestContext);
       else if (name === "health") await runHealth(requestContext);
@@ -1732,20 +2403,32 @@
           error_type: stateError && stateError.name ? stateError.name : "Error"
         });
       }
-      try {
-        openTaskpane(requestContext);
-      } catch (panelError) {
-        log("ERROR", "host.command.failure_panel_open.failed", "命令失败后任务窗格打开失败", {
-          ...contextDetails(requestContext), command: name, primary_error_code: code,
-          error_code: stableErrorCode(panelError, "WPS_TASKPANE_OPEN_FAILED"),
-          error_type: panelError && panelError.name ? panelError.name : "Error"
-        });
+      if (name !== "panel_ready") {
+        try {
+          openTaskpane(requestContext);
+        } catch (panelError) {
+          log("ERROR", "host.command.failure_panel_open.failed", "命令失败后任务窗格打开失败", {
+            ...contextDetails(requestContext), command: name, primary_error_code: code,
+            error_code: stableErrorCode(panelError, "WPS_TASKPANE_OPEN_FAILED"),
+            error_type: panelError && panelError.name ? panelError.name : "Error"
+          });
+        }
       }
       throw new Error(code);
     } finally {
+      let flushError = "";
+      try {
+        await flushStatePublication();
+      } catch (error) {
+        flushError = stableErrorCode(error, "WPS_BRIDGE_STATE_FLUSH_FAILED");
+        log("ERROR", "host.bridge.state.flush_failed", "命令最终状态发布失败", {
+          ...contextDetails(requestContext), command: name, error_code: flushError,
+          error_type: error && error.name ? error.name : "Error"
+        });
+      }
       busy = false;
       try {
-        if (app.ribbonUI && typeof app.ribbonUI.Invalidate === "function") app.ribbonUI.Invalidate();
+        if (ribbonUI && typeof ribbonUI.Invalidate === "function") ribbonUI.Invalidate();
       } catch (error) {
         log("WARNING", "ribbon.invalidate.failed", "Ribbon 状态刷新失败", {
           ...contextDetails(requestContext), command: name,
@@ -1753,110 +2436,129 @@
           error_type: error && error.name ? error.name : "Error"
         });
       }
+      if (flushError) throw new Error(flushError);
     }
   }
 
-  function pollTaskpaneRequests() {
-    if (!pollFirstTickLogged) {
-      pollFirstTickLogged = true;
-      log("INFO", "host.poll.first_tick", "任务窗格请求轮询已执行首次检查", {
-        host_ready: started, poll_interval_ms: 250, request_key: REQUEST_KEY
+  async function runBridgeCommand(command) {
+    if (!command || command.schema_version !== "wps-command-v1") {
+      log("ERROR", "host.bridge.command.schema_invalid", "通信桥命令协议无效", {
+        error_code: "WPS_BRIDGE_COMMAND_SCHEMA_INVALID"
+      });
+      throw new Error("WPS_BRIDGE_COMMAND_SCHEMA_INVALID");
+    }
+    if (!command.request_id) {
+      log("ERROR", "host.bridge.command.request_id_missing", "通信桥命令缺少请求 ID", {
+        command: command.command || "", error_code: "WPS_REQUEST_ID_MISSING"
+      });
+      throw new Error("WPS_REQUEST_ID_MISSING");
+    }
+    if (!command.command) {
+      log("ERROR", "host.bridge.command.command_missing", "通信桥命令缺少命令名称", {
+        request_id: command.request_id, error_code: "WPS_REQUEST_COMMAND_MISSING"
+      });
+      throw new Error("WPS_REQUEST_COMMAND_MISSING");
+    }
+    if (command.request_id === lastRequestId) {
+      log("ERROR", "host.bridge.command.duplicate", "通信桥返回了重复命令", {
+        request_id: command.request_id, command: command.command,
+        command_sequence: command.command_sequence,
+        error_code: "WPS_BRIDGE_COMMAND_DUPLICATE"
+      });
+      throw new Error("WPS_BRIDGE_COMMAND_DUPLICATE");
+    }
+    const requestContext = Object.freeze({
+      request_id: command.request_id, command: command.command, source: "taskpane",
+      document_name: activeDocumentName()
+    });
+    lastRequestId = command.request_id;
+    writeState({ active_request: Object.assign({}, contextDetails(requestContext), {
+      request_id: requestContext.request_id, command: requestContext.command,
+      request_status: "CLAIMED", error_code: ""
+    }) });
+    await flushStatePublication();
+    log("INFO", "host.bridge.command.received", "Host 已收到通信桥命令", {
+      ...contextDetails(requestContext), command: requestContext.command,
+      command_sequence: command.command_sequence, host_generation: hostGeneration
+    });
+    try {
+      await runCommand(requestContext.command, requestContext);
+    } catch (_) {
+      // runCommand records and publishes the operation-specific failure.
+    } finally {
+      log("INFO", "taskpane.request.completed", "任务窗格请求处理结束", {
+        ...contextDetails(requestContext), command: requestContext.command
       });
     }
-    try {
-      let raw;
+  }
+
+  async function runBridgeWaitLoop() {
+    log("INFO", "host.bridge.wait.started", "Host 命令长请求已启动", {
+      host_generation: hostGeneration, bridge_ready: true
+    });
+    while (bridgeRunning) {
+      let result;
       try {
-        raw = storage().getItem(REQUEST_KEY);
+        result = await bridgeApi("/v1/bridge/host/wait", {
+          host_context_id: hostContextId,
+          host_generation: hostGeneration,
+          timeout_seconds: 25
+        }, null);
       } catch (error) {
-        log("ERROR", "host.request_slot.read_failed", "Host 请求槽读取失败", {
-          error_code: "WPS_REQUEST_SLOT_READ_FAILED",
+        const errorCode = stableErrorCode(error, "WPS_BRIDGE_HOST_WAIT_FAILED");
+        log("ERROR", "host.bridge.wait.failed", "Host 命令长请求失败", {
+          host_generation: hostGeneration, error_code: errorCode,
           error_type: error && error.name ? error.name : "Error"
         });
-        stopPollingForStorageFailure("WPS_REQUEST_SLOT_READ_FAILED");
-        throw new Error("WPS_REQUEST_SLOT_READ_FAILED");
+        throw new Error(errorCode);
       }
-      if (!raw) return;
-      log("INFO", "host.storage.request.observed", "Host 已读取到任务窗格请求", {
-        raw_present: true, raw_length: String(raw).length, busy
+      if (result.timed_out) continue;
+      await runBridgeCommand(result.command);
+    }
+  }
+
+  async function startBridgeSession() {
+    let stage = "bridge_register";
+    try {
+      log("INFO", "host.bridge.register.start", "开始注册 Host 通信上下文", {});
+      const registration = await bridgeApi("/v1/bridge/host/register", {
+        host_context_id: hostContextId
+      }, null);
+      hostGeneration = registration.host_generation;
+      bridgeRunning = true;
+      bridgeReady = true;
+      statePublishError = "";
+      statePublishChain = Promise.resolve();
+      log("INFO", "host.bridge.register.completed", "Host 通信上下文注册完成", {
+        host_generation: hostGeneration, state_revision: registration.state_revision,
+        replaced: Boolean(registration.replaced), bridge_ready: true
       });
-      let request;
-      try {
-        request = JSON.parse(raw);
-      } catch (error) {
-        log("ERROR", "host.request.parse.failed", "任务窗格请求解析失败", {
-          error_type: error && error.name ? error.name : "Error",
-          error_code: "WPS_REQUEST_JSON_INVALID"
-        });
-        clearRequestSlot(null, "json_invalid");
-        throw new Error("WPS_REQUEST_JSON_INVALID");
-      }
-      log("INFO", "host.request.parsed", "任务窗格请求解析完成", {
-        request_id: request && request.request_id ? request.request_id : "",
-        command: request && request.command_name ? request.command_name : "",
-        pane_instance_id_present: Boolean(request && request.pane_instance_id)
+      stage = "state_publish";
+      writeState({
+        status: "READY", stage: "ready", message: "DocxTool WPS 已就绪",
+        host_ready: true, recognition_rows: [], compatibility_warnings: [],
+        preview_comment_count: 0, preview_confirmed_count: 0, preview_review_count: 0,
+        error_code: "", active_request: null, last_request: null
       });
-      if (!request || request.schema_version !== "wps-request-v2") {
-        log("ERROR", "host.request.schema_invalid", "任务窗格请求协议版本无效", {
-          request_id: request && request.request_id ? request.request_id : "",
-          command: request && request.command_name ? request.command_name : "",
-          reason: "schema_invalid", error_code: "WPS_REQUEST_SCHEMA_INVALID"
-        });
-        clearRequestSlot(request, "schema_invalid");
-        return;
-      }
-      if (!request.request_id) {
-        log("ERROR", "host.request.id_missing", "任务窗格请求缺少请求 ID", {
-          reason: "request_id_missing", error_code: "WPS_REQUEST_ID_MISSING"
-        });
-        clearRequestSlot(null, "request_id_missing");
-        return;
-      }
-      if (!request.command_name) {
-        log("ERROR", "host.request.command_missing", "任务窗格请求缺少命令", {
-          request_id: request.request_id, reason: "command_missing",
-          error_code: "WPS_REQUEST_COMMAND_MISSING"
-        });
-        clearRequestSlot(request, "command_missing");
-        return;
-      }
-      log("INFO", "host.request.detected", "检测到任务窗格请求", {
-        request_id: request.request_id, command: request.command_name
+      await flushStatePublication();
+      log("INFO", "host.start.completed", "Host Runtime 启动完成", {
+        host_ready: true, host_generation: hostGeneration, bridge_ready: true
       });
-      if (request.request_id === lastRequestId) {
-        log("WARNING", "host.request.ignored", "任务窗格请求被忽略", {
-          request_id: request.request_id, command: request.command_name,
-          reason: "already_processed"
-        });
-        log("WARNING", "host.request.duplicate", "忽略重复任务窗格请求", {
-          request_id: request.request_id, command: request.command_name
-        });
-        clearRequestSlot(request, "already_processed");
-        return;
-      }
-      if (busy) {
-        clearRequestSlot(request, "busy");
-        writeState({ last_request: { request_id: request.request_id, request_status: "FAIL", error_code: "WPS_COMMAND_BUSY" } });
-        log("WARNING", "host.request.rejected.busy", "任务窗格请求被忙碌命令拒绝", Object.assign(contextDetails(request), {
-          command: request.command_name, reason: "busy", error_code: "WPS_COMMAND_BUSY"
-        }));
-        return;
-      }
-      const requestContext = Object.freeze({
-        request_id: request.request_id, command: request.command_name, source: "taskpane",
-        document_name: activeDocumentName()
-      });
-      lastRequestId = request.request_id;
-      writeState({ active_request: Object.assign({}, contextDetails(requestContext), {
-        request_id: requestContext.request_id, command: requestContext.command, request_status: "CLAIMED", error_code: ""
-      }) });
-      clearRequestSlot(requestContext, "claimed");
-      log("INFO", "taskpane.request.claimed", "任务窗格请求已领取", Object.assign(contextDetails(requestContext), { command: requestContext.command }));
-      log("INFO", "host.request.claimed", "任务窗格请求已领取", Object.assign(contextDetails(requestContext), { command: requestContext.command }));
-      void runCommand(requestContext.command, requestContext).finally(() => {
-        log("INFO", "taskpane.request.completed", "任务窗格请求处理结束", Object.assign(contextDetails(requestContext), { command: requestContext.command }));
-      });
+      stage = "bridge_wait";
+      await runBridgeWaitLoop();
+      started = false;
     } catch (error) {
-      log("ERROR", "host.request.invalid", "任务窗格请求处理失败", { error_code: stableErrorCode(error, "WPS_HOST_REQUEST_FAILED") });
+      const errorCode = stableErrorCode(error, "WPS_HOST_START_FAILED");
+      bridgeRunning = false;
+      bridgeReady = false;
+      started = false;
+      log("ERROR", "host.start.rollback", "Host Runtime 启动已回滚", {
+        stage, error_code: errorCode, host_generation: hostGeneration
+      });
+      log("ERROR", "host.start.failed", "Host Runtime 启动失败", {
+        stage, error_type: error && error.name ? error.name : "Error",
+        error_code: errorCode, host_generation: hostGeneration
+      });
     }
   }
 
@@ -1907,54 +2609,17 @@
       log("INFO", "host.storage.initialize.start", "开始验证 PluginStorage", {});
       if (!app || !app.PluginStorage) throw new Error("WPS_PLUGIN_STORAGE_UNAVAILABLE");
       log("INFO", "host.storage.initialize.completed", "PluginStorage 验证完成", {});
-      stage = "storage_reset";
-      const staleRequestPresent = Boolean(storage().getItem(REQUEST_KEY));
-      log("INFO", "host.storage.reset.start", "开始清理旧 Host 状态和请求槽", {
-        slot_occupied: staleRequestPresent
-      });
-      try {
-        storage().setItem(REQUEST_KEY, "");
-        storage().setItem(STATE_KEY, "");
-      } catch (error) {
-        log("ERROR", "host.storage.reset.failed", "旧 Host 状态或请求槽清理失败", {
-          slot_occupied: staleRequestPresent,
-          error_code: "WPS_HOST_STORAGE_RESET_FAILED",
-          error_type: error && error.name ? error.name : "Error"
-        });
-        throw new Error("WPS_HOST_STORAGE_RESET_FAILED");
-      }
-      log("INFO", "host.storage.reset.completed", "旧 Host 状态和请求槽已清理", {
-        cleared_count: staleRequestPresent ? 2 : 1
-      });
-      stage = "poll_start";
-      log("INFO", "host.poll.start", "开始创建任务窗格请求轮询", {
-        poll_interval_ms: 250, request_key: REQUEST_KEY
-      });
-      pollFirstTickLogged = false;
-      pollTimer = setInterval(pollTaskpaneRequests, 250);
-      if (!pollTimer) throw new Error("WPS_REQUEST_POLL_UNAVAILABLE");
-      log("INFO", "host.poll.started", "任务窗格请求轮询已启动", {
-        poll_interval_ms: 250, request_key: REQUEST_KEY
-      });
-      stage = "state_publish";
-      log("INFO", "host.state.publish.start", "开始发布 Host 就绪状态", {});
-      writeState({
-        status: "READY", stage: "ready", message: "DocxTool WPS 已就绪",
-        host_ready: true, recognition_rows: [], compatibility_warnings: [],
-        preview_comment_count: 0, preview_confirmed_count: 0, preview_review_count: 0,
-        error_code: "", active_request: null, last_request: null
-      });
-      log("INFO", "host.state.publish.completed", "Host 就绪状态已发布", {
-        host_ready: true
-      });
       started = true;
-      log("INFO", "host.start.completed", "Host Runtime 启动完成", { host_ready: true });
+      stage = "bridge_start";
+      void startBridgeSession();
+      log("INFO", "host.start.scheduled", "Host Runtime 后台通信已调度", {
+        bridge_ready: false
+      });
       return "started";
     } catch (error) {
       const errorCode = stableErrorCode(error, "WPS_HOST_START_FAILED");
-      if (pollTimer) clearInterval(pollTimer);
-      pollTimer = null;
-      pollFirstTickLogged = false;
+      bridgeRunning = false;
+      bridgeReady = false;
       started = false;
       log("ERROR", "host.start.rollback", "Host Runtime 启动已回滚", {
         stage, error_code: errorCode
@@ -2026,6 +2691,10 @@
     catch (_) { return false; }
   }
 
+  function setRibbonUI(value) {
+    ribbonUI = value;
+  }
+
   if (!globalObject.DocxToolEarlyLog) throw new Error("WPS_BOOTSTRAP_LOG_UNAVAILABLE");
   globalObject.DocxToolEarlyLog("INFO", "bootstrap", "runtime.config.detected", "WPS 运行配置已读取", {
     config_present: Boolean(globalObject.DocxToolWpsConfig),
@@ -2041,7 +2710,11 @@
     start,
     runCommand,
     getBusy: () => busy,
+    getBridgeReady: () => bridgeReady,
+    getHostGeneration: () => hostGeneration,
     getInstanceIdShort: () => hostInstanceIdShort,
+    getStateSnapshot: () => JSON.parse(JSON.stringify(hostState)),
+    setRibbonUI,
     handleRibbonAction,
     getActionEnabled
   });

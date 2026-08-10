@@ -4,6 +4,8 @@ import importlib
 
 from docx import Document
 from docx.enum.text import WD_BREAK
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 from docx.shared import Pt
 import pytest
 
@@ -142,6 +144,46 @@ def test_body_visual_emphasis_does_not_create_a_paragraph_boundary() -> None:
     source = "推动重点工作走深走实。各单位应当结合实际认真执行。"
     boundary = source.index("。") + 1
     features = _features_for_visual_boundary(source, boundary)
+
+    spans = _split_inline_heading_body_spans(
+        source, 0, len(source), features, allow_visual_boundary=False
+    )
+
+    assert spans == [(0, len(source))]
+
+
+def test_native_list_bold_heading_splits_inside_body_region() -> None:
+    source = "阶段任务安排。后续正文内容完整保留并继续说明具体工作。"
+    boundary = source.index("。") + 1
+    features = _features_for_visual_boundary(source, boundary)
+    features.numbering_prefix = "@lvl_0"
+
+    candidates = _segment_boundary_candidates(source, 0, len(source), features)
+    spans = _split_inline_heading_body_spans(
+        source, 0, len(source), features, allow_visual_boundary=False
+    )
+
+    assert candidates[0].left_type_hint == "heading"
+    assert [source[start:end] for start, end in spans] == [
+        "阶段任务安排。", "后续正文内容完整保留并继续说明具体工作。",
+    ]
+
+
+def test_native_list_without_heading_format_transition_stays_one_segment() -> None:
+    source = "这是普通自动列表正文第一句。后续内容仍然属于同一列表正文段落。"
+    features = ParagraphFeatures(
+        source_physical_text=source,
+        numbering_prefix="@lvl_0",
+        source_run_spans=(
+            SourceRun(
+                start=0, end=len(source), font_name="FangSong",
+                east_asia_font_name="FangSong", ascii_font_name="Times New Roman",
+                font_size_pt=16.0, bold=False, italic=False, underline=False,
+                explicit=True, inherited=False, known=True,
+                format_sources=("direct_run",),
+            ),
+        ),
+    )
 
     spans = _split_inline_heading_body_spans(
         source, 0, len(source), features, allow_visual_boundary=False
@@ -300,6 +342,43 @@ def test_numbered_heading_with_wrapped_body_emits_one_complete_body_segment(tmp_
     assert [block.recognized_text for block in blocks] == [
         "一、总体要求。", "正文第一部分属于同一正文段。\n正文第二部分仍属于同一正文段。",
     ]
+
+
+def test_native_list_bold_heading_and_body_emit_two_located_sdk_blocks(tmp_path) -> None:
+    source = tmp_path / "native-list-heading-body.docx"
+    document = Document()
+    document.add_paragraph("工作总结")
+    paragraph = document.add_paragraph()
+    properties = paragraph._p.get_or_add_pPr()
+    num_pr = OxmlElement("w:numPr")
+    ilvl = OxmlElement("w:ilvl")
+    ilvl.set(qn("w:val"), "0")
+    num_id = OxmlElement("w:numId")
+    num_id.set(qn("w:val"), "2")
+    num_pr.extend((ilvl, num_id))
+    properties.append(num_pr)
+    heading = paragraph.add_run("阶段任务安排。")
+    heading.bold = True
+    heading.font.size = Pt(16)
+    paragraph.add_run("后续正文内容完整保留并继续说明具体工作。")
+    document.save(source)
+
+    plan = recognize_docx(
+        source,
+        processing_mode="structural",
+        recognition_mode="authoritative",
+        include_text=True,
+    )
+    blocks = [block for block in plan.blocks if block.physical_paragraph_index == 1]
+
+    assert [block.type_id for block in blocks] == ["heading2", "body"]
+    assert [block.recognized_text for block in blocks] == [
+        "阶段任务安排。", "后续正文内容完整保留并继续说明具体工作。",
+    ]
+    assert [block.segment_index for block in blocks] == [0, 1]
+    assert {block.segment_count_total for block in blocks} == {2}
+    assert all(block.source_locator_status == "confirmed" for block in blocks)
+    assert blocks[0].raw_end_utf16 == blocks[1].raw_start_utf16
 
 
 def test_sdk_locates_heading_body_and_later_salutation_without_gaps(tmp_path) -> None:

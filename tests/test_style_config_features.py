@@ -1,7 +1,11 @@
+from io import StringIO
 import json
+import logging
+import sys
 
 import pytest
 
+from docxtool.document import style_config
 from docxtool.paths import default_format_config_path
 from docxtool.document.style_config import (
     ConfigValidationError,
@@ -12,6 +16,39 @@ from docxtool.document.style_config import (
 
 def _page_number(config: dict) -> dict:
     return load_rules_and_settings(config)[2]["page_number"]
+
+
+def test_console_logging_splits_normal_and_problem_levels(monkeypatch) -> None:
+    stdout = StringIO()
+    stderr = StringIO()
+    monkeypatch.setattr(sys, "stdout", stdout)
+    monkeypatch.setattr(sys, "stderr", stderr)
+    logger = logging.Logger("docx_tool_console_test", logging.DEBUG)
+    logger.propagate = False
+
+    style_config._ensure_console_handler(logger)
+    style_config._ensure_console_handler(logger)
+    logger.debug("debug-message")
+    logger.info("info-message")
+    logger.warning("warning-message")
+    logger.error("error-message")
+    logger.critical("critical-message")
+
+    console_handlers = [
+        handler
+        for handler in logger.handlers
+        if isinstance(handler, logging.StreamHandler)
+        and not isinstance(handler, logging.FileHandler)
+    ]
+    assert len(console_handlers) == 2
+    assert "debug-message" in stdout.getvalue()
+    assert "info-message" in stdout.getvalue()
+    assert "warning-message" not in stdout.getvalue()
+    assert "error-message" not in stdout.getvalue()
+    assert "warning-message" in stderr.getvalue()
+    assert "error-message" in stderr.getvalue()
+    assert "critical-message" in stderr.getvalue()
+    assert "info-message" not in stderr.getvalue()
 
 
 def test_page_number_defaults_are_standard_document_defaults() -> None:

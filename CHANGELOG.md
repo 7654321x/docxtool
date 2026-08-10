@@ -1,5 +1,14 @@
 # Changelog
 
+## 5.1 - 2026-08-10
+
+- Replaced high-frequency PluginStorage command polling with a single-slot HostBridge long-request transport while keeping all WPS document objects on the Host thread and Core work serialized by the existing monitor.
+- Stabilized the background launcher with a fixed `127.0.0.1:3889` add-in origin, explicit port-conflict failure, no automatic WPS launch, and safe Ribbon UI ownership across Bootstrap reloads.
+- Completed the first-open TaskPane layout path with one `panel_ready` native workspace recalculation, versioned pane replacement, bounded geometry diagnostics, sentence-case display states, and the WPS-style TaskPane icon.
+- Expanded stage-specific, document-scoped WPS diagnostics and split normal console logs to stdout while reserving stderr for warnings and errors without changing file-log content.
+- Preserved native Word/WPS automatic-list heading evidence when a bold heading sentence and ordinary body share one physical paragraph, with source locator continuity and no split for ordinary list prose.
+- Added HostBridge, launcher, Ribbon, TaskPane, logging, segmentation, SDK locator, privacy, and release-manifest regression coverage without changing the public SDK schema or DocxTool Engine boundary.
+
 ## 5.0 - 2026-08-10
 
 - Stabilized the WPS bootstrap, Host Runtime, TaskPane, Control Server, and single-thread command-monitor chain with stage-specific privacy-safe diagnostics.

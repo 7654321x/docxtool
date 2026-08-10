@@ -5,13 +5,15 @@
 ## 架构边界
 
 ```text
-wpsjs 2.2.3 → index.html（极薄启动壳，只加载 main.js）
+main.py 固定 127.0.0.1:3889 静态服务 → index.html（极薄启动壳，只加载 main.js）
         ↓
 main.js（同步 bootstrap）
         ↓
 bootstrap-log.js → runtime-config.js → host-runtime.js → ribbon.js
         ↓
 WPS Ribbon / TaskPane
+        ↓
+HostBridge 单命令槽 + 25 秒异步长请求
         ↓
 127.0.0.1 随机 loopback Control Server
         ↓
@@ -23,14 +25,14 @@ validate_docx_integrity
 
 `apps/wps` 可以调用 `src/docxtool`，但 `src/docxtool` 不得反向依赖 WPS。
 
-当前固定使用的 `wpsjs 2.2.3` 调试服务器要求项目根 `index.html` 存在。该文件只负责加载 `main.js`，真正的 bootstrap 顺序仍由 `main.js` 单一负责。
+项目根 `index.html` 只负责加载 `main.js`，真正的 bootstrap 顺序仍由 `main.js` 单一负责。`main.py` 使用本机静态服务发布这些文件，并更新当前项目的 WPS 加载项注册，不依赖 `wpsjs debug` 自动拉起 WPS。
 
-关键 bootstrap 使用经典同步脚本加载。WPS 会在加载项装载阶段解析 Ribbon 回调，因此 `host-runtime.js` 必须先于 `ribbon.js` 完成执行，确保 `OnAddinLoad` 被调用时 Host Runtime 已可用。Host 只由 `OnAddinLoad` 启动；任务窗格与 Host 通过 WPS `PluginStorage` 交换命令和状态。
+关键 bootstrap 使用经典同步脚本加载。WPS 会在加载项装载阶段解析 Ribbon 回调，因此 `host-runtime.js` 必须先于 `ribbon.js` 完成执行，确保 `OnAddinLoad` 被调用时 Host Runtime 已可用。Host 与 TaskPane 各保持一个 Control Server 异步长请求：TaskPane 将命令写入单槽，Host 领取后复用现有业务流程并发布递增 revision 的状态。空闲时不轮询 WPS API；PluginStorage 只保存任务窗格 ID、页面版本和预览批注元数据。
 
 ## 已迁移能力
 
 - Ribbon：预览排版、一键排版、清除预览、状态面板、本机检测
-- TaskPane：识别结果、宿主绑定状态、兼容性提示、执行状态、返回文档、关闭面板
+- TaskPane：识别结果、宿主绑定状态、兼容性提示、执行状态、关闭面板
 - 当前 WPS DOCX 保存完成确认、关闭、重新打开确认
 - authoritative 识别预览
 - `HostSnapshot -> bind_recognition_plan()` 正式 SDK 宿主绑定
@@ -137,7 +139,7 @@ pwsh -NoProfile -Command "python apps/wps/main.py verify"
 pwsh -NoProfile -Command "python apps/wps/main.py start"
 ```
 
-`start` 会先绑定 `127.0.0.1` 的空闲端口，再生成短期 `runtime/runtime-config.js`，最后调用固定版本的 `wpsjs` 加载插件。运行结束后会删除包含 session token 的 runtime config。
+`start` 会为 Control Server 分配随机本机端口，插件网页服务固定使用 `127.0.0.1:3889`，生成短期 `runtime/runtime-config.js`，并更新当前项目的 WPS 加载项注册。固定网页来源避免 WPS 因端口变化反复询问信任；若 `3889` 已被占用，启动器会直接报告端口绑定失败，不回退到随机端口。插件网页响应禁止缓存，避免 WPS 跨会话继续加载旧版 Bootstrap、Host 或 TaskPane。它不会自动打开或关闭 WPS；服务就绪后按需打开 WPS 文字即可。运行结束后会删除包含 session token 的 runtime config。
 
 只测试 Python Control Server：
 

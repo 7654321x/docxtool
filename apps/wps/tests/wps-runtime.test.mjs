@@ -13,14 +13,17 @@ const TASKPANE_SOURCE = await readFile(
   "utf8",
 );
 const MAIN_SOURCE = await readFile(new URL("../main.js", import.meta.url), "utf8");
+const RIBBON_SOURCE = await readFile(
+  new URL("../js/ribbon.js", import.meta.url),
+  "utf8",
+);
 const BOOTSTRAP_COMPLETE_SOURCE = await readFile(
   new URL("../js/bootstrap-complete.js", import.meta.url),
   "utf8",
 );
 
-const STATE_KEY = "docxtool_wps_state_v1";
-const REQUEST_KEY = "docxtool_wps_request_v1";
 const TASKPANE_KEY = "docxtool_wps_taskpane_id_v1";
+const TASKPANE_VERSION_KEY = "docxtool_wps_taskpane_version_v1";
 
 function sha256(value) {
   return createHash("sha256").update(value, "utf8").digest("hex");
@@ -31,11 +34,15 @@ function makeStorage(initial = {}) {
   const storage = {
     failGetKey: "",
     failSetKey: "",
+    getCalls: [],
+    setCalls: [],
     getItem(key) {
+      this.getCalls.push(key);
       if (key === this.failGetKey) throw new Error("STORAGE_GET_FAILED");
       return values.get(key) ?? "";
     },
     setItem(key, value) {
+      this.setCalls.push(key);
       if (key === this.failSetKey) throw new Error("STORAGE_SET_FAILED");
       values.set(key, String(value));
     },
@@ -158,17 +165,21 @@ function makeHostHarness({
   bootstrapId = "",
   convertedRawText = "",
 } = {}) {
-  const { storage, values } = makeStorage({
-    [REQUEST_KEY]: "stale-request",
-    [STATE_KEY]: JSON.stringify({ status: "STALE" }),
-  });
+  const { storage, values } = makeStorage();
   const comments = makeComments({ failAddAt, failMetadataAt, failDeleteAt });
   const { document, paragraphRange } = makeDocument(rawText, comments);
   const logs = [];
   const apiCalls = [];
   const intervals = [];
+  const bridgeWaiters = [];
+  let bridgeGeneration = 1;
+  let bridgeStateRevision = 1;
+  let bridgeState = { host_ready: false, status: "NOT_READY" };
   const panes = [];
   const taskpaneCreateCalls = [];
+  const taskpaneOperations = [];
+  const activationCalls = [];
+  const documentLifecycleCalls = [];
   const bridgePaths = [];
   const saveAsFormats = [];
   const deletedPaths = [];
@@ -178,7 +189,31 @@ function makeHostHarness({
     ribbonUI: { Invalidate() {} },
     CreateTaskPane(...args) {
       taskpaneCreateCalls.push(args);
-      const pane = { ID: panes.length + 1, Visible: false, Width: 0 };
+      const paneState = { visible: false, width: 640, dockPosition: 2 };
+      const pane = { ID: panes.length + 1 };
+      Object.defineProperties(pane, {
+        Visible: {
+          get() { return paneState.visible; },
+          set(value) {
+            paneState.visible = Boolean(value);
+            taskpaneOperations.push(`visible:${String(Boolean(value))}`);
+          },
+        },
+        Width: {
+          get() { return paneState.width; },
+          set(value) {
+            paneState.width = Number(value);
+            taskpaneOperations.push(`width:${String(Number(value))}`);
+          },
+        },
+        DockPosition: {
+          get() { return paneState.dockPosition; },
+          set(value) {
+            paneState.dockPosition = Number(value);
+            taskpaneOperations.push(`dock:${String(Number(value))}`);
+          },
+        },
+      });
       panes.push(pane);
       return pane;
     },
@@ -186,6 +221,19 @@ function makeHostHarness({
       return panes.find((item) => item.ID === id) || null;
     },
     Documents: {
+      Add() {
+        const temporaryDocument = {
+          Close(saveChanges) {
+            documentLifecycleCalls.push(`temporary.close:${String(saveChanges)}`);
+            if (application.ActiveDocument === temporaryDocument) {
+              application.ActiveDocument = document;
+            }
+          },
+        };
+        documentLifecycleCalls.push("temporary.add");
+        application.ActiveDocument = temporaryDocument;
+        return temporaryDocument;
+      },
       Open(path) {
         const reopened = {
           FullName: path,
@@ -197,6 +245,12 @@ function makeHostHarness({
           Sections: document.Sections,
           Comments: document.Comments,
           Paragraphs: document.Paragraphs,
+          ActiveWindow: {
+            Activate() { activationCalls.push("window"); },
+          },
+          Activate() {
+            activationCalls.push("document");
+          },
           Save() {
             this.Saved = true;
           },
@@ -223,6 +277,18 @@ function makeHostHarness({
         deletedPaths.push(path);
       },
     },
+    Enum: {
+      msoCTPDockPositionRight: 2,
+      msoCTPDockPositionFloating: 4,
+    },
+  };
+  document.Activate = () => {
+    activationCalls.push("document");
+    documentLifecycleCalls.push("source.activate");
+    application.ActiveDocument = document;
+  };
+  document.ActiveWindow = {
+    Activate() { activationCalls.push("window"); },
   };
   document.SaveAs2 = (path, format) => {
     bridgePaths.push(path);
@@ -265,7 +331,22 @@ function makeHostHarness({
       }
     }
     let data;
-    if (path === "/v1/recognize") {
+    if (path === "/v1/bridge/host/register") {
+      data = {
+        host_generation: bridgeGeneration,
+        state_revision: bridgeStateRevision,
+        replaced: false,
+      };
+    } else if (path === "/v1/bridge/state") {
+      bridgeState = body.state;
+      bridgeStateRevision += 1;
+      data = {
+        host_generation: bridgeGeneration,
+        state_revision: bridgeStateRevision,
+      };
+    } else if (path === "/v1/bridge/host/wait") {
+      return await new Promise((resolve) => bridgeWaiters.push(resolve));
+    } else if (path === "/v1/recognize") {
       data = {
         plan_id: "plan-test",
         document_mode: "NORMAL",
@@ -363,13 +444,47 @@ function makeHostHarness({
 
   return {
     application,
+    activationCalls,
     bridgePaths,
     comments,
     consoleLines,
     context,
     document,
+    documentLifecycleCalls,
     deletedPaths,
     events: () => logs.map((item) => item.event),
+    async flushAsync(turns = 12) {
+      for (let index = 0; index < turns; index += 1) await Promise.resolve();
+    },
+    async waitForBridgeReady() {
+      for (let index = 0; index < 30; index += 1) {
+        if (context.DocxToolHostRuntime.getBridgeReady() && bridgeWaiters.length === 1) return;
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      assert.fail("Host bridge did not become ready");
+    },
+    deliverBridgeCommand(command) {
+      const resolve = bridgeWaiters.shift();
+      assert.ok(resolve, "Host bridge has no pending wait request");
+      resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          ok: true,
+          data: {
+            timed_out: false,
+            command: Object.assign({
+              schema_version: "wps-command-v1",
+              pane_instance_id: "pane-test",
+              command_sequence: 1,
+              host_generation: bridgeGeneration,
+            }, command),
+          },
+        }),
+      });
+    },
+    get bridgeState() { return bridgeState; },
+    get bridgeWaiterCount() { return bridgeWaiters.length; },
     intervals,
     logs,
     apiCalls,
@@ -377,6 +492,7 @@ function makeHostHarness({
     saveAsFormats,
     storage,
     taskpaneCreateCalls,
+    taskpaneOperations,
     values,
   };
 }
@@ -401,11 +517,54 @@ function completeBootstrap(harness, bootstrapId = "bootstrap-test") {
   return earlyLogs;
 }
 
+test("Ribbon callbacks keep ribbonUI outside the WPS Application proxy", () => {
+  const existingRibbonUI = { Invalidate() {} };
+  const application = {};
+  Object.defineProperty(application, "ribbonUI", {
+    configurable: false,
+    value: existingRibbonUI,
+    writable: false,
+  });
+  const receivedRibbonUI = { Invalidate() {} };
+  const calls = [];
+  const context = {
+    Application: application,
+    DocxToolEarlyLog() {},
+    DocxToolHostRuntime: {
+      setRibbonUI(value) { calls.push(["set", value]); },
+      start() { calls.push(["start"]); },
+      handleRibbonAction(id) { calls.push(["action", id]); },
+      getActionEnabled() { return true; },
+    },
+  };
+  context.window = context;
+  vm.runInNewContext(RIBBON_SOURCE, context, { filename: "ribbon.js" });
+
+  assert.equal(context.DocxToolRibbonCallbacks.onAddinLoad(receivedRibbonUI), true);
+  assert.equal(application.ribbonUI, existingRibbonUI);
+  assert.deepEqual(calls.slice(0, 2), [["set", receivedRibbonUI], ["start"]]);
+  assert.equal(context.DocxToolRibbonCallbacks.onAction({ Id: "panel" }), true);
+  assert.deepEqual(calls.at(-1), ["action", "panel"]);
+});
+
+test("Host invalidates the Ribbon UI captured by OnAddinLoad", async () => {
+  const harness = makeHostHarness();
+  let invalidationCount = 0;
+  harness.runtime.setRibbonUI({
+    Invalidate() { invalidationCount += 1; },
+  });
+
+  await harness.runtime.runCommand(
+    "health",
+    requestContext("health", "request-ribbon-invalidate"),
+  );
+
+  assert.equal(invalidationCount, 1);
+});
+
 test("Host preview keeps one request_id through save, binding, Range, and comments", async () => {
   const harness = makeHostHarness();
   assert.equal(harness.runtime.start(), "started");
-  assert.equal(JSON.parse(harness.values.get(STATE_KEY)).host_ready, true);
-  assert.equal(harness.values.get(REQUEST_KEY), "");
 
   await harness.runtime.runCommand(
     "preview",
@@ -430,6 +589,8 @@ test("Host preview keeps one request_id through save, binding, Range, and commen
   }
   assert.equal(harness.comments.created.length, 1);
   assert.equal(harness.comments.created[0].deleted, false);
+  assert.match(harness.comments.created[0].Text, /^识别格式：/);
+  assert.doesNotMatch(harness.comments.created[0].Text, /DocxTool 预览|DocxTool Engine/);
   assert.deepEqual(
     harness.apiCalls
       .filter((item) => item.path.startsWith("/v1/recognize"))
@@ -454,7 +615,7 @@ test("Host writes canonical review bindings as explicit review comments", async 
 
   assert.equal(harness.comments.created.length, 1);
   assert.match(harness.comments.created[0].Text, /建议人工复核/);
-  const state = JSON.parse(harness.values.get(STATE_KEY));
+  const state = harness.runtime.getStateSnapshot();
   assert.equal(state.preview_comment_count, 1);
   assert.equal(state.preview_confirmed_count, 0);
   assert.equal(state.preview_review_count, 1);
@@ -510,7 +671,7 @@ test("Host writes confirmed and review comments but skips unresolved blocks", as
   );
 
   assert.equal(harness.comments.created.length, 2);
-  const state = JSON.parse(harness.values.get(STATE_KEY));
+  const state = harness.runtime.getStateSnapshot();
   assert.equal(state.preview_confirmed_count, 1);
   assert.equal(state.preview_review_count, 1);
   assert.equal(state.recognition.unresolved_count, 1);
@@ -706,6 +867,34 @@ test("Host keeps a bridge document open while replacing and reopening the source
   assert.ok(events.indexOf("format.bridge.save.completed") < events.indexOf("format.commit.start"));
   assert.ok(events.indexOf("format.document.reopen.completed") < events.indexOf("format.bridge.cleanup.completed"));
   assert.ok(events.indexOf("format.bridge.cleanup.completed") < events.indexOf("format.finalize.start"));
+  assert.ok(events.indexOf("format.bridge.save_as.call.start") < events.indexOf("format.bridge.save_as.call.completed"));
+  assert.ok(events.indexOf("format.document.open_call.start") < events.indexOf("format.document.open_call.completed"));
+  const checkpoints = harness.logs
+    .filter((entry) => entry.event === "format.host_context.snapshot")
+    .map((entry) => entry.details.checkpoint);
+  assert.deepEqual(checkpoints, [
+    "format_start",
+    "before_preview_clear",
+    "after_preview_clear",
+    "before_transaction_prepare",
+    "before_bridge_save_as",
+    "after_bridge_save_as",
+    "after_bridge_activated",
+    "after_transaction_prepare",
+    "before_commit",
+    "after_commit",
+    "before_target_open",
+    "after_target_open_call",
+    "after_target_activated",
+    "before_bridge_close",
+    "after_bridge_close",
+    "after_bridge_delete",
+    "after_finalize",
+    "format_completed",
+  ]);
+  for (const entry of harness.logs.filter((item) => item.event === "format.host_context.snapshot")) {
+    assert.equal(entry.details.request_id, "request-format-bridge");
+  }
 });
 
 test("Host operation logs identify the active document by file name", async () => {
@@ -748,7 +937,7 @@ test("Host silently upgrades a legacy DOC before recognition preview", async () 
       "/v1/format/finalize",
     ],
   );
-  const state = JSON.parse(harness.values.get(STATE_KEY));
+  const state = harness.runtime.getStateSnapshot();
   assert.equal(state.status, "PASS");
   assert.equal(state.error_code, "");
   assert.match(state.message, /已升级为 legacy\.docx/);
@@ -776,7 +965,7 @@ test("Host does not upgrade legacy documents for health or clear preview", async
     harness.apiCalls.filter((item) => item.path.startsWith("/v1/format/")).length,
     0,
   );
-  const state = JSON.parse(harness.values.get(STATE_KEY));
+  const state = harness.runtime.getStateSnapshot();
   assert.equal(state.status, "PASS");
   assert.match(state.message, /没有可清除的 DocxTool 预览/);
 });
@@ -840,7 +1029,7 @@ test("Host silently upgrades legacy DOC once and opens the formatted DOCX", asyn
       "/v1/format/finalize",
     ],
   );
-  const state = JSON.parse(harness.values.get(STATE_KEY));
+  const state = harness.runtime.getStateSnapshot();
   assert.match(state.message, /已升级为 legacy\.docx/);
 });
 
@@ -978,44 +1167,234 @@ test("Host rolls back a legacy conversion whose visible content changed", async 
   );
 });
 
-test("Host start logs PluginStorage reset failure and does not publish READY", () => {
+test("Host start registers one long request without storage polling", async () => {
   const harness = makeHostHarness();
-  harness.storage.failSetKey = REQUEST_KEY;
 
-  assert.throws(() => harness.runtime.start(), /WPS_HOST_STORAGE_RESET_FAILED/);
-  const specific = harness.events().indexOf("host.storage.reset.failed");
-  const summary = harness.events().indexOf("host.start.failed");
-  assert.ok(specific >= 0);
-  assert.ok(summary > specific);
-  assert.notEqual(harness.values.get(STATE_KEY), JSON.stringify({ host_ready: true }));
+  assert.equal(harness.runtime.start(), "started");
+  await harness.waitForBridgeReady();
+
+  assert.equal(harness.runtime.getStateSnapshot().host_ready, true);
+  assert.equal(harness.intervals.length, 0);
+  assert.equal(harness.bridgeWaiterCount, 1);
+  assert.deepEqual(
+    harness.apiCalls
+      .filter((item) => item.path.startsWith("/v1/bridge/"))
+      .map((item) => item.path),
+    ["/v1/bridge/host/register", "/v1/bridge/state", "/v1/bridge/host/wait"],
+  );
 });
 
-test("Panel action starts Host when WPS reused the add-in without OnAddinLoad", () => {
+test("Panel action starts one Host bridge when OnAddinLoad was not observed", async () => {
   const harness = makeHostHarness();
 
   harness.runtime.handleRibbonAction("panel");
+  await harness.waitForBridgeReady();
 
-  assert.equal(JSON.parse(harness.values.get(STATE_KEY)).host_ready, true);
-  assert.equal(harness.intervals.length, 1);
+  assert.equal(harness.intervals.length, 0);
+  assert.equal(harness.bridgeWaiterCount, 1);
   assert.equal(harness.taskpaneCreateCalls.length, 1);
   assert.equal(harness.taskpaneCreateCalls[0].length, 1);
+  assert.match(harness.taskpaneCreateCalls[0][0], /taskpane\.html\?v=9$/);
+  assert.equal(harness.values.get(TASKPANE_VERSION_KEY), "9");
   assert.ok(harness.events().includes("host.start.lazy.enter"));
   assert.ok(harness.events().includes("host.start.lazy.completed"));
 
   harness.runtime.handleRibbonAction("panel");
-  assert.equal(harness.intervals.length, 1);
   assert.equal(
-    harness.events().filter((event) => event === "host.start.completed").length,
+    harness.apiCalls.filter((item) => item.path === "/v1/bridge/host/register").length,
     1,
   );
 });
 
-test("Bootstrap completion restores one Host poller and logs its first tick", () => {
+test("Panel records TaskPane creation and reuse host properties", () => {
+  const harness = makeHostHarness();
+  harness.runtime.start();
+
+  harness.runtime.handleRibbonAction("panel");
+
+  const created = harness.logs.find((entry) => entry.event === "taskpane.create.completed");
+  const shown = harness.logs.find((entry) => entry.event === "taskpane.show.completed");
+  const width = harness.logs.find((entry) => entry.event === "taskpane.width.completed");
+  const widthStarted = harness.logs.find((entry) => entry.event === "taskpane.width.write.start");
+  const rebuilt = harness.logs.find((entry) => entry.event === "taskpane.rebuild.completed");
+  assert.equal(created.details.pane_id, "1");
+  assert.equal(created.details.pane_visible, false);
+  assert.equal(created.details.pane_dock_position, 2);
+  assert.equal(shown.details.pane_visible, true);
+  assert.equal(shown.details.pane_visible_before, false);
+  assert.equal(shown.details.pane_visible_after, true);
+  assert.equal(shown.details.pane_visible_effective, true);
+  assert.equal(widthStarted.details.pane_width_before, 640);
+  assert.equal(widthStarted.details.pane_width_requested, 390);
+  assert.equal(width.details.pane_width, 390);
+  assert.equal(width.details.pane_width_after, 390);
+  assert.equal(width.details.pane_width_effective, true);
+  assert.equal(rebuilt.details.pane_branch, "created");
+  assert.equal(rebuilt.details.pane_expected_dock_position, 2);
+  const snapshots = harness.logs.filter((entry) => entry.event === "taskpane.host_state.snapshot");
+  assert.deepEqual(
+    snapshots.slice(0, 4).map((entry) => entry.details.checkpoint),
+    ["after_open_0ms", "after_open_100ms", "after_open_500ms", "after_open_1000ms"],
+  );
+  assert.ok(snapshots.slice(0, 4).every((entry) => entry.details.pane_found === true));
+  assert.ok(snapshots.slice(0, 4).every((entry) => entry.details.active_document_present === true));
+
+  harness.runtime.handleRibbonAction("panel");
+
+  const reused = harness.logs.filter((entry) => entry.event === "taskpane.reuse.completed").at(-1);
+  assert.equal(reused.details.pane_branch, "reused");
+  assert.equal(reused.details.pane_visible, true);
+  assert.equal(reused.details.pane_width, 390);
+  assert.equal(reused.details.pane_dock_position, 2);
+});
+
+test("Panel configures native layout before show and returns focus to the document", () => {
+  const harness = makeHostHarness();
+  harness.runtime.start();
+
+  harness.runtime.handleRibbonAction("panel");
+
+  assert.deepEqual(
+    harness.taskpaneOperations.slice(0, 3),
+    ["dock:2", "width:390", "visible:true"],
+  );
+  assert.deepEqual(harness.activationCalls, ["document", "window"]);
+  const events = harness.events();
+  assert.ok(events.indexOf("taskpane.dock_position.completed") < events.indexOf("taskpane.width.completed"));
+  assert.ok(events.indexOf("taskpane.width.completed") < events.indexOf("taskpane.show.completed"));
+  assert.ok(events.indexOf("taskpane.show.completed") < events.indexOf("taskpane.document_focus.completed"));
+});
+
+test("panel_ready mirrors the successful document lifecycle without window focus", async () => {
+  const harness = makeHostHarness();
+  harness.runtime.start();
+  await harness.waitForBridgeReady();
+  harness.runtime.handleRibbonAction("panel");
+  const operationStart = harness.taskpaneOperations.length;
+  const activationStart = harness.activationCalls.length;
+  const lifecycleStart = harness.documentLifecycleCalls.length;
+  const sourcePath = harness.document.FullName;
+
+  await harness.runtime.runCommand(
+    "panel_ready",
+    requestContext("panel_ready", "request-panel-ready"),
+  );
+
+  assert.deepEqual(harness.taskpaneOperations.slice(operationStart), []);
+  assert.deepEqual(harness.activationCalls.slice(activationStart), ["document"]);
+  assert.deepEqual(
+    harness.documentLifecycleCalls.slice(lifecycleStart),
+    ["temporary.add", "source.activate", "temporary.close:0"],
+  );
+  assert.equal(harness.application.ActiveDocument, harness.document);
+  assert.equal(harness.document.FullName, sourcePath);
+  const events = harness.events();
+  assert.ok(events.indexOf("panel_ready.temporary_document.create.completed") < events.indexOf("panel_ready.source_document.activate.completed"));
+  assert.ok(events.indexOf("panel_ready.source_document.activate.completed") < events.indexOf("panel_ready.temporary_document.close.completed"));
+  assert.ok(events.indexOf("panel_ready.temporary_document.close.completed") < events.indexOf("panel_ready.layout_settle.completed"));
+  assert.equal(events.includes("panel_ready.document_focus.completed"), false);
+  assert.equal(harness.runtime.getStateSnapshot().active_request.request_status, "PASS");
+});
+
+test("panel_ready reports each document lifecycle failure at its source", async () => {
+  const cases = [
+    {
+      code: "WPS_PANEL_READY_DOCUMENT_UNAVAILABLE",
+      event: "panel_ready.source_document.missing",
+      setup(harness) {
+        harness.application.ActiveDocument = null;
+      },
+    },
+    {
+      code: "WPS_PANEL_READY_TEMPORARY_DOCUMENT_CREATE_FAILED",
+      event: "panel_ready.temporary_document.create.failed",
+      setup(harness) {
+        harness.application.Documents.Add = () => { throw new Error("DOCUMENT_ADD_FAILED"); };
+      },
+    },
+    {
+      code: "WPS_PANEL_READY_SOURCE_DOCUMENT_ACTIVATE_FAILED",
+      event: "panel_ready.source_document.activate.failed",
+      setup(harness) {
+        harness.document.Activate = () => { throw new Error("DOCUMENT_ACTIVATE_FAILED"); };
+      },
+    },
+    {
+      code: "WPS_PANEL_READY_TEMPORARY_DOCUMENT_CLOSE_FAILED",
+      event: "panel_ready.temporary_document.close.failed",
+      setup(harness) {
+        const addDocument = harness.application.Documents.Add.bind(harness.application.Documents);
+        harness.application.Documents.Add = () => {
+          const temporaryDocument = addDocument();
+          temporaryDocument.Close = () => { throw new Error("DOCUMENT_CLOSE_FAILED"); };
+          return temporaryDocument;
+        };
+      },
+    },
+  ];
+
+  for (const item of cases) {
+    const harness = makeHostHarness();
+    harness.runtime.start();
+    await harness.waitForBridgeReady();
+    item.setup(harness);
+    await assert.rejects(
+      harness.runtime.runCommand(
+        "panel_ready",
+        requestContext("panel_ready", `request-${item.code}`),
+      ),
+      new RegExp(item.code),
+    );
+    assert.ok(harness.events().includes(item.event), item.event);
+    assert.equal(harness.taskpaneCreateCalls.length, 0);
+    if (item.code === "WPS_PANEL_READY_SOURCE_DOCUMENT_ACTIVATE_FAILED") {
+      assert.deepEqual(harness.documentLifecycleCalls, ["temporary.add", "temporary.close:0"]);
+    }
+  }
+});
+
+test("Panel reuse does not rebuild when returning document focus fails", () => {
+  const harness = makeHostHarness();
+  harness.runtime.start();
+  harness.runtime.handleRibbonAction("panel");
+  harness.document.Activate = () => { throw new Error("DOCUMENT_ACTIVATE_FAILED"); };
+
+  assert.throws(
+    () => harness.runtime.handleRibbonAction("panel"),
+    /WPS_DOCUMENT_ACTIVATE_FAILED/,
+  );
+
+  assert.equal(
+    harness.events().filter((event) => event === "taskpane.rebuild.start").length,
+    1,
+  );
+  assert.ok(harness.events().includes("taskpane.document_activate.failed"));
+});
+
+test("Panel replaces a stale TaskPane page before showing it", () => {
+  const harness = makeHostHarness();
+  harness.runtime.start();
+  const stalePane = harness.application.CreateTaskPane("http://127.0.0.1:3889/taskpane.html");
+  stalePane.Visible = true;
+  harness.values.set(TASKPANE_KEY, String(stalePane.ID));
+
+  harness.runtime.handleRibbonAction("panel");
+
+  assert.equal(stalePane.Visible, false);
+  assert.equal(harness.taskpaneCreateCalls.length, 2);
+  assert.match(harness.taskpaneCreateCalls[1][0], /taskpane\.html\?v=9$/);
+  assert.equal(harness.values.get(TASKPANE_VERSION_KEY), "9");
+  assert.ok(harness.events().includes("taskpane.page_version.mismatch"));
+});
+
+test("Bootstrap completion restores one Host long request", async () => {
   const harness = makeHostHarness();
 
   const firstBootstrapLogs = completeBootstrap(harness, "bootstrap-first");
+  await harness.waitForBridgeReady();
 
-  assert.equal(harness.intervals.length, 1);
+  assert.equal(harness.intervals.length, 0);
+  assert.equal(harness.bridgeWaiterCount, 1);
   assert.deepEqual(
     firstBootstrapLogs.map((entry) => entry.event),
     ["bootstrap.completed", "bootstrap.host_start.enter", "bootstrap.host_start.completed"],
@@ -1025,40 +1404,36 @@ test("Bootstrap completion restores one Host poller and logs its first tick", ()
     "started",
   );
 
-  harness.values.set(REQUEST_KEY, JSON.stringify({
-    schema_version: "wps-request-v2",
+  harness.deliverBridgeCommand({
     request_id: "request-after-bootstrap",
-    command_name: "health",
-    pane_instance_id: "pane-after-bootstrap",
-  }));
-  harness.intervals[0]();
-  harness.intervals[0]();
-  assert.equal(
-    harness.events().filter((event) => event === "host.poll.first_tick").length,
-    1,
-  );
-  assert.ok(harness.events().includes("host.storage.request.observed"));
-  const claimed = harness.logs.find((entry) => entry.event === "host.request.claimed");
+    command: "health",
+  });
+  await harness.waitForBridgeReady();
+  const claimed = harness.logs.find((entry) => entry.event === "host.bridge.command.received");
   assert.equal(claimed.details.request_id, "request-after-bootstrap");
   assert.equal(claimed.details.command, "health");
+  assert.equal(harness.runtime.getStateSnapshot().status, "PASS");
+  assert.equal(harness.bridgeWaiterCount, 1);
 
   const repeatedBootstrapLogs = completeBootstrap(harness, "bootstrap-first");
-  assert.equal(harness.intervals.length, 1);
+  assert.equal(harness.bridgeWaiterCount, 1);
   assert.equal(
     repeatedBootstrapLogs.find((entry) => entry.event === "bootstrap.host_start.completed").details.state,
     "already_started",
   );
 });
 
-test("A fresh Bootstrap context starts a fresh Host instance", () => {
+test("A fresh Bootstrap context starts a fresh Host instance", async () => {
   const first = makeHostHarness({ bootstrapId: "bootstrap-first" });
   const second = makeHostHarness({ bootstrapId: "bootstrap-second" });
 
   completeBootstrap(first, "bootstrap-first");
   completeBootstrap(second, "bootstrap-second");
+  await first.waitForBridgeReady();
+  await second.waitForBridgeReady();
 
-  assert.equal(first.intervals.length, 1);
-  assert.equal(second.intervals.length, 1);
+  assert.equal(first.bridgeWaiterCount, 1);
+  assert.equal(second.bridgeWaiterCount, 1);
   const firstStart = first.logs.find((entry) => entry.event === "host.start.completed");
   const secondStart = second.logs.find((entry) => entry.event === "host.start.completed");
   assert.equal(firstStart.details.bootstrap_id, "bootstrap-first");
@@ -1069,55 +1444,42 @@ test("A fresh Bootstrap context starts a fresh Host instance", () => {
   );
 });
 
-test("Bootstrap completion logs the exact Host startup failure", () => {
-  const harness = makeHostHarness();
-  harness.storage.failSetKey = REQUEST_KEY;
-
-  assert.throws(
-    () => completeBootstrap(harness, "bootstrap-failed"),
-    /WPS_HOST_STORAGE_RESET_FAILED/,
-  );
-
-  const failed = harness.bootstrapLogs.find(
-    (entry) => entry.event === "bootstrap.host_start.failed",
-  );
-  assert.equal(failed.details.bootstrap_id, "bootstrap-failed");
-  assert.equal(failed.details.stage, "host_start");
-  assert.equal(failed.details.error_code, "WPS_HOST_STORAGE_RESET_FAILED");
-});
-
-test("Panel lazy Host start preserves the original startup failure", () => {
-  const harness = makeHostHarness();
-  harness.storage.failSetKey = REQUEST_KEY;
-
-  assert.throws(
-    () => harness.runtime.handleRibbonAction("panel"),
-    /WPS_HOST_STORAGE_RESET_FAILED/,
-  );
-  const specific = harness.logs.find((item) => item.event === "host.start.lazy.failed");
-  assert.equal(specific.details.error_code, "WPS_HOST_STORAGE_RESET_FAILED");
-  assert.ok(!harness.events().includes("taskpane.rebuild.completed"));
-});
-
-test("Host state write failure keeps one stable error code", async () => {
-  const harness = makeHostHarness();
+test("Host bridge registration failure stops the wait chain", async () => {
+  const harness = makeHostHarness({
+    routeOverride: async ({ path }) => path === "/v1/bridge/host/register" ? {
+      ok: false,
+      status: 400,
+      payload: { ok: false, error_code: "WPS_HOST_REGISTRATION_REJECTED" },
+    } : null,
+  });
   harness.runtime.start();
-  harness.storage.failSetKey = STATE_KEY;
+  await harness.flushAsync();
 
-  await assert.rejects(
-    harness.runtime.runCommand(
-      "health",
-      requestContext("health", "request-state-fail"),
-    ),
-    /WPS_STATE_WRITE_FAILED/,
-  );
-  const specific = harness.logs.find((item) => item.event === "host.state.write_failed");
-  const summary = harness.logs.find((item) => item.event === "host.command.failed");
-  assert.equal(specific.details.error_code, "WPS_STATE_WRITE_FAILED");
-  assert.equal(summary.details.error_code, "WPS_STATE_WRITE_FAILED");
+  assert.equal(harness.runtime.getBridgeReady(), false);
+  const failed = harness.logs.find((item) => item.event === "host.start.failed");
+  assert.equal(failed.details.error_code, "WPS_HOST_REGISTRATION_REJECTED");
+  assert.equal(failed.details.stage, "bridge_register");
 });
 
-test("Host distinguishes TaskPane id, create, and id-write failures", async () => {
+test("Host state publish failure stops the wait chain with one stable code", async () => {
+  const harness = makeHostHarness({
+    routeOverride: async ({ path }) => path === "/v1/bridge/state" ? {
+      ok: false,
+      status: 400,
+      payload: { ok: false, error_code: "WPS_BRIDGE_STATE_REJECTED" },
+    } : null,
+  });
+  harness.runtime.start();
+  await harness.flushAsync(20);
+
+  assert.equal(harness.runtime.getBridgeReady(), false);
+  const specific = harness.logs.find((item) => item.event === "host.bridge.state.publish_failed");
+  const summary = harness.logs.find((item) => item.event === "host.start.failed");
+  assert.equal(specific.details.error_code, "WPS_BRIDGE_STATE_REJECTED");
+  assert.equal(summary.details.error_code, "WPS_BRIDGE_STATE_REJECTED");
+});
+
+test("Host distinguishes TaskPane creation, layout, focus, and storage failures", async () => {
   const cases = [
     {
       code: "WPS_TASKPANE_ID_READ_FAILED",
@@ -1129,6 +1491,34 @@ test("Host distinguishes TaskPane id, create, and id-write failures", async () =
       event: "taskpane.create_call.failed",
       setup(harness) {
         harness.application.CreateTaskPane = () => { throw new Error("CREATE_FAILED"); };
+      },
+    },
+    {
+      code: "WPS_TASKPANE_DOCK_POSITION_FAILED",
+      event: "taskpane.dock_position.failed",
+      setup(harness) {
+        harness.application.CreateTaskPane = () => {
+          const pane = { ID: 99, Visible: false, Width: 640 };
+          Object.defineProperty(pane, "DockPosition", {
+            get() { return 2; },
+            set() { throw new Error("DOCK_POSITION_FAILED"); },
+          });
+          return pane;
+        };
+      },
+    },
+    {
+      code: "WPS_DOCUMENT_ACTIVATE_FAILED",
+      event: "taskpane.document_activate.failed",
+      setup(harness) {
+        harness.document.Activate = () => { throw new Error("DOCUMENT_ACTIVATE_FAILED"); };
+      },
+    },
+    {
+      code: "WPS_DOCUMENT_WINDOW_ACTIVATE_FAILED",
+      event: "taskpane.document_window_activate.failed",
+      setup(harness) {
+        harness.document.ActiveWindow.Activate = () => { throw new Error("WINDOW_ACTIVATE_FAILED"); };
       },
     },
     {
@@ -1155,72 +1545,195 @@ test("Host distinguishes TaskPane id, create, and id-write failures", async () =
   }
 });
 
-test("Host request polling distinguishes JSON, schema, id, and command failures", () => {
-  const harness = makeHostHarness();
-  harness.runtime.start();
-  const poll = harness.intervals[0];
+test("Host long request distinguishes schema and field failures", async () => {
   const cases = [
-    ["{", "host.request.parse.failed"],
-    [JSON.stringify({}), "host.request.schema_invalid"],
-    [JSON.stringify({ schema_version: "wps-request-v2", command_name: "health" }), "host.request.id_missing"],
-    [JSON.stringify({ schema_version: "wps-request-v2", request_id: "request-no-command" }), "host.request.command_missing"],
+    [{ schema_version: "invalid", request_id: "request-1", command: "health" }, "host.bridge.command.schema_invalid"],
+    [{ schema_version: "wps-command-v1", command: "health" }, "host.bridge.command.request_id_missing"],
+    [{ schema_version: "wps-command-v1", request_id: "request-no-command" }, "host.bridge.command.command_missing"],
   ];
-  for (const [value, event] of cases) {
-    harness.values.set(REQUEST_KEY, value);
-    poll();
+  for (const [command, event] of cases) {
+    const harness = makeHostHarness();
+    harness.runtime.start();
+    await harness.waitForBridgeReady();
+    harness.deliverBridgeCommand(command);
+    await harness.flushAsync();
     assert.ok(harness.events().includes(event), event);
-    assert.equal(harness.values.get(REQUEST_KEY), "");
+    assert.equal(harness.runtime.getBridgeReady(), false);
   }
 });
 
 function makeElement(id) {
+  const rect = id === "taskpane_header"
+    ? { top: 0, right: 390, bottom: 64, left: 0, width: 390, height: 64 }
+    : id === "content"
+      ? { top: 64, right: 390, bottom: 720, left: 0, width: 390, height: 656 }
+      : { top: 80, right: 200, bottom: 112, left: 0, width: 200, height: 32 };
   return {
     id,
+    tagName: id === "taskpane_header" ? "HEADER" : "DIV",
     disabled: false,
+    scrollTop: 0,
+    clientWidth: rect.width,
+    clientHeight: rect.height,
+    scrollWidth: rect.width,
+    scrollHeight: rect.height,
+    offsetTop: rect.top,
+    offsetHeight: rect.height,
+    rect,
     textContent: "",
     listeners: new Map(),
     addEventListener(name, callback) {
       this.listeners.set(name, callback);
     },
+    getBoundingClientRect() {
+      return { ...this.rect };
+    },
     replaceChildren() {},
   };
 }
 
-function makeTaskpaneHarness(initialState, { transport = true, failGetKey = "" } = {}) {
-  const { storage, values } = makeStorage({
-    [STATE_KEY]: JSON.stringify(initialState),
-  });
-  storage.failGetKey = failGetKey;
+function makeTaskpaneHarness(initialState, {
+  transport = true,
+  commandFailure = "",
+  invalidJsonPath = "",
+  stateWaitFailure = "",
+} = {}) {
+  const { storage, values } = makeStorage();
   const elements = new Map();
   const logs = [];
   const consoleLines = [];
-  const intervals = [];
-  const clearedIntervals = [];
+  const bridgeCalls = [];
+  const commandRequests = [];
+  const stateWaiters = [];
+  const scrollCalls = [];
+  const timeouts = [];
+  const windowListeners = new Map();
+  const documentListeners = new Map();
+  let activeDocumentReads = 0;
+  let initialStatePending = true;
+  let hostGeneration = initialState && initialState.host_ready ? 1 : 0;
+  let stateRevision = 1;
+  let nextStateWaitFailure = stateWaitFailure;
   const ids = [
-    "preview", "apply", "clear_preview", "health", "focus_document",
+    "preview", "apply", "clear_preview", "health",
     "close_panel", "status", "message", "error", "warnings", "summary", "rows",
+    "taskpane_header", "content",
   ];
   for (const id of ids) elements.set(id, makeElement(id));
+  elements.get("content").scrollTop = 80;
+  const body = {
+    scrollTop: 80,
+    clientWidth: 390,
+    clientHeight: 720,
+    scrollWidth: 390,
+    scrollHeight: 720,
+    tagName: "BODY",
+    id: "",
+  };
   const document = {
+    readyState: "loading",
+    visibilityState: "visible",
+    documentElement: {
+      scrollTop: 80,
+      clientWidth: 390,
+      clientHeight: 720,
+      scrollWidth: 390,
+      scrollHeight: 720,
+    },
+    body,
+    activeElement: body,
+    addEventListener(name, callback) {
+      const listeners = documentListeners.get(name) || [];
+      listeners.push(callback);
+      documentListeners.set(name, listeners);
+    },
+    elementFromPoint() {
+      return elements.get("taskpane_header").rect.bottom > 0
+        ? elements.get("taskpane_header")
+        : elements.get("content");
+    },
     getElementById(id) {
       return elements.get(id) || null;
+    },
+    hasFocus() {
+      return true;
     },
     createElement() {
       return { className: "", textContent: "" };
     },
   };
-  async function fetch(_url, options) {
-    logs.push(JSON.parse(options.body));
-    return { ok: true, status: 200 };
+  function response(data, { ok = true, status = 200 } = {}) {
+    return {
+      ok,
+      status,
+      json: async () => data,
+    };
   }
-  const context = {
-    Application: {
-      PluginStorage: storage,
-      ActiveDocument: null,
-      GetTaskPane() {
-        return null;
-      },
+  async function fetch(url, options = {}) {
+    const path = new URL(url).pathname;
+    const body = options.body ? JSON.parse(options.body) : {};
+    if (path === "/v1/log") {
+      logs.push(body);
+      return response({ ok: true });
+    }
+    bridgeCalls.push({ path, body, headers: options.headers || {} });
+    if (path === invalidJsonPath) {
+      return { ok: true, status: 200, json: async () => { throw new Error("INVALID_JSON"); } };
+    }
+    if (path === "/v1/bridge/state/wait") {
+      if (nextStateWaitFailure) {
+        const code = nextStateWaitFailure;
+        nextStateWaitFailure = "";
+        return response({ ok: false, error_code: code }, { ok: false, status: 400 });
+      }
+      if (initialStatePending) {
+        initialStatePending = false;
+        return response({
+          ok: true,
+          data: {
+            timed_out: false,
+            generation_changed: false,
+            host_generation: hostGeneration,
+            state_revision: stateRevision,
+            state: initialState,
+          },
+        });
+      }
+      return await new Promise((resolve, reject) => stateWaiters.push({ resolve, reject }));
+    }
+    if (path === "/v1/bridge/command") {
+      commandRequests.push(body);
+      if (commandFailure) {
+        return response(
+          { ok: false, error_code: commandFailure },
+          { ok: false, status: 400 },
+        );
+      }
+      return response({
+        ok: true,
+        data: {
+          request_id: body.request_id,
+          command_sequence: commandRequests.length,
+          state_revision: stateRevision + 1,
+        },
+      });
+    }
+    throw new Error(`UNEXPECTED_TASKPANE_ROUTE:${path}`);
+  }
+  const application = {
+    PluginStorage: storage,
+    GetTaskPane() {
+      return null;
     },
+  };
+  Object.defineProperty(application, "ActiveDocument", {
+    get() {
+      activeDocumentReads += 1;
+      return null;
+    },
+  });
+  const context = {
+    Application: application,
     Date,
     Error,
     JSON,
@@ -1234,12 +1747,53 @@ function makeTaskpaneHarness(initialState, { transport = true, failGetKey = "" }
     },
     document,
     fetch,
-    setInterval(callback) {
-      intervals.push(callback);
-      return intervals.length;
+    setTimeout(callback, delay = 0) {
+      timeouts.push({ callback, delay });
+      return timeouts.length;
     },
-    clearInterval(id) {
-      clearedIntervals.push(id);
+    addEventListener(name, callback) {
+      const listeners = windowListeners.get(name) || [];
+      listeners.push(callback);
+      windowListeners.set(name, listeners);
+    },
+    devicePixelRatio: 1,
+    innerHeight: 720,
+    innerWidth: 390,
+    outerHeight: 720,
+    outerWidth: 390,
+    screenX: 80,
+    screenY: 120,
+    screenLeft: 80,
+    screenTop: 120,
+    screen: {
+      width: 1920,
+      height: 1080,
+      availWidth: 1920,
+      availHeight: 1040,
+      availLeft: 0,
+      availTop: 0,
+    },
+    pageXOffset: 0,
+    pageYOffset: 0,
+    visualViewport: {
+      height: 720,
+      width: 390,
+      offsetTop: 0,
+      pageTop: 0,
+    },
+    getComputedStyle() {
+      return {
+        display: "block",
+        opacity: "1",
+        overflow: "visible",
+        position: "static",
+        transform: "none",
+        visibility: "visible",
+        zIndex: "auto",
+      };
+    },
+    scrollTo(x, y) {
+      scrollCalls.push([x, y]);
     },
     DocxToolWpsConfig: transport ? {
       controlBaseUrl: "http://127.0.0.1:9527",
@@ -1247,67 +1801,340 @@ function makeTaskpaneHarness(initialState, { transport = true, failGetKey = "" }
     } : {},
   };
   context.window = context;
+  context.self = context;
+  context.top = context;
   vm.runInNewContext(TASKPANE_SOURCE, context, { filename: "taskpane.js" });
   return {
     click(id) {
       elements.get(id).listeners.get("click")();
     },
-    clearedIntervals,
+    get activeDocumentReads() { return activeDocumentReads; },
+    bridgeCalls,
+    commandRequests,
     consoleLines,
     elements,
     events: () => logs.map((item) => item.event),
-    intervals,
     logs,
+    document,
+    dispatchDocumentEvent(name, event = {}) {
+      (documentListeners.get(name) || []).forEach((callback) => callback(event));
+    },
+    dispatchWindowEvent(name, event = {}) {
+      (windowListeners.get(name) || []).forEach((callback) => callback(event));
+    },
+    flushTimeouts() {
+      while (timeouts.length) timeouts.shift().callback();
+    },
+    scrollCalls,
     storage,
+    async flushAsync(turns = 12) {
+      for (let index = 0; index < turns; index += 1) await Promise.resolve();
+    },
+    pushState(state, { generationChanged = false, generation } = {}) {
+      const waiter = stateWaiters.shift();
+      assert.ok(waiter, "TaskPane has no pending state wait request");
+      hostGeneration = generation ?? hostGeneration;
+      stateRevision += 1;
+      waiter.resolve(response({
+        ok: true,
+        data: {
+          timed_out: false,
+          generation_changed: generationChanged,
+          host_generation: hostGeneration,
+          state_revision: stateRevision,
+          state,
+        },
+      }));
+    },
+    timeoutStateWait() {
+      const waiter = stateWaiters.shift();
+      assert.ok(waiter, "TaskPane has no pending state wait request");
+      waiter.resolve(response({
+        ok: true,
+        data: {
+          timed_out: true,
+          generation_changed: false,
+          host_generation: hostGeneration,
+          state_revision: stateRevision,
+          state: initialState,
+        },
+      }));
+    },
+    failNextStateWait(code) {
+      const waiter = stateWaiters.shift();
+      assert.ok(waiter, "TaskPane has no pending state wait request");
+      waiter.resolve(response({ ok: false, error_code: code }, { ok: false, status: 400 }));
+    },
+    get stateWaiterCount() { return stateWaiters.length; },
     values,
   };
 }
 
-test("TaskPane blocks not-ready and busy states with distinct events", () => {
+test("TaskPane resets the WPS viewport again after page load settles", () => {
+  const harness = makeTaskpaneHarness({ host_ready: true, status: "READY", updated_at: "1" });
+
+  assert.deepEqual(harness.scrollCalls, [[0, 0]]);
+  assert.equal(harness.document.documentElement.scrollTop, 0);
+  assert.equal(harness.document.body.scrollTop, 0);
+  assert.equal(harness.elements.get("content").scrollTop, 0);
+
+  harness.document.documentElement.scrollTop = 80;
+  harness.document.body.scrollTop = 80;
+  harness.elements.get("content").scrollTop = 80;
+  harness.dispatchWindowEvent("load");
+  harness.flushTimeouts();
+
+  assert.deepEqual(harness.scrollCalls, [[0, 0], [0, 0]]);
+  assert.equal(harness.document.documentElement.scrollTop, 0);
+  assert.equal(harness.document.body.scrollTop, 0);
+  assert.equal(harness.elements.get("content").scrollTop, 0);
+  const completed = harness.logs.filter(
+    (item) => item.event === "taskpane.viewport.reset.completed",
+  );
+  assert.deepEqual(completed.map((item) => item.details.stage), ["initial", "load_settled"]);
+  assert.equal(completed[1].details.root_scroll_top, 0);
+  assert.equal(completed[1].details.body_scroll_top, 0);
+  assert.equal(completed[1].details.content_scroll_top, 0);
+});
+
+test("TaskPane renders protocol statuses in sentence case", async () => {
+  const cases = [
+    ["READY", "Ready"],
+    ["RUNNING", "Running"],
+    ["PASS", "Pass"],
+    ["FAIL", "Fail"],
+  ];
+  for (const [protocolStatus, displayStatus] of cases) {
+    const harness = makeTaskpaneHarness({
+      host_ready: true,
+      status: protocolStatus,
+      updated_at: "1",
+    });
+    await harness.flushAsync();
+    assert.equal(harness.elements.get("status").textContent, displayStatus);
+  }
+
   const notReady = makeTaskpaneHarness({
     host_ready: false,
     status: "NOT_READY",
     updated_at: "1",
   });
+  await notReady.flushAsync();
+  assert.equal(notReady.elements.get("status").textContent, "Not ready");
+});
+
+test("TaskPane submits panel_ready once after READY and load_settled", async () => {
+  const harness = makeTaskpaneHarness({ host_ready: true, status: "READY", updated_at: "1" });
+  await harness.flushAsync();
+
+  assert.equal(harness.commandRequests.length, 0);
+  assert.equal(harness.elements.get("preview").disabled, true);
+
+  harness.dispatchWindowEvent("load");
+  harness.flushTimeouts();
+  await harness.flushAsync();
+
+  assert.equal(harness.commandRequests.length, 1);
+  const panelRequest = harness.commandRequests[0];
+  assert.equal(panelRequest.command, "panel_ready");
+  assert.equal(panelRequest.host_generation, 1);
+  assert.equal(harness.elements.get("preview").disabled, true);
+
+  harness.dispatchWindowEvent("load");
+  harness.flushTimeouts();
+  await harness.flushAsync();
+  assert.equal(harness.commandRequests.length, 1);
+
+  harness.pushState({
+    host_ready: true,
+    status: "READY",
+    updated_at: "2",
+    active_request: {
+      request_id: panelRequest.request_id,
+      command: "panel_ready",
+      request_status: "CLAIMED",
+    },
+  });
+  await harness.flushAsync();
+  harness.pushState({
+    host_ready: true,
+    status: "READY",
+    updated_at: "3",
+    active_request: {
+      request_id: panelRequest.request_id,
+      command: "panel_ready",
+      request_status: "PASS",
+    },
+  });
+  await harness.flushAsync();
+
+  assert.equal(harness.elements.get("preview").disabled, false);
+  assert.equal(
+    harness.events().filter((event) => event === "taskpane.panel_ready.submit.start").length,
+    1,
+  );
+  assert.equal(
+    harness.events().filter((event) => event === "taskpane.panel_ready.completed").length,
+    1,
+  );
+  const snapshots = harness.logs.filter(
+    (item) => item.event === "taskpane.panel_ready.layout.snapshot",
+  );
+  assert.deepEqual(snapshots.map((item) => item.details.stage), ["panel_ready_before", "panel_ready_after"]);
+  assert.ok(snapshots.every((item) => item.details.window_screen_y === 120));
+});
+
+test("TaskPane records bounded first-load geometry, focus, and event-loop probes", () => {
+  const harness = makeTaskpaneHarness({ host_ready: true, status: "READY", updated_at: "1" });
+
+  const initial = harness.logs.find(
+    (item) => item.event === "taskpane.layout.snapshot" && item.details.stage === "initial",
+  );
+  assert.equal(initial.details.inner_width, 390);
+  assert.equal(initial.details.inner_height, 720);
+  assert.equal(initial.details.header_top, 0);
+  assert.equal(initial.details.header_height, 64);
+  assert.equal(initial.details.header_clipped_top, false);
+  assert.equal(initial.details.document_has_focus, true);
+  assert.equal(initial.details.active_element_tag, "BODY");
+  assert.equal(initial.details.top_element_id, "taskpane_header");
+  assert.equal(initial.details.window_screen_x, 80);
+  assert.equal(initial.details.window_screen_y, 120);
+  assert.equal(initial.details.screen_width, 1920);
+  assert.equal(initial.details.screen_avail_height, 1040);
+  assert.equal(initial.details.physical_inner_width, 390);
+  assert.equal(initial.details.physical_header_height, 64);
+  assert.equal(initial.details.window_top_is_self, true);
+  assert.equal(initial.details.frame_element_present, false);
+  assert.equal(initial.details.header_transform, "none");
+
+  const header = harness.elements.get("taskpane_header");
+  header.rect.top = -64;
+  header.rect.bottom = 0;
+  harness.document.activeElement = harness.elements.get("content");
+  harness.dispatchWindowEvent("resize");
+
+  const clipped = harness.logs.find((item) => item.event === "taskpane.layout.header_clipped");
+  assert.equal(clipped.details.stage, "resize");
+  assert.equal(clipped.details.header_clipped_top, true);
+  assert.equal(clipped.details.top_element_id, "content");
+  assert.equal(clipped.details.error_code, "WPS_TASKPANE_HEADER_CLIPPED");
+
+  harness.flushTimeouts();
+  const probes = harness.logs.filter((item) => item.event === "taskpane.event_loop.probe");
+  assert.deepEqual(probes.map((item) => item.details.scheduled_delay_ms), [100, 500, 1000]);
+  assert.ok(probes.every((item) => item.details.timer_drift_ms >= 0));
+  assert.ok(probes.every((item) => item.details.state_wait_in_flight === true));
+
+  harness.dispatchWindowEvent("pagehide", { persisted: false });
+  harness.dispatchWindowEvent("beforeunload");
+  harness.dispatchWindowEvent("unload");
+  assert.ok(harness.events().includes("taskpane.lifecycle.pagehide"));
+  assert.ok(harness.events().includes("taskpane.lifecycle.beforeunload"));
+  assert.ok(harness.events().includes("taskpane.lifecycle.unload"));
+});
+
+test("TaskPane blocks not-ready and busy states with distinct events", async () => {
+  const notReady = makeTaskpaneHarness({
+    host_ready: false,
+    status: "NOT_READY",
+    updated_at: "1",
+  });
+  await notReady.flushAsync();
   notReady.click("preview");
+  await notReady.flushAsync();
   assert.ok(notReady.events().includes("taskpane.request.blocked.host_not_ready"));
   assert.equal(notReady.elements.get("error").textContent, "WPS_HOST_NOT_READY");
 
   const busy = makeTaskpaneHarness({ host_ready: true, status: "READY", updated_at: "1" });
-  busy.values.set(REQUEST_KEY, "occupied");
+  await busy.flushAsync();
   busy.click("health");
+  await busy.flushAsync();
+  busy.click("preview");
+  await busy.flushAsync();
   assert.ok(busy.events().includes("taskpane.request.blocked.busy"));
   assert.equal(busy.elements.get("error").textContent, "WPS_COMMAND_BUSY");
 });
 
-test("TaskPane writes, verifies, observes claim, and observes completion", () => {
+test("TaskPane submits through the bridge and observes claim and completion", async () => {
   const harness = makeTaskpaneHarness({ host_ready: true, status: "READY", updated_at: "1" });
+  await harness.flushAsync();
+  harness.dispatchWindowEvent("load");
+  harness.flushTimeouts();
+  await harness.flushAsync();
+  const panelRequest = harness.commandRequests.find((item) => item.command === "panel_ready");
+  harness.pushState({
+    host_ready: true,
+    status: "READY",
+    active_request: {
+      request_id: panelRequest.request_id,
+      command: "panel_ready",
+      request_status: "PASS",
+    },
+  });
+  await harness.flushAsync();
   harness.click("preview");
-  const request = JSON.parse(harness.values.get(REQUEST_KEY));
-  assert.equal(request.schema_version, "wps-request-v2");
-  assert.equal(request.command_name, "preview");
-  assert.ok(harness.events().includes("taskpane.storage.write.verified"));
+  await harness.flushAsync();
+  const clicked = harness.logs.find((item) => item.event === "taskpane.action.clicked");
+  assert.equal(clicked.details.command, "preview");
+  assert.equal(clicked.details.window_screen_y, 120);
+  assert.equal(clicked.details.header_top, 0);
+  const request = harness.commandRequests.find((item) => item.command === "preview");
+  assert.equal(request.command, "preview");
+  assert.equal(request.host_generation, 1);
+  assert.ok(harness.events().includes("taskpane.bridge.command.submit.completed"));
 
-  harness.values.set(STATE_KEY, JSON.stringify({
+  harness.pushState({
     host_ready: true,
     status: "RUNNING",
     updated_at: "2",
-    active_request: { request_id: request.request_id, request_status: "CLAIMED" },
-  }));
-  harness.intervals[0]();
-  harness.values.set(STATE_KEY, JSON.stringify({
+    active_request: {
+      request_id: request.request_id,
+      command: "preview",
+      request_status: "CLAIMED",
+    },
+  });
+  await harness.flushAsync();
+  harness.pushState({
     host_ready: true,
     status: "PASS",
     updated_at: "3",
-    active_request: { request_id: request.request_id, request_status: "PASS" },
-  }));
-  harness.intervals[0]();
+    active_request: {
+      request_id: request.request_id,
+      command: "preview",
+      request_status: "PASS",
+    },
+  });
+  await harness.flushAsync();
   assert.ok(harness.events().includes("taskpane.request.claimed"));
   assert.ok(harness.events().includes("taskpane.request.completed"));
+  assert.deepEqual(
+    harness.logs
+      .filter((item) => item.event === "taskpane.command.layout.snapshot")
+      .filter((item) => item.details.command === "preview")
+      .map((item) => item.details.stage),
+    ["request_prepare", "request_claimed", "request_completed"],
+  );
   assert.equal(harness.elements.get("preview").disabled, false);
 });
 
-test("TaskPane summary separates confirmed, review, and unresolved preview items", () => {
+test("TaskPane uses the five-second ACK wait after command enqueue", async () => {
+  const ready = { host_ready: true, status: "READY", updated_at: "1" };
+  const harness = makeTaskpaneHarness(ready);
+  await harness.flushAsync();
+  harness.click("health");
+  await harness.flushAsync();
+
+  harness.pushState(ready);
+  await harness.flushAsync();
+
+  const stateWaits = harness.bridgeCalls.filter(
+    (item) => item.path === "/v1/bridge/state/wait",
+  );
+  assert.equal(stateWaits.at(-1).body.timeout_seconds, 5);
+});
+
+test("TaskPane summary separates confirmed, review, and unresolved preview items", async () => {
   const harness = makeTaskpaneHarness({
     host_ready: true,
     status: "PASS",
@@ -1322,6 +2149,7 @@ test("TaskPane summary separates confirmed, review, and unresolved preview items
     },
     recognition_rows: [],
   });
+  await harness.flushAsync();
 
   assert.match(harness.elements.get("summary").textContent, /识别 3 项/);
   assert.match(harness.elements.get("summary").textContent, /批注 2/);
@@ -1330,63 +2158,101 @@ test("TaskPane summary separates confirmed, review, and unresolved preview items
   assert.match(harness.elements.get("summary").textContent, /未定位 1/);
 });
 
-test("TaskPane logs request-slot write failure before request summary", () => {
-  const harness = makeTaskpaneHarness({ host_ready: true, status: "READY", updated_at: "1" });
-  harness.storage.failSetKey = REQUEST_KEY;
-  harness.click("apply");
-  const specific = harness.events().indexOf("taskpane.storage.write.failed");
-  const summary = harness.events().indexOf("taskpane.request.failed");
-  assert.ok(specific >= 0);
-  assert.ok(summary > specific);
-  assert.equal(harness.elements.get("error").textContent, "WPS_REQUEST_SLOT_WRITE_FAILED");
-});
-
-test("TaskPane distinguishes invalid request readback JSON", () => {
-  const harness = makeTaskpaneHarness({ host_ready: true, status: "READY", updated_at: "1" });
-  const originalSet = harness.storage.setItem.bind(harness.storage);
-  harness.storage.setItem = (key, value) => {
-    originalSet(key, key === REQUEST_KEY ? "{" : value);
-  };
-  harness.click("preview");
-  const specific = harness.events().indexOf("taskpane.storage.readback.parse_failed");
-  const summary = harness.events().indexOf("taskpane.request.failed");
-  assert.ok(specific >= 0);
-  assert.ok(summary > specific);
-  assert.equal(harness.elements.get("error").textContent, "WPS_REQUEST_READBACK_JSON_INVALID");
-});
-
-test("TaskPane does not start polling when initial state storage is unavailable", () => {
+test("TaskPane logs bridge command failure before request summary", async () => {
   const harness = makeTaskpaneHarness(
     { host_ready: true, status: "READY", updated_at: "1" },
-    { failGetKey: STATE_KEY },
+    { commandFailure: "WPS_COMMAND_BUSY" },
   );
-
-  assert.equal(harness.intervals.length, 0);
-  assert.equal(harness.elements.get("preview").disabled, true);
-  assert.equal(
-    harness.events().filter((event) => event === "taskpane.state.read_failed").length,
-    1,
-  );
-  assert.ok(harness.events().includes("taskpane.load.failed"));
+  await harness.flushAsync();
+  harness.click("apply");
+  await harness.flushAsync();
+  const specific = harness.events().indexOf("taskpane.bridge.command.submit.failed");
+  const summary = harness.events().indexOf("taskpane.request.failed");
+  assert.ok(specific >= 0);
+  assert.ok(summary > specific);
+  assert.equal(harness.elements.get("error").textContent, "WPS_COMMAND_BUSY");
 });
 
-test("TaskPane stops polling after the first runtime state storage failure", () => {
-  const harness = makeTaskpaneHarness({ host_ready: true, status: "READY", updated_at: "1" });
-  harness.storage.failGetKey = STATE_KEY;
+test("TaskPane distinguishes an invalid bridge command response", async () => {
+  const harness = makeTaskpaneHarness(
+    { host_ready: true, status: "READY", updated_at: "1" },
+    { invalidJsonPath: "/v1/bridge/command" },
+  );
+  await harness.flushAsync();
+  harness.click("preview");
+  await harness.flushAsync();
+  const specific = harness.events().indexOf("taskpane.bridge.command.submit.failed");
+  const summary = harness.events().indexOf("taskpane.request.failed");
+  assert.ok(specific >= 0);
+  assert.ok(summary > specific);
+  assert.equal(harness.elements.get("error").textContent, "WPS_BRIDGE_RESPONSE_INVALID");
+});
 
-  harness.intervals[0]();
-  harness.intervals[0]();
+test("TaskPane stops when its initial state long request fails", async () => {
+  const harness = makeTaskpaneHarness(
+    { host_ready: true, status: "READY", updated_at: "1" },
+    { stateWaitFailure: "WPS_BRIDGE_STATE_UNAVAILABLE" },
+  );
+  await harness.flushAsync();
 
-  assert.deepEqual(harness.clearedIntervals, [1]);
   assert.equal(harness.elements.get("preview").disabled, true);
   assert.equal(
-    harness.events().filter((event) => event === "taskpane.state.read_failed").length,
+    harness.events().filter((event) => event === "taskpane.bridge.state.wait.failed").length,
     1,
   );
   assert.equal(
-    harness.events().filter((event) => event === "taskpane.poll.stopped.storage_failure").length,
+    harness.events().filter((event) => event === "taskpane.bridge.state.wait.stopped").length,
     1,
   );
+  assert.equal(harness.stateWaiterCount, 0);
+});
+
+test("TaskPane stops after the first runtime state long-request failure", async () => {
+  const harness = makeTaskpaneHarness({ host_ready: true, status: "READY", updated_at: "1" });
+  await harness.flushAsync();
+  harness.failNextStateWait("WPS_BRIDGE_STATE_UNAVAILABLE");
+  await harness.flushAsync();
+
+  assert.equal(harness.elements.get("preview").disabled, true);
+  assert.equal(
+    harness.events().filter((event) => event === "taskpane.bridge.state.wait.failed").length,
+    1,
+  );
+  assert.equal(
+    harness.events().filter((event) => event === "taskpane.bridge.state.wait.stopped").length,
+    1,
+  );
+  assert.equal(harness.stateWaiterCount, 0);
+});
+
+test("Idle TaskPane keeps one long request and does not touch WPS objects", async () => {
+  const harness = makeTaskpaneHarness({ host_ready: true, status: "READY", updated_at: "1" });
+  await harness.flushAsync();
+
+  assert.equal(harness.stateWaiterCount, 1);
+  assert.equal(harness.activeDocumentReads, 0);
+  assert.deepEqual(harness.storage.getCalls, []);
+  assert.equal(TASKPANE_SOURCE.includes("setInterval("), false);
+  assert.equal(HOST_SOURCE.includes("setInterval("), false);
+});
+
+test("TaskPane terminates a pending command when Host generation changes", async () => {
+  const harness = makeTaskpaneHarness({ host_ready: true, status: "READY", updated_at: "1" });
+  await harness.flushAsync();
+  harness.click("preview");
+  await harness.flushAsync();
+  const request = harness.commandRequests[0];
+
+  harness.pushState(
+    { host_ready: false, status: "NOT_READY", error_code: "WPS_HOST_CONTEXT_REPLACED" },
+    { generationChanged: true, generation: 2 },
+  );
+  await harness.flushAsync();
+
+  assert.ok(harness.events().includes("taskpane.bridge.host_generation.changed"));
+  assert.ok(harness.events().includes("taskpane.request.failed.host_replaced"));
+  assert.equal(harness.elements.get("error").textContent, "WPS_HOST_CONTEXT_REPLACED");
+  assert.ok(request.request_id);
 });
 
 test("Host and TaskPane keep local evidence when log transport is unavailable", () => {
