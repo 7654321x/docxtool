@@ -68,7 +68,7 @@ class FrontMatterMetadataCandidateProvider:
 
 
 class SourceListNumberingCandidateProvider:
-    """Preserve short, visually explicit Word list headings."""
+    """Preserve short Word list headings with visual or parent-child support."""
 
     name = "source-list-numbering"
 
@@ -82,18 +82,36 @@ class SourceListNumberingCandidateProvider:
             or ""
         )
         match = re.fullmatch(r"@lvl_(\d+)", marker)
+        if match is None:
+            return []
+        source_level = int(match.group(1))
+        following_evidence = (
+            set(context.document_context.heading_reasons(context.index + 1))
+            if source_level == 0 and context.document_context is not None
+            else set()
+        )
+        parent_of_following_heading2 = {
+            "numbered-heading-level-2",
+            "missing-parent-heading",
+        } <= following_evidence
+        bold_heading = features.is_bold or features.bold_char_ratio >= 0.65
         if (
-            match is None
-            or features.text_length > 40
+            features.text_length > 40
             or features.key_value_label
             or features.date_match
             or features.attachment_note_match
             or is_standalone_addressing_text(features.normalized_text)
-            or not (features.is_bold or features.bold_char_ratio >= 0.65)
+            or not (bold_heading or parent_of_following_heading2)
         ):
             return []
-        level = min(int(match.group(1)) + 2, 4)
+        level = 1 if parent_of_following_heading2 else min(source_level + 2, 4)
+        evidence = [f"source-word-list-level-{source_level}"]
+        if bold_heading:
+            evidence.append("short-bold-list-heading")
+        if parent_of_following_heading2:
+            evidence.append("parent-of-following-heading2")
         paragraph_type = {
+            1: ParagraphType.HEADING_1,
             2: ParagraphType.HEADING_2,
             3: ParagraphType.HEADING_3,
             4: ParagraphType.HEADING_4,
@@ -102,7 +120,7 @@ class SourceListNumberingCandidateProvider:
             paragraph_type,
             1.0,
             self.name,
-            (f"source-word-list-level-{match.group(1)}", "short-bold-list-heading"),
+            tuple(evidence),
             hard=True,
             section_hint=SectionKind.BODY,
             heading_level=level,

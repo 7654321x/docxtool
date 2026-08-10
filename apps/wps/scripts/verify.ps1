@@ -30,6 +30,9 @@ try {
         if ($LASTEXITCODE) { throw "WPS_JAVASCRIPT_CHECK_FAILED: $javaScriptFile" }
     }
 
+    & node --test "apps/wps/tests/wps-runtime.test.mjs"
+    if ($LASTEXITCODE) { throw "WPS_JAVASCRIPT_RUNTIME_TESTS_FAILED" }
+
     if (-not (Test-Path -LiteralPath "apps/wps/index.html" -PathType Leaf)) {
         throw "WPS_ROOT_INDEX_MISSING"
     }
@@ -38,6 +41,7 @@ try {
     [xml](Get-Content -LiteralPath "apps/wps/manifest.xml" -Raw) | Out-Null
     [xml](Get-Content -LiteralPath "apps/wps/ribbon.xml" -Raw) | Out-Null
     Get-Content -LiteralPath "apps/wps/package.json" -Raw | ConvertFrom-Json | Out-Null
+    Get-Content -LiteralPath "apps/wps/package-lock.json" -Raw | ConvertFrom-Json -AsHashtable | Out-Null
 
     Write-Output "WPS_APP_GATE_PASS"
 } finally {

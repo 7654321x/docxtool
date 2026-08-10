@@ -5,6 +5,8 @@ from zipfile import ZipFile
 
 from docx import Document
 from docx.enum.text import WD_BREAK
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 from docx.shared import Pt
 
 from docxtool.document.engine import export_doc
@@ -438,6 +440,60 @@ class ProcessingFlagsTest(unittest.TestCase):
                 }
             ]
             self.assertEqual(headings, ["一、第一部分", "（一）第二层", "1.第三层", "（1）第四层"])
+
+    def test_smart_mode_restores_visible_heading1_from_wps_native_numbering(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "wps-native-numbering.docx"
+            output = Path(tmp) / "wps-native-numbering-output.docx"
+            document = Document()
+            document.add_paragraph("工作总结", style="Title")
+            document.add_paragraph("前段正文已经开始，并完整说明有关工作情况。")
+            parent = document.add_paragraph()
+            parent.add_run("阶段工作安排")
+            num_pr = OxmlElement("w:numPr")
+            ilvl = OxmlElement("w:ilvl")
+            ilvl.set(qn("w:val"), "0")
+            num_id = OxmlElement("w:numId")
+            num_id.set(qn("w:val"), "1")
+            num_pr.extend((ilvl, num_id))
+            parent._p.get_or_add_pPr().append(num_pr)
+            child = document.add_paragraph()
+            child.add_run("（一）第一项工作").bold = True
+            document.add_paragraph("后续正文对该标题展开具体说明。")
+            document.save(source)
+
+            rules, settings, features = load_rules_and_settings(
+                {"mode": "smart", "numbering": {"enabled": True}}
+            )
+            data = DocxImporter().load(str(source), rules, features=features)
+            parent_data = next(item for item in data.paragraphs if item.text == "阶段工作安排")
+            child_data = next(item for item in data.paragraphs if item.text == "（一）第一项工作")
+
+            self.assertEqual(parent_data.type_id, "heading1")
+            self.assertEqual(child_data.type_id, "heading2")
+            export_doc(
+                data,
+                rules,
+                settings,
+                str(output),
+                numbering_options=features["numbering"],
+            )
+
+            exported = Document(output)
+            headings = [
+                (paragraph.style.style_id, paragraph.text)
+                for paragraph in exported.paragraphs
+                if paragraph.style.style_id in {"DCT-Heading1", "DCT-Heading2"}
+            ]
+            self.assertEqual(
+                headings,
+                [
+                    ("DCT-Heading1", "一、阶段工作安排"),
+                    ("DCT-Heading2", "（一）第一项工作"),
+                ],
+            )
+            with ZipFile(output) as package:
+                self.assertIsNone(package.testzip())
 
     def test_smart_mode_rebuilds_malformed_chinese_dot_heading1(self):
         with tempfile.TemporaryDirectory() as tmp:

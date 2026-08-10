@@ -27,10 +27,39 @@ LOGGER = get_logger()
 WPS_LOG_MAX_BYTES = 10 * 1024 * 1024
 WPS_LOG_BACKUP_COUNT = 5
 _WPS_FILE_HANDLER: Optional[RotatingFileHandler] = None
+SAFE_WPS_LOG_FIELDS = frozenset(
+    {
+        "application_available", "applied_count", "applied_total", "backup_state",
+        "batch_index", "binding_status", "block_count", "block_index", "blocks",
+        "body_count", "bootstrap_id", "busy", "callbacks_registered", "cause_event",
+        "cleared_count", "command", "compatibility_warnings", "config_file", "config_present",
+        "confirmed", "confirmed_count", "control_host", "control_port", "control_url_present",
+        "current_status",
+        "deleted_count", "document_id_short", "document_mode", "document_name", "document_ready_state",
+        "docxtool_version", "duration_ms", "end_utf16", "error_code", "error_type",
+        "event_sequence", "executable", "failed_count", "file_id", "flushed_count",
+        "headings", "heading_count", "host", "host_instance_id_short", "host_paragraph_index", "host_ready",
+        "host_runtime_present", "http_status", "interval_ms", "log_file", "method",
+        "locator_status", "locator_verified", "operation_id_short", "pane_instance_id", "pane_instance_id_present", "paragraph_count",
+        "paragraphs", "path", "pending_present", "plan_id_short", "plugin_storage_available", "processing_strategy",
+        "physical_occurrence_index", "physical_paragraph_index", "physical_text_length_utf16",
+        "poll_interval_ms", "port", "previous_state", "previous_status", "primary_error_code", "punctuation_safe_enabled",
+        "process_count", "queued_count", "raw_length", "raw_present", "readback_present",
+        "reason", "recognition_mode", "recommended_action", "request_id", "request_id_match",
+        "request_key", "request_status", "response_ok", "return_code", "review", "review_count",
+        "ribbon_ui_available", "segment_count", "segment_index", "skipped_count", "slot_occupied", "source_state", "stage",
+        "start_utf16", "state", "status", "table_paragraph_count", "temporary_state",
+        "token_present", "total_duration_ms", "type_id", "unresolved", "unresolved_count", "numbering_enabled",
+        "validated_count", "value_present", "wait_attempts", "warning_code", "warning_count",
+        "preview_confirmed_count", "preview_eligible_count", "preview_review_count",
+        "conversion_state", "inline_shape_count", "mismatch_count", "section_count",
+        "shape_count", "source_format", "target_format", "target_state", "wpsjs_version",
+    }
+)
 
 
 def configure_wps_logging(app_root: Path) -> Path:
-    """Enable DocxTool-format file logging under ``apps/wps/logs``."""
+    """Enable DocxTool-format file logging under the local WPS runtime root."""
     global _WPS_FILE_HANDLER
     log_dir = Path(app_root) / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -58,10 +87,34 @@ def _safe_value(value: Any) -> str:
     return text.replace("\r", " ").replace("\n", " ")[:240]
 
 
-def _fields_text(fields: Optional[Dict[str, Any]]) -> str:
+def sanitize_wps_log_fields(fields: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if not fields:
+        return {}
+    result = {}
+    for key, value in fields.items():
+        if (
+            key not in SAFE_WPS_LOG_FIELDS
+            or not (isinstance(value, (str, int, float, bool)) or value is None)
+        ):
+            continue
+        if key == "path" and (
+            not isinstance(value, str)
+            or not value.startswith("/v1/")
+            or "\\" in value
+            or ":" in value
+        ):
+            continue
+        result[str(key)] = value
+    return result
+
+
+def _fields_text(fields: Optional[Dict[str, Any]]) -> str:
+    safe_fields = sanitize_wps_log_fields(fields)
+    if not safe_fields:
         return ""
-    parts = [f"{key}={_safe_value(value)}" for key, value in sorted(fields.items())]
+    parts = [
+        f"{key}={_safe_value(value)}" for key, value in sorted(safe_fields.items())
+    ]
     return " | " + " ".join(parts)
 
 
@@ -101,6 +154,7 @@ def document_log_context(
     source_path: Path,
     log_dir: Path,
     operation_id: str,
+    request_id: str = "",
 ) -> Iterator[str]:
     """Route DocxTool core logs for one WPS operation to a filename-safe log."""
     log_path = make_document_log_path(
@@ -117,7 +171,8 @@ def document_log_context(
             "document.log.start",
             "WPS 文档任务日志已建立",
             {
-                "operation_id": operation_id[:8],
+                "operation_id_short": operation_id[:12],
+                "request_id": request_id,
                 "file_id": file_identity(source_path),
                 "log_file": Path(log_path).name,
             },

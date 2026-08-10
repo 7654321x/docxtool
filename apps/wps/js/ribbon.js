@@ -1,6 +1,7 @@
+(function () {
 "use strict";
 
-function OnAddinLoad(ribbonUI) {
+function onAddinLoad(ribbonUI) {
   var startedAt = Date.now();
   window.DocxToolEarlyLog("INFO", "ribbon", "ribbon.addin.load.enter", "WPS Ribbon 加载回调已进入", {
     ribbon_ui_available: Boolean(ribbonUI),
@@ -31,17 +32,18 @@ function OnAddinLoad(ribbonUI) {
   }
 }
 
-function OnAction(control) {
+function onAction(control) {
   var id = control && (control.Id || control.id) ? String(control.Id || control.id) : "";
-  window.DocxToolHostRuntime.handleRibbonAction(id);
+  return window.DocxToolHostRuntime.handleRibbonAction(id);
 }
 
-function GetActionEnabled(control) {
+function getActionEnabled(control) {
   var id = control && (control.Id || control.id) ? String(control.Id || control.id) : "";
   return window.DocxToolHostRuntime.getActionEnabled(id);
 }
 
-window.OnAddinLoad = OnAddinLoad;
-window.OnAction = OnAction;
-window.GetActionEnabled = GetActionEnabled;
-window.DocxToolEarlyLog("INFO", "ribbon", "ribbon.script.loaded", "Ribbon 回调脚本已加载", {});
+window.DocxToolRibbonCallbacks = Object.freeze({ onAddinLoad, onAction, getActionEnabled });
+window.DocxToolEarlyLog("INFO", "ribbon", "ribbon.script.loaded", "Ribbon 回调实现已加载", {
+  callbacks_registered: true
+});
+})();

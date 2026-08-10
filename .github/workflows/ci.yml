@@ -34,7 +34,14 @@ jobs:
       - name: Check WPS JavaScript syntax
         run: |
           node --check apps/wps/main.js
+          node --check apps/wps/js/bootstrap-log.js
+          node --check apps/wps/js/bootstrap-complete.js
+          node --check apps/wps/js/ribbon.js
+          node --check apps/wps/host-runtime.js
           node --check apps/wps/taskpane.js
+
+      - name: Run WPS JavaScript runtime tests
+        run: node --test apps/wps/tests/wps-runtime.test.mjs
 
       - name: Validate WPS static configuration
         run: |
@@ -47,6 +54,7 @@ jobs:
           ET.parse(root / "manifest.xml")
           ET.parse(root / "ribbon.xml")
           json.loads((root / "package.json").read_text(encoding="utf-8"))
+          json.loads((root / "package-lock.json").read_text(encoding="utf-8"))
           PY
 
       - name: Run worker routing tests

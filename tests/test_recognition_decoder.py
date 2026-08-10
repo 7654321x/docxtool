@@ -648,6 +648,56 @@ def test_short_bold_source_list_heading_survives_core_body_candidate() -> None:
     assert paragraph.meta["recognition_provider"].startswith("source-list-numbering:")
 
 
+def test_source_list_level_zero_is_parent_of_following_literal_heading2() -> None:
+    paragraph = _paragraph(
+        "阶段工作安排",
+        "heading2",
+        2,
+        numbering_prefix="@lvl_0",
+        classification_kind="body",
+        classification_confidence=0.78,
+    )
+    data = _document(
+        _paragraph("工作总结", "title", 0),
+        _paragraph("前段正文已经开始，并完整说明有关工作情况。", "body", 1),
+        paragraph,
+        _paragraph("（一）第一项工作", "body", 3),
+        _paragraph("后续正文对该标题展开具体说明。", "body", 4),
+    )
+
+    apply_recognition(data)
+
+    assert paragraph.type_id == "heading1"
+    assert paragraph.meta["recognition_provider"].startswith("source-list-numbering:")
+    trace = data.recognition_diagnostics["candidate_trace"][2]
+    candidate = next(item for item in trace["candidates"] if item["source"] == "source-list-numbering")
+    assert candidate["type"] == "heading1"
+    assert "parent-of-following-heading2" in candidate["evidence"]
+
+
+def test_unbold_source_list_level_zero_without_child_support_stays_body() -> None:
+    paragraph = _paragraph(
+        "阶段工作安排",
+        "heading2",
+        2,
+        numbering_prefix="@lvl_0",
+        classification_kind="body",
+        classification_confidence=0.78,
+    )
+    data = _document(
+        _paragraph("工作总结", "title", 0),
+        _paragraph("前段正文已经开始，并完整说明有关工作情况。", "body", 1),
+        paragraph,
+        _paragraph("后续正文继续展开具体说明。", "body", 3),
+    )
+
+    apply_recognition(data)
+
+    assert paragraph.type_id == "body"
+    trace = data.recognition_diagnostics["candidate_trace"][2]
+    assert "source-list-numbering" not in {item["source"] for item in trace["candidates"]}
+
+
 def test_long_source_list_prose_is_not_promoted_to_heading() -> None:
     paragraph = _paragraph(
         "这是继承了Word列表属性的较长正文段落，其中包含完整叙述和多项具体情况，不应因为隐藏列表属性被识别成标题。",

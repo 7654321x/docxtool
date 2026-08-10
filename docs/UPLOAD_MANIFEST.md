@@ -73,7 +73,7 @@ apps/wps/js/bootstrap-complete.js
 apps/wps/js/ribbon.js
 ```
 
-同时保留 `apps/wps/main.js`、`index.html`、`main.py`、`manifest.xml`、`ribbon.xml`、`taskpane.*`、`control/*.py`、`tests/test_wps_app.py`、`scripts/verify.ps1`、`package.json`、`package-lock.json`、`README.md` 和 `AGENTS.md`。不得上传 `apps/wps/node_modules/`、`logs/`、运行时生成的 `runtime/runtime-config.js` 或本机 WPS 注册文件。
+同时保留 `apps/wps/main.js`、`index.html`、`main.py`、`manifest.xml`、`ribbon.xml`、`taskpane.*`、`control/*.py`（包含单线程 `control/monitor.py`）、`tests/test_wps_app.py`、`tests/test_command_monitor.py`、`tests/wps-runtime.test.mjs`、`scripts/verify.ps1`、`package.json`、`package-lock.json`、`README.md` 和 `AGENTS.md`。不得上传 `apps/wps/node_modules/`、`logs/`、运行时生成的 `runtime/runtime-config.js` 或本机 WPS 注册文件。
 
 ## 2. 后端和排版核心
 

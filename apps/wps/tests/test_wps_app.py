@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import threading
 from types import SimpleNamespace
+from xml.etree import ElementTree
 
 import pytest
 from docx import Document
@@ -15,8 +16,14 @@ import apps.wps.main as wps_main
 from apps.wps.control import logging_adapter
 from apps.wps.control import server as server_module
 from apps.wps.control import document_transaction as transaction_module
+from apps.wps.control import format_current_document as format_module
+from apps.wps.control import recognize_document as recognition_module
 from apps.wps.control.format_current_document import FormatResult
-from apps.wps.control.logging_adapter import document_log_context, file_identity
+from apps.wps.control.logging_adapter import (
+    document_log_context,
+    file_identity,
+    sanitize_wps_log_fields,
+)
 from apps.wps.control.recognize_document import bind_preview
 from apps.wps.control.server import _safe_warnings
 from docxtool.sdk import recognize_docx
@@ -38,12 +45,40 @@ def _fake_result(output_path: Path, log_dir: Path) -> FormatResult:
 
 
 def _install_fake_formatter(monkeypatch):
-    def fake_format(source_path, output_path, *, operation_id, log_dir, format_config=None):
+    def fake_format(
+        source_path,
+        output_path,
+        *,
+        operation_id,
+        log_dir,
+        format_config=None,
+        request_id="",
+    ):
         target = Path(output_path)
         target.write_bytes(b"formatted")
         return _fake_result(target, Path(log_dir))
 
     monkeypatch.setattr(transaction_module, "format_current_document", fake_format)
+
+
+def _transaction_journal_payload(source: Path) -> dict:
+    operation_id = "a" * 32
+    return {
+        "version": 2,
+        "operation_id": operation_id,
+        "state": "prepared",
+        "source_path": str(source),
+        "temporary_path": str(
+            source.with_name(f".{source.stem}.docxtool-{operation_id[:12]}.docx")
+        ),
+        "backup_path": str(
+            source.with_name(f".{source.stem}.docxtool-backup-{operation_id[:12]}.docx")
+        ),
+        "original_source_sha256": "0" * 64,
+        "temporary_sha256": "1" * 64,
+        "backup_sha256": None,
+        "formatted_source_sha256": None,
+    }
 
 
 def _snapshot(raw_text: str, *, snapshot_id: str = "snap-wps") -> dict:
@@ -107,6 +142,369 @@ def test_transaction_finalize_keeps_formatted_document(tmp_path, monkeypatch):
     assert source.read_bytes() == b"formatted"
     assert not operation.backup_path.exists()
     assert not manager.journal_path.exists()
+
+
+def test_legacy_upgrade_commit_then_rollback_restores_original(tmp_path, monkeypatch):
+    source = tmp_path / "sample.doc"
+    source.write_bytes(b"legacy-original")
+    _install_fake_formatter(monkeypatch)
+
+    manager = transaction_module.DocumentTransactionManager(tmp_path / "logs")
+    operation = manager.reserve_upgrade(str(source))
+    assert operation.state == "conversion_pending"
+    assert operation.target_path == tmp_path / "sample.docx"
+    operation.conversion_path.write_bytes(b"converted-docx")
+
+    operation = manager.prepare_upgrade(operation.operation_id)
+    assert operation.state == "prepared"
+    assert operation.temporary_path.read_bytes() == b"formatted"
+
+    manager.commit(operation.operation_id)
+    assert not source.exists()
+    assert operation.target_path.read_bytes() == b"formatted"
+    assert operation.backup_path.read_bytes() == b"legacy-original"
+
+    manager.rollback(operation.operation_id)
+    assert source.read_bytes() == b"legacy-original"
+    assert not operation.target_path.exists()
+    assert not operation.conversion_path.exists()
+
+
+def test_legacy_upgrade_finalize_keeps_only_docx(tmp_path, monkeypatch):
+    source = tmp_path / "sample.wps"
+    source.write_bytes(b"legacy-original")
+    _install_fake_formatter(monkeypatch)
+
+    manager = transaction_module.DocumentTransactionManager(tmp_path / "logs")
+    operation = manager.reserve_upgrade(str(source))
+    operation.conversion_path.write_bytes(b"converted-docx")
+    manager.prepare_upgrade(operation.operation_id)
+    manager.commit(operation.operation_id)
+    manager.finalize(operation.operation_id)
+
+    assert not source.exists()
+    assert operation.target_path.read_bytes() == b"formatted"
+    assert not operation.backup_path.exists()
+    assert not operation.conversion_path.exists()
+    assert not manager.journal_path.exists()
+
+
+def test_legacy_upgrade_rejects_existing_docx_before_reservation(tmp_path):
+    source = tmp_path / "sample.doc"
+    target = tmp_path / "sample.docx"
+    source.write_bytes(b"legacy-original")
+    target.write_bytes(b"existing-docx")
+
+    manager = transaction_module.DocumentTransactionManager(tmp_path / "logs")
+    with pytest.raises(transaction_module.DocumentTransactionError) as exc_info:
+        manager.reserve_upgrade(str(source))
+
+    assert exc_info.value.code == "WPS_LEGACY_UPGRADE_TARGET_EXISTS"
+    assert source.read_bytes() == b"legacy-original"
+    assert target.read_bytes() == b"existing-docx"
+    assert not manager.journal_path.exists()
+
+
+def test_legacy_upgrade_prepare_converted_preserves_docx_bytes(tmp_path):
+    source = tmp_path / "sample.doc"
+    source.write_bytes(b"legacy-original")
+    manager = transaction_module.DocumentTransactionManager(tmp_path / "logs")
+    operation = manager.reserve_upgrade(str(source))
+    operation.conversion_path.write_bytes(b"converted-docx")
+
+    prepared = manager.prepare_converted_upgrade(operation.operation_id)
+
+    assert prepared.state == "prepared"
+    assert prepared.format_result is None
+    assert prepared.temporary_path.read_bytes() == b"converted-docx"
+    assert prepared.conversion_path.read_bytes() == b"converted-docx"
+    manager.rollback(operation.operation_id)
+
+
+def test_legacy_upgrade_recovery_cleans_uncommitted_conversion(tmp_path):
+    source = tmp_path / "sample.doc"
+    source.write_bytes(b"legacy-original")
+    log_dir = tmp_path / "logs"
+
+    manager = transaction_module.DocumentTransactionManager(log_dir)
+    operation = manager.reserve_upgrade(str(source))
+    operation.conversion_path.write_bytes(b"converted-docx")
+
+    recovered = transaction_module.DocumentTransactionManager(log_dir)
+
+    assert source.read_bytes() == b"legacy-original"
+    assert not operation.target_path.exists()
+    assert not operation.conversion_path.exists()
+    assert not recovered.journal_path.exists()
+
+
+def test_legacy_upgrade_recovery_cleans_unjournaled_publish_copy(tmp_path):
+    source = tmp_path / "sample.doc"
+    source.write_bytes(b"legacy-original")
+    log_dir = tmp_path / "logs"
+    manager = transaction_module.DocumentTransactionManager(log_dir)
+    operation = manager.reserve_upgrade(str(source))
+    operation.conversion_path.write_bytes(b"converted-docx")
+    operation.temporary_path.write_bytes(b"converted-docx")
+
+    recovered = transaction_module.DocumentTransactionManager(log_dir)
+
+    assert source.read_bytes() == b"legacy-original"
+    assert not operation.target_path.exists()
+    assert not operation.conversion_path.exists()
+    assert not operation.temporary_path.exists()
+    assert not recovered.journal_path.exists()
+
+
+def test_legacy_upgrade_recovery_restores_committed_source(tmp_path, monkeypatch):
+    source = tmp_path / "sample.wps"
+    source.write_bytes(b"legacy-original")
+    log_dir = tmp_path / "logs"
+    _install_fake_formatter(monkeypatch)
+
+    manager = transaction_module.DocumentTransactionManager(log_dir)
+    operation = manager.reserve_upgrade(str(source))
+    operation.conversion_path.write_bytes(b"converted-docx")
+    manager.prepare_upgrade(operation.operation_id)
+    manager.commit(operation.operation_id)
+
+    recovered = transaction_module.DocumentTransactionManager(log_dir)
+
+    assert source.read_bytes() == b"legacy-original"
+    assert not operation.target_path.exists()
+    assert not operation.backup_path.exists()
+    assert not operation.conversion_path.exists()
+    assert not recovered.journal_path.exists()
+
+
+def test_control_legacy_upgrade_routes_share_one_transaction(tmp_path, monkeypatch):
+    source = tmp_path / "sample.doc"
+    source.write_bytes(b"legacy-original")
+    log_dir = tmp_path / "logs"
+    _install_fake_formatter(monkeypatch)
+    application = object.__new__(server_module.WpsControlApplication)
+    application.log_dir = log_dir
+    application.transactions = transaction_module.DocumentTransactionManager(log_dir)
+
+    reserved = application.dispatch(
+        "/v1/format/upgrade/reserve",
+        {"source_path": str(source)},
+        request_id="request-upgrade",
+    )
+    conversion_path = Path(reserved["conversion_path"])
+    conversion_path.write_bytes(b"converted-docx")
+
+    prepared = application.dispatch(
+        "/v1/format/upgrade/prepare",
+        {"operation_id": reserved["operation_id"]},
+        request_id="request-upgrade",
+    )
+    rolled_back = application.dispatch(
+        "/v1/format/rollback",
+        {"operation_id": reserved["operation_id"]},
+        request_id="request-upgrade",
+    )
+
+    assert reserved["state"] == "conversion_pending"
+    assert reserved["source_format"] == "doc"
+    assert Path(reserved["target_path"]) == source.with_suffix(".docx")
+    assert prepared["state"] == "prepared"
+    assert rolled_back["state"] == "rolled_back"
+    assert source.read_bytes() == b"legacy-original"
+    assert not conversion_path.exists()
+
+
+def test_control_prepare_converted_upgrade_route(tmp_path):
+    source = tmp_path / "sample.wps"
+    source.write_bytes(b"legacy-original")
+    log_dir = tmp_path / "logs"
+    application = object.__new__(server_module.WpsControlApplication)
+    application.log_dir = log_dir
+    application.transactions = transaction_module.DocumentTransactionManager(log_dir)
+    reserved = application.dispatch(
+        "/v1/format/upgrade/reserve",
+        {"source_path": str(source)},
+        request_id="request-preview-upgrade",
+    )
+    Path(reserved["conversion_path"]).write_bytes(b"converted-docx")
+
+    prepared = application.dispatch(
+        "/v1/format/upgrade/prepare-converted",
+        {"operation_id": reserved["operation_id"]},
+        request_id="request-preview-upgrade",
+    )
+
+    assert prepared == {
+        "operation_id": reserved["operation_id"],
+        "state": "prepared",
+    }
+    application.dispatch(
+        "/v1/format/rollback",
+        {"operation_id": reserved["operation_id"]},
+        request_id="request-preview-upgrade",
+    )
+
+
+def test_prepare_journal_failure_does_not_publish_operation(tmp_path, monkeypatch):
+    source = tmp_path / "sample.docx"
+    source.write_bytes(b"original")
+    _install_fake_formatter(monkeypatch)
+    manager = transaction_module.DocumentTransactionManager(tmp_path / "logs")
+    original_write = Path.write_text
+
+    def fail_journal_write(path, *args, **kwargs):
+        if path == manager.journal_path.with_suffix(".tmp"):
+            raise OSError("journal unavailable")
+        return original_write(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", fail_journal_write)
+    with pytest.raises(transaction_module.DocumentTransactionError) as exc_info:
+        manager.prepare(str(source))
+    assert exc_info.value.code == "WPS_TRANSACTION_JOURNAL_WRITE_FAILED"
+    assert not manager._operations
+    assert not list(tmp_path.glob(".sample.docxtool-*.docx"))
+
+
+def test_commit_started_journal_failure_keeps_consistent_state(tmp_path, monkeypatch):
+    source = tmp_path / "sample.docx"
+    source.write_bytes(b"original")
+    _install_fake_formatter(monkeypatch)
+    manager = transaction_module.DocumentTransactionManager(tmp_path / "logs")
+    operation = manager.prepare(str(source))
+    original_write = Path.write_text
+
+    def fail_journal_write(path, *args, **kwargs):
+        if path == manager.journal_path.with_suffix(".tmp"):
+            raise OSError("journal unavailable")
+        return original_write(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", fail_journal_write)
+    with pytest.raises(transaction_module.DocumentTransactionError) as exc_info:
+        manager.commit(operation.operation_id)
+    assert exc_info.value.code == "WPS_TRANSACTION_JOURNAL_WRITE_FAILED"
+    assert operation.state == "prepared"
+    assert source.read_bytes() == b"original"
+    assert operation.temporary_path.read_bytes() == b"formatted"
+    assert not operation.backup_path.exists()
+
+
+def test_commit_replace_failure_keeps_recoverable_state(tmp_path, monkeypatch):
+    source = tmp_path / "sample.docx"
+    source.write_bytes(b"original")
+    _install_fake_formatter(monkeypatch)
+    manager = transaction_module.DocumentTransactionManager(tmp_path / "logs")
+    operation = manager.prepare(str(source))
+    original_replace = transaction_module.os.replace
+
+    def fail_document_replace(source_path, destination_path):
+        if Path(source_path) == operation.temporary_path and Path(destination_path) == operation.source_path:
+            raise OSError("document locked")
+        return original_replace(source_path, destination_path)
+
+    monkeypatch.setattr(transaction_module.os, "replace", fail_document_replace)
+    with pytest.raises(transaction_module.DocumentTransactionError) as exc_info:
+        manager.commit(operation.operation_id)
+    assert exc_info.value.code == "WPS_TRANSACTION_REPLACE_FAILED"
+    assert operation.state == "commit_started"
+    assert source.read_bytes() == b"original"
+    assert operation.temporary_path.read_bytes() == b"formatted"
+    assert operation.backup_path.read_bytes() == b"original"
+
+
+def test_commit_backup_copy_failure_keeps_recoverable_state(tmp_path, monkeypatch):
+    source = tmp_path / "sample.docx"
+    source.write_bytes(b"original")
+    _install_fake_formatter(monkeypatch)
+    manager = transaction_module.DocumentTransactionManager(tmp_path / "logs")
+    operation = manager.prepare(str(source))
+
+    def fail_backup_copy(*_args, **_kwargs):
+        raise OSError("backup unavailable")
+
+    monkeypatch.setattr(transaction_module.shutil, "copy2", fail_backup_copy)
+    with pytest.raises(transaction_module.DocumentTransactionError) as exc_info:
+        manager.commit(operation.operation_id)
+    assert exc_info.value.code == "WPS_TRANSACTION_BACKUP_FAILED"
+    assert operation.state == "commit_started"
+    assert source.read_bytes() == b"original"
+    assert operation.temporary_path.read_bytes() == b"formatted"
+    assert not operation.backup_path.exists()
+
+
+def test_committed_journal_failure_is_recoverable(tmp_path, monkeypatch):
+    source = tmp_path / "sample.docx"
+    source.write_bytes(b"original")
+    _install_fake_formatter(monkeypatch)
+    manager = transaction_module.DocumentTransactionManager(tmp_path / "logs")
+    operation = manager.prepare(str(source))
+    original_write = Path.write_text
+    write_count = 0
+
+    def fail_committed_write(path, *args, **kwargs):
+        nonlocal write_count
+        if path == manager.journal_path.with_suffix(".tmp"):
+            write_count += 1
+            if write_count == 3:
+                raise OSError("journal unavailable")
+        return original_write(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", fail_committed_write)
+    with pytest.raises(transaction_module.DocumentTransactionError) as exc_info:
+        manager.commit(operation.operation_id)
+    assert exc_info.value.code == "WPS_TRANSACTION_JOURNAL_WRITE_FAILED"
+    assert operation.state == "commit_started"
+    assert source.read_bytes() == b"formatted"
+    monkeypatch.undo()
+    transaction_module.DocumentTransactionManager(tmp_path / "logs")
+    assert source.read_bytes() == b"original"
+    assert not manager.journal_path.exists()
+
+
+def test_recovery_refuses_changed_source_and_preserves_artifacts(tmp_path, monkeypatch):
+    source = tmp_path / "sample.docx"
+    source.write_bytes(b"original")
+    _install_fake_formatter(monkeypatch)
+    manager = transaction_module.DocumentTransactionManager(tmp_path / "logs")
+    operation = manager.prepare(str(source))
+    manager.commit(operation.operation_id)
+    source.write_bytes(b"changed outside transaction")
+
+    with pytest.raises(transaction_module.DocumentTransactionError) as exc_info:
+        transaction_module.DocumentTransactionManager(tmp_path / "logs")
+    assert exc_info.value.code == "WPS_TRANSACTION_RECOVERY_REQUIRED"
+    assert source.read_bytes() == b"changed outside transaction"
+    assert operation.backup_path.exists()
+    assert manager.journal_path.exists()
+
+
+def test_recovery_restores_only_verified_formatted_source(tmp_path, monkeypatch):
+    source = tmp_path / "sample.docx"
+    source.write_bytes(b"original")
+    _install_fake_formatter(monkeypatch)
+    manager = transaction_module.DocumentTransactionManager(tmp_path / "logs")
+    operation = manager.prepare(str(source))
+    manager.commit(operation.operation_id)
+
+    transaction_module.DocumentTransactionManager(tmp_path / "logs")
+    assert source.read_bytes() == b"original"
+    assert not operation.backup_path.exists()
+    assert not manager.journal_path.exists()
+
+
+def test_recovery_refuses_wrong_backup(tmp_path, monkeypatch):
+    source = tmp_path / "sample.docx"
+    source.write_bytes(b"original")
+    _install_fake_formatter(monkeypatch)
+    manager = transaction_module.DocumentTransactionManager(tmp_path / "logs")
+    operation = manager.prepare(str(source))
+    manager.commit(operation.operation_id)
+    operation.backup_path.write_bytes(b"wrong backup")
+
+    with pytest.raises(transaction_module.DocumentTransactionError) as exc_info:
+        transaction_module.DocumentTransactionManager(tmp_path / "logs")
+    assert exc_info.value.code == "WPS_TRANSACTION_RECOVERY_REQUIRED"
+    assert source.read_bytes() == b"formatted"
+    assert operation.backup_path.read_bytes() == b"wrong backup"
 
 
 def test_second_format_transaction_is_rejected_until_first_finishes(tmp_path, monkeypatch):
@@ -179,15 +577,133 @@ def test_stale_transaction_recovery_logs_lifecycle(tmp_path, monkeypatch):
 
     assert events == [
         "transaction.recovery.start",
+        "transaction.recovery.temporary_cleanup.start",
+        "transaction.recovery.temporary_cleanup.completed",
+        "transaction.recovery.journal_clear.start",
+        "transaction.recovery.journal_clear.completed",
         "transaction.recovery.completed",
     ]
     assert not operation.temporary_path.exists()
 
 
-def test_invalid_stale_transaction_logs_recovery_failure(tmp_path, monkeypatch):
+def test_stale_transaction_source_restore_failure_has_own_event(tmp_path, monkeypatch):
+    source = tmp_path / "sample.docx"
+    source.write_bytes(b"original")
+    log_dir = tmp_path / "logs"
+    _install_fake_formatter(monkeypatch)
+    manager = transaction_module.DocumentTransactionManager(log_dir)
+    operation = manager.prepare(str(source))
+    manager.commit(operation.operation_id)
+    original_replace = transaction_module.os.replace
+
+    def fail_backup_restore(source_path, destination_path):
+        if (
+            Path(source_path) == operation.backup_path
+            and Path(destination_path) == operation.source_path
+        ):
+            raise OSError("restore failed")
+        return original_replace(source_path, destination_path)
+
+    events = []
+    monkeypatch.setattr(transaction_module.os, "replace", fail_backup_restore)
+    monkeypatch.setattr(
+        transaction_module,
+        "log_event",
+        lambda _level, _component, event, _message, fields=None: events.append(
+            (event, fields)
+        ),
+    )
+
+    with pytest.raises(transaction_module.DocumentTransactionError) as exc_info:
+        transaction_module.DocumentTransactionManager(log_dir)
+
+    assert exc_info.value.code == "WPS_TRANSACTION_RECOVERY_SOURCE_RESTORE_FAILED"
+    assert [event for event, _fields in events][-3:] == [
+        "transaction.recovery.source_restore.start",
+        "transaction.recovery.source_restore.failed",
+        "transaction.recovery.failed",
+    ]
+
+
+def test_stale_transaction_journal_clear_failure_has_own_event(tmp_path, monkeypatch):
+    source = tmp_path / "sample.docx"
+    source.write_bytes(b"original")
+    log_dir = tmp_path / "logs"
+    _install_fake_formatter(monkeypatch)
+    manager = transaction_module.DocumentTransactionManager(log_dir)
+    manager.prepare(str(source))
+    events = []
+
+    def fail_journal_clear(_manager):
+        raise OSError("journal clear failed")
+
+    monkeypatch.setattr(
+        transaction_module.DocumentTransactionManager,
+        "_clear_journal",
+        fail_journal_clear,
+    )
+    monkeypatch.setattr(
+        transaction_module,
+        "log_event",
+        lambda _level, _component, event, _message, fields=None: events.append(
+            (event, fields)
+        ),
+    )
+
+    with pytest.raises(transaction_module.DocumentTransactionError) as exc_info:
+        transaction_module.DocumentTransactionManager(log_dir)
+
+    assert exc_info.value.code == "WPS_TRANSACTION_RECOVERY_JOURNAL_CLEAR_FAILED"
+    assert [event for event, _fields in events][-3:] == [
+        "transaction.recovery.journal_clear.start",
+        "transaction.recovery.journal_clear.failed",
+        "transaction.recovery.failed",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("case", "expected_event", "expected_code"),
+    [
+        (
+            "json",
+            "transaction.journal.parse.failed",
+            "WPS_TRANSACTION_JOURNAL_JSON_INVALID",
+        ),
+        (
+            "schema",
+            "transaction.journal.schema.invalid",
+            "WPS_TRANSACTION_JOURNAL_SCHEMA_INVALID",
+        ),
+        (
+            "path",
+            "transaction.journal.paths.invalid",
+            "WPS_TRANSACTION_JOURNAL_PATH_INVALID",
+        ),
+        (
+            "hash",
+            "transaction.journal.hashes.invalid",
+            "WPS_TRANSACTION_JOURNAL_HASH_INVALID",
+        ),
+    ],
+)
+def test_invalid_stale_transaction_logs_exact_validation_failure(
+    tmp_path, monkeypatch, case, expected_event, expected_code
+):
     runtime_dir = tmp_path / "runtime"
     runtime_dir.mkdir()
-    (runtime_dir / "transaction-state.json").write_text("{}", encoding="utf-8")
+    journal_path = runtime_dir / "transaction-state.json"
+    source = tmp_path / "sample.docx"
+    payload = _transaction_journal_payload(source)
+    if case == "json":
+        journal_path.write_text("{", encoding="utf-8")
+    elif case == "schema":
+        journal_path.write_text("{}", encoding="utf-8")
+    else:
+        if case == "path":
+            payload["source_path"] = str(source.with_suffix(".txt"))
+        elif case == "hash":
+            payload["original_source_sha256"] = "invalid"
+        journal_path.write_text(json.dumps(payload), encoding="utf-8")
     events = []
     monkeypatch.setattr(
         transaction_module,
@@ -195,14 +711,118 @@ def test_invalid_stale_transaction_logs_recovery_failure(tmp_path, monkeypatch):
         lambda _level, _component, event, _message, fields=None: events.append((event, fields)),
     )
 
-    with pytest.raises(transaction_module.DocumentTransactionError):
+    with pytest.raises(transaction_module.DocumentTransactionError) as exc_info:
         transaction_module.DocumentTransactionManager(tmp_path / "logs")
 
     assert [event for event, _fields in events] == [
         "transaction.recovery.start",
+        expected_event,
         "transaction.recovery.failed",
     ]
-    assert events[-1][1]["error_code"] == "WPS_TRANSACTION_JOURNAL_INVALID"
+    assert exc_info.value.code == expected_code
+    assert events[-1][1]["error_code"] == expected_code
+
+
+def test_stale_transaction_journal_read_failure_has_own_event(tmp_path, monkeypatch):
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir()
+    journal_path = runtime_dir / "transaction-state.json"
+    journal_path.write_text("{}", encoding="utf-8")
+    original_read_text = Path.read_text
+
+    def fail_journal_read(path, *args, **kwargs):
+        if path == journal_path:
+            raise OSError("journal read failed")
+        return original_read_text(path, *args, **kwargs)
+
+    events = []
+    monkeypatch.setattr(Path, "read_text", fail_journal_read)
+    monkeypatch.setattr(
+        transaction_module,
+        "log_event",
+        lambda _level, _component, event, _message, fields=None: events.append(
+            (event, fields)
+        ),
+    )
+
+    with pytest.raises(transaction_module.DocumentTransactionError) as exc_info:
+        transaction_module.DocumentTransactionManager(tmp_path / "logs")
+
+    assert [event for event, _fields in events] == [
+        "transaction.recovery.start",
+        "transaction.journal.read.failed",
+        "transaction.recovery.failed",
+    ]
+    assert exc_info.value.code == "WPS_TRANSACTION_JOURNAL_READ_FAILED"
+
+
+@pytest.mark.parametrize(
+    ("role", "expected_event", "expected_code"),
+    [
+        (
+            "source",
+            "transaction.recovery.source_state.failed",
+            "WPS_TRANSACTION_SOURCE_STATE_READ_FAILED",
+        ),
+        (
+            "temporary",
+            "transaction.recovery.temporary_state.failed",
+            "WPS_TRANSACTION_TEMPORARY_STATE_READ_FAILED",
+        ),
+        (
+            "backup",
+            "transaction.recovery.backup_state.failed",
+            "WPS_TRANSACTION_BACKUP_STATE_READ_FAILED",
+        ),
+    ],
+)
+def test_stale_transaction_file_state_failure_has_own_event(
+    tmp_path, monkeypatch, role, expected_event, expected_code
+):
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir()
+    source = tmp_path / "sample.docx"
+    payload = _transaction_journal_payload(source)
+    paths = {
+        "source": source,
+        "temporary": Path(payload["temporary_path"]),
+        "backup": Path(payload["backup_path"]),
+    }
+    paths["source"].write_bytes(b"original")
+    paths["temporary"].write_bytes(b"formatted")
+    paths["backup"].write_bytes(b"original")
+    payload["original_source_sha256"] = transaction_module.sha256_file(paths["source"])
+    payload["temporary_sha256"] = transaction_module.sha256_file(paths["temporary"])
+    payload["backup_sha256"] = payload["original_source_sha256"]
+    (runtime_dir / "transaction-state.json").write_text(
+        json.dumps(payload), encoding="utf-8"
+    )
+    original_sha256_file = transaction_module.sha256_file
+
+    def fail_selected_file_state(path):
+        if Path(path) == paths[role]:
+            raise OSError("file state read failed")
+        return original_sha256_file(path)
+
+    events = []
+    monkeypatch.setattr(transaction_module, "sha256_file", fail_selected_file_state)
+    monkeypatch.setattr(
+        transaction_module,
+        "log_event",
+        lambda _level, _component, event, _message, fields=None: events.append(
+            (event, fields)
+        ),
+    )
+
+    with pytest.raises(transaction_module.DocumentTransactionError) as exc_info:
+        transaction_module.DocumentTransactionManager(tmp_path / "logs")
+
+    assert [event for event, _fields in events] == [
+        "transaction.recovery.start",
+        expected_event,
+        "transaction.recovery.failed",
+    ]
+    assert exc_info.value.code == expected_code
 
 
 def test_preview_binding_uses_sdk_confirmed_host_range(tmp_path):
@@ -222,17 +842,265 @@ def test_preview_binding_uses_sdk_confirmed_host_range(tmp_path):
     assert all(item["raw_fragment_sha256"] for item in eligible)
 
 
-def test_preview_binding_does_not_write_canonical_review_range(tmp_path):
+def test_preview_binding_marks_canonical_review_range_as_preview_eligible(
+    tmp_path, monkeypatch
+):
     source = tmp_path / "source.docx"
     document = Document()
     document.add_paragraph("正文\u00a0内容")
     document.save(source)
 
     plan = recognize_docx(source, recognition_mode="authoritative")
+    events = []
+    monkeypatch.setattr(
+        recognition_module,
+        "log_event",
+        lambda _level, _component, event, _message, fields=None: events.append(
+            (event, fields)
+        ),
+    )
     result = bind_preview(plan, _snapshot("正文 内容"))
 
     assert result["binding_review_count"] >= 1
+    eligible = [item for item in result["items"] if item["preview_eligible"]]
+    assert eligible
+    assert result["confirmed_count"] == 0
+    assert result["preview_eligible_count"] == len(eligible)
+    assert all(item["binding_status"] == "review" for item in eligible)
+    assert all(item["recommended_action"] == "preview_only" for item in eligible)
+    warning_events = [
+        fields for event, fields in events if event == "binding.item.warning"
+    ]
+    assert warning_events
+    assert all(fields["warning_code"] == "RAW_TEXT_NORMALIZED" for fields in warning_events)
+    assert all(fields["physical_paragraph_index"] == 0 for fields in warning_events)
+    assert all(fields["physical_occurrence_index"] == 0 for fields in warning_events)
+    assert all(fields["physical_text_length_utf16"] == 5 for fields in warning_events)
+    assert all(fields["segment_index"] == 0 for fields in warning_events)
+    assert all(fields["segment_count"] == 1 for fields in warning_events)
+    assert all(fields["locator_verified"] is True for fields in warning_events)
+    assert all(fields["locator_status"] == "confirmed" for fields in warning_events)
+
+
+def test_preview_binding_keeps_ambiguous_range_unresolved_and_ineligible(tmp_path):
+    source = tmp_path / "source.docx"
+    document = Document()
+    document.add_paragraph("重复内容")
+    document.save(source)
+
+    plan = recognize_docx(source, recognition_mode="authoritative")
+    snapshot = _snapshot("重复内容")
+    duplicate = dict(snapshot["paragraphs"][0])
+    duplicate.update(
+        host_paragraph_id="main:000001",
+        host_paragraph_index=1,
+        story_paragraph_index=1,
+    )
+    snapshot["paragraphs"].append(duplicate)
+    result = bind_preview(plan, snapshot)
+
+    assert result["unresolved_count"] >= 1
+    assert result["preview_eligible_count"] == 0
     assert not any(item["preview_eligible"] for item in result["items"])
+
+
+def test_preview_binding_sdk_failure_logs_exact_boundary(tmp_path, monkeypatch):
+    source = tmp_path / "source.docx"
+    document = Document()
+    document.add_paragraph("脱敏正文")
+    document.save(source)
+    plan = recognize_docx(source)
+    events = []
+    monkeypatch.setattr(
+        recognition_module,
+        "log_event",
+        lambda _level, _component, event, _message, fields=None: events.append(
+            (event, fields)
+        ),
+    )
+    monkeypatch.setattr(
+        recognition_module,
+        "bind_recognition_plan",
+        lambda _plan, _snapshot: (_ for _ in ()).throw(RuntimeError("binder failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="WPS_BINDING_SDK_FAILED"):
+        recognition_module.bind_preview(plan, {}, request_id="request-binding-fail")
+
+    assert [event for event, _fields in events] == [
+        "binding.start",
+        "binding.sdk.failed",
+    ]
+    assert events[-1][1]["request_id"] == "request-binding-fail"
+    assert events[-1][1]["error_code"] == "WPS_BINDING_SDK_FAILED"
+
+
+@pytest.mark.parametrize(
+    ("case", "expected_event", "expected_code"),
+    [
+        ("config", "config.load.failed", "WPS_FORMAT_CONFIG_FAILED"),
+        ("import", "import.failed", "WPS_FORMAT_IMPORT_FAILED"),
+        ("export", "engine.export.failed", "WPS_FORMAT_EXPORT_FAILED"),
+        ("integrity", "integrity.validate.failed", "WPS_FORMAT_INTEGRITY_FAILED"),
+    ],
+)
+def test_format_pipeline_failure_logs_exact_stage(
+    tmp_path, monkeypatch, case, expected_event, expected_code
+):
+    source = tmp_path / "source.docx"
+    target = tmp_path / "output.docx"
+    source.write_bytes(b"source")
+    events = []
+
+    class FakeImporter:
+        def load(self, *_args, **_kwargs):
+            return SimpleNamespace(
+                doc_mode="NORMAL",
+                paragraphs=[SimpleNamespace(type_id="body")],
+            )
+
+    def export_success(*_args, **_kwargs):
+        target.write_bytes(b"output")
+        return {}
+
+    monkeypatch.setattr(
+        format_module,
+        "log_event",
+        lambda _level, _component, event, _message, fields=None: events.append(
+            (event, fields)
+        ),
+    )
+    monkeypatch.setattr(
+        format_module,
+        "load_rules_and_settings",
+        lambda _config: (
+            {},
+            {},
+            {
+                "processing": {},
+                "numbering": {"enabled": False},
+                "punctuation": {"enabled": False},
+            },
+        ),
+    )
+    monkeypatch.setattr(format_module, "DocxImporter", FakeImporter)
+    monkeypatch.setattr(format_module, "export_doc", export_success)
+    monkeypatch.setattr(format_module, "validate_docx_integrity", lambda _path: None)
+
+    if case == "config":
+        monkeypatch.setattr(
+            format_module,
+            "load_rules_and_settings",
+            lambda _config: (_ for _ in ()).throw(RuntimeError("config failed")),
+        )
+    elif case == "import":
+        monkeypatch.setattr(
+            FakeImporter,
+            "load",
+            lambda self, *_args, **_kwargs: (_ for _ in ()).throw(
+                RuntimeError("import failed")
+            ),
+        )
+    elif case == "export":
+        monkeypatch.setattr(
+            format_module,
+            "export_doc",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                RuntimeError("export failed")
+            ),
+        )
+    elif case == "integrity":
+        monkeypatch.setattr(
+            format_module,
+            "validate_docx_integrity",
+            lambda _path: (_ for _ in ()).throw(RuntimeError("integrity failed")),
+        )
+
+    with pytest.raises(RuntimeError, match=expected_code):
+        format_module.format_current_document(
+            str(source),
+            str(target),
+            operation_id="operation-test",
+            log_dir=tmp_path / "logs",
+            request_id="request-format-fail",
+        )
+
+    failure = next(fields for event, fields in events if event == expected_event)
+    assert failure["request_id"] == "request-format-fail"
+    assert failure["error_code"] == expected_code
+
+
+def test_wps_one_click_format_rebuilds_heading_numbering_by_default(tmp_path):
+    source = tmp_path / "source.docx"
+    target = tmp_path / "output.docx"
+    document = Document()
+    for text in (
+        "测试材料",
+        "一、第一部分",
+        "（六）第二层",
+        "5.第三层",
+        "（6）第四层",
+        "正文内容正文内容正文内容。",
+    ):
+        document.add_paragraph(text)
+    document.save(source)
+
+    format_module.format_current_document(
+        str(source),
+        str(target),
+        operation_id="operation-numbering",
+        log_dir=tmp_path / "logs",
+        request_id="request-numbering",
+    )
+
+    headings = [
+        paragraph.text
+        for paragraph in Document(target).paragraphs
+        if paragraph.style.style_id
+        in {"DCT-Heading1", "DCT-Heading2", "DCT-Heading3", "DCT-Heading4"}
+    ]
+    assert headings == [
+        "一、第一部分",
+        "（一）第二层",
+        "1.第三层",
+        "（1）第四层",
+    ]
+
+
+def test_wps_one_click_format_uses_safe_punctuation_by_default(tmp_path, monkeypatch):
+    source = tmp_path / "source.docx"
+    target = tmp_path / "output.docx"
+    captured = {}
+    load_config = format_module.load_rules_and_settings
+
+    def capture_config(config):
+        rules, settings, features = load_config(config)
+        captured["features"] = features
+        return rules, settings, features
+
+    monkeypatch.setattr(format_module, "load_rules_and_settings", capture_config)
+    document = Document()
+    document.add_paragraph("测试材料")
+    document.add_paragraph(
+        "请访问 https://example.com/a,b?x=1.2, 并说明:可以吗?"
+    )
+    document.save(source)
+
+    format_module.format_current_document(
+        str(source),
+        str(target),
+        operation_id="operation-punctuation",
+        log_dir=tmp_path / "logs",
+        request_id="request-punctuation",
+    )
+
+    body_texts = [
+        paragraph.text
+        for paragraph in Document(target).paragraphs
+        if paragraph.style.style_id == "DCT-Body"
+    ]
+    assert captured["features"]["punctuation"]["enabled"] is True
+    assert "请访问 https://example.com/a,b?x=1.2, 并说明：可以吗？" in body_texts
 
 
 def test_document_log_name_does_not_expose_source_filename(tmp_path):
@@ -249,6 +1117,26 @@ def test_file_identity_does_not_expose_path(tmp_path):
     value = file_identity(source)
     assert len(value) == 12
     assert "private-name" not in value
+
+
+def test_wps_log_accepts_document_name_but_not_document_path():
+    fields = sanitize_wps_log_fields(
+        {
+            "document_name": "sample.docx",
+            "source_path": r"C:\\fixtures\\sample.docx",
+        }
+    )
+    assert fields == {"document_name": "sample.docx"}
+
+
+def test_ribbon_only_keeps_the_taskpane_entry():
+    ribbon_path = Path(__file__).resolve().parents[1] / "ribbon.xml"
+    root = ElementTree.parse(ribbon_path).getroot()
+    namespace = {"ui": "http://schemas.microsoft.com/office/2006/01/customui"}
+    buttons = root.findall(".//ui:button", namespace)
+    assert [(button.get("id"), button.get("label")) for button in buttons] == [
+        ("panel", "打开侧边栏")
+    ]
 
 
 def test_compatibility_warnings_are_json_safe_and_bounded():
@@ -322,12 +1210,16 @@ def test_wps_bootstrap_structure_is_explicit():
     positions = [main_source.index(source) for source in expected_order]
     assert positions == sorted(positions)
     assert "document.write(" in main_source
+    assert "language='javascript'" in main_source
+    assert "onload=" not in main_source
+    assert "onerror=" not in main_source
+    assert "?v=" not in main_source
     assert "Promise" not in main_source
     assert "async " not in main_source
     assert "defer" not in main_source
 
     ribbon_source = (root / "js" / "ribbon.js").read_text(encoding="utf-8")
-    for callback in ("OnAddinLoad", "OnAction", "GetActionEnabled"):
+    for callback in ("onAddinLoad", "onAction", "getActionEnabled"):
         assert re.search(rf"^function {callback}\(", ribbon_source, re.MULTILINE)
     assert "window.DocxToolHostRuntime.start()" in ribbon_source
 
@@ -383,6 +1275,319 @@ def test_control_request_id_header_reaches_dispatch(monkeypatch, tmp_path):
     ]
 
 
+def _control_post(server, path, *, body=b"{}", token="test-token", headers=None):
+    connection = http.client.HTTPConnection(
+        "127.0.0.1", server.server_address[1], timeout=5
+    )
+    request_headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "X-DocxTool-Request-Id": "boundary-request",
+    }
+    request_headers.update(headers or {})
+    try:
+        connection.request("POST", path, body=body, headers=request_headers)
+        response = connection.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+        return response.status, payload
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize(
+    ("case", "path", "body", "token", "headers", "expected_status", "expected_code", "expected_event"),
+    [
+        (
+            "unauthorized",
+            "/v1/recognize",
+            b"{}",
+            "wrong-token",
+            {},
+            401,
+            "WPS_CONTROL_UNAUTHORIZED",
+            "control.auth.rejected",
+        ),
+        (
+            "invalid-content-length",
+            "/v1/recognize",
+            b"",
+            "test-token",
+            {"Content-Length": "invalid"},
+            400,
+            "WPS_CONTROL_INVALID_CONTENT_LENGTH",
+            "control.body.length_invalid",
+        ),
+        (
+            "negative-content-length",
+            "/v1/recognize",
+            b"",
+            "test-token",
+            {"Content-Length": "-1"},
+            400,
+            "WPS_CONTROL_NEGATIVE_CONTENT_LENGTH",
+            "control.body.length_negative",
+        ),
+        (
+            "body-too-large",
+            "/v1/recognize",
+            b"",
+            "test-token",
+            {"Content-Length": str(server_module.MAX_BODY_BYTES + 1)},
+            400,
+            "WPS_CONTROL_REQUEST_TOO_LARGE",
+            "control.body.too_large",
+        ),
+        (
+            "invalid-json",
+            "/v1/recognize",
+            b"{",
+            "test-token",
+            {},
+            400,
+            "WPS_CONTROL_JSON_INVALID",
+            "control.body.json_invalid",
+        ),
+        (
+            "json-object-required",
+            "/v1/recognize",
+            b"[]",
+            "test-token",
+            {},
+            400,
+            "WPS_CONTROL_JSON_OBJECT_REQUIRED",
+            "control.body.object_required",
+        ),
+        (
+            "route-not-found",
+            "/v1/missing",
+            b"{}",
+            "test-token",
+            {},
+            404,
+            "WPS_CONTROL_ROUTE_NOT_FOUND",
+            "control.route.not_found",
+        ),
+    ],
+)
+def test_control_boundaries_have_distinct_events(
+    monkeypatch,
+    tmp_path,
+    case,
+    path,
+    body,
+    token,
+    headers,
+    expected_status,
+    expected_code,
+    expected_event,
+):
+    events = []
+    monkeypatch.setattr(
+        server_module,
+        "log_event",
+        lambda _level, _component, event, _message, fields=None: events.append(
+            (event, fields or {})
+        ),
+    )
+    server = server_module.create_server(tmp_path / case, "test-token", 0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, payload = _control_post(
+            server, path, body=body, token=token, headers=headers
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
+
+    assert status == expected_status
+    assert payload == {"ok": False, "error_code": expected_code}
+    matching = [fields for event, fields in events if event == expected_event]
+    assert len(matching) == 1
+    assert matching[0]["error_code"] == expected_code
+    assert not any(
+        event == "control.request.execution_failed" for event, _fields in events
+    )
+
+
+@pytest.mark.parametrize(
+    ("monitor_state", "expected_code", "expected_event"),
+    [
+        ("busy", "WPS_COMMAND_BUSY", "control.command.busy"),
+        ("stopped", "WPS_MONITOR_NOT_RUNNING", "control.monitor.unavailable"),
+    ],
+)
+def test_control_monitor_boundaries_have_distinct_events(
+    monkeypatch, tmp_path, monitor_state, expected_code, expected_event
+):
+    events = []
+    monkeypatch.setattr(
+        server_module,
+        "log_event",
+        lambda _level, _component, event, _message, fields=None: events.append(
+            (event, fields or {})
+        ),
+    )
+    server = server_module.create_server(tmp_path / monitor_state, "test-token", 0)
+    if monitor_state == "busy":
+        with server.command_monitor._lock:
+            server.command_monitor._occupied = True
+    else:
+        server.command_monitor.stop()
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, payload = _control_post(server, "/v1/recognize")
+    finally:
+        if monitor_state == "busy":
+            with server.command_monitor._lock:
+                server.command_monitor._occupied = False
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
+
+    assert status == 400
+    assert payload == {"ok": False, "error_code": expected_code}
+    matching = [fields for event, fields in events if event == expected_event]
+    assert len(matching) == 1
+    assert matching[0]["error_code"] == expected_code
+
+
+def test_log_route_emits_only_the_submitted_diagnostic_event(monkeypatch, tmp_path):
+    events = []
+    monkeypatch.setattr(
+        server_module,
+        "log_event",
+        lambda _level, component, event, _message, fields=None: events.append(
+            (component, event, fields or {})
+        ),
+    )
+    server = server_module.create_server(tmp_path, "test-token", 0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    connection = http.client.HTTPConnection(
+        "127.0.0.1", server.server_address[1], timeout=5
+    )
+    try:
+        body = json.dumps(
+            {
+                "level": "WARNING",
+                "component": "taskpane",
+                "event": "taskpane.request.blocked",
+                "message": "blocked",
+                "details": {
+                    "request_id": "request-42",
+                    "reason": "context_not_ready",
+                },
+            }
+        )
+        connection.request(
+            "POST",
+            "/v1/log",
+            body=body,
+            headers={
+                "Authorization": "Bearer test-token",
+                "Content-Type": "application/json",
+            },
+        )
+        response = connection.getresponse()
+        response.read()
+        assert response.status == 200
+    finally:
+        connection.close()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
+
+    assert events == [
+        (
+            "taskpane",
+            "taskpane.request.blocked",
+            {"request_id": "request-42", "reason": "context_not_ready"},
+        )
+    ]
+
+
+def test_log_detail_contract_keeps_diagnostics_and_rejects_sensitive_fields():
+    details = server_module._safe_log_details(
+        {
+            "request_id": "request-42",
+            "event_sequence": 9,
+            "reason": "context_not_ready",
+            "request_status": "BLOCKED",
+            "host_ready": True,
+            "host_instance_id_short": "host-1234abcd",
+            "physical_paragraph_index": 12,
+            "physical_occurrence_index": 1,
+            "physical_text_length_utf16": 48,
+            "segment_index": 0,
+            "segment_count": 2,
+            "locator_verified": True,
+            "locator_status": "confirmed",
+            "document_id_short": "doc-1234",
+            "operation_id_short": "operation-12",
+            "plan_id_short": "plan-1234",
+            "body": "private body",
+            "source_path": "C:/private/document.docx",
+            "raw_text": "private body",
+            "session_token": "secret",
+            "sha256": "f" * 64,
+            "traceback": "private traceback",
+        }
+    )
+
+    assert details == {
+        "request_id": "request-42",
+        "event_sequence": 9,
+        "reason": "context_not_ready",
+        "request_status": "BLOCKED",
+        "host_ready": True,
+        "host_instance_id_short": "host-1234abcd",
+        "physical_paragraph_index": 12,
+        "physical_occurrence_index": 1,
+        "physical_text_length_utf16": 48,
+        "segment_index": 0,
+        "segment_count": 2,
+        "locator_verified": True,
+        "locator_status": "confirmed",
+        "document_id_short": "doc-1234",
+        "operation_id_short": "operation-12",
+        "plan_id_short": "plan-1234",
+    }
+    assert server_module._safe_log_details({"path": "/v1/health"}) == {
+        "path": "/v1/health"
+    }
+    assert server_module._safe_log_details(
+        {"path": "C:/private/document.docx"}
+    ) == {}
+
+
+def test_python_log_field_contract_rejects_sensitive_values():
+    fields = logging_adapter._fields_text(
+        {
+            "request_id": "request-42",
+            "error_code": "WPS_TEST_FAILED",
+            "body": "private body",
+            "source_path": "C:/private/document.docx",
+            "raw_text": "private body",
+            "session_token": "secret",
+            "sha256": "f" * 64,
+            "traceback": "private traceback",
+        }
+    )
+
+    assert "request_id=request-42" in fields
+    assert "error_code=WPS_TEST_FAILED" in fields
+    assert "private" not in fields
+    assert "secret" not in fields
+    assert "traceback" not in fields
+    assert "C:/private" not in logging_adapter._fields_text(
+        {"path": "C:/private/document.docx"}
+    )
+    assert "path=/v1/health" in logging_adapter._fields_text({"path": "/v1/health"})
+
+
 def test_control_recognize_and_bind_logs_keep_request_id(monkeypatch, tmp_path):
     application = object.__new__(server_module.WpsControlApplication)
     application.log_dir = tmp_path
@@ -404,7 +1609,10 @@ def test_control_recognize_and_bind_logs_keep_request_id(monkeypatch, tmp_path):
     monkeypatch.setattr(
         server_module,
         "bind_preview",
-        lambda _plan, _snapshot: {"confirmed_count": 2, "unresolved_count": 1},
+        lambda _plan, _snapshot, request_id="": {
+            "confirmed_count": 2,
+            "unresolved_count": 1,
+        },
     )
 
     application.dispatch("/v1/recognize", {}, request_id="request-42")
@@ -442,6 +1650,7 @@ def test_verify_files_requires_new_bootstrap_files(monkeypatch, tmp_path):
         "control/document_transaction.py",
         "control/logging_adapter.py",
         "control/recognize_document.py",
+        "control/monitor.py",
     ):
         path = tmp_path / relative
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -478,8 +1687,12 @@ def test_start_handles_keyboard_interrupt_without_traceback(monkeypatch):
         def join(self, timeout):
             events.append(("join", timeout))
 
+        def is_alive(self):
+            return False
+
     monkeypatch.setattr(wps_main, "verify_files", lambda: None)
     monkeypatch.setattr(wps_main, "configure_wps_logging", lambda _root: None)
+    monkeypatch.setattr(wps_main, "_require_wps_stopped", lambda: None)
     monkeypatch.setattr(wps_main, "_wpsjs_command", lambda: ["wpsjs"])
     monkeypatch.setattr(wps_main, "_start_control", lambda _port: (FakeServer(), 45678))
     monkeypatch.setattr(wps_main.threading, "Thread", FakeThread)
@@ -491,6 +1704,122 @@ def test_start_handles_keyboard_interrupt_without_traceback(monkeypatch):
 
     assert "launcher.interrupt.received" in events
     assert events[-1] == "launcher.session.stop"
+
+
+def test_runtime_config_contains_only_control_transport(tmp_path, monkeypatch):
+    config_path = tmp_path / "runtime" / "runtime-config.js"
+    monkeypatch.setattr(wps_main, "RUNTIME_DIR", config_path.parent)
+    monkeypatch.setattr(wps_main, "RUNTIME_CONFIG", config_path)
+
+    wps_main.write_runtime_config(9527, "test-token")
+
+    source = config_path.read_text(encoding="utf-8")
+    assert '"controlBaseUrl": "http://127.0.0.1:9527"' in source
+    assert '"sessionToken": "test-token"' in source
+    assert "sessionId" not in source
+
+
+def test_wpsjs_command_uses_official_debug_start_contract(tmp_path, monkeypatch):
+    executable = tmp_path / "node_modules" / ".bin" / "wpsjs"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("", encoding="utf-8")
+    monkeypatch.setattr(wps_main, "APP_ROOT", tmp_path)
+    monkeypatch.setattr(wps_main, "_verify_installed_node_runtime", lambda: None)
+    monkeypatch.setattr(wps_main.sys, "platform", "linux")
+
+    assert wps_main._wpsjs_command() == [str(executable), "debug"]
+
+
+def test_existing_wps_process_requires_restart(monkeypatch):
+    events = []
+    monkeypatch.setattr(wps_main, "_wps_process_count", lambda: 1)
+    monkeypatch.setattr(
+        wps_main,
+        "log_event",
+        lambda _level, _component, event, _message, fields=None: events.append(
+            (event, fields or {})
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="WPS_RESTART_REQUIRED"):
+        wps_main._require_wps_stopped()
+
+    assert events[-1] == (
+        "launcher.wps.restart_required",
+        {"error_code": "WPS_RESTART_REQUIRED", "process_count": 1},
+    )
+
+
+def test_wps_background_process_without_visible_window_is_ignored(monkeypatch):
+    completed = SimpleNamespace(stdout='"wps.exe","1234"\n')
+    monkeypatch.setattr(wps_main.sys, "platform", "win32")
+    monkeypatch.setattr(wps_main.subprocess, "run", lambda *_args, **_kwargs: completed)
+    monkeypatch.setattr(
+        wps_main, "_visible_top_level_window_process_ids", lambda: set()
+    )
+
+    assert wps_main._wps_process_count() == 0
+
+
+def test_only_visible_wps_writer_processes_require_restart(monkeypatch):
+    completed = SimpleNamespace(
+        stdout='"wps.exe","1234"\n"wps.exe","5678"\n"et.exe","9999"\n'
+    )
+    monkeypatch.setattr(wps_main.sys, "platform", "win32")
+    monkeypatch.setattr(wps_main.subprocess, "run", lambda *_args, **_kwargs: completed)
+    monkeypatch.setattr(
+        wps_main,
+        "_visible_top_level_window_process_ids",
+        lambda: {5678, 9999},
+    )
+
+    assert wps_main._wps_process_count() == 1
+
+
+def test_wps_request_context_and_preview_safety_contracts_are_present():
+    root = Path(__file__).resolve().parents[1]
+    host = (root / "host-runtime.js").read_text(encoding="utf-8")
+    taskpane = (root / "taskpane.js").read_text(encoding="utf-8")
+
+    assert "currentRequestId" not in host
+    for token in (
+        'schema_version: "wps-request-v2"',
+        "host_ready",
+        "pendingRequestId",
+        "REQUEST_ACK_TIMEOUT",
+    ):
+        assert token in taskpane
+    for token in (
+        "host.request.schema_invalid",
+        "host.request.id_missing",
+        "host.request.command_missing",
+        "taskpane.request.claimed",
+        "taskpane.request.completed",
+        "host.start.rollback",
+        "host.storage.reset.completed",
+        "PREVIEW_DOCUMENT_CHANGED",
+        "preview.range.revalidate.failed",
+        "document.context.changed",
+        "taskpane.rebuild.failed",
+    ):
+        assert token in host
+    assert "config.sessionId" not in host
+    assert "config.sessionId" not in taskpane
+    assert "hostContextId" not in host
+    assert host.index("range = await previewRange(document, item)") < host.index("comments.Add(range")
+
+
+def test_wps_entry_registers_ribbon_bridges_before_loading_children():
+    root = Path(__file__).resolve().parents[1]
+    main_source = (root / "main.js").read_text(encoding="utf-8")
+    ribbon_source = (root / "js" / "ribbon.js").read_text(encoding="utf-8")
+
+    first_child_load = main_source.index('loadScript("js/bootstrap-log.js"')
+    for callback in ("OnAddinLoad", "OnAction", "GetActionEnabled"):
+        declaration = main_source.index(f"function {callback}(")
+        assert declaration < first_child_load
+    assert "DocxToolRibbonCallbacks" in main_source
+    assert "window.DocxToolRibbonCallbacks" in ribbon_source
 
 
 def test_wps_diagnostic_event_contract_is_present():
@@ -521,20 +1850,57 @@ def test_wps_diagnostic_event_contract_is_present():
         ),
         "host": (
             "host.start.enter",
+            "host.start.lazy.enter",
+            "host.start.lazy.completed",
+            "host.start.lazy.failed",
             "host.start.failed",
             "host.poll.started",
             "host.storage.request.observed",
             "host.request.parsed",
             "host.request.ignored",
             "host.request.claimed",
+            "taskpane.storage_id.read_failed",
+            "taskpane.storage_id.write_failed",
+            "taskpane.create_call.failed",
+            "taskpane.show.failed",
+            "taskpane.width.failed",
+            "document.format.detected",
+            "document.upgrade.start",
+            "document.upgrade.save_as.failed",
+            "document.upgrade.verify.failed",
+            "document.upgrade.publish.start",
+            "document.upgrade.reopen.failed",
+            "document.upgrade.completed",
+            "document.upgrade.rollback.failed",
+            "document.upgrade.rollback.completed",
             "preview.start",
             "preview.document_path.wait.start",
             "preview.document_path.wait.completed",
             "preview.document_path.wait.failed",
             "preview.range_validation.start",
             "preview.range_validation.completed",
-            "preview.range_validation.failed",
+            "preview.range.binding_unconfirmed",
+            "preview.range.paragraph_unresolved",
+            "preview.range.offset_invalid",
+            "preview.range.paragraph_lookup_failed",
+            "preview.range.paragraph_missing",
+            "preview.range.paragraph_text_failed",
+            "preview.range.paragraph_changed",
+            "preview.range.fragment_mismatch",
+            "preview.range.characters_unsupported",
+            "preview.range.utf16_boundary_invalid",
+            "preview.range.character_lookup_failed",
+            "preview.range.boundary_invalid",
+            "preview.range.set_failed",
+            "preview.range.readback_failed",
+            "preview.range.readback_mismatch",
+            "preview.comment.create_call.failed",
+            "preview.comment.create_result.empty",
+            "preview.comment.metadata.failed",
+            "preview.session.write_failed",
             "preview.comment_cleanup.item.failed",
+            "preview.comments.rollback.completed",
+            "preview.comments.rollback.failed",
             "preview.completed",
             "preview.failed",
             "format.start",
@@ -543,13 +1909,150 @@ def test_wps_diagnostic_event_contract_is_present():
             "transaction.recovery.start",
             "transaction.recovery.completed",
             "transaction.recovery.failed",
+            "host.command.failure_state.failed",
+            "host.command.failure_panel_open.failed",
+            "ribbon.invalidate.failed",
+            "log.transport.unavailable",
         ),
         "taskpane": (
             "taskpane.request.prepare",
+            "taskpane.request.blocked.busy",
+            "taskpane.request.blocked.host_not_ready",
+            "taskpane.request_slot.read_failed",
+            "taskpane.request.serialize_failed",
             "taskpane.storage.write.start",
             "taskpane.storage.write.completed",
+            "taskpane.storage.write.failed",
             "taskpane.storage.write.verified",
+            "taskpane.storage.readback.failed",
+            "taskpane.storage.readback.parse_failed",
+            "taskpane.storage.write.verify_failed",
             "taskpane.request.created",
+            "taskpane.load.failed",
+            "taskpane.poll.stopped.storage_failure",
+            "taskpane.poll.stopped.state_invalid",
+            "log.transport.unavailable",
+        ),
+    }
+    for source_name, events in expected.items():
+        for event in events:
+            assert event in sources[source_name], f"missing {event} in {source_name}"
+
+
+def test_wps_python_diagnostic_event_contract_is_present():
+    root = Path(__file__).resolve().parents[1]
+    sources = {
+        "monitor": (root / "control" / "monitor.py").read_text(encoding="utf-8"),
+        "server": (root / "control" / "server.py").read_text(encoding="utf-8"),
+        "recognition": (root / "control" / "recognize_document.py").read_text(
+            encoding="utf-8"
+        ),
+        "format": (root / "control" / "format_current_document.py").read_text(
+            encoding="utf-8"
+        ),
+        "transaction": (root / "control" / "document_transaction.py").read_text(
+            encoding="utf-8"
+        ),
+        "launcher": (root / "main.py").read_text(encoding="utf-8"),
+    }
+    expected = {
+        "monitor": (
+            "monitor.thread.started",
+            "monitor.thread.crashed",
+            "monitor.command.received",
+            "monitor.command.queued",
+            "monitor.command.started",
+            "monitor.command.completed",
+            "monitor.command.failed",
+            "monitor.command.busy",
+            "monitor.command.unavailable",
+        ),
+        "server": (
+            "control.auth.rejected",
+            "control.body.length_invalid",
+            "control.body.length_negative",
+            "control.body.too_large",
+            "control.body.truncated",
+            "control.body.json_invalid",
+            "control.body.object_required",
+            "control.route.not_found",
+            "control.response.write_failed",
+            "format.upgrade.prepare_converted.request.start",
+            "format.upgrade.prepare_converted.request.failed",
+            "format.upgrade.prepare_converted.request.completed",
+        ),
+        "recognition": (
+            "recognition.input.invalid",
+            "recognition.start",
+            "recognition.pipeline.failed",
+            "recognition.completed",
+            "binding.start",
+            "binding.sdk.failed",
+            "binding.block_missing",
+            "binding.item",
+            "binding.item.warning",
+            "binding.completed",
+        ),
+        "format": (
+            "input.source.invalid",
+            "input.output.invalid",
+            "input.path_collision",
+            "config.load.failed",
+            "config.processing.invalid",
+            "import.failed",
+            "engine.export.failed",
+            "integrity.validate.failed",
+            "pipeline.completed",
+        ),
+        "transaction": (
+            "prepare.rejected.busy",
+            "prepare.source_hash.failed",
+            "prepare.output_hash.failed",
+            "prepare.source_changed",
+            "upgrade.prepare_converted.start",
+            "upgrade.prepare_converted.copy.failed",
+            "upgrade.prepare_converted.completed",
+            "commit.source.missing",
+            "commit.source.changed",
+            "commit.output.missing",
+            "backup.copy.failed",
+            "backup.verify.failed",
+            "source.replace.failed",
+            "source.replace.verify_failed",
+            "finalize.cleanup.failed",
+            "rollback.backup.missing",
+            "rollback.backup.mismatch",
+            "rollback.source.ambiguous",
+            "rollback.temporary_cleanup.failed",
+            "rollback.source_replace.failed",
+            "rollback.backup_cleanup.failed",
+            "rollback.journal_clear.failed",
+            "transaction.journal.read.failed",
+            "transaction.journal.parse.failed",
+            "transaction.journal.schema.invalid",
+            "transaction.journal.paths.invalid",
+            "transaction.journal.hashes.invalid",
+            "transaction.recovery.source_state.failed",
+            "transaction.recovery.temporary_state.failed",
+            "transaction.recovery.backup_state.failed",
+            "transaction.recovery.prepared_state.invalid",
+            "transaction.recovery.committed_state.invalid",
+            "transaction.recovery.state.invalid",
+            "transaction.recovery.temporary_cleanup.failed",
+            "transaction.recovery.source_restore.failed",
+            "transaction.recovery.backup_cleanup.failed",
+            "transaction.recovery.journal_clear.failed",
+            "transaction.recovery.failed",
+        ),
+        "launcher": (
+            "launcher.wps.process_check.failed",
+            "launcher.wps.restart_required",
+            "launcher.control.create.failed",
+            "launcher.runtime_config.write.failed",
+            "launcher.control.thread.failed",
+            "launcher.wpsjs.start_failed",
+            "launcher.wpsjs.exit_failed",
+            "launcher.control.thread.stop_timeout",
         ),
     }
     for source_name, events in expected.items():

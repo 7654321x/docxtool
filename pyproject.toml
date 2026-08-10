@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "docxtool"
-version = "4.0"
+version = "5.0"
 description = "DOCX official-document formatting web service"
 requires-python = ">=3.8,<3.11"
 dependencies = [

@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
+import os
 from pathlib import Path
 import secrets
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
-from typing import List, Tuple
+from typing import List, Set, Tuple
 
 APP_ROOT = Path(__file__).resolve().parent
 REPO_ROOT = APP_ROOT.parent.parent
@@ -26,18 +29,36 @@ from apps.wps.control.server import DEFAULT_PORT, create_server  # noqa: E402
 
 RUNTIME_DIR = APP_ROOT / "runtime"
 RUNTIME_CONFIG = RUNTIME_DIR / "runtime-config.js"
+CONTROL_RUNTIME_ROOT = Path(
+    os.environ.get("LOCALAPPDATA") or tempfile.gettempdir()
+) / "DocxTool" / "wps"
 EXPECTED_WPSJS_VERSION = "2.2.3"
 EXPECTED_RPC_VERSION = "1.1.0"
 
 
 def write_runtime_config(port: int, token: str) -> None:
     log_event("INFO", "launcher", "launcher.runtime_config.write.start", "开始写入 WPS 运行配置")
-    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
-    payload = {"controlBaseUrl": f"http://127.0.0.1:{port}", "sessionToken": token}
-    text = "window.DocxToolWpsConfig=Object.freeze(" + json.dumps(payload, ensure_ascii=False) + ");\n"
     temporary = RUNTIME_CONFIG.with_suffix(".tmp")
-    temporary.write_text(text, encoding="utf-8")
-    temporary.replace(RUNTIME_CONFIG)
+    try:
+        RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "controlBaseUrl": f"http://127.0.0.1:{port}",
+            "sessionToken": token,
+        }
+        text = "window.DocxToolWpsConfig=Object.freeze(" + json.dumps(payload, ensure_ascii=False) + ");\n"
+        temporary.write_text(text, encoding="utf-8")
+        temporary.replace(RUNTIME_CONFIG)
+    except OSError as exc:
+        temporary.unlink(missing_ok=True)
+        log_event(
+            "ERROR", "launcher", "launcher.runtime_config.write.failed",
+            "WPS 运行配置写入失败",
+            {
+                "error_code": "WPS_RUNTIME_CONFIG_WRITE_FAILED",
+                "error_type": type(exc).__name__,
+            },
+        )
+        raise
     log_event(
         "INFO",
         "launcher",
@@ -65,6 +86,7 @@ def verify_files() -> None:
         "taskpane.html", "taskpane.js", "control/server.py",
         "control/format_current_document.py", "control/document_transaction.py",
         "control/logging_adapter.py", "control/recognize_document.py",
+        "control/monitor.py",
     ]
     missing = [item for item in required if not (APP_ROOT / item).is_file()]
     if missing:
@@ -98,7 +120,7 @@ def _wpsjs_command() -> List[str]:
     if not wpsjs.exists():
         raise RuntimeError("WPSJS_EXECUTABLE_MISSING")
     if sys.platform != "win32":
-        command = [str(wpsjs), "debug", "-s"]
+        command = [str(wpsjs), "debug"]
         log_event(
             "INFO", "launcher", "launcher.wpsjs.command.resolved", "wpsjs 启动命令已确认",
             {"executable": wpsjs.name, "wpsjs_version": EXPECTED_WPSJS_VERSION},
@@ -108,7 +130,7 @@ def _wpsjs_command() -> List[str]:
     if not pwsh:
         raise RuntimeError("POWERSHELL7_NOT_FOUND: Windows 启动 WPS 插件需要 PowerShell 7 (pwsh)。")
     quoted = str(wpsjs).replace("'", "''")
-    command = [pwsh, "-NoProfile", "-Command", f"& '{quoted}' debug -s"]
+    command = [pwsh, "-NoProfile", "-Command", f"& '{quoted}' debug"]
     log_event(
         "INFO", "launcher", "launcher.wpsjs.command.resolved", "wpsjs 启动命令已确认",
         {"executable": Path(pwsh).name, "wpsjs_version": EXPECTED_WPSJS_VERSION},
@@ -116,14 +138,131 @@ def _wpsjs_command() -> List[str]:
     return command
 
 
+def _visible_top_level_window_process_ids() -> Set[int]:
+    import ctypes
+    from ctypes import wintypes
+
+    visible_process_ids: Set[int] = set()
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    callback_type = ctypes.WINFUNCTYPE(
+        wintypes.BOOL, wintypes.HWND, wintypes.LPARAM
+    )
+    user32.EnumWindows.argtypes = [callback_type, wintypes.LPARAM]
+    user32.EnumWindows.restype = wintypes.BOOL
+    user32.IsWindowVisible.argtypes = [wintypes.HWND]
+    user32.IsWindowVisible.restype = wintypes.BOOL
+    user32.GetWindowThreadProcessId.argtypes = [
+        wintypes.HWND,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+
+    @callback_type
+    def collect_visible_window(hwnd, _lparam):
+        if user32.IsWindowVisible(hwnd):
+            process_id = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(process_id))
+            if process_id.value:
+                visible_process_ids.add(int(process_id.value))
+        return True
+
+    if not user32.EnumWindows(collect_visible_window, 0):
+        error_code = ctypes.get_last_error()
+        if error_code:
+            raise OSError(error_code, "EnumWindows failed")
+    return visible_process_ids
+
+
+def _wps_process_count() -> int:
+    if sys.platform != "win32":
+        return 0
+    completed = subprocess.run(
+        ["tasklist", "/FI", "IMAGENAME eq wps.exe", "/FO", "CSV", "/NH"],
+        check=True,
+        capture_output=True,
+        text=True,
+        shell=False,
+    )
+    rows = csv.reader(completed.stdout.splitlines())
+    wps_process_ids = {
+        int(row[1])
+        for row in rows
+        if len(row) > 1
+        and str(row[0]).strip().casefold() == "wps.exe"
+        and str(row[1]).strip().isdigit()
+    }
+    return len(wps_process_ids & _visible_top_level_window_process_ids())
+
+
+def _require_wps_stopped() -> None:
+    log_event(
+        "INFO",
+        "launcher",
+        "launcher.wps.process_check.start",
+        "开始检查是否已有可见 WPS 文字窗口",
+    )
+    try:
+        process_count = _wps_process_count()
+    except (OSError, subprocess.CalledProcessError) as exc:
+        log_event(
+            "ERROR",
+            "launcher",
+            "launcher.wps.process_check.failed",
+            "WPS 文字窗口检查失败",
+            {
+                "error_code": "WPS_PROCESS_CHECK_FAILED",
+                "error_type": type(exc).__name__,
+            },
+        )
+        raise RuntimeError("WPS_PROCESS_CHECK_FAILED") from exc
+    if process_count:
+        log_event(
+            "ERROR",
+            "launcher",
+            "launcher.wps.restart_required",
+            "检测到已打开的 WPS 文字窗口，请关闭后重新启动 DocxTool",
+            {
+                "error_code": "WPS_RESTART_REQUIRED",
+                "process_count": process_count,
+            },
+        )
+        raise RuntimeError("WPS_RESTART_REQUIRED")
+    log_event(
+        "INFO",
+        "launcher",
+        "launcher.wps.process_check.completed",
+        "未检测到已打开的 WPS 文字窗口",
+        {"process_count": 0},
+    )
+
+
 def _start_control(port: int) -> Tuple[object, int]:
     log_event("INFO", "launcher", "launcher.control.create.start", "开始创建 WPS Control Server")
     token = secrets.token_urlsafe(32)
-    server = create_server(APP_ROOT, token, port)
+    try:
+        server = create_server(CONTROL_RUNTIME_ROOT, token, port)
+    except Exception as exc:
+        log_event(
+            "ERROR", "launcher", "launcher.control.create.failed",
+            "WPS Control Server 创建失败",
+            {
+                "error_code": "WPS_CONTROL_CREATE_FAILED",
+                "error_type": type(exc).__name__,
+            },
+        )
+        raise
     actual_port = int(server.server_address[1])
     try:
         write_runtime_config(actual_port, token)
-    except Exception:
+    except Exception as exc:
+        log_event(
+            "ERROR", "launcher", "launcher.control.config_failed",
+            "Control Server 已创建但运行配置发布失败",
+            {
+                "control_port": actual_port,
+                "error_code": "WPS_CONTROL_CONFIG_PUBLISH_FAILED",
+                "error_type": type(exc).__name__,
+            },
+        )
         server.server_close()
         raise
     log_event(
@@ -135,7 +274,7 @@ def _start_control(port: int) -> Tuple[object, int]:
 
 def control_only(port: int) -> None:
     verify_files()
-    configure_wps_logging(APP_ROOT)
+    configure_wps_logging(CONTROL_RUNTIME_ROOT)
     server, actual_port = _start_control(port)
     log_event("INFO", "launcher", "control.start", "WPS Control Server 前台运行", {"port": actual_port})
     try:
@@ -148,14 +287,23 @@ def control_only(port: int) -> None:
 
 def start(port: int) -> None:
     verify_files()
-    configure_wps_logging(APP_ROOT)
+    configure_wps_logging(CONTROL_RUNTIME_ROOT)
+    _require_wps_stopped()
     command = _wpsjs_command()
     server, actual_port = _start_control(port)
     thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.25}, daemon=True)
-    thread.start()
-    log_event("INFO", "launcher", "launcher.session.start", "DocxTool WPS 本地会话已启动", {"control_port": actual_port})
+    thread_started = False
     started_at = time.monotonic()
     try:
+        log_event("INFO", "launcher", "launcher.control.thread.start", "开始启动 WPS Control Server 线程", {"control_port": actual_port})
+        try:
+            thread.start()
+            thread_started = True
+        except RuntimeError as exc:
+            log_event("ERROR", "launcher", "launcher.control.thread.failed", "WPS Control Server 线程启动失败", {"control_port": actual_port, "error_code": "WPS_CONTROL_THREAD_START_FAILED", "error_type": type(exc).__name__})
+            raise
+        log_event("INFO", "launcher", "launcher.control.thread.started", "WPS Control Server 线程已启动", {"control_port": actual_port})
+        log_event("INFO", "launcher", "launcher.session.start", "DocxTool WPS 本地会话已启动", {"control_port": actual_port})
         log_event("INFO", "launcher", "launcher.wpsjs.start", "开始启动 wpsjs")
         completed = subprocess.run(command, cwd=str(APP_ROOT), check=True, shell=False)
         log_event(
@@ -164,11 +312,45 @@ def start(port: int) -> None:
         )
     except KeyboardInterrupt:
         log_event("INFO", "launcher", "launcher.interrupt.received", "收到用户中断，开始停止本地会话")
+    except subprocess.CalledProcessError as exc:
+        log_event(
+            "ERROR",
+            "launcher",
+            "launcher.wpsjs.exit_failed",
+            "wpsjs 异常退出",
+            {
+                "error_code": "WPSJS_PROCESS_FAILED",
+                "error_type": type(exc).__name__,
+                "return_code": exc.returncode,
+                "duration_ms": int((time.monotonic() - started_at) * 1000),
+            },
+        )
+        raise
+    except OSError as exc:
+        log_event(
+            "ERROR",
+            "launcher",
+            "launcher.wpsjs.start_failed",
+            "wpsjs 进程启动失败",
+            {
+                "error_code": "WPSJS_PROCESS_START_FAILED",
+                "error_type": type(exc).__name__,
+                "duration_ms": int((time.monotonic() - started_at) * 1000),
+            },
+        )
+        raise
     finally:
-        log_event("INFO", "launcher", "launcher.runtime_config.cleanup.start", "开始清理 WPS 运行配置")
-        server.shutdown()
+        log_event("INFO", "launcher", "launcher.control.shutdown.start", "开始停止 WPS Control Server", {"control_port": actual_port})
+        if thread_started:
+            server.shutdown()
         server.server_close()
-        thread.join(timeout=3)
+        if thread_started:
+            thread.join(timeout=3)
+            if thread.is_alive():
+                log_event("ERROR", "launcher", "launcher.control.thread.stop_timeout", "WPS Control Server 线程停止超时", {"control_port": actual_port, "error_code": "WPS_CONTROL_THREAD_STOP_TIMEOUT"})
+                raise RuntimeError("WPS_CONTROL_THREAD_STOP_TIMEOUT")
+        log_event("INFO", "launcher", "launcher.control.shutdown.completed", "WPS Control Server 已停止", {"control_port": actual_port})
+        log_event("INFO", "launcher", "launcher.runtime_config.cleanup.start", "开始清理 WPS 运行配置")
         try:
             clear_runtime_config()
         except Exception as exc:
@@ -187,7 +369,7 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="0 表示自动选择空闲 loopback 端口")
     args = parser.parse_args()
     if args.action == "verify":
-        configure_wps_logging(APP_ROOT)
+        configure_wps_logging(CONTROL_RUNTIME_ROOT)
         log_event("INFO", "launcher", "launcher.verify.start", "开始验证 WPS App 文件")
         verify_files()
         log_event("INFO", "launcher", "launcher.verify.completed", "WPS App 文件验证完成")

@@ -1,5 +1,14 @@
 # Changelog
 
+## 5.0 - 2026-08-10
+
+- Stabilized the WPS bootstrap, Host Runtime, TaskPane, Control Server, and single-thread command-monitor chain with stage-specific privacy-safe diagnostics.
+- Expanded recognition preview coverage to confirmed and review-only bindings while preserving Range preconditions, rollback, and unresolved-item safety.
+- Routed WPS one-click formatting through the authoritative DocxTool importer, recognition, normalization, and Engine pipeline with numbering and safe punctuation enabled by default.
+- Preserved native WPS list-heading hierarchy when parent-child structure supports a visible first-level heading.
+- Added transactional silent `.doc/.wps` upgrades before preview or formatting, with one WPS conversion, same-name collision protection, content verification, recovery, and permanent `.docx` publication.
+- Added WPS Python and JavaScript runtime regression gates, updated the public release manifest, and retained the existing SDK and Core architecture boundaries.
+
 ## 4.0 - 2026-08-04
 
 - Released the recognition-first wheel contract for WPS, Office.js, VSTO, and other local hosts while keeping formatting writes inside each host adapter.

@@ -1,8 +1,30 @@
+"use strict";
+
+function ribbonCallbacks() {
+  if (!window.DocxToolRibbonCallbacks) throw new Error("WPS_RIBBON_CALLBACKS_NOT_READY");
+  return window.DocxToolRibbonCallbacks;
+}
+
+function OnAddinLoad(ribbonUI) {
+  return ribbonCallbacks().onAddinLoad(ribbonUI);
+}
+
+function OnAction(control) {
+  return ribbonCallbacks().onAction(control);
+}
+
+function GetActionEnabled(control) {
+  return ribbonCallbacks().getActionEnabled(control);
+}
+
+window.OnAddinLoad = OnAddinLoad;
+window.OnAction = OnAction;
+window.GetActionEnabled = GetActionEnabled;
+
 (function () {
   "use strict";
 
   var bootstrapId = "bootstrap-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 9);
-  var nonce = encodeURIComponent(bootstrapId);
 
   function bootstrapLog(level, event, message, details) {
     if (typeof window.DocxToolEarlyLog === "function") {
@@ -24,12 +46,17 @@
 
   function loadScript(source, label) {
     bootstrapLog("INFO", "bootstrap." + label + ".load.start", "开始加载 WPS 启动子脚本", {});
-    document.write("<script src='" + source + "?v=" + nonce + "' onload=\"DocxToolBootstrapScriptLoaded('" + label + "')\" onerror=\"DocxToolBootstrapScriptFailed('" + label + "')\"><\/script>");
+    try {
+      document.write("<script language='javascript' src='" + source + "'><\/script>");
+    } catch (error) {
+      scriptFailed(label);
+      throw error;
+    }
+    scriptLoaded(label);
   }
 
   window.DocxToolBootstrapId = bootstrapId;
   window.DocxToolBootstrapScriptLoaded = scriptLoaded;
-  window.DocxToolBootstrapScriptFailed = scriptFailed;
   console.log("[WPS][bootstrap] bootstrap.main.loaded | WPS 主启动脚本已加载", {
     bootstrap_id: bootstrapId,
     application_available: Boolean(window.Application),
