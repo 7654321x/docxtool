@@ -28,9 +28,6 @@ jobs:
       - name: Run tests
         run: python -m pytest
 
-      - name: Run WPS app tests
-        run: python -m pytest apps/wps/tests -q
-
       - name: Check WPS JavaScript syntax
         run: |
           node --check apps/wps/main.js
@@ -192,3 +189,30 @@ jobs:
       - name: Check Windows startup entry point
         shell: pwsh
         run: pwsh -NoProfile -File .\run.ps1 -CheckOnly
+
+  windows-wps-release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.8
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.8"
+
+      - name: Install project and build dependencies
+        shell: pwsh
+        run: |
+          python -m venv .venv
+          .\.venv\Scripts\python.exe -m pip install --upgrade pip
+          .\.venv\Scripts\python.exe -m pip install --require-hashes -r requirements-dev.lock
+          .\.venv\Scripts\python.exe -m pip install -r apps/wps/requirements-build.txt
+
+      - name: Run Windows WPS release gate
+        shell: pwsh
+        run: pwsh -NoProfile -File .\apps\wps\scripts\verify.ps1
+
+      - name: Build and verify packaged WPS executable
+        shell: pwsh
+        run: pwsh -NoProfile -File .\apps\wps\scripts\build-exe.ps1 -ServerOrigin "https://acceptance.invalid" -SkipInstall

@@ -11,6 +11,7 @@ from docxtool.document.models.document import (
 )
 from docxtool.document.models.paragraph import (
     InlineToken,
+    NativeNumbering,
     ParagraphData,
     ParagraphFeatures,
 )
@@ -23,6 +24,7 @@ __all__ = [
     "BodyBlock",
     "DocumentData",
     "InlineToken",
+    "NativeNumbering",
     "NormalizationChange",
     "ParagraphData",
     "ParagraphFeatures",

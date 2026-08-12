@@ -21,6 +21,10 @@ class NumberingCandidateProvider:
         family = global_context.heading_family(position)
         score = 0.72
         evidence = list(global_context.heading_reasons(position) or (f"heading-level-{features.heading_shape_level}",))
+        if features.native_numbering_level_source:
+            evidence.append(
+                f"native-numbering-{features.native_numbering_level_source}"
+            )
         if features.heading_semantic_score >= 0.8:
             score += 0.08
             evidence.append("explicit-numbering-shape")

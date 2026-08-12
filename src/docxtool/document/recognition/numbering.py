@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 from typing import Any, Callable, Optional, Tuple
 
 from docxtool.document.style_config import NB_FIXED, NB_SUFFIXES
@@ -72,11 +73,22 @@ def match_style_or_level(
     if not features:
         return None, None
     prefix = getattr(features, "numbering_prefix", "") or ""
+    native = getattr(features, "native_numbering", None)
     if find_numbered_bold_pos(text, normalize_text=normalize_text) == 0:
         return None, None
     if prefix.startswith("@lvl_0") and len(text) > 25 and re.search(r'[、，；]', text):
         return None, None
-    if prefix.startswith("@lvl_"):
+    native_level = native_numbering_heading_level(native)
+    if native_level is not None and (
+        len((text or "").strip()) > 40
+        or (text or "").rstrip().endswith(("。", "！", "？", ".", "!", "?"))
+        or "：" in (text or "")
+        or ":" in (text or "")
+    ):
+        return None, None
+    if native_level is not None:
+        return f"heading{native_level}", ""
+    if native is None and prefix.startswith("@lvl_"):
         try:
             level = int(prefix[5:])
             return f"heading{min(level + 2, 4)}", ""
@@ -85,6 +97,155 @@ def match_style_or_level(
     if prefix.startswith("@style_"):
         return prefix[7:], ""
     return None, None
+
+
+def native_numbering_heading_level(native: Any) -> int | None:
+    """根据有效 OOXML 编号模板返回公文标题层级。"""
+    if native is None:
+        return None
+    template = re.sub(r"\s+", "", str(getattr(native, "lvl_text", "") or ""))
+    num_fmt = str(getattr(native, "num_fmt", "") or "")
+    if not template:
+        return None
+    placeholder = rf"%{int(getattr(native, 'ilvl', 0)) + 1}"
+    chinese_format = num_fmt in {
+        "chineseCounting", "chineseCountingThousand", "ideographTraditional",
+    }
+    decimal_format = num_fmt in {"decimal", "decimalZero"}
+    if chinese_format and re.fullmatch(rf"{re.escape(placeholder)}[、.．]", template):
+        return 1
+    if chinese_format and re.fullmatch(
+        rf"[（(]{re.escape(placeholder)}[）)]", template
+    ):
+        return 2
+    if decimal_format and re.fullmatch(rf"{re.escape(placeholder)}[.．]", template):
+        return 3
+    if decimal_format and re.fullmatch(
+        rf"[（(]{re.escape(placeholder)}[）)]", template
+    ):
+        return 4
+    return None
+
+
+def resolve_native_numbering_levels(features: list[Any]) -> list[Any]:
+    """用模板、Word 标题样式和同编号族上下文补全原生编号标题层级。"""
+    resolved = list(features)
+    family_levels: dict[tuple[str, int], tuple[int, str]] = {}
+    body_list_positions = _native_body_list_positions(resolved)
+
+    for index, item in enumerate(resolved):
+        if index in body_list_positions:
+            resolved[index] = replace(item, native_numbering_body_list=True)
+            continue
+        if not _native_heading_eligible(item):
+            continue
+        level = item.native_numbering_template_level
+        source = "template" if level is not None else ""
+        if level is None:
+            level, source = _native_heading_anchor(item)
+        if level is None:
+            continue
+        resolved[index] = _with_native_heading_level(item, level, source)
+        family_levels[(item.native_numbering_family, item.native_numbering_ilvl)] = (
+            level,
+            source,
+        )
+
+    for index, item in enumerate(resolved):
+        if index in body_list_positions:
+            continue
+        if item.native_numbering_level is not None or not _native_heading_eligible(item):
+            continue
+        family_key = (item.native_numbering_family, item.native_numbering_ilvl)
+        family_match = family_levels.get(family_key)
+        if family_match is not None:
+            resolved[index] = _with_native_heading_level(
+                item, family_match[0], "family-sibling"
+            )
+            continue
+        relative = _relative_family_level(item, family_levels)
+        if relative is not None:
+            resolved[index] = _with_native_heading_level(
+                item, relative, "family-context"
+            )
+    return resolved
+
+
+def _native_body_list_positions(features: list[Any]) -> set[int]:
+    positions: set[int] = set()
+    active_family = ""
+    for index, item in enumerate(features):
+        if not item.native_numbering_present:
+            active_family = ""
+            continue
+        previous = features[index - 1] if index else None
+        if previous is not None and (
+            previous.colon_at_end or previous.colon_explanatory_body
+        ):
+            active_family = item.native_numbering_family
+        if active_family and item.native_numbering_family == active_family:
+            positions.add(index)
+        elif active_family:
+            active_family = ""
+    return positions
+
+
+def _native_heading_eligible(features: Any) -> bool:
+    return bool(
+        features.native_numbering_present
+        and features.native_numbering_family
+        and features.native_numbering_ilvl is not None
+        and features.text_length <= 40
+        and not features.ends_with_sentence_punctuation
+        and not features.date_match
+        and not features.attachment_note_match
+        and not features.recipient_match
+        and not features.key_value_label
+        and not features.colon_at_end
+        and not features.colon_explanatory_body
+        and not re.fullmatch(
+            r"附件[0-9一二三四五六七八九十百千]*",
+            features.compact_text,
+        )
+    )
+
+
+def _native_heading_anchor(features: Any) -> tuple[int | None, str]:
+    style = re.sub(r"\s+", " ", str(features.style_name or "").strip().casefold())
+    style_match = re.fullmatch(r"(?:heading|标题)\s*([1-4])", style)
+    if style_match is not None:
+        return int(style_match.group(1)), "word-style"
+    legacy_match = re.fullmatch(r"heading([1-4])", str(features.legacy_type_id or ""))
+    if legacy_match is not None:
+        return int(legacy_match.group(1)), "legacy"
+    return None, ""
+
+
+def _relative_family_level(
+    features: Any,
+    family_levels: dict[tuple[str, int], tuple[int, str]],
+) -> int | None:
+    candidates = [
+        (abs(features.native_numbering_ilvl - ilvl), level, ilvl)
+        for (family, ilvl), (level, _source) in family_levels.items()
+        if family == features.native_numbering_family
+    ]
+    if not candidates:
+        return None
+    _distance, anchor_level, anchor_ilvl = min(candidates)
+    inferred = anchor_level + features.native_numbering_ilvl - anchor_ilvl
+    return inferred if 1 <= inferred <= 4 else None
+
+
+def _with_native_heading_level(features: Any, level: int, source: str) -> Any:
+    return replace(
+        features,
+        numbering_level=features.numbering_level or level,
+        heading_shape_level=features.heading_shape_level or level,
+        heading_semantic_score=max(features.heading_semantic_score, 0.8),
+        native_numbering_level=level,
+        native_numbering_level_source=source,
+    )
 
 
 def legacy_numbered_heading_score(

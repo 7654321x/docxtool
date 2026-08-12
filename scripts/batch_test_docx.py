@@ -92,6 +92,18 @@ def _normalized_text(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "").replace("\u3000", " ").strip())
 
 
+def _heading_content_key(value: str) -> str:
+    normalized = _normalized_text(value)
+    return re.sub(
+        r"^(?:[一二三四五六七八九十百千零〇]+、|"
+        r"[（(][一二三四五六七八九十百千零〇0-9]+[）)]|"
+        r"\d+[.．、])\s*",
+        "",
+        normalized,
+        count=1,
+    )
+
+
 def _cjk_number(value: str) -> int | None:
     if value.isdigit():
         return int(value)
@@ -1013,20 +1025,9 @@ def source_heading_cue_audit(source_data: Any, output_data: Any) -> dict[str, An
     a short bold ``@lvl_N`` source item must remain the corresponding heading
     after export and re-import.
     """
-    def heading_content_key(value: str) -> str:
-        normalized = _normalized_text(value)
-        return re.sub(
-            r"^(?:[一二三四五六七八九十百千零〇]+、|"
-            r"[（(][一二三四五六七八九十百千零〇0-9]+[）)]|"
-            r"\d+[.．、])\s*",
-            "",
-            normalized,
-            count=1,
-        )
-
     output_by_text: dict[str, list[tuple[int, str]]] = {}
     for index, paragraph in enumerate(getattr(output_data, "paragraphs", ())):
-        key = heading_content_key(str(getattr(paragraph, "text", "") or ""))
+        key = _heading_content_key(str(getattr(paragraph, "text", "") or ""))
         if key:
             output_by_text.setdefault(key, []).append((index, str(getattr(paragraph, "type_id", ""))))
 
@@ -1034,13 +1035,15 @@ def source_heading_cue_audit(source_data: Any, output_data: Any) -> dict[str, An
     mismatches: list[dict[str, Any]] = []
     for index, paragraph in enumerate(getattr(source_data, "paragraphs", ())):
         features = getattr(paragraph, "features", None)
+        if getattr(features, "native_numbering", None) is not None:
+            continue
         marker = str(
             getattr(features, "segment_numbering_features", "")
             or getattr(features, "numbering_prefix", "")
             or ""
         )
         match = re.fullmatch(r"@lvl_(\d+)", marker)
-        text = heading_content_key(str(getattr(paragraph, "text", "") or ""))
+        text = _heading_content_key(str(getattr(paragraph, "text", "") or ""))
         bold_ratio = float(
             getattr(features, "segment_bold_char_ratio", 0.0)
             or getattr(features, "bold_char_ratio", 0.0)
@@ -1064,6 +1067,71 @@ def source_heading_cue_audit(source_data: Any, output_data: Any) -> dict[str, An
             "evidence": [marker, "short-bold-source-list-item"],
         })
     return {"cue_count": cue_count, "mismatch_count": len(mismatches), "mismatches": mismatches}
+
+
+def native_numbering_heading_audit(
+    source_data: Any,
+    output_data: Any,
+) -> dict[str, Any]:
+    """汇总原生自动编号标题线索，报告不保存正文。"""
+    details: list[dict[str, Any]] = []
+    unpreserved_count = 0
+    output_by_text: dict[str, list[tuple[int, str]]] = {}
+    for output_index, paragraph in enumerate(getattr(output_data, "paragraphs", ())):
+        key = _heading_content_key(str(getattr(paragraph, "text", "") or ""))
+        if key:
+            output_by_text.setdefault(key, []).append(
+                (output_index, str(getattr(paragraph, "type_id", "")))
+            )
+    for index, paragraph in enumerate(getattr(source_data, "paragraphs", ())):
+        features = getattr(paragraph, "features", None)
+        native = getattr(features, "native_numbering", None)
+        if native is None:
+            continue
+        type_id = str(getattr(paragraph, "type_id", ""))
+        diagnostics = getattr(source_data, "recognition_diagnostics", {}) or {}
+        paragraph_diagnostics = diagnostics.get("paragraphs", ())
+        diagnostic = next(
+            (
+                item
+                for item in paragraph_diagnostics
+                if item.get("paragraph_index") == index
+            ),
+            {},
+        )
+        evidence = [
+            str(item)
+            for item in diagnostic.get("evidence_summary", ())
+            if str(item).startswith(("native-numbering-", "numbered-heading-level-"))
+        ]
+        if not evidence:
+            continue
+        text = str(getattr(paragraph, "text", "") or "")
+        matches = output_by_text.get(_heading_content_key(text), [])
+        preserved = any(output_type == type_id for _index, output_type in matches)
+        unpreserved_count += int(not preserved)
+        details.append(
+            {
+                "source_paragraph_index": index,
+                "source_physical_paragraph_index": getattr(
+                    features, "source_physical_paragraph_index", None
+                ),
+                "type": type_id,
+                "evidence": evidence,
+                "text_hash": text_hash(text),
+                "output_paragraph_indexes": [
+                    output_index for output_index, _output_type in matches
+                ],
+                "output_types": sorted(
+                    {output_type for _output_index, output_type in matches}
+                ),
+            }
+        )
+    return {
+        "clue_count": len(details),
+        "unpreserved_count": unpreserved_count,
+        "details": details,
+    }
 
 
 def signature_continuity_audit(output_data: Any) -> dict[str, Any]:
@@ -1135,6 +1203,9 @@ def _special_record(
         diagnostics = getattr(output_data, "recognition_diagnostics", {}) or {}
         summary = diagnostics.get("summary", {}) if isinstance(diagnostics, dict) else {}
         title_cue_audit = source_heading_cue_audit(source_data, output_data)
+        native_numbering_audit = native_numbering_heading_audit(
+            source_data, output_data
+        )
         signature_audit = signature_continuity_audit(output_data)
         record.update({
             "成功": True, "原文段落数": len(source_data.paragraphs), "输出段落数": len(output_data.paragraphs),
@@ -1145,6 +1216,9 @@ def _special_record(
             "源标题线索数": title_cue_audit["cue_count"],
             "源标题线索未保留数": title_cue_audit["mismatch_count"],
             "源标题线索检查": title_cue_audit["mismatches"],
+            "源自动编号标题线索数": native_numbering_audit["clue_count"],
+            "源自动编号标题未保留数": native_numbering_audit["unpreserved_count"],
+            "源自动编号标题检查": native_numbering_audit["details"],
             "落款连续性问题数": signature_audit["issue_count"],
             "落款连续性检查": signature_audit["issues"],
         })
@@ -1344,6 +1418,7 @@ def _report_lines(report: dict[str, Any]) -> list[str]:
         "项目配置差异统计：" + json.dumps(report.get("项目配置差异统计", {}), ensure_ascii=False),
         "受保护对象差异统计：" + json.dumps(report.get("受保护对象差异统计", {}), ensure_ascii=False),
         f"源标题线索未保留：{report.get('源标题线索未保留数', 0)}",
+        f"源自动编号标题未保留：{report.get('源自动编号标题未保留数', 0)}",
         f"落款连续性问题：{report.get('落款连续性问题数', 0)}",
         "视觉渲染检查：" + str(report["视觉渲染检查"]["reason"]),
     ]
@@ -1390,6 +1465,9 @@ def main(argv: list[str] | None = None) -> int:
                 importer, source, output, rules, settings, processing_features, letterhead_options=letterhead_options,
             )
             title_cue_audit = source_heading_cue_audit(source_data, output_data)
+            native_numbering_audit = native_numbering_heading_audit(
+                source_data, output_data
+            )
             signature_audit = signature_continuity_audit(output_data)
             standard_outputs[record["编号"]] = output
             record.update({
@@ -1404,6 +1482,9 @@ def main(argv: list[str] | None = None) -> int:
                 "源标题线索数": title_cue_audit["cue_count"],
                 "源标题线索未保留数": title_cue_audit["mismatch_count"],
                 "源标题线索检查": title_cue_audit["mismatches"],
+                "源自动编号标题线索数": native_numbering_audit["clue_count"],
+                "源自动编号标题未保留数": native_numbering_audit["unpreserved_count"],
+                "源自动编号标题检查": native_numbering_audit["details"],
                 "落款连续性问题数": signature_audit["issue_count"],
                 "落款连续性检查": signature_audit["issues"],
                 "原文文字哈希": text_hash("\n".join(item.original_text for item in source_data.paragraphs)),
@@ -1452,6 +1533,7 @@ def main(argv: list[str] | None = None) -> int:
         "失败数": sum(not item["成功"] for item in special_results), "处理策略": processing_strategy,
         "模板对比": f"专项集模板目录：{SPECIAL_TEMPLATE_DIR.relative_to(ROOT)}；当前专项报告仍以结构审计和视觉抽查为主。",
         "源标题线索未保留数": sum(int(item.get("源标题线索未保留数", 0) or 0) for item in special_results),
+        "源自动编号标题未保留数": sum(int(item.get("源自动编号标题未保留数", 0) or 0) for item in special_results),
         "落款连续性问题数": sum(int(item.get("落款连续性问题数", 0) or 0) for item in special_results),
         "视觉渲染检查": special_visual, "结果": special_results,
     }
@@ -1460,6 +1542,7 @@ def main(argv: list[str] | None = None) -> int:
         f"总数：{special_report['总数']}", f"成功：{special_report['成功数']}", f"失败：{special_report['失败数']}",
         f"处理策略：{processing_strategy}", "模板对比：" + special_report["模板对比"],
         f"源标题线索未保留：{special_report['源标题线索未保留数']}",
+        f"源自动编号标题未保留：{special_report['源自动编号标题未保留数']}",
         f"落款连续性问题：{special_report['落款连续性问题数']}",
         "视觉渲染检查：" + str(special_visual["reason"]),
         *[f"{item['文件名']} | 成功={item['成功']} | 复核={item.get('结构复核数', 0)} | 源标题未保留={item.get('源标题线索未保留数', 0)} | 落款连续性={item.get('落款连续性问题数', 0)} | 错误={item['错误']}" for item in special_results],
@@ -1498,6 +1581,7 @@ def main(argv: list[str] | None = None) -> int:
             if diff.get("expected_reason") == "protected_source_difference"
         )),
         "源标题线索未保留数": sum(int(item.get("源标题线索未保留数", 0) or 0) for item in results),
+        "源自动编号标题未保留数": sum(int(item.get("源自动编号标题未保留数", 0) or 0) for item in results),
         "落款连续性问题数": sum(int(item.get("落款连续性问题数", 0) or 0) for item in results),
         "视觉渲染检查": visual_status,
         "专项集": {"目录": str(SPECIAL_INPUT_DIR.relative_to(ROOT)), "结果目录": str(special_output_dir.relative_to(ROOT)), "总数": special_report["总数"], "成功数": special_report["成功数"], "失败数": special_report["失败数"]},

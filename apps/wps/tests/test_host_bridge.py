@@ -338,20 +338,23 @@ def test_close_releases_command_and_state_waiters():
         bridge.wait_state(revision, generation, timeout_seconds=0)
 
 
-def _post(server, path, payload, token="test-token"):
+def _post(server, path, payload, token="test-token", origin=""):
     connection = http.client.HTTPConnection(
         "127.0.0.1", server.server_address[1], timeout=2
     )
     try:
+        headers = {
+            "Authorization": "Bearer " + token,
+            "Content-Type": "application/json",
+            "X-DocxTool-Request-Id": "bridge-request-1",
+        }
+        if origin:
+            headers["Origin"] = origin
         connection.request(
             "POST",
             path,
             body=json.dumps(payload),
-            headers={
-                "Authorization": "Bearer " + token,
-                "Content-Type": "application/json",
-                "X-DocxTool-Request-Id": "bridge-request-1",
-            },
+            headers=headers,
         )
         response = connection.getresponse()
         body = json.loads(response.read().decode("utf-8"))
@@ -626,6 +629,55 @@ def test_apply_is_authorized_before_host_delivery_and_result_is_reported(tmp_pat
         server.shutdown()
         server.server_close()
         thread.join(timeout=3)
+
+
+def test_public_authorization_network_failure_does_not_enqueue_host_command(tmp_path):
+    class OfflineAccountRuntime:
+        def authorize_format(self, _request_id):
+            raise PublicApiError(
+                "WPS_PUBLIC_SERVER_UNAVAILABLE",
+                "服务器无法连接",
+                network=True,
+            )
+
+    application = server_module.WpsControlApplication(
+        tmp_path,
+        "test-token",
+        OfflineAccountRuntime(),
+    )
+    registration = application.dispatch_bridge(
+        "/v1/bridge/host/register",
+        {"host_context_id": "host-context-offline"},
+    )
+    generation = registration["host_generation"]
+    application.dispatch_bridge(
+        "/v1/bridge/state",
+        {
+            "host_context_id": "host-context-offline",
+            "host_generation": generation,
+            "state": {"host_ready": True, "status": "READY"},
+        },
+    )
+
+    with pytest.raises(
+        PublicApiError,
+        match="WPS_PUBLIC_SERVER_UNAVAILABLE",
+    ):
+        application.dispatch_bridge(
+            "/v1/bridge/command",
+            {
+                "request_id": "request-offline-apply",
+                "command": "apply",
+                "pane_instance_id": "pane-offline",
+                "host_generation": generation,
+            },
+        )
+
+    assert application.host_bridge.wait_command(
+        "host-context-offline",
+        generation,
+        timeout_seconds=0,
+    ) == {"timed_out": True, "command": None}
 
 
 def test_enqueue_error_is_not_replaced_when_public_result_reporting_fails(monkeypatch, tmp_path):
@@ -953,6 +1005,126 @@ def test_bridge_http_routes_bypass_command_monitor(tmp_path):
         thread.join(timeout=3)
 
 
+def test_control_client_disconnect_is_logged_once_without_second_response(
+    tmp_path, monkeypatch
+):
+    events = []
+    server = server_module.create_server(tmp_path, "test-token", 0)
+    handler_type = server.RequestHandlerClass
+    handler = object.__new__(handler_type)
+    handler.path = "/v1/bridge/state/wait"
+    handler.command = "POST"
+    handler.headers = {}
+    handler.send_response = lambda _status: None
+    handler.send_header = lambda *_args: None
+    handler.end_headers = lambda: None
+
+    class AbortedWriter:
+        def write(self, _data):
+            error = ConnectionAbortedError("client left")
+            error.winerror = 10053
+            raise error
+
+    handler.wfile = AbortedWriter()
+    monkeypatch.setattr(
+        server_module,
+        "log_event",
+        lambda _level, _component, event, _message, fields=None: events.append(
+            (event, fields or {})
+        ),
+    )
+    try:
+        with pytest.raises(Exception) as raised:
+            handler._json(200, {"ok": True})
+        assert getattr(raised.value, "code", "") == "WPS_CONTROL_CLIENT_DISCONNECTED"
+        assert [event for event, _fields in events] == ["control.client.disconnected"]
+        assert events[0][1]["error_code"] == "WPS_CONTROL_CLIENT_DISCONNECTED"
+        assert server_module._client_disconnected(OSError("disk failed")) is False
+    finally:
+        server.server_close()
+
+
+def test_control_client_disconnect_during_headers_is_handled_for_get(
+    tmp_path, monkeypatch
+):
+    events = []
+    server = server_module.create_server(tmp_path, "test-token", 0)
+    handler_type = server.RequestHandlerClass
+    handler = object.__new__(handler_type)
+    handler.path = "/v1/health"
+    handler.command = "GET"
+    handler.headers = {"Authorization": "Bearer test-token"}
+    handler.request_version = "HTTP/1.1"
+    handler.close_connection = False
+    handler._origin_allowed = lambda: True
+    handler.log_request = lambda *_args: None
+
+    def abort_response(_status):
+        error = ConnectionResetError("client left")
+        error.winerror = 10054
+        raise error
+
+    handler.send_response = abort_response
+    monkeypatch.setattr(
+        server_module,
+        "log_event",
+        lambda _level, _component, event, _message, fields=None: events.append(
+            (event, fields or {})
+        ),
+    )
+    try:
+        handler.do_GET()
+        assert [event for event, _fields in events].count(
+            "control.client.disconnected"
+        ) == 1
+        assert "control.response.write_failed" not in {
+            event for event, _fields in events
+        }
+    finally:
+        server.server_close()
+
+
+def test_control_response_write_failure_is_not_retried(tmp_path, monkeypatch):
+    events = []
+    writes = 0
+    server = server_module.create_server(tmp_path, "test-token", 0)
+    handler_type = server.RequestHandlerClass
+    handler = object.__new__(handler_type)
+    handler.path = "/v1/bridge/state/wait"
+    handler.command = "POST"
+    handler.headers = {"Authorization": "Bearer test-token"}
+    handler.rfile = object()
+    handler.send_response = lambda _status: None
+    handler.send_header = lambda *_args: None
+    handler.end_headers = lambda: None
+    handler._origin_allowed = lambda: True
+    handler._read_body = lambda: {}
+
+    class FailingWriter:
+        def write(self, _data):
+            nonlocal writes
+            writes += 1
+            raise OSError("disk failed")
+
+    handler.wfile = FailingWriter()
+    monkeypatch.setattr(
+        server_module,
+        "log_event",
+        lambda _level, _component, event, _message, fields=None: events.append(
+            (event, fields or {})
+        ),
+    )
+    try:
+        with pytest.raises(OSError, match="disk failed"):
+            handler.do_POST()
+        assert writes == 1
+        assert [event for event, _fields in events].count(
+            "control.response.write_failed"
+        ) == 1
+    finally:
+        server.server_close()
+
+
 def test_bridge_http_rejects_auth_and_stale_generation(tmp_path):
     server = server_module.create_server(tmp_path, "test-token", 0)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -999,6 +1171,55 @@ def test_bridge_http_rejects_auth_and_stale_generation(tmp_path):
         )
         assert status == 400
         assert stale["error_code"] == "WPS_HOST_GENERATION_MISMATCH"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
+
+
+def test_control_browser_origin_is_exactly_scoped(tmp_path):
+    allowed = "http://127.0.0.1:3889"
+    server = server_module.create_server(
+        tmp_path, "test-token", 0, allowed_origin=allowed
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        connection = http.client.HTTPConnection(
+            "127.0.0.1", server.server_address[1], timeout=2
+        )
+        connection.request(
+            "OPTIONS",
+            "/v1/log",
+            headers={
+                "Origin": allowed,
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "authorization,content-type",
+            },
+        )
+        response = connection.getresponse()
+        assert response.status == 204
+        assert response.getheader("Access-Control-Allow-Origin") == allowed
+        response.read()
+        connection.close()
+
+        status, body = _post(
+            server,
+            "/v1/log",
+            {"level": "INFO", "component": "test", "event": "origin.allowed", "message": "ok", "fields": {}},
+            origin=allowed,
+        )
+        assert status == 200
+        assert body["ok"] is True
+
+        status, body = _post(
+            server,
+            "/v1/log",
+            {"level": "INFO", "component": "test", "event": "origin.external", "message": "bad", "fields": {}},
+            origin="https://external.example",
+        )
+        assert status == 403
+        assert body["error_code"] == "WPS_CONTROL_ORIGIN_REJECTED"
     finally:
         server.shutdown()
         server.server_close()

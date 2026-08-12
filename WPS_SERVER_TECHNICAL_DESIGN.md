@@ -5,11 +5,20 @@
 - 文档职责：说明 `WPS_SERVER_PRD.md` 第一阶段功能如何在当前仓库中实现。
 - 上位需求：`WPS_SERVER_PRD.md`。
 - 上位工程规则：`AGENTS.md`、`docs/API.md`、`docs/DEPLOY.md`。
+- 版本归属：DocxTool 5.2.2。
 - 当前状态：第一阶段九轮实现及自动门禁已完成；真实 WPS 宿主操作仍需发布前人工验收。
 - 第一实现目标：先完成可独立联调的 WPS 公网服务器，再接入用户端 EXE 和 WPS TaskPane。
 - 唯一启动入口：服务器本地开发和部署继续执行根目录 `server.py`，不新增第二个服务器启动脚本。
 
-本文只定义第一阶段已经确认的注册登录、设备、24 小时会话、心跳、免费一键排版授权、结果回传和管理后台。卡密、付费权益、套餐、次数扣减和远程主动控制不在本阶段实现。
+本文只定义第一阶段已经确认的注册登录、设备、7 天会话、心跳、免费一键排版授权、结果回传和管理后台。卡密、付费权益、套餐、次数扣减和远程主动控制不在本阶段实现。
+
+### 1.1 DocxTool 5.2.1 登录性能变更
+
+1. 新签发 WPS 会话固定为 7 天，心跳不续期；数据库中已有会话不执行迁移。
+2. 单进程使用一个 `BoundedSemaphore(2)` 统一限制 WPS 注册哈希、真实或虚假账号校验及哈希升级，Argon2id 保持 `m=65536 KiB、t=3、p=4`。
+3. 旧哈希升级先在 SQLite 写锁和 `BEGIN IMMEDIATE` 外计算，短事务内只复核状态、更新设备、保存预计算摘要并创建会话。
+4. WPS 登录限流调整为 IP `300/600s`、账号 `10/600s`；注册与网页登录限流保持不变。
+5. HTTP 路径、请求响应、Token、数据库 Schema、网页版匿名排版及异常处理策略均不变。
 
 ## 2. 当前代码事实
 
@@ -29,7 +38,7 @@
 | `src/docxtool/web/admin_access.py` | 现有管理员会话与 CSRF 校验 |
 | `apps/wps/host-runtime.js` | 本机 `apply` 命令、格式前置检测、事务、Engine 调用和文档重开 |
 
-现有网页用户会话默认 30 天。本项目新增的 WPS 会话必须独立实现为固定 24 小时，不修改网页用户表、网页 Cookie 或网页会话时长。
+现有网页用户会话默认 30 天。本项目新增的 WPS 会话必须独立实现为固定 7 天，不修改网页用户表、网页 Cookie 或网页会话时长。升级前已经写入的 WPS 会话不迁移，继续按各自数据库 `expires_at` 生效。
 
 ## 3. 目标架构
 
@@ -69,7 +78,7 @@ flowchart LR
 ```text
 src/docxtool/wps_server/
 ├─ __init__.py          # 公开第一阶段必要入口，不承载业务逻辑
-├─ config.py            # 数据库路径、24 小时会话、心跳和功能清单常量
+├─ config.py            # 数据库路径、7 天会话、心跳和功能清单常量
 ├─ validation.py        # WPS 账号、密码、设备和请求字段的权威校验
 ├─ database.py          # WPS SQLite 连接、四张表、索引和 schema 初始化
 ├─ auth.py              # Bearer 解析、会话签发、查询、失效和退出
@@ -108,7 +117,7 @@ src/docxtool/wps_server/
 apps/wps/public_api.py               # 调用公网注册、登录、心跳、授权和结果接口
 apps/wps/account_store.py            # 本地账号 SQLite 和 Windows DPAPI 密文读写
 apps/wps/login_window.py             # 启动器独立登录注册窗口
-apps/wps/main.py                     # 启动前检查账号并决定显示窗口或直接启动插件
+apps/wps/main.py                     # 启动前读取本地身份并执行可选自动登录
 apps/wps/control/server.py           # 向 Host 提供受控排版入口
 apps/wps/host-runtime.js             # apply 前接收授权请求编号和配置版本，执行本机文档操作
 apps/wps/taskpane.html               # 只显示账号状态，不提供登录注册入口
@@ -162,7 +171,7 @@ def _initialize_all_databases() -> None: ...
 `src/docxtool/wps_server/config.py` 只定义当前阶段真正使用的配置：
 
 ```python
-WPS_SESSION_TTL_SECONDS = 24 * 60 * 60
+WPS_SESSION_TTL_SECONDS = 7 * 24 * 60 * 60
 WPS_HEARTBEAT_INTERVAL_SECONDS = 10 * 60
 WPS_OFFLINE_AFTER_SECONDS = 30 * 60
 WPS_JSON_MAX_BYTES = 32 * 1024
@@ -178,7 +187,7 @@ def public_feature_manifest() -> dict: ...
 WPS_DATABASE_PATH=var/data/wps_plugin.db
 ```
 
-24 小时会话、10 分钟心跳建议值和 30 分钟离线判断属于本阶段固定产品规则，不做成可变环境开关。
+7 天新会话、10 分钟心跳建议值和 30 分钟离线判断属于本阶段固定产品规则，不做成可变环境开关。数据库中已有会话不执行到期时间迁移。
 
 ### 5.4 用户端启动入口
 
@@ -204,15 +213,14 @@ def resolve_startup_account() -> dict: ...
 
 ```text
 读取本地账号
-├─ 没有账号：显示独立登录注册窗口，成功后继续启动
-└─ 已有账号：不显示窗口，直接启动插件
-   ├─ 会话有效：后台 heartbeat
-   ├─ 会话过期：后台使用 DPAPI 解密密码并静默登录
-   ├─ 账号被拒绝：清除本地凭据并显示登录注册窗口
-   └─ 网络不可用：保持本地功能启动，apply 暂不可用
+├─ 没有账号：显示空白的独立登录注册窗口
+├─ 未启用自动登录：预填已允许保存的字段后显示同一窗口
+├─ 已启用自动登录：复用有效会话，或在过期后静默登录一次
+├─ 自动登录网络失败：保留已有本地账号并启动本地功能
+└─ 手动关闭窗口：停止本次启动，不启动插件
 ```
 
-登录注册窗口属于启动器进程，不嵌入 `taskpane.html`，也不依赖 WPS 已经打开。
+登录注册窗口属于启动器进程，使用 `PySide2 5.15.2.1 + Qt Widgets + QSS`，不嵌入 `taskpane.html`。自动登录要求同时记住密码；旧账号迁移默认记住密码但不自动登录。运行期间会话到期后的既有刷新机制保留。
 
 ## 6. 数据库设计
 
@@ -526,7 +534,7 @@ def load_active_format_profile() -> dict:
 
 1. 通过 `default_format_config_path()` 读取现有正式配置。
 2. 使用 `validate_format_config()` 验证并归一化。
-3. 配置版本使用 `docxtool-<package_version>`，例如 `docxtool-5.2`。
+3. 配置版本使用 `docxtool-<package_version>`，例如 `docxtool-5.2.2`。
 4. 服务启动时加载一次；配置无效时启动失败，不能运行到授权请求时才返回假成功。
 5. 返回响应前复制配置对象，避免请求处理修改进程内基准配置。
 
@@ -596,10 +604,10 @@ def encrypt_secret(value: str) -> bytes: ...
 def decrypt_secret(value: bytes) -> str: ...
 def load_account() -> dict: ...
 def save_account(account: dict) -> None: ...
-def clear_account() -> None: ...
+def clear_account() -> int: ...
 ```
 
-`encrypt_secret()` 和 `decrypt_secret()` 只调用 Windows DPAPI。数据库只接收加密后的 BLOB；DPAPI 失败立即终止当前保存或静默登录，不能回退为明文。
+`encrypt_secret()` 和 `decrypt_secret()` 只调用 Windows DPAPI。数据库只接收加密后的 BLOB；DPAPI 失败立即终止当前保存或运行期会话刷新，不能回退为明文。
 
 ### 7.11 `public_api.py`
 
@@ -619,10 +627,10 @@ def report_format_result(session_token: str, payload: dict) -> dict: ...
 ```python
 def window_geometry(width: int, requested_height: int, screen_width: int, screen_height: int) -> str: ...
 def submit_account(*, mode, username, password, confirmation, api, account_store, device_key) -> dict: ...
-def show_login_register_window(*, api, account_store) -> dict: ...
+def show_login_register_window(*, api, account_store, initial_username="", device_key="") -> dict: ...
 ```
 
-第一阶段使用独立启动窗口。默认登录视图包含账号、密码、登录按钮和底部“注册账号”入口；注册视图包含账号、密码、确认密码、“注册并登录”按钮和“返回登录”入口。窗口使用浅色 DocxTool 品牌区、向上叠接的白色表单面板和深色主按钮，品牌区不放宣传文案；输入框使用单一圆角描边，不放账号前后缀装饰，密码和确认密码提供眼睛按钮切换显示状态。窗口按当前视图的内容请求高度重新计算和居中，禁止固定高度裁掉控件。账号和密码输入框展示 5 位起、必须同时含字母和数字的规则；客户端校验只改善体验，服务器响应才是最终结果。窗口成功时返回已保存账号摘要；用户在没有本地账号的情况下关闭窗口时，启动器直接退出，不启动插件。
+独立启动窗口使用 PySide2 Qt Widgets 和集中 QSS。登录视图包含账号、密码、记住密码、自动登录、登录按钮和注册入口；注册视图增加确认密码并复用同一认证逻辑。网络认证运行在单个 QThread，所有 QWidget 更新留在 Qt 主线程。窗口使用浅色品牌区、白色圆角卡片、圆角输入框和深色主按钮；通过布局和 Qt 5 高 DPI 属性适配 Windows 7 SP1 及以上系统。窗口成功时返回已保存账号摘要；用户关闭窗口时直接退出，不启动插件。
 
 ## 8. 核心业务事务
 
@@ -633,13 +641,13 @@ def show_login_register_window(*, api, account_store) -> dict: ...
 → 执行 WPS 专用账号和密码校验
 → 生成 username_norm 小写标准化值
 → 查询 username_norm 是否存在
-→ 计算 Argon2id 密码摘要
+→ 通过进程级双槽限制计算 Argon2id 密码摘要
 → 生成用户编号、设备编号和会话凭据
 → BEGIN IMMEDIATE
 → 再次查询 username_norm
 → 插入 WPS 用户
 → 插入首台设备
-→ 插入 24 小时会话摘要
+→ 插入 7 天会话摘要
 → COMMIT
 → 返回用户、设备、会话和功能清单
 ```
@@ -652,19 +660,23 @@ def show_login_register_window(*, api, account_store) -> dict: ...
 执行 WPS 登录字段校验
 → 生成 username_norm
 → 按账号标准化值查询用户
-→ 在数据库锁外执行 Argon2id 密码验证
+→ 在数据库锁外通过进程级双槽限制执行真实或虚假 Argon2id 密码验证
+→ 需要升级旧摘要时，在数据库锁外通过同一限制预计算新摘要
 → BEGIN IMMEDIATE
 → 再次确认用户仍为正常状态
 → 查询或创建当前设备
 → 设备停用则拒绝
 → 更新最后登录时间和设备版本
-→ 插入新的 24 小时会话摘要
+→ 写入预计算的新摘要（仅需要升级时）
+→ 插入新的 7 天会话摘要
 → COMMIT
 ```
 
-账号格式错误、密码格式错误、密码错误和账号不存在统一返回“账号或密码错误”。同一账号、同一设备密钥重复登录复用设备记录，但创建新的 24 小时会话。
+账号格式错误、密码格式错误、密码错误和账号不存在统一返回“账号或密码错误”。同一账号、同一设备密钥重复登录复用设备记录，但创建新的 7 天会话。
 
-注册和登录使用独立限流作用域，不与网页账号共享计数：注册每个 IP 每小时最多 5 次；登录每个 IP 每 10 分钟最多 30 次、每个标准化账号每 10 分钟最多 10 次。第一阶段复用现有进程内限流辅助，不新增账号锁定字段。
+注册和登录使用独立限流作用域，不与网页账号共享计数：注册每个 IP 每小时最多 5 次；登录每个 IP 每 10 分钟最多 300 次、每个标准化账号每 10 分钟最多 10 次。网页登录继续保持每个 IP 每 10 分钟 30 次、每个标准化账号每 10 分钟 10 次。第一阶段复用现有进程内限流辅助，不新增账号锁定字段。
+
+WPS 服务在单个 Python 进程内共用一个 `BoundedSemaphore(2)`，注册哈希、真实账号校验、缺失账号虚假校验和哈希升级都必须经过该限制。等待请求自然排队，不新增超时、错误码或降级路径。Argon2id 参数保持 `memory_cost=65536 KiB`、`time_cost=3`、`parallelism=4`。该容量规则按单进程设计；改为多进程部署时，每个进程都会有两个槽位，必须重新核算总内存。
 
 ### 8.3 心跳
 
@@ -1027,18 +1039,14 @@ WPS 插件摘要：用户总数、正常用户数、在线设备数、已授权�
 ```text
 EXE 启动
 → 读取 %LOCALAPPDATA%\DocxTool\wps\account.db
-├─ 无账号
-│  → 弹出独立登录注册窗口
-│  → 成功后保存 DPAPI 密文
-│  → 启动插件
-└─ 有账号
-   → 跳过登录注册窗口并启动插件
-   → 后台验证会话
-      ├─ 有效：立即 heartbeat
-      ├─ 过期：解密密码并静默登录
-      ├─ 被拒绝：清除账号并显示登录注册窗口
-      └─ 网络失败：保留本地功能，禁用 apply
+→ 弹出独立登录注册窗口
+   ├─ 无账号：账号输入框为空并生成设备密钥
+   ├─ 有账号：预填账号名并复用原设备密钥，密码为空
+   ├─ 登录或注册成功：保存 DPAPI 密文并启动插件
+   └─ 关闭窗口或登录失败：停止本次启动
+→ AccountRuntime 使用本次新签发会话立即 heartbeat
 → 运行期间每 10 分钟 heartbeat
+→ 运行期间会话过期时才允许使用保存的凭据刷新会话
 ```
 
 一键排版：
@@ -1086,7 +1094,7 @@ TaskPane 点击一键排版
 | `DEVICE_MISMATCH` | 请求设备与会话设备不一致 | 403 |
 | `SESSION_REQUIRED` | 缺少 Bearer 会话 | 401 |
 | `SESSION_INVALID` | 会话不存在 | 401 |
-| `SESSION_EXPIRED` | 24 小时会话已到期 | 401 |
+| `SESSION_EXPIRED` | WPS 会话已到期 | 401 |
 | `COMMAND_NOT_ALLOWED` | 功能不在受控功能清单 | 403 |
 | `REQUEST_ID_INVALID` | 排版请求编号无效 | 400 |
 | `REQUEST_ID_MISMATCH` | 请求头与请求体编号不一致 | 400 |
@@ -1134,7 +1142,7 @@ wps.format_config.loaded / failed
 4. readiness 增加 WPS 数据库状态。
 5. 验证 `python server.py` 能同时服务现有接口和空的 WPS 数据库。
 
-### 阶段 B：注册登录和 24 小时会话
+### 阶段 B：注册登录和 7 天会话
 
 1. 实现 WPS 专用账号和密码校验。
 2. 实现注册查重、数据库唯一约束和 Argon2id 密码摘要。
@@ -1173,8 +1181,8 @@ wps.format_config.loaded / failed
 
 1. 实现本地账号 SQLite 和 Windows DPAPI 加解密。
 2. 实现独立登录注册窗口，不向 TaskPane 增加登录表单。
-3. 修改 `main.py`，无账号时先显示窗口，有账号时直接启动插件。
-4. 实现有效会话复用、过期会话静默登录和账号拒绝后的本地清理。
+3. 修改 `main.py`，默认显示窗口，并按用户偏好处理记住密码和自动登录。
+4. 实现运行期会话刷新和账号拒绝后的本地清理。
 5. 实现心跳、授权和结果回传。
 6. 把 `apply` 授权放在文档前置检测之前。
 
@@ -1196,7 +1204,9 @@ apps/wps/tests/test_launcher_auth.py
 第一轮只覆盖真实主流程和已确认失败边界：
 
 - 四张表、唯一约束和索引创建成功。
-- 注册、登录、当前账号、退出和精确 24 小时到期。
+- 注册、登录、当前账号、退出和新会话精确 7 天到期；历史会话按原 `expires_at` 生效。
+- 三个并发 Argon2 操作最多同时执行两个，注册、真实账号、缺失账号和哈希升级使用同一限制；升级计算期间不持有 SQLite 写锁。
+- Argon2id 保持 `m=65536、t=3、p=4`；WPS 登录限流为 IP `300/600s`、账号 `10/600s`，注册和网页登录限制保持原值。
 - 账号和密码的长度、字符集、字母数字组合规则均由服务器执行。
 - 大小写不同的同名账号以及并发同名注册只能成功一次。
 - 正确密码登录成功，错误密码、错误账号和不存在账号返回同一凭据错误。
@@ -1210,7 +1220,8 @@ apps/wps/tests/test_launcher_auth.py
 - `/admin/web` 与 `/monitor` 保持同一网页业务能力。
 - Web 和 WPS 管理查询不会连接错误的数据库。
 - 本地账号数据库中的密码、会话和设备密钥均为 DPAPI 密文。
-- 无本地账号时启动器显示独立登录注册窗口，有账号时不显示窗口。
+- 启动器默认显示独立登录注册窗口；仅用户启用自动登录时允许跳过。
+- 关闭窗口或公网登录未成功时不创建 Control、Web 或 AccountRuntime 服务。
 - TaskPane 中不存在登录、注册或密码保存表单。
 - 现有网页数据库仍然只包含原有 Web 表。
 - WPS 数据库和请求日志不包含文档字段。
@@ -1224,7 +1235,7 @@ apps/wps/tests/test_launcher_auth.py
 1. 只执行 `python server.py` 即可启动现有 Web 服务和 WPS 公网 API。
 2. `stats.db` 与 `wps_plugin.db` 完全分离。
 3. WPS 用户可以注册、登录、查询当前账号和退出。
-4. 会话从登录成功起精确 24 小时，心跳不续期。
+4. 新会话从登录成功起精确 7 天，心跳不续期；已有会话按原到期时间生效。
 5. 后台可以看到账号、设备、在线状态和插件版本。
 6. 正常账号可以免费申请 `apply` 授权。
 7. 服务器先写入唯一请求记录，再返回允许执行和排版配置。

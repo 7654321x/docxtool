@@ -1402,18 +1402,32 @@ async function upload(f){
   const task=await resp.json();
   const task_id=task.task_id;
   bar.style.width='36%';setStep(2);status((task.status==='queued'?(task.message||`排队中，前方还有 ${task.queue_ahead||0} 个任务`):'正在读取文档结构')+warnSuffix(task),'');
-  for(let i=0;i<40;i++){
+  let pollCount=0;
+  let consecutiveStatusFailures=0;
+  while(true){
     await new Promise(r=>setTimeout(r,1000));
     try{
-      const r=await fetch(api('/status/'+task_id));const t=await r.json();
+      const r=await fetch(api('/status/'+task_id));
+      if(!r.ok)throw new Error('TASK_STATUS_HTTP_'+r.status);
+      const t=await r.json();
+      consecutiveStatusFailures=0;
       if(t.status==='queued'){bar.style.width='36%';setStep(2);status((t.message||`排队中，前方还有 ${t.queue_ahead||0} 个任务`)+warnSuffix(t),'');continue}
-      if(t.status==='processing'){const pct=48+Math.min(i*2,36);bar.style.width=pct+'%';setStep(pct<72?3:4);status((t.message||'正在应用公文格式')+warnSuffix(t),'');continue}
-      if(t.status==='done'){bar.style.width='100%';setStep(4);status('排版完成，正在下载'+warnSuffix(t),'done');const dl=await fetch(api('/download/'+task_id));const blob=await dl.blob();if(lastDownloadUrl)URL.revokeObjectURL(lastDownloadUrl);lastDownloadUrl=URL.createObjectURL(blob);lastDownloadName=f.name.replace(/\.docx$/i,(config?.output_suffix||'_排版')+'.docx');triggerDownload(lastDownloadUrl,lastDownloadName);status('下载完成','done');renderRecognitionSummary(t.recognition_summary);resultCard.style.display='block';return}
-      if(t.status==='error'){status(friendlyError(t.error||'排版失败',t.code,t),'error');return}
-      bar.style.width=(50+Math.min(i*2,42))+'%';
-    }catch(_){}
+      if(t.status==='processing'){const pct=48+Math.min(pollCount*2,36);bar.style.width=pct+'%';setStep(pct<72?3:4);status((t.message||'正在应用公文格式')+warnSuffix(t),'');pollCount+=1;continue}
+      if(t.status==='done'){
+        bar.style.width='100%';setStep(4);status('排版完成，正在下载'+warnSuffix(t),'done');
+        const dl=await fetch(api('/download/'+task_id));
+        const contentType=String(dl.headers.get('content-type')||'').split(';',1)[0].trim().toLowerCase();
+        if(!dl.ok){let e={};try{e=await dl.json()}catch(_){}status(friendlyError(e.error||'下载失败',e.code,e),'error');return}
+        if(contentType!=='application/vnd.openxmlformats-officedocument.wordprocessingml.document'){status('下载失败：服务器未返回 DOCX 文件','error');return}
+        const blob=await dl.blob();if(lastDownloadUrl)URL.revokeObjectURL(lastDownloadUrl);lastDownloadUrl=URL.createObjectURL(blob);lastDownloadName=f.name.replace(/\.docx$/i,(config?.output_suffix||'_排版')+'.docx');triggerDownload(lastDownloadUrl,lastDownloadName);status('下载完成','done');renderRecognitionSummary(t.recognition_summary);resultCard.style.display='block';return
+      }
+      if(['error','failed','timeout','interrupted','expired'].includes(t.status)){status(friendlyError(t.error||t.message||('任务已'+t.status),t.code,t),'error');return}
+      status('任务状态异常，请重新上传','error');return
+    }catch(_){
+      consecutiveStatusFailures+=1;
+      if(consecutiveStatusFailures>=3){status('状态查询连续失败，请检查网络后重试','error');return}
+    }
   }
-  status('排版超时，请稍后重试或重新上传','error');
 }
 function triggerDownload(url,name){const a=document.createElement('a');a.href=url;a.download=name;a.click()}function redownload(){if(lastDownloadUrl)triggerDownload(lastDownloadUrl,lastDownloadName)}function resetUpload(){document.getElementById('file').value='';meta.textContent='还没有选择文件';progressArea.style.display='none';resultCard.style.display='none';renderRecognitionSummary(null);bar.style.width='0';status('',null);setStep(0)}
 async function bootstrap(){loadLocalTemplates();initSettings();renderTemplateOptions();await refreshUserSession();await refreshAdminSession();await loadRemoteTemplates()}

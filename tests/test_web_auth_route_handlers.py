@@ -295,6 +295,48 @@ def test_handle_auth_login_rejects_invalid_credentials_or_disabled_account() -> 
     assert disabled.responses == [("json_error_fields", ("ACCOUNT_DISABLED", "disabled", 403))]
 
 
+def test_web_login_keeps_30_per_ip_and_10_per_account_limits() -> None:
+    """WPS 限流调整不得改变网页账号登录的独立限流参数。"""
+    handler = FakeHandler({"username": "Alice", "password": "pass"})
+    calls: list[tuple[str, str, int, int]] = []
+
+    def auth_rate_allow(scope, key, window, limit):
+        calls.append((scope, key, window, limit))
+        return False, 9
+
+    handle_auth_login(
+        handler,
+        read_json_request=lambda: handler.payload,
+        validate_username=lambda value: (value, value.lower()),
+        invalid_credentials_error=lambda: ("INVALID_CREDENTIALS", "bad", 401),
+        client_ip=lambda *_args: "203.0.113.10",
+        auth_rate_allow=auth_rate_allow,
+        login_rate_limit_error=lambda *_args: ("RATE_LIMITED", "slow", 429),
+        sql_lock=nullcontext(),
+        connect=lambda: FakeConnection(),
+        verify_password=lambda *_args: (False, False),
+        account_disabled_error=lambda: ("ACCOUNT_DISABLED", "disabled", 403),
+        hash_password=lambda password: password,
+        now_unix=lambda: 123,
+        principal=lambda *_args: {},
+        migrate_anonymous_resources=lambda *_args: None,
+        create_user_session=lambda *_args: {},
+        parse_bool=lambda _value, default: default,
+        success_response=lambda *_args: {},
+        session_extra_headers=lambda *_args: [],
+        user_cookie_header=lambda *_args, **_kwargs: "",
+        anonymous_clear_cookie_header=lambda: "",
+    )
+
+    assert calls == [
+        ("login-ip", "203.0.113.10", 600, 30),
+        ("login-name", "alice", 600, 10),
+    ]
+    assert handler.responses == [
+        ("json_error_fields", ("RATE_LIMITED", "slow", 429))
+    ]
+
+
 def test_handle_auth_logout_checks_origin_csrf_and_clears_cookie() -> None:
     """退出处理器应校验来源和 CSRF，通过后删除 session 并清除 Cookie。"""
     handler = FakeHandler()

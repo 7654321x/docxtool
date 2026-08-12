@@ -2,7 +2,7 @@
 
 这是一个公文排版 Web 服务，支持 `.docx` 上传、格式识别、自动排版、任务状态查询、文件下载、管理后台和 Cloudflare Pages Worker 代理。
 
-当前正式版本为 **5.2**。本版本新增 WPS 独立账号、设备、会话、心跳和排版授权服务，提供统一管理员工作台，并补齐 WPS 客户端登录、授权、结果回传、旧格式文档事务处理和可复现 EXE 构建流程；同时强化文首职务姓名识别，继续保持识别优先 wheel 供 WPS、Office.js、VSTO 和其他本地宿主复用。
+当前正式版本为 **5.2.2**。本版本完善 WPS 登录与托盘体验，强化账号、心跳、结果补报和启动器清理的一致性，并补齐 Word/WPS 原生自动编号标题的一至四级识别、标题句末标点清理及一键排版文字序号重建；继续保持识别优先 wheel 供 WPS、Office.js、VSTO 和其他本地宿主复用。
 
 当前项目只保留 Web 服务新架构。重构前的桌面端文件和旧前端入口已从发布树移除。
 
@@ -203,9 +203,11 @@ DATABASE_PATH=var/data/stats.db
 
 ## WPS 插件公网账号与客户端
 
-根目录 `server.py` 同时提供网页排版服务和 `/wps-api/v1/*` WPS 公网账号接口，但网页业务与 WPS 插件分别使用 `stats.db` 和 `wps_plugin.db`。WPS 第一阶段包含注册、登录、设备、固定 24 小时会话、10 分钟心跳、免费一键排版授权、服务器格式配置下发、结果统计和独立管理页面。
+根目录 `server.py` 同时提供网页排版服务和 `/wps-api/v1/*` WPS 公网账号接口，但网页业务与 WPS 插件分别使用 `stats.db` 和 `wps_plugin.db`。WPS 第一阶段包含注册、登录、设备、固定 7 天会话、10 分钟心跳、免费一键排版授权、服务器格式配置下发、结果统计和独立管理页面。新注册和新登录签发的会话从签发时起精确有效 7 天，心跳不续期；升级前已经存在的会话继续按数据库中的原到期时间失效。
 
-WPS 用户端由 `apps/wps/main.py` 或打包后的 `DocxToolWps.exe` 单独启动。本地没有账号时显示独立登录注册窗口；已有账号时直接启动插件服务。账号密码、会话和设备密钥使用 Windows DPAPI 加密后存入 `%LOCALAPPDATA%\DocxTool\wps\account.db`。预览、清除预览和本机检测保留本地可用；一键排版执行前必须取得公网授权。文档内容不上传公网服务器。
+单进程部署时，WPS 注册哈希、真实或虚假账号密码校验及旧哈希升级共用两个 Argon2 槽位，以控制 2 核 2G 服务器的内存峰值。Argon2id 仍使用 `m=65536 KiB、t=3、p=4`；WPS 登录限流为同一 IP 每 10 分钟 300 次、同一账号每 10 分钟 10 次，注册仍为同一 IP 每小时 5 次。网页版账号限流和匿名排版不受影响。
+
+WPS 用户端由 `apps/wps/main.py` 或打包后的 `DocxToolWps.exe` 单独启动。登录注册窗口使用 `PySide2 5.15.2.1 + Qt Widgets + QSS`，兼容目标为 Windows 7 SP1 及以上系统。默认每次启动都显示窗口；用户可选择“记住密码”和“自动登录”，自动登录会优先复用有效会话，过期时只静默登录一次。自动登录后可通过系统托盘的“登录与账号设置”关闭该选项，双击托盘或再次运行程序也会打开设置；按住 Shift 启动可强制显示登录窗口。“随 Windows 登录启动”与自动登录相互独立，使用当前用户启动项，不需要管理员权限。账号密码、会话和设备密钥使用 Windows DPAPI 加密后存入 `%LOCALAPPDATA%\DocxTool\wps\account.db`，不记住密码时清除本地密码密文；一键排版执行前还必须取得公网授权。文档内容不上传公网服务器。
 
 构建控制台单文件客户端时必须显式传入正式 HTTPS Origin：
 
@@ -220,6 +222,8 @@ pwsh -NoProfile -File .\apps\wps\scripts\build-exe.ps1 -ServerOrigin https://wps
 ```pwsh
 pwsh -NoProfile -Command "python -m pytest"
 pwsh -NoProfile -Command "python -m ruff check src tests scripts"
+pwsh -NoProfile -Command "node --test apps/wps/tests/wps-runtime.test.mjs"
+pwsh -NoProfile -Command "node --test tests/frontend-format-config.test.mjs"
 pwsh -NoProfile -Command "node --test tests/worker-routing.test.mjs"
 pwsh -NoProfile -Command "python -m build"
 ```

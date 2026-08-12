@@ -33,6 +33,7 @@ def render_document_items(
     body_flow_started = context.body_flow_started
     line_twips = context.line_twips
     numbering_enabled = context.numbering_enabled
+    native_numbering_copier = context.native_numbering_copier
     numbering_mode = context.numbering_mode
     strict_preservation = context.strict_preservation
     normalization_processing = context.normalization_processing
@@ -101,15 +102,23 @@ def render_document_items(
 
             # 标题先清理旧编号，再建段落
             text = pd.text
-            # A standalone first-level title is not a body sentence.  Its
-            # terminal Chinese full stop is copied formatting noise and is
-            # removed in every editable processing mode.
+            # A standalone heading is not a body sentence. Its terminal
+            # Chinese full stop is copied formatting noise and is removed in
+            # every editable processing mode at all four heading levels.
+            stripped_text = text.rstrip()
+            first_period = stripped_text.find("。")
+            has_inline_body = (
+                first_period >= 0
+                and len(stripped_text[first_period + 1:-1].strip())
+                >= _INLINE_HEADING_BODY_MIN_CHARS
+            )
             if (
                 not strict_preservation
-                and pd.type_id == "heading1"
-                and text.rstrip().endswith("。")
+                and pd.type_id in ("heading1", "heading2", "heading3", "heading4")
+                and stripped_text.endswith("。")
+                and not has_inline_body
             ):
-                text = text.rstrip()[:-1]
+                text = stripped_text[:-1]
             if numbering_enabled and normalization_processing:
                 numbering_result = normalize_numbering_text(text, safe=numbering_mode != "off")
                 if numbering_result.changed:
@@ -136,6 +145,18 @@ def render_document_items(
             else:
                 para = doc.add_paragraph(text)
             _set_paragraph_style_id(para, _style_id_for_type(pd.type_id))
+            native_numbering = getattr(getattr(pd, "features", None), "native_numbering", None)
+            preserve_native_numbering = bool(
+                native_numbering is not None
+                and (
+                    strict_preservation
+                    or not (numbering_enabled and pd.type_id.startswith("heading"))
+                )
+            )
+            if preserve_native_numbering:
+                native_numbering_copier.apply(para, native_numbering)
+                context.native_numbering_elements.add(para._p)
+                stats["native_numbering_preserved"] += 1
             next_pd = render_items[i + 1] if i + 1 < len(render_items) else None
             if _is_standalone_keep_heading(pd, next_pd, para.text):
                 _set_keep_with_next(para)
@@ -412,6 +433,8 @@ def render_document_items(
             else:
                 stats["body"] += 1
 
+        except ExportError:
+            raise
         except Exception as e:
             logger.error(f"[引擎] 段落 {i} 异常: {e}，降级为纯文本")
             # 降级兜底：不跳过，用原始文本 + 正文格式写入

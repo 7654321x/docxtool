@@ -910,7 +910,7 @@ test("Host sends only the authorization identity to the local Engine route", asy
   assert.equal(Object.hasOwn(prepare.body, "format_config"), false);
 });
 
-test("Host operation logs identify the active document by file name", async () => {
+test("Host operation logs do not expose the active document name", async () => {
   const harness = makeHostHarness();
   harness.runtime.start();
 
@@ -920,8 +920,7 @@ test("Host operation logs identify the active document by file name", async () =
   );
 
   const started = harness.logs.find((item) => item.event === "host.command.start");
-  assert.equal(started.details.document_name, "sample.docx");
-  assert.ok(!started.details.document_name.includes("\\"));
+  assert.equal(Object.hasOwn(started.details, "document_name"), false);
 });
 
 test("Host silently upgrades a legacy DOC before recognition preview", async () => {
@@ -1210,7 +1209,7 @@ test("Panel action starts one Host bridge when OnAddinLoad was not observed", as
   assert.match(harness.taskpaneCreateCalls[0][0], /taskpane\.html\?v=10$/);
   assert.equal(harness.values.get(TASKPANE_VERSION_KEY), "10");
   assert.ok(harness.events().includes("host.start.lazy.enter"));
-  assert.ok(harness.events().includes("host.start.lazy.completed"));
+  assert.ok(harness.events().includes("host.start.lazy.scheduled"));
 
   harness.runtime.handleRibbonAction("panel");
   assert.equal(
@@ -1608,6 +1607,7 @@ function makeElement(id) {
     offsetHeight: rect.height,
     rect,
     textContent: "",
+    children: [],
     listeners: new Map(),
     addEventListener(name, callback) {
       this.listeners.set(name, callback);
@@ -1615,7 +1615,7 @@ function makeElement(id) {
     getBoundingClientRect() {
       return { ...this.rect };
     },
-    replaceChildren() {},
+    replaceChildren(...children) { this.children = children; },
   };
 }
 
@@ -1624,6 +1624,7 @@ function makeTaskpaneHarness(initialState, {
   commandFailure = "",
   invalidJsonPath = "",
   stateWaitFailure = "",
+  nowMs = Date.now(),
   account = {
     signed_in: true,
     username: "User01",
@@ -1650,6 +1651,10 @@ function makeTaskpaneHarness(initialState, {
   let stateRevision = 1;
   let nextStateWaitFailure = stateWaitFailure;
   let currentAccount = account;
+  let currentNowMs = nowMs;
+  const HarnessDate = class extends Date {
+    static now() { return currentNowMs; }
+  };
   const ids = [
     "preview", "apply", "clear_preview", "health",
     "close_panel", "status", "account", "message", "error", "warnings", "summary", "rows",
@@ -1771,7 +1776,7 @@ function makeTaskpaneHarness(initialState, {
   });
   const context = {
     Application: application,
-    Date,
+    Date: HarnessDate,
     Error,
     JSON,
     Math,
@@ -1906,6 +1911,7 @@ function makeTaskpaneHarness(initialState, {
       waiter.resolve(response({ ok: false, error_code: code }, { ok: false, status: 400 }));
     },
     get stateWaiterCount() { return stateWaiters.length; },
+    advanceTime(milliseconds) { currentNowMs += milliseconds; },
     values,
   };
 }
@@ -1937,12 +1943,12 @@ test("TaskPane resets the WPS viewport again after page load settles", () => {
   assert.equal(completed[1].details.content_scroll_top, 0);
 });
 
-test("TaskPane renders protocol statuses in sentence case", async () => {
+test("TaskPane renders protocol statuses in Chinese", async () => {
   const cases = [
-    ["READY", "Ready"],
-    ["RUNNING", "Running"],
-    ["PASS", "Pass"],
-    ["FAIL", "Fail"],
+    ["READY", "就绪"],
+    ["RUNNING", "处理中"],
+    ["PASS", "成功"],
+    ["FAIL", "失败"],
   ];
   for (const [protocolStatus, displayStatus] of cases) {
     const harness = makeTaskpaneHarness({
@@ -1960,7 +1966,7 @@ test("TaskPane renders protocol statuses in sentence case", async () => {
     updated_at: "1",
   });
   await notReady.flushAsync();
-  assert.equal(notReady.elements.get("status").textContent, "Not ready");
+  assert.equal(notReady.elements.get("status").textContent, "未就绪");
 });
 
 test("TaskPane submits panel_ready once after READY and load_settled", async () => {
@@ -2084,7 +2090,7 @@ test("TaskPane blocks not-ready and busy states with distinct events", async () 
   notReady.click("preview");
   await notReady.flushAsync();
   assert.ok(notReady.events().includes("taskpane.request.blocked.host_not_ready"));
-  assert.equal(notReady.elements.get("error").textContent, "WPS_HOST_NOT_READY");
+  assert.equal(notReady.elements.get("error").textContent, "错误代码：WPS_HOST_NOT_READY");
 
   const busy = makeTaskpaneHarness({ host_ready: true, status: "READY", updated_at: "1" });
   await busy.flushAsync();
@@ -2093,7 +2099,7 @@ test("TaskPane blocks not-ready and busy states with distinct events", async () 
   busy.click("preview");
   await busy.flushAsync();
   assert.ok(busy.events().includes("taskpane.request.blocked.busy"));
-  assert.equal(busy.elements.get("error").textContent, "WPS_COMMAND_BUSY");
+  assert.equal(busy.elements.get("error").textContent, "错误代码：WPS_COMMAND_BUSY");
 });
 
 test("TaskPane submits through the bridge and observes claim and completion", async () => {
@@ -2174,6 +2180,153 @@ test("TaskPane uses the five-second ACK wait after command enqueue", async () =>
   assert.equal(stateWaits.at(-1).body.timeout_seconds, 5);
 });
 
+test("TaskPane accepts a terminal panel_ready PASS that arrives after ACK timeout", async () => {
+  const ready = { host_ready: true, status: "READY", updated_at: "1" };
+  const harness = makeTaskpaneHarness(ready, { nowMs: 1000 });
+  await harness.flushAsync();
+  harness.dispatchWindowEvent("load");
+  harness.flushTimeouts();
+  await harness.flushAsync();
+  const panelRequest = harness.commandRequests.find((item) => item.command === "panel_ready");
+
+  harness.advanceTime(5001);
+  harness.pushState(ready);
+  await harness.flushAsync(50);
+  assert.ok(harness.events().includes("taskpane.request.timeout"));
+
+  harness.pushState({
+    host_ready: true,
+    status: "READY",
+    updated_at: "2",
+    last_request: {
+      request_id: panelRequest.request_id,
+      command: "panel_ready",
+      request_status: "PASS",
+    },
+  });
+  await harness.flushAsync(50);
+
+  assert.ok(harness.events().includes("taskpane.panel_ready.completed"));
+  assert.equal(harness.elements.get("preview").disabled, false);
+  assert.equal(harness.elements.get("apply").disabled, false);
+});
+
+test("TaskPane keeps a late terminal panel_ready FAIL disabled and ignores duplicates", async () => {
+  const ready = { host_ready: true, status: "READY", updated_at: "1" };
+  const harness = makeTaskpaneHarness(ready, { nowMs: 1000 });
+  await harness.flushAsync();
+  harness.dispatchWindowEvent("load");
+  harness.flushTimeouts();
+  await harness.flushAsync();
+  const panelRequest = harness.commandRequests.find((item) => item.command === "panel_ready");
+
+  harness.advanceTime(5001);
+  harness.pushState(ready);
+  await harness.flushAsync(50);
+  const failureState = {
+    host_ready: true,
+    status: "FAIL",
+    updated_at: "2",
+    last_request: {
+      request_id: panelRequest.request_id,
+      command: "panel_ready",
+      request_status: "FAIL",
+      error_code: "WPS_PANEL_READY_FAILED",
+    },
+  };
+  harness.pushState(failureState);
+  await harness.flushAsync(50);
+  harness.pushState(failureState);
+  await harness.flushAsync(50);
+
+  assert.equal(
+    harness.events().filter((event) => event === "taskpane.panel_ready.failed").length,
+    1,
+  );
+  assert.equal(harness.elements.get("preview").disabled, true);
+  assert.equal(harness.elements.get("apply").disabled, true);
+});
+
+test("TaskPane ignores an unrelated terminal state while waiting for panel_ready", async () => {
+  const ready = { host_ready: true, status: "READY", updated_at: "1" };
+  const harness = makeTaskpaneHarness(ready, { nowMs: 1000 });
+  await harness.flushAsync();
+  harness.dispatchWindowEvent("load");
+  harness.flushTimeouts();
+  await harness.flushAsync();
+
+  harness.advanceTime(5001);
+  harness.pushState(ready);
+  await harness.flushAsync(50);
+  harness.pushState({
+    host_ready: true,
+    status: "PASS",
+    updated_at: "2",
+    last_request: {
+      request_id: "unrelated-request",
+      command: "health",
+      request_status: "PASS",
+    },
+  });
+  await harness.flushAsync(50);
+
+  assert.equal(harness.events().includes("taskpane.panel_ready.completed"), false);
+  assert.equal(harness.elements.get("preview").disabled, true);
+  assert.equal(harness.bridgeCalls.filter((item) => item.path === "/v1/bridge/command").length, 1);
+});
+
+test("TaskPane stops a panel_ready wait at thirty seconds and prepares a fresh pane", async () => {
+  const ready = { host_ready: true, status: "READY", updated_at: "1" };
+  const harness = makeTaskpaneHarness(ready, { nowMs: 1000 });
+  await harness.flushAsync();
+  harness.dispatchWindowEvent("load");
+  harness.flushTimeouts();
+  await harness.flushAsync();
+
+  harness.advanceTime(29999);
+  harness.timeoutStateWait();
+  await harness.flushAsync(50);
+  assert.equal(harness.events().includes("taskpane.panel_ready.terminal_timeout"), false);
+  assert.equal(harness.stateWaiterCount, 1);
+
+  harness.advanceTime(1);
+  harness.timeoutStateWait();
+  await harness.flushAsync(50);
+
+  assert.equal(
+    harness.events().filter((event) => event === "taskpane.panel_ready.terminal_timeout").length,
+    1,
+  );
+  assert.equal(harness.stateWaiterCount, 0);
+  assert.equal(harness.values.get("docxtool_wps_taskpane_id_v1"), "");
+  assert.equal(harness.values.get("docxtool_wps_taskpane_version_v1"), "");
+  assert.equal(harness.elements.get("error").textContent, "错误代码：WPS_PANEL_READY_TERMINAL_TIMEOUT");
+  assert.match(harness.elements.get("message").textContent, /重启 WPS/);
+  assert.equal(harness.elements.get("preview").disabled, true);
+  assert.equal(harness.elements.get("apply").disabled, true);
+});
+
+test("TaskPane releases an ordinary command after the five-second ACK timeout", async () => {
+  const ready = { host_ready: true, status: "READY", updated_at: "1" };
+  const harness = makeTaskpaneHarness(ready, { nowMs: 1000 });
+  await harness.flushAsync();
+  harness.click("health");
+  await harness.flushAsync();
+
+  harness.advanceTime(5001);
+  harness.pushState(ready);
+  await harness.flushAsync(50);
+  harness.click("health");
+  await harness.flushAsync();
+
+  assert.equal(harness.commandRequests.filter((item) => item.command === "health").length, 2);
+  assert.equal(
+    harness.events().filter((event) => event === "taskpane.request.timeout").length,
+    1,
+  );
+  assert.equal(harness.events().includes("taskpane.panel_ready.terminal_timeout"), false);
+});
+
 test("TaskPane summary separates confirmed, review, and unresolved preview items", async () => {
   const harness = makeTaskpaneHarness({
     host_ready: true,
@@ -2192,10 +2345,36 @@ test("TaskPane summary separates confirmed, review, and unresolved preview items
   await harness.flushAsync();
 
   assert.match(harness.elements.get("summary").textContent, /识别 3 项/);
+  assert.match(harness.elements.get("summary").textContent, /文档模式 普通公文/);
+  assert.doesNotMatch(harness.elements.get("summary").textContent, /NORMAL/);
   assert.match(harness.elements.get("summary").textContent, /批注 2/);
   assert.match(harness.elements.get("summary").textContent, /确认 1/);
   assert.match(harness.elements.get("summary").textContent, /复核 1/);
   assert.match(harness.elements.get("summary").textContent, /未定位 1/);
+});
+
+test("TaskPane never exposes an internal type id when no Chinese role is supplied", async () => {
+  const harness = makeTaskpaneHarness({
+    host_ready: true,
+    status: "PASS",
+    updated_at: "1",
+    recognition: { document_mode: "UNKNOWN", block_count: 1, unresolved_count: 0 },
+    recognition_rows: [{
+      paragraph_index: 0,
+      type_id: "internal_future_type",
+      role_name: "",
+      confidence: 0.9,
+      binding_status: "confirmed",
+      review_level: "confirmed",
+    }],
+  });
+  await harness.flushAsync();
+
+  assert.match(harness.elements.get("rows").children[0].textContent, /未知/);
+  assert.doesNotMatch(
+    harness.elements.get("rows").children[0].textContent,
+    /internal_future_type/,
+  );
 });
 
 test("TaskPane clears the pending-result warning after account synchronization", async () => {
@@ -2222,7 +2401,7 @@ test("TaskPane clears the pending-result warning after account synchronization",
   });
   await harness.flushAsync();
 
-  assert.equal(harness.elements.get("status").textContent, "Pass");
+  assert.equal(harness.elements.get("status").textContent, "成功");
   assert.match(harness.elements.get("warnings").textContent, /排版已完成，结果尚未同步/);
   assert.equal(
     harness.events().filter((event) => event === "taskpane.result.sync.pending").length,
@@ -2275,7 +2454,12 @@ test("TaskPane restores apply availability from the bridge account state", async
   });
   await harness.flushAsync();
   assert.equal(harness.elements.get("apply").disabled, true);
-  assert.match(harness.elements.get("account").textContent, /离线/);
+  assert.equal(harness.elements.get("account").textContent, "User01 · 服务器离线");
+  assert.equal(harness.elements.get("message").textContent, "服务器无法连接。");
+  assert.equal(
+    harness.elements.get("error").textContent,
+    "错误代码：WPS_PUBLIC_SERVER_UNAVAILABLE",
+  );
 
   harness.pushState(ready, {
     account: {
@@ -2288,7 +2472,7 @@ test("TaskPane restores apply availability from the bridge account state", async
   await harness.flushAsync();
 
   assert.equal(harness.elements.get("apply").disabled, false);
-  assert.doesNotMatch(harness.elements.get("account").textContent, /离线/);
+  assert.equal(harness.elements.get("account").textContent, "User01");
 });
 
 test("TaskPane logs bridge command failure before request summary", async () => {
@@ -2303,7 +2487,7 @@ test("TaskPane logs bridge command failure before request summary", async () => 
   const summary = harness.events().indexOf("taskpane.request.failed");
   assert.ok(specific >= 0);
   assert.ok(summary > specific);
-  assert.equal(harness.elements.get("error").textContent, "WPS_COMMAND_BUSY");
+  assert.equal(harness.elements.get("error").textContent, "错误代码：WPS_COMMAND_BUSY");
 });
 
 test("TaskPane distinguishes an invalid bridge command response", async () => {
@@ -2318,7 +2502,7 @@ test("TaskPane distinguishes an invalid bridge command response", async () => {
   const summary = harness.events().indexOf("taskpane.request.failed");
   assert.ok(specific >= 0);
   assert.ok(summary > specific);
-  assert.equal(harness.elements.get("error").textContent, "WPS_BRIDGE_RESPONSE_INVALID");
+  assert.equal(harness.elements.get("error").textContent, "错误代码：WPS_BRIDGE_RESPONSE_INVALID");
 });
 
 test("TaskPane stops when its initial state long request fails", async () => {
@@ -2338,6 +2522,9 @@ test("TaskPane stops when its initial state long request fails", async () => {
     1,
   );
   assert.equal(harness.stateWaiterCount, 0);
+  assert.equal(harness.values.get("docxtool_wps_taskpane_id_v1"), "");
+  assert.equal(harness.values.get("docxtool_wps_taskpane_version_v1"), "");
+  assert.ok(harness.events().includes("taskpane.bridge.state.wait.recovery_prepared"));
 });
 
 test("TaskPane stops with a specific error when bridge account state is invalid", async () => {
@@ -2358,7 +2545,7 @@ test("TaskPane stops with a specific error when bridge account state is invalid"
   );
   assert.equal(
     harness.elements.get("error").textContent,
-    "WPS_ACCOUNT_PENDING_RESULT_COUNT_INVALID",
+    "错误代码：WPS_ACCOUNT_PENDING_RESULT_COUNT_INVALID",
   );
   assert.equal(harness.stateWaiterCount, 0);
 });
@@ -2407,7 +2594,7 @@ test("TaskPane terminates a pending command when Host generation changes", async
 
   assert.ok(harness.events().includes("taskpane.bridge.host_generation.changed"));
   assert.ok(harness.events().includes("taskpane.request.failed.host_replaced"));
-  assert.equal(harness.elements.get("error").textContent, "WPS_HOST_CONTEXT_REPLACED");
+  assert.equal(harness.elements.get("error").textContent, "错误代码：WPS_HOST_CONTEXT_REPLACED");
   assert.ok(request.request_id);
 });
 
@@ -2453,7 +2640,7 @@ test("Host and TaskPane keep local evidence when log transport is unavailable", 
   assert.ok(taskpane.consoleLines.some((line) => line.includes("log.transport.unavailable")));
 });
 
-test("Bootstrap logs the exact child-script boundary that failed", () => {
+test("Bootstrap logs the exact asynchronous child-script boundary that failed", async () => {
   const consoleLines = [];
   const context = {
     Error,
@@ -2470,18 +2657,20 @@ test("Bootstrap logs the exact child-script boundary that failed", () => {
         consoleLines.push(String(message));
       },
     },
+    fetch: async () => ({ ok: true, json: async () => ({}) }),
     document: {
       readyState: "loading",
-      write() {
-        throw new Error("SCRIPT_WRITE_FAILED");
+      createElement() {
+        return {};
+      },
+      head: {
+        appendChild(script) { script.onerror(); },
       },
     },
   };
   context.window = context;
-  assert.throws(
-    () => vm.runInNewContext(MAIN_SOURCE, context, { filename: "main.js" }),
-    /SCRIPT_WRITE_FAILED/,
-  );
+  vm.runInNewContext(MAIN_SOURCE, context, { filename: "main.js" });
+  for (let index = 0; index < 8; index += 1) await Promise.resolve();
   assert.ok(
     consoleLines.some((line) => line.includes("bootstrap.bootstrap_log.failed")),
   );

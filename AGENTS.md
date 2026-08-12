@@ -134,7 +134,7 @@ pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m pytest tests/test_struct
 38. 触发场景：独立一级标题错误写成`二.标题`、`三．标题`或带重复句点时，中文序数加点号仍作为损坏的一级序号证据；标点规范化不得先将该点号转换为正文句号，开启序号规范后统一重建为`二、标题`、`三、标题`。不得将正文中的“一是、二是、三是”纳入此规则。修改后至少运行 `tests/test_importer_heading_flow.py tests/test_processing_flags.py tests/test_punctuation_engine.py tests/test_recognition_decoder.py`。
 38. 触发场景：广义“任意短句以冒号结尾”不能全局作为主送机关。`recipient/addressing`只允许文首正文开始前的主送机关，或任意区域中明确的独立称呼；进入正文后，空值的“机构名称：”按 `body + no_indent` 输出，使用 `DCT-Body` 且段前段后为 0。已有责任单位、联系人等明确字段标签继续走键值段规则，禁止维护具体机构名称名单。修改后至少运行 `tests/test_recognition_decoder.py tests/test_processing_flags.py tests/test_structured_layout_quality.py`。
 39. 触发场景：“姓名/姓氏或职务修饰 + 书记、主席、主任、局长、老师、同志等个人称谓 + 冒号/感叹号”的短独立行应识别为称呼，不维护具体人名。“机构名称：正文内容”和“责任单位：内容”不得因冒号生成新段落，冒号只用于段内格式。同一段中的“一是/二是/三是”或“一要/二要/三要”仅加粗各自引导句，句号后正文必须恢复普通格式，不得与 `inline_lead_bold` 重复重写。
-40. 触发场景：源 DOCX 的自动列表编号可能只存在于 `w:numPr`，不出现在段落文本中。短独立段若保留 `@lvl_N`、高加粗比例且旧导入链已识别为对应标题，authoritative decoder 不得被普通正文候选覆盖；超过 40 字的列表继承正文不按该规则整体升级。若同一自动列表物理段由“加粗标题句 + 普通正文”组成，`structural/smart` 应使用原生列表事实、句末标点和 run 格式切换拆为标题与一个完整正文段；没有 `w:numPr` 的普通加粗首句正文及无格式切换的长列表不得拆分。批处理必须对比源结构线索与输出类型，报告“源标题线索数/未保留数”，只记录段落号、类型、证据和文字哈希，不记录完整正文。修改后至少运行 `tests/test_segment_boundaries.py tests/test_processing_flags.py tests/test_recognition_decoder.py tests/test_sdk.py`。
+40. 触发场景：源 DOCX 的自动列表编号可能只存在于 `w:numPr`，不出现在段落文本中。必须解析直接或样式继承的 `numPr` 及其 `num/abstractNum` 定义；定义缺失时立即失败。标题层级优先由 `numFmt + lvlText` 模板确定，同一 `ilvl` 可对应不同标题层级；自定义模板只可结合同编号族、连续序号、最近父标题、旧识别结果和 Word 标题样式推断。加粗、字体和标题样式只加分，不得把“未加粗”作为自动编号标题的否定条件。超过 40 字、完整正文句、日期、附件、键值、称呼及冒号引出的连续列表保持正文/原结构。拆分物理段时仅首个逻辑段继承原生编号；关闭序号规范时合并并重映射完整编号定义，开启时只替换最终标题，普通自动列表继续保留。批处理报告“源自动编号标题线索数/未保留数”，只记录段落号、类型、证据和文字哈希。修改后至少运行 `tests/test_native_numbering.py tests/test_segment_boundaries.py tests/test_processing_flags.py tests/test_recognition_decoder.py tests/test_sdk.py tests/test_batch_test_docx.py`。
 41. 触发场景：附件说明、落款单位和落款日期在源文档中交错，或被无内容空段隔开时，非 strict 导出必须整理为“附件说明及附件项 → 落款单位 → 日期”，并删除该尾部块内部无结构含义的空段。若同一物理段落包含“编号标题 + 正文 + 多个软换行 + 末行落款单位”，且下一物理段落首个可见行是日期，也必须在标题/正文拆分后继续拆出落款单位，不能让标题正文分支吞掉尾部结构。识别到落款单位和日期后，最终渲染计划必须保证二者相邻；批处理报告“落款连续性问题数”，附件不得出现在二者之间。
 42. 触发场景：讲话稿开头和正文结尾都出现独立称呼时，开场称呼继续使用“称呼”配置的段前 1 行；一旦正文流已经开始，后续 `addressing`（例如文末再次称呼）段前、段后均强制为 0，不得因共用 `DCT-Recipient` 样式再次产生空一行。源段落中的连续手动空行仍按结构拆分规则清理。修改后至少运行 `tests/test_engine_heading_spacing.py tests/test_processing_flags.py tests/test_segment_boundaries.py`，并复排讲话专项稿检查最终 OOXML 的 `w:beforeLines`。
 43. 触发场景：主标题后的职务姓名和日期时间地点继承了 Word 标题样式时，全文文首分析器确认的 `role_name`、`date_line` 结构事实必须优先于 `main_title/title_continuation` 视觉候选及 Beam 的“主标题 → 标题续行”加分；旧类型或 Word 样式本身不得触发该硬约束。带空格或紧凑的“角色 + 2—4 字姓名”必须由前一标题锚点或后续日期/称呼支持；报告、总结、方案、材料等文档形态后缀和正文中的角色词是反例。数字两侧的时间或比例冒号（如 `11:00`、`1 : 2`）即使夹有普通空格、Tab、NBSP、全角空格或其他 Unicode 空白，也不是结构标签分隔符，`时间 ： 11:00`仍按第一个语义冒号识别键值。数字冒号后再出现标签时，识别与渲染必须共享原文 offset 和真实标签范围，仅加粗标签及语义冒号，不加粗前置时间或比例。以上规则不维护具体姓名、单位或地区名单。修改后至少运行 `tests/test_colon_structure.py tests/test_engine_inline_effects.py tests/test_recognition_decoder.py tests/test_processing_flags.py tests/test_segmentation_soft_breaks.py tests/test_sdk.py`，并复排讲话专项稿核验文首类型及 SDK 子范围。
@@ -153,6 +153,7 @@ pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m ruff check src tests scr
 ```
 45. 触发场景：职务后任意四字纯汉字短语不能仅凭前标题、后日期、后称呼、居中或 Word 标题样式单项证据认作姓名。裸姓名 fallback 也必须统一调用 `is_person_name_suffix()` 和 `person_name_shape_strength()`，不得直接用宽泛正则确认。普通四字姓名属于弱形状，必须同时具备前标题、后日期/称呼和居中；弱裸姓名自身若已有 `title/title_cont` 类型或 Title、Subtitle、Heading 样式，则保留在标题/正文裁决中，不得写入 `front_metadata role_name`。复姓、间隔点、占位符及 2—3 字姓名属于强形状，沿用既有前后结构锚点。紧凑“职务+姓名”存在多种切分时优先采用强姓名形状，文档形状后缀不得成为姓名，不得加入具体姓名或业务短语黑名单。修改后运行 `tests/test_recognition_decoder.py tests/test_processing_flags.py`。
 46. 触发场景：`时间11:00 标签：内容`、`版本1:2 标签：内容`等带文字前缀的数字时间/比例后仍有语义标签时，统一冒号分析必须返回原文中的 `separator_index`、`label_start_index`和`label_end_index`；渲染只加粗真实标签及语义冒号，数字表达及其文字前缀保持普通字重。修改后运行 `tests/test_colon_structure.py tests/test_engine_inline_effects.py`。
+47. 触发场景：最终识别为一至四级标题的独立标题以中文句号结尾，且句号后没有正文时，非 strict 导出必须删除该句末句号；“标题。正文”仍按既有标题正文边界处理，不得因本规则误删分界句号或正文。修改后运行 `tests/test_engine_heading_spacing.py`。
 
 ## 可移动服务器部署
 
@@ -162,6 +163,8 @@ pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m ruff check src tests scr
 3. Nginx模板只允许固定本机上游 `127.0.0.1:9527`，服务器公网地址通过 Cloudflare Pages 的 `BACKEND_BASE_URL`配置，不写入源码。
 4. 修改路径或部署入口后至少运行 `tests/test_paths.py`，并从项目目录之外执行 `pwsh -NoProfile -File <项目目录>\run.ps1 -CheckOnly`。
 5. Web 业务库 `DATABASE_PATH` 与 WPS 插件库 `WPS_DATABASE_PATH` 必须解析到不同文件；统一启动入口必须在初始化任一数据库前检查冲突，并以 `WPS_DATABASE_PATH_CONFLICT` 失败。不得通过 SQLite `ATTACH`、跨库 JOIN 或跨库事务合并两套业务数据。修改后运行 `tests/test_wps_server_database.py tests/test_web_admin_workspace.py`。
+6. 单进程、2 核 2G 的 WPS 账号服务固定共用两个 Argon2 槽位；注册哈希、真实或虚假账号校验和哈希升级都必须经过同一进程级 `BoundedSemaphore(2)`。Argon2id 保持 `m=65536 KiB、t=3、p=4`，不得通过降低密码参数换取吞吐；改为多进程时必须按“每进程两个槽位”重新核算总内存。
+7. WPS 新会话固定 7 天且心跳不续期，已有会话不得批量迁移；WPS 登录限流固定为 IP `300/600s`、账号 `10/600s`，注册为 IP `5/3600s`。网页版登录继续使用 IP `30/600s`、账号 `10/600s`。修改后运行 `tests/test_wps_server_auth.py tests/test_wps_server_routes.py tests/test_web_auth_route_handlers.py`。
 
 ## IDE 快捷方式启动失败
 

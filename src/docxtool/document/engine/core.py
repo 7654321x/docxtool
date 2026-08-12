@@ -79,6 +79,7 @@ from docxtool.document.engine.inline import (
     write_inline_tokens as _write_inline_tokens,
 )
 from docxtool.document.engine.preservation import (
+    NativeNumberingCopier as _NativeNumberingCopier,
     ReferencedStyleCopier as _ReferencedStyleCopier,
     SectionRelationshipCopier as _SectionRelationshipCopier,
     copy_image as _copy_image,

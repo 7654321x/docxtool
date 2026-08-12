@@ -11,6 +11,7 @@ class HeadingFamily:
     positions: tuple[int, ...]
     supported_positions: tuple[int, ...]
     parent_scope: tuple[int, ...] = ()
+    source_family: str = ""
 
     @property
     def count(self) -> int:
@@ -119,4 +120,6 @@ def _family_diagnostic(family: HeadingFamily) -> dict:
     }
     if family.parent_scope:
         result["parent_scope"] = list(family.parent_scope)
+    if family.source_family:
+        result["source_family"] = family.source_family
     return result

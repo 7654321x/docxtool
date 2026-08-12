@@ -141,7 +141,7 @@ pwsh -NoProfile -Command "python apps/wps/main.py start"
 
 `start` 会为 Control Server 分配随机本机端口，插件网页服务固定使用 `127.0.0.1:3889`，生成短期 `runtime/runtime-config.js`，并更新当前项目的 WPS 加载项注册。固定网页来源避免 WPS 因端口变化反复询问信任；若 `3889` 已被占用，启动器会直接报告端口绑定失败，不回退到随机端口。插件网页响应禁止缓存，避免 WPS 跨会话继续加载旧版 Bootstrap、Host 或 TaskPane。它不会自动打开或关闭 WPS；服务就绪后按需打开 WPS 文字即可。运行结束后会删除包含 session token 的 runtime config。
 
-首次启动且本机没有账号时，启动器显示独立登录注册窗口。账号密码、会话和设备密钥由 Windows DPAPI 加密后写入 `%LOCALAPPDATA%\DocxTool\wps\account.db`；已有账号时跳过窗口，过期会话通过保存的凭据静默登录。公网服务不可用时预览、清除预览和本机检测仍可使用，一键排版必须重新取得公网授权。
+独立登录注册窗口使用 `PySide2 5.15.2.1 + Qt Widgets + QSS`，通过布局和 Qt 5 高 DPI 属性适配 Windows 7 SP1、8.1、10 和 11。默认每次启动都显示窗口；“记住密码”允许使用 Windows DPAPI 保存并回填密码，“自动登录”同时启用记住密码，并在下次启动时复用有效会话或执行一次静默登录。自动登录后可从系统托盘进入“登录与账号设置”，双击托盘或再次运行程序也会打开设置；按住 Shift 启动会强制显示登录窗口。取消记住密码会清除密码密文并关闭自动登录。“随 Windows 登录启动”是独立开关，写入当前用户启动项，不需要管理员权限。账号、会话和设备密钥继续保存在 `%LOCALAPPDATA%\DocxTool\wps\account.db`；一键排版每次执行前必须重新取得公网授权。
 
 只测试 Python Control Server：
 

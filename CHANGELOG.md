@@ -1,10 +1,29 @@
 # Changelog
 
+## 5.2.2 - 2026-08-13
+
+- Recognized Word/WPS native automatic-numbering headings across levels one through four without requiring bold formatting, while preserving numbering definitions and source locators for safe output decisions.
+- Made WPS one-click formatting remove native heading numbering and rebuild editable text numbering with the configured heading font, size, and weight; ordinary automatic body lists remain preserved.
+- Removed terminal Chinese full stops from standalone headings at all four levels while retaining punctuation that separates an inline heading from body text.
+- Added a PySide2 custom title bar, shared D branding for login, settings, taskbar, Alt+Tab, and system tray, plus remember-password, auto-login, startup, and account-recovery controls.
+- Hardened WPS account rejection, durable result outbox cleanup, bounded `panel_ready` completion, launcher resource cleanup, loopback disconnect handling, and Chinese offline feedback.
+- Extended WPS sessions to seven days, bounded WPS Argon2 concurrency to two operations, moved password rehashing outside SQLite write locks, and raised the WPS per-IP login limit without weakening password parameters.
+
+## 5.2.1 - 2026-08-12
+
+- Rebuilt the WPS login/register experience with PySide2 Qt Widgets and QSS, adding DPAPI-backed remember-password preferences, user-selected auto-login, and corruption recovery while keeping manual login as the default.
+- Extended newly issued WPS sessions to seven days without migrating existing expiries, while keeping heartbeat non-renewing.
+- Bounded WPS Argon2 work to two concurrent operations per process, moved password rehash computation outside the SQLite write transaction, and raised only the WPS per-IP login limit to 300 requests per 10 minutes.
+- Hardened the WPS loopback credential boundary with same-origin runtime configuration and exact browser-origin validation.
+- Fixed late `panel_ready` completion, failed TaskPane reopen recovery, Web task lifecycle handling, and DOCX download response validation.
+- Added local-account corruption recovery and a durable SQLite format-result outbox.
+- Added Windows WPS/EXE release gates and corrected privacy-sensitive WPS log fields and lifecycle event names.
+
 ## 5.2 - 2026-08-12
 
 - Added an independent WPS account service with user registration and login, device and session lifecycle management, heartbeat, controlled formatting authorization, result reporting, and dedicated SQLite storage.
 - Added a unified administrator workspace for Web runtime status, WPS users, devices, online activity, and account or device enable/disable actions.
-- Added WPS client login and account persistence, silent session refresh, authorization-aware formatting, pending result delivery, and explicit network or account-state feedback.
+- Added WPS client login and account persistence, runtime session refresh, authorization-aware formatting, pending result delivery, and explicit network or account-state feedback.
 - Strengthened transactional handling for `.doc` and `.wps` conversion, document replacement, rollback, and host-side formatting while preserving single-thread WPS document access.
 - Added reproducible WPS executable build inputs, public API and server contracts, deployment guidance, and focused Python and JavaScript regression coverage.
 - Improved front-matter role/name recognition using document-wide title, date, salutation, style, alignment, and name-shape evidence without person or organization allowlists.

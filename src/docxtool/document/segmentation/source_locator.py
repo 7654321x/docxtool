@@ -290,6 +290,11 @@ def build_segment_features(
         alignment=parent.alignment,
         style_name=parent.style_name,
         numbering_prefix=parent.numbering_prefix,
+        native_numbering=(
+            parent.native_numbering
+            if not parent.source_physical_text[:start].strip()
+            else None
+        ),
         paragraph_index=paragraph_index,
         is_new_line=is_new_line,
         dominant_font_name=parent.dominant_font_name,
@@ -327,6 +332,7 @@ def build_unresolved_empty_segment_features(
         alignment=parent.alignment,
         style_name=parent.style_name,
         numbering_prefix=parent.numbering_prefix,
+        native_numbering=parent.native_numbering,
         paragraph_index=paragraph_index,
     )
     child.source_physical_paragraph_index = parent.source_physical_paragraph_index

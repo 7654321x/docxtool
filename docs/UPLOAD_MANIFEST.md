@@ -71,12 +71,15 @@ https://github.com/7654321x/docxtool.git
 ```text
 apps/wps/host-runtime.js
 apps/wps/images/taskpane.svg
+apps/wps/images/eye.svg
+apps/wps/images/eye-off.svg
+apps/wps/images/login-window.png
 apps/wps/js/bootstrap-log.js
 apps/wps/js/bootstrap-complete.js
 apps/wps/js/ribbon.js
 ```
 
-同时保留 `apps/wps/main.js`、`index.html`、`main.py`、`manifest.xml`、`ribbon.xml`、`images/taskpane.svg`、`taskpane.*`、`control/*.py`（包含单线程 `control/monitor.py` 和长请求通信桥 `control/host_bridge.py`）、`account_store.py`、`account_runtime.py`、`public_api.py`、`login_window.py`、`client-config.json`、`DocxToolWps.spec`、`requirements-build.txt`、`scripts/build-exe.ps1`、全部 WPS 测试（包括登录窗口测试）、`scripts/verify.ps1`、`package.json`、`package-lock.json`、`README.md` 和 `AGENTS.md`。不得上传 `apps/wps/node_modules/`、`logs/`、运行时生成的 `runtime/runtime-config.js`、`build/`、`dist/`、打包 EXE 或本机 WPS 注册文件。
+同时保留 `apps/wps/main.js`、`index.html`、`main.py`、`manifest.xml`、`ribbon.xml`、`images/taskpane.svg`、`images/eye.svg`、`images/eye-off.svg`、`images/login-window.png`、`taskpane.*`、`control/*.py`（包含单线程 `control/monitor.py` 和长请求通信桥 `control/host_bridge.py`）、`account_store.py`、`account_runtime.py`、`public_api.py`、`login_window.py`、`desktop_runtime.py`、`windows_startup.py`、`client-config.json`、`DocxToolWps.spec`、`requirements-build.txt`、`scripts/build-exe.ps1`、全部 WPS 测试（包括登录窗口和 Windows 启动项测试）、`scripts/verify.ps1`、`package.json`、`package-lock.json`、`README.md` 和 `AGENTS.md`。不得上传 `apps/wps/node_modules/`、`logs/`、运行时生成的 `runtime/runtime-config.js`、`build/`、`dist/`、打包 EXE 或本机 WPS 注册文件。
 
 ## 2. 后端和排版核心
 

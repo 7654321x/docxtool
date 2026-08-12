@@ -5,6 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 import logging
 import sqlite3
+import threading
 import uuid
 
 from docxtool.auth.passwords import hash_password, verify_password
@@ -28,8 +29,21 @@ from .validation import (
 )
 
 LOGGER = logging.getLogger("docx_tool")
+_WPS_ARGON2_LIMIT = threading.BoundedSemaphore(2)
 _DUMMY_PASSWORD = "DocxToolWpsDummy01"
-_DUMMY_PASSWORD_HASH = hash_password(_DUMMY_PASSWORD)
+
+
+def _hash_wps_password(password: str) -> str:
+    with _WPS_ARGON2_LIMIT:
+        return hash_password(password)
+
+
+def _verify_wps_password(password_hash: str, password: str) -> tuple[bool, bool]:
+    with _WPS_ARGON2_LIMIT:
+        return verify_password(password_hash, password)
+
+
+_DUMMY_PASSWORD_HASH = _hash_wps_password(_DUMMY_PASSWORD)
 
 
 class WpsServiceError(RuntimeError):
@@ -61,7 +75,7 @@ def register_user(payload, *, connect_func, sql_lock, client_ip, now_func, confi
     username, username_norm = validate_username(payload["username"])
     password = validate_password(payload["password"])
     device_data = validate_device_payload(payload["device"])
-    password_digest = hash_password(password)
+    password_digest = _hash_wps_password(password)
     fingerprint = device_fingerprint_hash(device_data["device_key"])
     now = int(now_func())
     user_id = _id("wusr")
@@ -125,13 +139,14 @@ def login_user(payload, *, connect_func, sql_lock, client_ip, now_func, config_v
         finally:
             conn.close()
     if user is None:
-        verify_password(_DUMMY_PASSWORD_HASH, password)
+        _verify_wps_password(_DUMMY_PASSWORD_HASH, password)
         raise WpsServiceError("INVALID_CREDENTIALS", "账号或密码错误", 401)
-    valid, needs_rehash = verify_password(user["password_hash"], password)
+    valid, needs_rehash = _verify_wps_password(user["password_hash"], password)
     if not valid:
         raise WpsServiceError("INVALID_CREDENTIALS", "账号或密码错误", 401)
     if user["status"] != "active":
         raise WpsServiceError("ACCOUNT_DISABLED", "账号已停用", 403)
+    updated_password_hash = _hash_wps_password(password) if needs_rehash else ""
     now = int(now_func())
     fingerprint = device_fingerprint_hash(device_data["device_key"])
     device_created = False
@@ -167,7 +182,7 @@ def login_user(payload, *, connect_func, sql_lock, client_ip, now_func, config_v
                     (device_data["device_name"], device_data["platform"], device_data["app_version"], now, client_ip[:80], device_id),
                 )
             updates = "password_hash=?,updated_at=?,last_login_at=?" if needs_rehash else "updated_at=?,last_login_at=?"
-            params = (hash_password(password), now, now, user["id"]) if needs_rehash else (now, now, user["id"])
+            params = (updated_password_hash, now, now, user["id"]) if needs_rehash else (now, now, user["id"])
             conn.execute(f"UPDATE wps_users SET {updates} WHERE id=?", params)
             session = create_session_in_connection(
                 conn, user["id"], device_id, client_ip, device_data["app_version"], now

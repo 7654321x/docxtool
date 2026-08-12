@@ -8,6 +8,29 @@ from typing import List, Optional, Tuple
 from docxtool.document.models.source import SourceRun
 
 
+@dataclass(frozen=True)
+class NativeNumbering:
+    """记录一个段落解析后的 Word/WPS 原生编号事实。"""
+
+    num_id: int
+    abstract_num_id: int
+    ilvl: int
+    num_fmt: str
+    lvl_text: str
+    start: int
+    start_override: Optional[int]
+    ordinal: int
+    family_id: str
+    num_xml: object
+    abstract_num_xml: object
+    num_pr_xml: object
+
+    @property
+    def effective_start(self) -> int:
+        """返回当前编号实例实际使用的起始序号。"""
+        return self.start_override if self.start_override is not None else self.start
+
+
 @dataclass
 class ParagraphFeatures:
     """记录一个逻辑段落可观测到的物理特征。
@@ -24,6 +47,7 @@ class ParagraphFeatures:
     alignment: str = ""
     first_line_indent: float = 0.0
     numbering_prefix: str = ""
+    native_numbering: Optional[NativeNumbering] = None
     paragraph_index: int = 0
     source_physical_paragraph_index: Optional[int] = None
     source_physical_text: str = ""

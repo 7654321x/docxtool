@@ -75,11 +75,34 @@ def read_body_blocks(
 
     raw_blocks: List[tuple] = []
     paragraph_index = 0
+    numbering_ordinals: dict[tuple[int, int], int] = {}
     body_index = 0
     for child in document._body._element.iterchildren():
         if child.tag == qn("w:p"):
             paragraph = DocxParagraph(child, document._body)
             paragraph_features = extract_features_func(paragraph, paragraph_index)
+            native_numbering = paragraph_features.native_numbering
+            if native_numbering is not None:
+                key = (native_numbering.num_id, native_numbering.ilvl)
+                current = numbering_ordinals.get(
+                    key,
+                    native_numbering.effective_start,
+                )
+                paragraph_features.native_numbering = type(native_numbering)(
+                    **{**native_numbering.__dict__, "ordinal": current}
+                )
+                numbering_ordinals[key] = current + 1
+                for counter_key in tuple(numbering_ordinals):
+                    counter_num_id, counter_level = counter_key
+                    if (
+                        counter_num_id == native_numbering.num_id
+                        and counter_level > native_numbering.ilvl
+                    ):
+                        numbering_ordinals.pop(counter_key)
+                data.native_numbering_definitions.setdefault(
+                    native_numbering.num_id,
+                    (native_numbering.num_xml, native_numbering.abstract_num_xml),
+                )
             inline_tokens = extract_inline_tokens(paragraph)
             sect_pr = extract_paragraph_sectPr(paragraph)
             collect_section_header_footer_parts(document, sect_pr, data)

@@ -93,7 +93,7 @@ def handle_wps_action(
         elif action == "login":
             payload = read_wps_json_request(handler)
             username_key = str(payload.get("username", "")).lower()
-            ip_allowed, ip_retry = rate_allow("wps-login-ip", ip, 600, 30)
+            ip_allowed, ip_retry = rate_allow("wps-login-ip", ip, 600, 300)
             name_allowed, name_retry = rate_allow("wps-login-name", username_key, 600, 10)
             if not ip_allowed or not name_allowed:
                 raise WpsServiceError("RATE_LIMITED", f"请求过于频繁，请在 {max(ip_retry, name_retry)} 秒后重试", 429)

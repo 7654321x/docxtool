@@ -111,6 +111,7 @@ $requiredFiles = @(
     "apps/wps/README.md",
     "apps/wps/account_runtime.py",
     "apps/wps/account_store.py",
+    "apps/wps/desktop_runtime.py",
     "apps/wps/client-config.json",
     "apps/wps/control/__init__.py",
     "apps/wps/control/document_transaction.py",
@@ -122,6 +123,9 @@ $requiredFiles = @(
     "apps/wps/control/server.py",
     "apps/wps/host-runtime.js",
     "apps/wps/images/taskpane.svg",
+    "apps/wps/images/eye.svg",
+    "apps/wps/images/eye-off.svg",
+    "apps/wps/images/login-window.png",
     "apps/wps/index.html",
     "apps/wps/js/bootstrap-complete.js",
     "apps/wps/js/bootstrap-log.js",
@@ -133,6 +137,7 @@ $requiredFiles = @(
     "apps/wps/package-lock.json",
     "apps/wps/package.json",
     "apps/wps/public_api.py",
+    "apps/wps/windows_startup.py",
     "apps/wps/requirements-build.txt",
     "apps/wps/ribbon.xml",
     "apps/wps/scripts/build-exe.ps1",
@@ -145,6 +150,7 @@ $requiredFiles = @(
     "apps/wps/tests/test_account_store.py",
     "apps/wps/tests/test_launcher_auth.py",
     "apps/wps/tests/test_login_window.py",
+    "apps/wps/tests/test_windows_startup.py",
     "apps/wps/tests/wps-runtime.test.mjs",
     "CHANGELOG.md",
     "WPS_SERVER_PRD.md",
@@ -486,6 +492,9 @@ try {
         )
 
         if ($Verify) {
+            if (-not $IsWindows) {
+                throw "Full -Verify requires Windows because the WPS release gate includes DPAPI and packaged EXE verification."
+            }
             $testPython = if (Test-Path -LiteralPath $sourceVenvPython -PathType Leaf) {
                 $sourceVenvPython
             }
@@ -499,6 +508,11 @@ try {
             if ($nodeTestFiles) {
                 Invoke-Checked node (@("--test") + $nodeTestFiles)
             }
+            Invoke-Checked pwsh @("-NoProfile", "-File", "apps/wps/scripts/verify.ps1")
+            Invoke-Checked pwsh @(
+                "-NoProfile", "-File", "apps/wps/scripts/build-exe.ps1",
+                "-ServerOrigin", "https://acceptance.invalid"
+            )
         }
 
         Invoke-Checked git @("add", "-A")

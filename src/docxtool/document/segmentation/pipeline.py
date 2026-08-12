@@ -165,6 +165,8 @@ def build_logical_lines(
                 if line_index == 0
                 else detect_numbering_prefix_func(line)
             )
+            if line_index > 0:
+                sub_features.native_numbering = None
             sub_features.segment_numbering_features = sub_features.numbering_prefix
             flat_lines.append((
                 "text",

@@ -7,7 +7,7 @@ from pathlib import Path
 
 from docxtool.paths import project_path, var_path
 
-WPS_SESSION_TTL_SECONDS = 24 * 60 * 60
+WPS_SESSION_TTL_SECONDS = 7 * 24 * 60 * 60
 WPS_HEARTBEAT_INTERVAL_SECONDS = 10 * 60
 WPS_OFFLINE_AFTER_SECONDS = 30 * 60
 WPS_JSON_MAX_BYTES = 32 * 1024

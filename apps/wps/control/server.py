@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections import OrderedDict
 from copy import deepcopy
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import errno
 import json
 from pathlib import Path
 import threading
@@ -126,6 +127,19 @@ def _request_failure_event(code: str) -> str:
         "WPS_APPLY_CONFIG_VERSION_REQUIRED": "bridge.command.config_version_required",
         "WPS_APPLY_FORMAT_CONFIG_REQUIRED": "bridge.command.format_config_required",
     }.get(code, "control.request.execution_failed")
+
+
+def _client_disconnected(error: OSError) -> bool:
+    """判断响应写入失败是否只是本机 HTTP 客户端已经离开。"""
+    return isinstance(
+        error, (ConnectionAbortedError, ConnectionResetError, BrokenPipeError)
+    ) or getattr(error, "winerror", None) in {10053, 10054} or getattr(
+        error, "errno", None
+    ) in {errno.EPIPE, errno.ECONNABORTED, errno.ECONNRESET}
+
+
+class _ControlClientDisconnected(Exception):
+    code = "WPS_CONTROL_CLIENT_DISCONNECTED"
 
 
 class WpsControlHttpServer(ThreadingHTTPServer):
@@ -830,6 +844,7 @@ def create_server(
     port: int = DEFAULT_PORT,
     *,
     account_runtime=None,
+    allowed_origin: str = "",
 ) -> WpsControlHttpServer:
     application = WpsControlApplication(app_root, session_token, account_runtime)
     monitor = CommandMonitor(application.dispatch)
@@ -837,27 +852,57 @@ def create_server(
     class Handler(BaseHTTPRequestHandler):
         server_version = "DocxToolWps/1"
 
+        def _origin_allowed(self) -> bool:
+            origin = self.headers.get("Origin", "")
+            return not origin or (bool(allowed_origin) and origin == allowed_origin)
+
         def _cors(self) -> None:
-            self.send_header("Access-Control-Allow-Origin", "*")
+            origin = self.headers.get("Origin", "")
+            if origin and origin == allowed_origin:
+                self.send_header("Access-Control-Allow-Origin", allowed_origin)
+                self.send_header("Vary", "Origin")
             self.send_header(
                 "Access-Control-Allow-Headers",
                 "Authorization, Content-Type, X-DocxTool-Request-Id",
             )
             self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 
+        def _reject_origin(self) -> None:
+            log_event(
+                "WARNING", "control", "control.origin.rejected",
+                "Control Server 已拒绝非授权浏览器来源",
+                {"method": self.command, "path": self.path, "error_code": "WPS_CONTROL_ORIGIN_REJECTED"},
+            )
+            self._json(403, {"ok": False, "error_code": "WPS_CONTROL_ORIGIN_REJECTED"})
+
         def _json(self, status: int, payload: Dict[str, Any]) -> None:
             data = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-            self.send_response(status)
-            self._cors()
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Content-Length", str(len(data)))
-            request_id = self._request_id()
-            if request_id:
-                self.send_header("X-DocxTool-Request-Id", request_id)
-            self.end_headers()
+            self._response_write_failed = False
             try:
+                self.send_response(status)
+                self._cors()
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(data)))
+                request_id = self._request_id()
+                if request_id:
+                    self.send_header("X-DocxTool-Request-Id", request_id)
+                self.end_headers()
                 self.wfile.write(data)
             except OSError as exc:
+                if _client_disconnected(exc):
+                    log_event(
+                        "INFO",
+                        "control",
+                        "control.client.disconnected",
+                        "WPS 任务窗格连接已断开",
+                        {
+                            "path": self.path,
+                            "http_status": status,
+                            "error_code": "WPS_CONTROL_CLIENT_DISCONNECTED",
+                            "error_type": type(exc).__name__,
+                        },
+                    )
+                    raise _ControlClientDisconnected() from None
                 log_event(
                     "ERROR",
                     "control",
@@ -870,6 +915,7 @@ def create_server(
                         "error_type": type(exc).__name__,
                     },
                 )
+                self._response_write_failed = True
                 raise
 
         def _authorized(self) -> bool:
@@ -902,6 +948,9 @@ def create_server(
             return value
 
         def do_OPTIONS(self) -> None:  # noqa: N802
+            if not self._origin_allowed():
+                self._reject_origin()
+                return
             is_quiet_route = self.path == "/v1/log" or self.path in BRIDGE_ROUTES
             if not is_quiet_route:
                 log_event("DEBUG", "control", "request.start", "WPS Control 预检请求开始", {"method": "OPTIONS", "path": self.path})
@@ -912,25 +961,34 @@ def create_server(
                 log_event("DEBUG", "control", "request.completed", "WPS Control 预检请求完成", {"method": "OPTIONS", "path": self.path, "http_status": 204})
 
         def do_GET(self) -> None:  # noqa: N802
-            started_at = time.monotonic()
-            request_id = self._request_id()
-            log_event("INFO", "control", "request.start", "WPS Control 请求开始", {"method": "GET", "path": self.path, "request_id": request_id})
-            if self.path not in {"/v1/health", "/v1/account"}:
-                self._json(404, {"ok": False, "error_code": "WPS_CONTROL_ROUTE_NOT_FOUND"})
-                log_event("ERROR", "control", "control.route.not_found", "WPS Control 路由不存在", {"method": "GET", "path": self.path, "request_id": request_id, "http_status": 404, "error_code": "WPS_CONTROL_ROUTE_NOT_FOUND"})
+            try:
+                if not self._origin_allowed():
+                    self._reject_origin()
+                    return
+                started_at = time.monotonic()
+                request_id = self._request_id()
+                log_event("INFO", "control", "request.start", "WPS Control 请求开始", {"method": "GET", "path": self.path, "request_id": request_id})
+                if self.path not in {"/v1/health", "/v1/account"}:
+                    self._json(404, {"ok": False, "error_code": "WPS_CONTROL_ROUTE_NOT_FOUND"})
+                    log_event("ERROR", "control", "control.route.not_found", "WPS Control 路由不存在", {"method": "GET", "path": self.path, "request_id": request_id, "http_status": 404, "error_code": "WPS_CONTROL_ROUTE_NOT_FOUND"})
+                    return
+                if not self._authorized():
+                    self._json(401, {"ok": False, "error_code": "WPS_CONTROL_UNAUTHORIZED"})
+                    log_event("ERROR", "control", "control.auth.rejected", "WPS Control 请求鉴权失败", {"method": "GET", "path": self.path, "request_id": request_id, "http_status": 401, "error_code": "WPS_CONTROL_UNAUTHORIZED"})
+                    return
+                data = application.health() if self.path == "/v1/health" else application.account_summary()
+                self._json(200, {"ok": True, "data": data})
+                log_event(
+                    "INFO", "control", "request.completed", "WPS Control 请求完成",
+                    {"method": "GET", "path": self.path, "request_id": request_id, "http_status": 200, "duration_ms": int((time.monotonic() - started_at) * 1000)},
+                )
+            except _ControlClientDisconnected:
                 return
-            if not self._authorized():
-                self._json(401, {"ok": False, "error_code": "WPS_CONTROL_UNAUTHORIZED"})
-                log_event("ERROR", "control", "control.auth.rejected", "WPS Control 请求鉴权失败", {"method": "GET", "path": self.path, "request_id": request_id, "http_status": 401, "error_code": "WPS_CONTROL_UNAUTHORIZED"})
-                return
-            data = application.health() if self.path == "/v1/health" else application.account_summary()
-            self._json(200, {"ok": True, "data": data})
-            log_event(
-                "INFO", "control", "request.completed", "WPS Control 请求完成",
-                {"method": "GET", "path": self.path, "request_id": request_id, "http_status": 200, "duration_ms": int((time.monotonic() - started_at) * 1000)},
-            )
 
         def do_POST(self) -> None:  # noqa: N802
+            if not self._origin_allowed():
+                self._reject_origin()
+                return
             started_at = time.monotonic()
             request_id = self._request_id()
             is_log_route = self.path == "/v1/log"
@@ -964,6 +1022,10 @@ def create_server(
                         {"method": "POST", "path": self.path, "request_id": request_id, "http_status": 200, "duration_ms": int((time.monotonic() - started_at) * 1000)},
                     )
             except Exception as exc:
+                if isinstance(exc, _ControlClientDisconnected):
+                    return
+                if getattr(self, "_response_write_failed", False):
+                    raise
                 code = _error_code(exc if isinstance(exc, Exception) else Exception(str(exc)))
                 status = 404 if code == "WPS_CONTROL_ROUTE_NOT_FOUND" else 400
                 log_event(
@@ -979,6 +1041,12 @@ def create_server(
                     },
                 )
                 self._json(status, {"ok": False, "error_code": code})
+
+        def handle_one_request(self) -> None:
+            try:
+                super().handle_one_request()
+            except _ControlClientDisconnected:
+                return
 
         def log_message(self, format: str, *args: object) -> None:
             if self.path == "/v1/log" or self.path in BRIDGE_ROUTES:

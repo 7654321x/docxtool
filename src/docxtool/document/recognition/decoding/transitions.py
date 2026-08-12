@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from ..candidates import Candidate
 from ..features import DocumentBlock
 from ..model import DocumentMode, ParagraphType, SectionKind
@@ -76,6 +78,19 @@ def _hard_veto(candidate: Candidate, features, mode: DocumentMode, context: _Con
     }
     previous_level = heading_levels.get(context.previous_type)
     current_level = heading_levels.get(candidate.paragraph_type)
+    if current_level is not None and (
+        features.date_match
+        or features.attachment_note_match
+        or features.recipient_match
+        or features.key_value_label
+        or features.colon_explanatory_body
+        or features.native_numbering_body_list
+        or re.fullmatch(
+            r"附件[0-9一二三四五六七八九十百千]*",
+            features.compact_text,
+        )
+    ):
+        return True
     if previous_level is not None and current_level is not None and current_level > previous_level + 1:
         return True
     if (

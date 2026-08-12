@@ -52,12 +52,17 @@ window.GetImage = GetImage;
   function loadScript(source, label) {
     bootstrapLog("INFO", "bootstrap." + label + ".load.start", "开始加载 WPS 启动子脚本", {});
     try {
-      document.write("<script language='javascript' src='" + source + "'><\/script>");
+      return new Promise(function (resolve, reject) {
+        var script = document.createElement("script");
+        script.src = source;
+        script.onload = function () { scriptLoaded(label); resolve(); };
+        script.onerror = function () { scriptFailed(label); reject(new Error("WPS_BOOTSTRAP_SCRIPT_LOAD_FAILED")); };
+        document.head.appendChild(script);
+      });
     } catch (error) {
       scriptFailed(label);
       throw error;
     }
-    scriptLoaded(label);
   }
 
   window.DocxToolBootstrapId = bootstrapId;
@@ -67,14 +72,22 @@ window.GetImage = GetImage;
     application_available: Boolean(window.Application),
     document_ready_state: document.readyState
   });
-  loadScript("js/bootstrap-log.js", "bootstrap_log");
-  bootstrapLog("INFO", "bootstrap.main.loaded", "WPS 主启动脚本已加载", {
-    bootstrap_id: bootstrapId,
-    application_available: Boolean(window.Application),
-    document_ready_state: document.readyState
+  (async function () {
+    bootstrapLog("INFO", "bootstrap.runtime_config.load.start", "开始读取同源 WPS 运行配置", {});
+    var response = await fetch("runtime/config", { cache: "no-store", credentials: "same-origin" });
+    if (!response.ok) throw new Error("WPS_RUNTIME_CONFIG_LOAD_FAILED");
+    window.DocxToolWpsConfig = Object.freeze(await response.json());
+    bootstrapLog("INFO", "bootstrap.runtime_config.loaded", "同源 WPS 运行配置已读取", {});
+    await loadScript("js/bootstrap-log.js", "bootstrap_log");
+    bootstrapLog("INFO", "bootstrap.main.loaded", "WPS 主启动脚本已加载", {
+      bootstrap_id: bootstrapId,
+      application_available: Boolean(window.Application),
+      document_ready_state: document.readyState
+    });
+    await loadScript("host-runtime.js", "host_runtime");
+    await loadScript("js/ribbon.js", "ribbon");
+    await loadScript("js/bootstrap-complete.js", "complete");
+  })().catch(function (error) {
+    bootstrapLog("ERROR", "bootstrap.main.failed", "WPS 启动失败", { error_code: error.message || "WPS_BOOTSTRAP_FAILED" });
   });
-  loadScript("runtime/runtime-config.js", "runtime_config");
-  loadScript("host-runtime.js", "host_runtime");
-  loadScript("js/ribbon.js", "ribbon");
-  loadScript("js/bootstrap-complete.js", "complete");
 })();

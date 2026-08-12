@@ -12,12 +12,32 @@ class _Store:
     def __init__(self):
         self.saved = None
         self.cleared = False
+        self.results = {}
 
     def save_account(self, account):
         self.saved = dict(account)
 
     def clear_account(self):
         self.cleared = True
+        deleted_count = len(self.results)
+        self.results.clear()
+        return deleted_count
+
+    def enqueue_format_result(self, payload):
+        existing = self.results.get(payload["request_id"])
+        if existing is not None and existing != payload:
+            raise RuntimeError("WPS_FORMAT_RESULT_QUEUE_CONFLICT")
+        self.results[payload["request_id"]] = dict(payload)
+        return existing is not None
+
+    def list_format_results(self):
+        return list(self.results.values())
+
+    def delete_format_result(self, request_id):
+        self.results.pop(request_id, None)
+
+    def count_format_results(self):
+        return len(self.results)
 
 
 def _account(expires=200):
@@ -54,6 +74,9 @@ class _Api:
     def report_format_result(self, token, payload):
         return {"reported": True, "token": token, **payload}
 
+    def logout(self, token):
+        return {"logged_out": True, "token": token}
+
 
 def test_expired_local_session_is_refreshed_and_saved():
     store = _Store()
@@ -62,6 +85,57 @@ def test_expired_local_session_is_refreshed_and_saved():
     assert runtime.ensure_session() == "new-token"
     assert store.saved["session_token"] == "new-token"
     assert runtime.authorize_format("pane-request-001")["allowed"] is True
+
+
+def test_expired_session_without_remembered_password_requires_login():
+    runtime = AccountRuntime(
+        {
+            **_account(expires=0),
+            "password": "",
+            "remember_password": False,
+            "auto_login": False,
+        },
+        _Api(),
+        store=_Store(),
+        now_func=lambda: 500,
+    )
+
+    with pytest.raises(PublicApiError) as exc_info:
+        runtime.ensure_session()
+    assert exc_info.value.code == "SESSION_EXPIRED"
+
+
+def test_logout_clears_session_and_auto_login_but_keeps_remembered_password():
+    store = _Store()
+    runtime = AccountRuntime(
+        {
+            **_account(),
+            "remember_password": True,
+            "auto_login": True,
+        },
+        _Api(),
+        store=store,
+    )
+
+    runtime.logout()
+
+    assert store.saved["session_token"] == ""
+    assert store.saved["session_expires_at"] == 0
+    assert store.saved["auto_login"] is False
+    assert store.saved["password"] == "Pass01"
+
+
+def test_runtime_reloads_preferences_without_reauthentication():
+    store = _Store()
+    store.load_account = lambda: {
+        **_account(),
+        "auto_login": False,
+    }
+    runtime = AccountRuntime(_account(), _Api(), store=store, now_func=lambda: 100)
+
+    runtime.reload_account()
+
+    assert runtime._account["auto_login"] is False
 
 
 def test_public_api_sends_bearer_and_request_id():
@@ -210,7 +284,9 @@ def test_heartbeat_logs_only_state_changes(monkeypatch):
 
     monkeypatch.setattr(
         "apps.wps.account_runtime.log_event",
-        lambda level, component, event, message, fields=None: events.append(event),
+        lambda level, component, event, message, fields=None: events.append(
+            (event, message)
+        ),
     )
     runtime = AccountRuntime(_account(), RecoveringApi(), store=_Store(), now_func=lambda: 100)
 
@@ -220,7 +296,10 @@ def test_heartbeat_logs_only_state_changes(monkeypatch):
         runtime.heartbeat_once()
     runtime.heartbeat_once()
 
-    assert events == ["account.heartbeat.failed", "account.heartbeat.online"]
+    assert events == [
+        ("account.heartbeat.failed", "服务器无法连接"),
+        ("account.heartbeat.recovered", "WPS 账号心跳已恢复"),
+    ]
 
 
 def test_heartbeat_logs_recovery_after_previously_online(monkeypatch):
@@ -319,6 +398,59 @@ def test_pending_result_conflict_is_removed_and_identical_enqueue_is_reused():
     assert runtime.summary()["error_code"] == "REQUEST_STATUS_CONFLICT"
 
 
+def test_account_rejection_deletes_pending_results_without_deferred_log(monkeypatch):
+    events = []
+
+    class RejectedApi(_Api):
+        def report_format_result(self, token, payload):
+            raise PublicApiError("ACCOUNT_DISABLED", "disabled", 403)
+
+    monkeypatch.setattr(
+        "apps.wps.account_runtime.log_event",
+        lambda level, component, event, message, fields=None: events.append((event, fields or {})),
+    )
+    store = _Store()
+    runtime = AccountRuntime(_account(), RejectedApi(), store=store, now_func=lambda: 100)
+    runtime.report_format_result("request-rejected", "success", 120, "")
+
+    with pytest.raises(PublicApiError, match="ACCOUNT_DISABLED"):
+        runtime._flush_pending_results()
+
+    assert store.cleared is True
+    assert runtime.summary()["pending_result_count"] == 0
+    deleted = [item for item in events if item[0] == "account.format_result.deleted.account_rejected"]
+    assert deleted == [
+        (
+            "account.format_result.deleted.account_rejected",
+            {"error_code": "ACCOUNT_DISABLED", "deleted_count": 1},
+        )
+    ]
+    assert not any(item[0] == "account.format_result.deferred" for item in events)
+
+
+def test_session_expiry_preserves_pending_result(monkeypatch):
+    events = []
+
+    class ExpiredResultApi(_Api):
+        def report_format_result(self, token, payload):
+            raise PublicApiError("SESSION_EXPIRED", "expired", 401)
+
+    monkeypatch.setattr(
+        "apps.wps.account_runtime.log_event",
+        lambda level, component, event, message, fields=None: events.append(event),
+    )
+    store = _Store()
+    runtime = AccountRuntime(_account(), ExpiredResultApi(), store=store, now_func=lambda: 100)
+    runtime.report_format_result("request-expired", "success", 120, "")
+
+    with pytest.raises(PublicApiError, match="SESSION_EXPIRED"):
+        runtime._flush_pending_results()
+
+    assert store.cleared is False
+    assert runtime.summary()["pending_result_count"] == 1
+    assert "account.format_result.deferred" in events
+
+
 def test_heartbeat_thread_logs_unexpected_failure_and_stops(monkeypatch):
     events = []
     monkeypatch.setattr(
@@ -336,23 +468,34 @@ def test_heartbeat_thread_logs_unexpected_failure_and_stops(monkeypatch):
     runtime._thread.join(timeout=1)
 
     assert runtime._thread.is_alive() is False
+    assert runtime.summary()["network_available"] is True
     assert runtime.summary()["error_code"] == "WPS_ACCOUNT_HEARTBEAT_THREAD_FAILED"
     assert events == ["account.heartbeat.thread.failed"]
 
 
-def test_stop_discards_pending_results_from_memory(monkeypatch):
+def test_stop_preserves_pending_results_in_store(monkeypatch):
     events = []
     monkeypatch.setattr(
         "apps.wps.account_runtime.log_event",
         lambda level, component, event, message, fields=None: events.append(event),
     )
-    runtime = AccountRuntime(_account(), _Api(), store=_Store(), now_func=lambda: 100)
+    store = _Store()
+    runtime = AccountRuntime(_account(), _Api(), store=store, now_func=lambda: 100)
     runtime.report_format_result("request-1", "success", 120, "")
 
     runtime.stop()
 
-    assert runtime.summary()["pending_result_count"] == 0
-    assert events == [
-        "account.format_result.queued",
-        "account.format_result.discarded",
-    ]
+    assert runtime.summary()["pending_result_count"] == 1
+    assert events == ["account.format_result.queued"]
+
+
+def test_new_runtime_flushes_result_left_by_previous_runtime():
+    store = _Store()
+    first = AccountRuntime(_account(), _Api(), store=store, now_func=lambda: 100)
+    first.report_format_result("request-1", "success", 120, "")
+    first.stop()
+
+    second = AccountRuntime(_account(), _Api(), store=store, now_func=lambda: 100)
+    assert second.summary()["pending_result_count"] == 1
+    second._flush_pending_results()
+    assert second.summary()["pending_result_count"] == 0

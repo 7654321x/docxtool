@@ -14,6 +14,10 @@ import time
 CRYPTPROTECT_UI_FORBIDDEN = 0x1
 
 
+class LocalAccountCorruptedError(RuntimeError):
+    """The existing local account database cannot be read safely."""
+
+
 class _DataBlob(ctypes.Structure):
     _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_ubyte))]
 
@@ -117,43 +121,91 @@ def _connect() -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(path))
     conn.row_factory = sqlite3.Row
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS local_account (
-            singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
-            server_origin TEXT NOT NULL,
-            username TEXT NOT NULL,
-            user_id TEXT NOT NULL DEFAULT '',
-            device_id TEXT NOT NULL DEFAULT '',
-            password_cipher BLOB NOT NULL,
-            session_token_cipher BLOB NOT NULL,
-            device_key_cipher BLOB NOT NULL,
-            session_expires_at INTEGER NOT NULL DEFAULT 0,
-            updated_at INTEGER NOT NULL
-        )"""
-    )
+    try:
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS local_account (
+                singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+                server_origin TEXT NOT NULL,
+                username TEXT NOT NULL,
+                user_id TEXT NOT NULL DEFAULT '',
+                device_id TEXT NOT NULL DEFAULT '',
+                password_cipher BLOB NOT NULL DEFAULT X'',
+                session_token_cipher BLOB NOT NULL DEFAULT X'',
+                device_key_cipher BLOB NOT NULL,
+                session_expires_at INTEGER NOT NULL DEFAULT 0,
+                remember_password INTEGER NOT NULL DEFAULT 1,
+                auto_login INTEGER NOT NULL DEFAULT 0,
+                updated_at INTEGER NOT NULL
+            )"""
+        )
+        columns = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA table_info(local_account)").fetchall()
+        }
+        if "remember_password" not in columns:
+            conn.execute(
+                "ALTER TABLE local_account ADD COLUMN "
+                "remember_password INTEGER NOT NULL DEFAULT 1"
+            )
+        if "auto_login" not in columns:
+            conn.execute(
+                "ALTER TABLE local_account ADD COLUMN "
+                "auto_login INTEGER NOT NULL DEFAULT 0"
+            )
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS format_result_outbox (
+                request_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                duration_ms INTEGER NOT NULL,
+                error_code TEXT NOT NULL,
+                app_version TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            )"""
+        )
+    except sqlite3.Error:
+        conn.close()
+        raise
     return conn
 
 
 def load_account() -> dict:
     if not local_account_path().is_file():
         return {}
-    conn = _connect()
     try:
-        row = conn.execute("SELECT * FROM local_account WHERE singleton_id=1").fetchone()
-    finally:
-        conn.close()
-    if row is None:
-        return {}
-    return {
-        "server_origin": row["server_origin"],
-        "username": row["username"],
-        "user_id": row["user_id"],
-        "device_id": row["device_id"],
-        "password": decrypt_secret(bytes(row["password_cipher"])),
-        "session_token": decrypt_secret(bytes(row["session_token_cipher"])),
-        "device_key": decrypt_secret(bytes(row["device_key_cipher"])),
-        "session_expires_at": int(row["session_expires_at"]),
-    }
+        conn = _connect()
+        try:
+            row = conn.execute("SELECT * FROM local_account WHERE singleton_id=1").fetchone()
+        finally:
+            conn.close()
+        if row is None:
+            return {}
+        remember_password = bool(row["remember_password"])
+        password_cipher = bytes(row["password_cipher"])
+        return {
+            "server_origin": row["server_origin"],
+            "username": row["username"],
+            "user_id": row["user_id"],
+            "device_id": row["device_id"],
+            "password": decrypt_secret(password_cipher) if remember_password else "",
+            "session_token": (
+                decrypt_secret(bytes(row["session_token_cipher"]))
+                if bytes(row["session_token_cipher"])
+                else ""
+            ),
+            "device_key": decrypt_secret(bytes(row["device_key_cipher"])),
+            "session_expires_at": int(row["session_expires_at"]),
+            "remember_password": remember_password,
+            "auto_login": bool(row["auto_login"]),
+        }
+    except (sqlite3.Error, OSError, ValueError, TypeError, KeyError, IndexError) as exc:
+        raise LocalAccountCorruptedError("WPS_LOCAL_ACCOUNT_CORRUPTED") from exc
+
+
+def quarantine_corrupted_account() -> Path:
+    path = local_account_path()
+    quarantined = path.with_name(f"{path.name}.corrupted-{int(time.time())}")
+    path.replace(quarantined)
+    return quarantined
 
 
 def save_account(account: dict) -> None:
@@ -162,22 +214,30 @@ def save_account(account: dict) -> None:
         "username",
         "user_id",
         "device_id",
-        "password",
         "session_token",
         "device_key",
         "session_expires_at",
     }
     if not isinstance(account, dict) or not required.issubset(account):
         raise ValueError("WPS_LOCAL_ACCOUNT_INVALID")
-    password_cipher = encrypt_secret(account["password"])
-    token_cipher = encrypt_secret(account["session_token"])
+    remember_password = bool(account.get("remember_password", True))
+    auto_login = bool(account.get("auto_login", False))
+    if auto_login and not remember_password:
+        raise ValueError("WPS_AUTO_LOGIN_REQUIRES_REMEMBER_PASSWORD")
+    password = account.get("password", "")
+    if remember_password and not password:
+        raise ValueError("WPS_LOCAL_PASSWORD_REQUIRED")
+    password_cipher = encrypt_secret(password) if remember_password else b""
+    token_cipher = (
+        encrypt_secret(account["session_token"]) if account["session_token"] else b""
+    )
     device_cipher = encrypt_secret(account["device_key"])
     conn = _connect()
     try:
         conn.execute(
             """INSERT INTO local_account
-               (singleton_id,server_origin,username,user_id,device_id,password_cipher,session_token_cipher,device_key_cipher,session_expires_at,updated_at)
-               VALUES (1,?,?,?,?,?,?,?,?,?)
+               (singleton_id,server_origin,username,user_id,device_id,password_cipher,session_token_cipher,device_key_cipher,session_expires_at,remember_password,auto_login,updated_at)
+               VALUES (1,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(singleton_id) DO UPDATE SET
                  server_origin=excluded.server_origin,
                  username=excluded.username,
@@ -187,6 +247,8 @@ def save_account(account: dict) -> None:
                  session_token_cipher=excluded.session_token_cipher,
                  device_key_cipher=excluded.device_key_cipher,
                  session_expires_at=excluded.session_expires_at,
+                 remember_password=excluded.remember_password,
+                 auto_login=excluded.auto_login,
                  updated_at=excluded.updated_at""",
             (
                 account["server_origin"],
@@ -197,6 +259,8 @@ def save_account(account: dict) -> None:
                 token_cipher,
                 device_cipher,
                 int(account["session_expires_at"]),
+                int(remember_password),
+                int(auto_login),
                 int(time.time()),
             ),
         )
@@ -205,12 +269,104 @@ def save_account(account: dict) -> None:
         conn.close()
 
 
-def clear_account() -> None:
+def update_preferences(*, remember_password: bool, auto_login: bool) -> dict:
+    if auto_login and not remember_password:
+        raise ValueError("WPS_AUTO_LOGIN_REQUIRES_REMEMBER_PASSWORD")
+    account = load_account()
+    if not account:
+        raise RuntimeError("WPS_LOCAL_ACCOUNT_MISSING")
+    if remember_password and not account.get("password"):
+        raise ValueError("WPS_REMEMBER_PASSWORD_REQUIRES_LOGIN")
+    account["remember_password"] = bool(remember_password)
+    account["auto_login"] = bool(auto_login)
+    if not remember_password:
+        account["password"] = ""
+    save_account(account)
+    return account
+
+
+def clear_account() -> int:
     if not local_account_path().is_file():
-        return
+        return 0
     conn = _connect()
     try:
+        conn.execute("BEGIN IMMEDIATE")
+        deleted_count = int(
+            conn.execute("SELECT COUNT(*) FROM format_result_outbox").fetchone()[0]
+        )
         conn.execute("DELETE FROM local_account WHERE singleton_id=1")
+        conn.execute("DELETE FROM format_result_outbox")
         conn.commit()
+        return deleted_count
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def enqueue_format_result(payload: dict) -> bool:
+    conn = _connect()
+    try:
+        row = conn.execute(
+            "SELECT request_id,status,duration_ms,error_code,app_version "
+            "FROM format_result_outbox WHERE request_id=?",
+            (payload["request_id"],),
+        ).fetchone()
+        expected = {
+            "request_id": payload["request_id"],
+            "status": payload["status"],
+            "duration_ms": int(payload["duration_ms"]),
+            "error_code": payload["error_code"],
+            "app_version": payload["app_version"],
+        }
+        if row is not None:
+            if dict(row) != expected:
+                raise RuntimeError("WPS_FORMAT_RESULT_QUEUE_CONFLICT")
+            return True
+        conn.execute(
+            "INSERT INTO format_result_outbox "
+            "(request_id,status,duration_ms,error_code,app_version,created_at) "
+            "VALUES (?,?,?,?,?,?)",
+            (
+                expected["request_id"],
+                expected["status"],
+                expected["duration_ms"],
+                expected["error_code"],
+                expected["app_version"],
+                int(time.time()),
+            ),
+        )
+        conn.commit()
+        return False
+    finally:
+        conn.close()
+
+
+def list_format_results() -> list:
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            "SELECT request_id,status,duration_ms,error_code,app_version "
+            "FROM format_result_outbox ORDER BY created_at, rowid"
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def delete_format_result(request_id: str) -> None:
+    conn = _connect()
+    try:
+        conn.execute("DELETE FROM format_result_outbox WHERE request_id=?", (request_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def count_format_results() -> int:
+    conn = _connect()
+    try:
+        return int(conn.execute("SELECT COUNT(*) FROM format_result_outbox").fetchone()[0])
     finally:
         conn.close()

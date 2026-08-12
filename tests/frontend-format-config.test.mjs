@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import test from "node:test";
 import { readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -46,6 +47,7 @@ function fakeElement(id = "") {
     querySelectorAll() {
       return [];
     },
+    replaceChildren() {},
     set innerHTML(value) {
       this._innerHTML = value;
     },
@@ -119,7 +121,9 @@ const context = {
 };
 context.globalThis = context;
 
-const script = scriptMatch[1].replace(/\nbootstrap\(\);\s*$/, "");
+const script = scriptMatch[1]
+  .replace(/\nbootstrap\(\);\s*$/, "")
+  .replace("}catch(_){}\n  }\n  status('排版超时", "}catch(error){globalThis.__pollErrors=(globalThis.__pollErrors||[]).concat(String(error&&error.stack||error))}\n  }\n  status('排版超时");
 vm.runInNewContext(
   `${script}
 globalThis.__frontend = {
@@ -138,7 +142,20 @@ globalThis.__frontend = {
   renderLetterhead,
   setIssuanceMode,
   setLetterheadSponsor,
-  styleRows
+  styleRows,
+  upload,
+  runUploadWithEnvironment: async (file, fetchImpl, timeoutImpl) => {
+    fetch = fetchImpl;
+    setTimeout = timeoutImpl;
+    return upload(file);
+  },
+  getUploadState: () => ({
+    message: document.getElementById('msg').textContent,
+    resultVisible: document.getElementById('resultCard').style.display === 'block',
+    lastDownloadUrl,
+    lastDownloadName,
+    pollErrors: globalThis.__pollErrors || [],
+  })
 };
 `,
   context,
@@ -349,3 +366,98 @@ assert.equal(
   }),
   "排版设置无效：styles[1].size 不能为空。",
 );
+
+function webResponse(payload, { ok = true, status = 200, contentType = "application/json" } = {}) {
+  return {
+    ok,
+    status,
+    headers: { get: (name) => name.toLowerCase() === "content-type" ? contentType : null },
+    async json() { return payload; },
+    async blob() { return new Blob([JSON.stringify(payload)], { type: contentType }); },
+  };
+}
+
+async function runUploadScenario(statuses, { download } = {}) {
+  let statusIndex = 0;
+  const observed = [];
+  const paths = [];
+  const fetchImpl = async (url) => {
+    const path = String(url);
+    paths.push(path);
+    if (path.endsWith("/upload")) return webResponse({ task_id: "task-acceptance", status: "queued", queue_ahead: 0 });
+    if (path.includes("/status/")) {
+      const next = statuses[Math.min(statusIndex, statuses.length - 1)];
+      statusIndex += 1;
+      observed.push(next instanceof Error ? "ERROR" : next);
+      if (next instanceof Error) throw next;
+      return webResponse({ status: next });
+    }
+    if (path.includes("/download/")) return download || webResponse("docx", { contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
+    throw new Error(`UNEXPECTED_URL:${path}`);
+  };
+  await frontend.runUploadWithEnvironment({
+    name: "acceptance.docx",
+    size: 100,
+    async arrayBuffer() { return new ArrayBuffer(8); },
+  }, fetchImpl, (callback) => { callback(); return 1; });
+  return { ...frontend.getUploadState(), statusCalls: statusIndex, observed, paths };
+}
+
+await test("Web polling waits through 15 seconds queued plus 35 seconds processing", async () => {
+  const result = await runUploadScenario([
+    ...Array(15).fill("queued"),
+    ...Array(35).fill("processing"),
+    "done",
+  ]);
+  assert.equal(result.message, "下载完成");
+});
+
+await test("Web polling waits through 55 seconds processing", async () => {
+  const result = await runUploadScenario([...Array(55).fill("processing"), "done"]);
+  assert.equal(result.message, "下载完成");
+});
+
+for (const terminal of ["failed", "timeout", "interrupted", "expired"]) {
+  await test(`Web renders server terminal state ${terminal} without a client timeout`, async () => {
+    const result = await runUploadScenario([terminal]);
+    assert.notEqual(result.message, "排版超时，请稍后重试或重新上传");
+    assert.equal(result.statusCalls, 1);
+  });
+}
+
+await test("Web polling recovers after one status network error", async () => {
+  const result = await runUploadScenario([new Error("network"), "done"]);
+  assert.deepEqual(result.observed.slice(0, 2), ["ERROR", "done"]);
+  assert.ok(result.paths.some((path) => path.includes("/download/")));
+  assert.equal(result.pollErrors.length, 0, String(result.pollErrors[0] || ""));
+  assert.equal(result.message, "下载完成");
+});
+
+await test("Web stops after three consecutive status network errors", async () => {
+  const result = await runUploadScenario([
+    new Error("network-1"),
+    new Error("network-2"),
+    new Error("network-3"),
+  ]);
+  assert.equal(result.statusCalls, 3);
+  assert.match(result.message, /状态查询连续失败/);
+  assert.equal(result.resultVisible, false);
+});
+
+for (const statusCode of [403, 404, 500]) {
+  await test(`Web rejects JSON download error ${statusCode} instead of saving DOCX`, async () => {
+    const result = await runUploadScenario(["done"], {
+      download: webResponse({ code: "DOWNLOAD_FAILED", error: "download failed" }, { ok: false, status: statusCode }),
+    });
+    assert.equal(result.resultVisible, false);
+    assert.notEqual(result.message, "下载完成");
+  });
+}
+
+await test("Web rejects a successful download with the wrong content type", async () => {
+  const result = await runUploadScenario(["done"], {
+    download: webResponse("not-docx", { contentType: "text/plain" }),
+  });
+  assert.match(result.message, /未返回 DOCX 文件/);
+  assert.equal(result.resultVisible, false);
+});

@@ -13,6 +13,7 @@ from ..config import DEFAULT_CONFIG, RecognitionConfig
 from ..features import detect_mode, extract_blocks, extract_features
 from ..global_context import analyze_document_context
 from ..model import DocumentMode, ParagraphType, RecognitionSummary, SectionKind
+from ..numbering import resolve_native_numbering_levels
 from ..validators import validate_diagnostics
 from ..version import (
     RECOGNITION_DIAGNOSTIC_SCHEMA_VERSION,
@@ -51,6 +52,7 @@ def apply_recognition(
         previous = paragraph_blocks[pos - 1] if pos else None
         following = paragraph_blocks[pos + 1] if pos + 1 < len(paragraph_blocks) else None
         extracted.append(extract_features(block, previous, following))
+    extracted = resolve_native_numbering_levels(extracted)
     document_context = analyze_document_context(extracted)
     legacy_document_mode = getattr(data, "doc_mode", "")
     decision = detect_mode(extracted, legacy_document_mode)
@@ -376,6 +378,17 @@ def apply_recognition(
         beam_width=config.beam_width,
     )
     report["summary"] = asdict(summary)
+    native_heading_clues = sum(
+        features.native_numbering_level is not None for features in extracted
+    )
+    native_heading_preserved = sum(
+        features.native_numbering_level is not None
+        and paragraph.type_id in {"heading1", "heading2", "heading3", "heading4"}
+        for features, paragraph in zip(
+            extracted,
+            (block.raw_reference for block in paragraph_blocks),
+        )
+    )
     report["summary"].update(
         {
             "confirmed_count": sum(item["review_level"] == "confirmed" for item in diagnostics),
@@ -383,6 +396,10 @@ def apply_recognition(
             "review_count": sum(item["review_level"] == "review" for item in diagnostics),
             "critical_review_count": sum(
                 item["review_level"] == "critical_review" for item in diagnostics
+            ),
+            "source_native_heading_clue_count": native_heading_clues,
+            "source_native_heading_unpreserved_count": (
+                native_heading_clues - native_heading_preserved
             ),
         }
     )

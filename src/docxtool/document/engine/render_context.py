@@ -13,6 +13,7 @@ class RenderContext:
     removed_external_relationships: list[dict]
     relationship_part_copier: Any
     referenced_style_copier: Any
+    native_numbering_copier: Any
     section_part_copier: Any
     stats: dict
     page_rule: Any
@@ -30,6 +31,7 @@ class RenderContext:
     inline_heading_body_pairs: list
     section_paragraphs: list
     protected_paragraph_elements: set
+    native_numbering_elements: set
     letterhead_detection: Any
     letterhead_enabled: bool
     preserve_input_letterhead: bool
@@ -54,6 +56,9 @@ def prepare_render_context(
         removed_external_relationships,
     )
     referenced_style_copier = compatibility_module._ReferencedStyleCopier(doc.styles.element)
+    native_numbering_copier = compatibility_module._NativeNumberingCopier(
+        doc.part.numbering_part.element
+    )
     section_part_copier = relationship_part_copier if section_relationship_parts else None
     stats = {
         "total": len(doc_data.paragraphs),
@@ -62,6 +67,7 @@ def prepare_render_context(
         "output_path": output_path,
         "removed_external_relationships": removed_external_relationships,
         "inline_heading_body_verified": 0,
+        "native_numbering_preserved": 0,
     }
     page_rule = (
         rules[8]
@@ -94,6 +100,7 @@ def prepare_render_context(
         removed_external_relationships=removed_external_relationships,
         relationship_part_copier=relationship_part_copier,
         referenced_style_copier=referenced_style_copier,
+        native_numbering_copier=native_numbering_copier,
         section_part_copier=section_part_copier,
         stats=stats,
         page_rule=page_rule,
@@ -111,6 +118,7 @@ def prepare_render_context(
         inline_heading_body_pairs=[],
         section_paragraphs=[],
         protected_paragraph_elements=set(),
+        native_numbering_elements=set(),
         letterhead_detection=letterhead_detection,
         letterhead_enabled=letterhead_enabled,
         preserve_input_letterhead=not letterhead_enabled,

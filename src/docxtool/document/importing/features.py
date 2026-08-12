@@ -29,7 +29,7 @@ def extract_paragraph_features(paragraph, index: int, *, detect_numbering_prefix
     features.contains_image = contains_visible_image(paragraph._element)
     numbering_module.apply_physical_numbering_features(
         features,
-        paragraph._element,
+        paragraph,
         text,
         debug_logger=logger,
     )

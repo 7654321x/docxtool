@@ -49,11 +49,8 @@ New-Item -ItemType Directory -Path $outsideRoot | Out-Null
 try {
     Push-Location -LiteralPath $outsideRoot
     try {
-        $verifyOutput = & $exe verify 2>&1
-        if ($LASTEXITCODE -ne 0) { throw "Packaged WPS verify command failed.`n$($verifyOutput -join "`n")" }
-        if (($verifyOutput -join "`n") -notmatch "WPS_APP_VERIFY_PASS") {
-            throw "Packaged WPS verify marker is missing.`n$($verifyOutput -join "`n")"
-        }
+        $verifyProcess = Start-Process -FilePath $exe -ArgumentList "verify" -WorkingDirectory $outsideRoot -Wait -PassThru
+        if ($verifyProcess.ExitCode -ne 0) { throw "Packaged WPS verify command failed with exit code $($verifyProcess.ExitCode)." }
     }
     finally {
         Pop-Location

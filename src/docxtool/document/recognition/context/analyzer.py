@@ -332,8 +332,8 @@ def analyze_document_context(features: list[ParagraphFeatures]) -> DocumentConte
     if body_start is None and not front_positions:
         body_start, body_reason = 0, "no-front-matter"
 
-    by_family: dict[tuple[int, tuple[int, ...]], list[int]] = {}
-    supported: dict[tuple[int, tuple[int, ...]], list[int]] = {}
+    by_family: dict[tuple[int, tuple[int, ...], str], list[int]] = {}
+    supported: dict[tuple[int, tuple[int, ...], str], list[int]] = {}
     heading_reasons: list[tuple[str, ...]] = [()] * count
     active_heading_stack: dict[int, int] = {}
     for position, item in enumerate(features):
@@ -343,7 +343,7 @@ def analyze_document_context(features: list[ParagraphFeatures]) -> DocumentConte
         parent_scope = tuple(
             active_heading_stack.get(parent_level, -1) for parent_level in range(1, level)
         )
-        family_key = (level, parent_scope)
+        family_key = (level, parent_scope, item.native_numbering_family)
         by_family.setdefault(family_key, []).append(position)
         next_item = features[position + 1] if position + 1 < count else None
         if next_item and (_body_like(next_item) or next_item.heading_shape_level is not None):
@@ -352,11 +352,18 @@ def analyze_document_context(features: list[ParagraphFeatures]) -> DocumentConte
             active_heading_stack.pop(reset_level, None)
         active_heading_stack[level] = position
     families = tuple(
-        HeadingFamily(level, tuple(positions), tuple(supported.get(key, ())), parent_scope)
-        for key, positions in sorted(
-            by_family.items(), key=lambda item: (item[0][0], item[0][1], item[1][0])
+        HeadingFamily(
+            level,
+            tuple(positions),
+            tuple(supported.get(key, ())),
+            parent_scope,
+            source_family,
         )
-        for level, parent_scope in (key,)
+        for key, positions in sorted(
+            by_family.items(),
+            key=lambda item: (item[0][0], item[0][1], item[0][2], item[1][0]),
+        )
+        for level, parent_scope, source_family in (key,)
     )
     for family in families:
         previous_ordinal = None
@@ -367,7 +374,11 @@ def analyze_document_context(features: list[ParagraphFeatures]) -> DocumentConte
             if ordinal is not None:
                 if ordinal in seen_ordinals:
                     evidence.append("numbering-duplicate")
-                elif previous_ordinal is None and ordinal > 1:
+                elif (
+                    previous_ordinal is None
+                    and ordinal
+                    != (features[position].native_numbering_start or 1)
+                ):
                     evidence.append("numbering-starts-after-one")
                 elif previous_ordinal is not None and ordinal < previous_ordinal:
                     evidence.append("numbering-reverse")

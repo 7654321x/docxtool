@@ -146,7 +146,10 @@ def finalize_export(
         f"[页面] 版心高度={page_h_cm:.1f}cm 行距={page_settings.line_spacing_value}pt → 理论最大={max_lines:.1f}行 设定={page_settings.lines_per_page}行"
     )
 
-    invariant_stats = _enforce_body_paragraph_invariants(doc, protected_paragraph_elements)
+    invariant_stats = _enforce_body_paragraph_invariants(
+        doc,
+        protected_paragraph_elements | context.native_numbering_elements,
+    )
     stats.update(invariant_stats)
     for heading_para, body_para, expected_body_text in inline_heading_body_pairs:
         _verify_inline_heading_body_pair(heading_para, body_para, expected_body_text)

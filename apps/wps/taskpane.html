@@ -12,7 +12,7 @@
 </style>
 </head>
 <body>
-<header id="taskpane_header"><div class="toolbar"><div><strong>DocxTool WPS</strong><div id="status" class="meta">Connecting</div><div id="account" class="meta">正在读取账号…</div></div><div class="toolbar-actions"><button id="close_panel">关闭</button></div></div></header>
+<header id="taskpane_header"><div class="toolbar"><div><strong>DocxTool WPS</strong><div id="status" class="meta">连接中</div><div id="account" class="meta">正在读取账号…</div></div><div class="toolbar-actions"><button id="close_panel">关闭</button></div></div></header>
 <main id="content">
   <div class="panel">
     <button id="preview">预览排版</button>
@@ -23,7 +23,20 @@
   <div class="panel"><strong>执行状态</strong><div id="message" class="meta">就绪</div><div id="error" class="error"></div><div id="warnings" class="warning"></div></div>
   <div class="panel"><strong>识别结果</strong><div id="summary" class="meta">尚未识别。</div><div id="rows" class="rows"></div></div>
 </main>
-<script src="./runtime/runtime-config.js"></script>
-  <script src="./taskpane.js?v=10"></script>
+<script>
+fetch("./runtime/config", {cache:"no-store", credentials:"same-origin"}).then(function(response){
+  if(!response.ok) throw new Error("WPS_RUNTIME_CONFIG_LOAD_FAILED");
+  return response.json();
+}).then(function(config){
+  window.DocxToolWpsConfig=Object.freeze(config);
+  var script=document.createElement("script");
+  script.src="./taskpane.js?v=11";
+  document.body.appendChild(script);
+}).catch(function(error){
+  document.getElementById("status").textContent="错误";
+  document.getElementById("message").textContent="运行配置加载失败，请重新打开状态面板。";
+  document.getElementById("error").textContent="错误代码：WPS_RUNTIME_CONFIG_LOAD_FAILED";
+});
+</script>
 </body>
 </html>

@@ -4,6 +4,7 @@
   const app = window.Application;
   const config = window.DocxToolWpsConfig || {};
   const TASKPANE_KEY = "docxtool_wps_taskpane_id_v1";
+  const TASKPANE_VERSION_KEY = "docxtool_wps_taskpane_version_v1";
   const paneInstanceId = `pane-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
   let lastStatus = "";
   let currentState = {};
@@ -12,6 +13,7 @@
   let pendingRequestId = "";
   let pendingRequestedAt = 0;
   let pendingClaimed = false;
+  let pendingAckTimedOut = false;
   let logSequence = 0;
   let logTransportFailureReported = false;
   let logTransportUnavailableReported = false;
@@ -24,11 +26,14 @@
   let panelReadyRequestId = "";
   let accountApplyAvailable = false;
   let accountPendingResultCount = 0;
+  let accountNetworkAvailable = true;
+  let accountErrorCode = "";
   let lastAccountStatusKey = "";
   let lastResultSyncPending = "";
   const layoutDiagnosticsStartedAt = Date.now();
   const lifecycleEventCounts = Object.create(null);
   const REQUEST_ACK_TIMEOUT_MS = 5000;
+  const PANEL_READY_TERMINAL_TIMEOUT_MS = 30000;
   const LAYOUT_EVENT_LIMIT = 4;
   const LAYOUT_PROBE_DELAYS_MS = [100, 500, 1000];
   const SAFE_DETAIL_FIELDS = new Set([
@@ -36,7 +41,7 @@
     "body_scroll_height", "body_scroll_top", "body_scroll_width", "command", "content_bottom",
     "content_client_height", "content_client_width", "content_height", "content_scroll_height",
     "content_scroll_top", "content_top", "current_status", "device_pixel_ratio", "document_client_height",
-    "document_client_width", "document_has_focus", "document_name", "document_ready_state",
+    "document_client_width", "document_has_focus", "document_ready_state",
     "document_scroll_height", "document_scroll_width", "error_code", "error_type", "event_sequence", "header_bottom",
     "header_clipped_top", "header_display", "header_height", "header_offset_top", "header_position",
     "header_top", "header_visibility", "host_ready", "inner_height", "inner_width", "layout_event_count",
@@ -352,8 +357,10 @@
     }
     accountApplyAvailable = account.apply_available === true;
     accountPendingResultCount = account.pending_result_count;
+    accountNetworkAvailable = account.network_available === true;
+    accountErrorCode = account.error_code || "";
     node("account").textContent = account.signed_in
-      ? `${account.username || "当前账号"}${account.network_available ? "" : " · 离线"}`
+      ? `${account.username || "当前账号"}${account.network_available ? "" : " · 服务器离线"}`
       : "未登录";
     if (!accountApplyAvailable) node("apply").disabled = true;
     else if (currentState.host_ready === true && panelReadyCompleted && !pendingRequestId) node("apply").disabled = false;
@@ -366,6 +373,10 @@
     ].join(":");
     if (statusKey === lastAccountStatusKey) return;
     lastAccountStatusKey = statusKey;
+    if (account.network_available === false && account.error_code) {
+      node("message").textContent = "服务器无法连接。";
+      node("error").textContent = displayError(account.error_code);
+    }
     log("INFO", "taskpane.account.changed", "任务窗格账号状态已更新", {
       apply_available: accountApplyAvailable,
       network_available: account.network_available === true,
@@ -383,7 +394,7 @@
     const state = currentState;
     if (pendingRequestId) {
       node("message").textContent = "命令正在处理中。";
-      node("error").textContent = "WPS_COMMAND_BUSY";
+      node("error").textContent = displayError("WPS_COMMAND_BUSY");
       log("WARNING", "taskpane.request.blocked.busy", "任务窗格请求被忙碌状态阻止", Object.assign(contextDetails(state), {
         command: commandName, reason: "pending_request", request_status: "BLOCKED",
         pending_present: true,
@@ -393,7 +404,7 @@
     }
     if (state.host_ready !== true || !hostGeneration) {
       node("message").textContent = "WPS Host 尚未就绪，请重启 WPS。";
-      node("error").textContent = "WPS_HOST_NOT_READY";
+      node("error").textContent = displayError("WPS_HOST_NOT_READY");
       log("WARNING", "taskpane.request.blocked.host_not_ready", "任务窗格请求因 Host 未就绪被阻止", Object.assign(contextDetails(state), {
         command: commandName, reason: "host_not_ready", request_status: "BLOCKED",
         pending_present: false, host_generation: hostGeneration,
@@ -421,6 +432,7 @@
     pendingRequestId = requestId;
     pendingRequestedAt = Date.now();
     pendingClaimed = false;
+    pendingAckTimedOut = false;
     setBusinessButtonsDisabled(true);
     node("message").textContent = "命令已发送，等待 WPS 主上下文处理…";
     log("INFO", "taskpane.bridge.command.submit.start", "开始向通信桥提交命令", {
@@ -444,6 +456,7 @@
       pendingRequestId = "";
       pendingRequestedAt = 0;
       pendingClaimed = false;
+      pendingAckTimedOut = false;
       setBusinessButtonsDisabled(state.host_ready !== true || !panelReadyCompleted);
       log("ERROR", "taskpane.bridge.command.submit.failed", "任务窗格命令提交失败", {
         request_id: requestId, command: commandName, host_generation: hostGeneration,
@@ -487,7 +500,7 @@
       const errorCode = stableErrorCode(error, "WPS_PANEL_READY_SUBMIT_FAILED");
       setBusinessButtonsDisabled(true);
       node("message").textContent = "任务窗格工作区重算失败，请重新打开状态面板。";
-      node("error").textContent = errorCode;
+      node("error").textContent = displayError(errorCode);
       log("ERROR", "taskpane.panel_ready.submit.failed", "WPS 工作区重算请求提交失败", {
         request_id: panelReadyRequestId, command: "panel_ready",
         pane_instance_id: paneInstanceId, host_generation: hostGeneration,
@@ -517,15 +530,82 @@
   }
 
   function displayStatus(value) {
-    const text = String(value || "").toLowerCase().replace(/_/g, " ");
-    return text ? text.charAt(0).toUpperCase() + text.slice(1) : "";
+    const statuses = {
+      CONNECTING: "连接中",
+      NOT_READY: "未就绪",
+      READY: "就绪",
+      CLAIMED: "已领取",
+      RUNNING: "处理中",
+      PASS: "成功",
+      FAIL: "失败",
+      ERROR: "错误"
+    };
+    return statuses[String(value || "").toUpperCase()] || "未知状态";
+  }
+
+  function displayError(code) {
+    return code ? `错误代码：${String(code)}` : "";
+  }
+
+  function displayDocumentMode(value) {
+    const modes = {
+      UNKNOWN: "未知",
+      NORMAL: "普通公文",
+      REPORT: "报告",
+      NOTICE: "通知",
+      PLAN: "方案",
+      MEETING_MINUTES: "会议纪要"
+    };
+    return modes[String(value || "").toUpperCase()] || "未知";
+  }
+
+  function prepareTaskpaneRecovery(errorCode) {
+    try {
+      storage().setItem(TASKPANE_KEY, "");
+      storage().setItem(TASKPANE_VERSION_KEY, "");
+      log("INFO", "taskpane.bridge.state.wait.recovery_prepared", "任务窗格失效标识已清除，下次将重建状态面板", {
+        pane_instance_id: paneInstanceId, error_code: errorCode
+      });
+    } catch (storageError) {
+      log("ERROR", "taskpane.bridge.state.wait.recovery_failed", "任务窗格失效标识清除失败", {
+        pane_instance_id: paneInstanceId,
+        error_code: stableErrorCode(storageError, "WPS_TASKPANE_RECOVERY_STORAGE_FAILED"),
+        error_type: storageError && storageError.name ? storageError.name : "Error"
+      });
+    }
+  }
+
+  function stopPanelReadyTerminalWait() {
+    const requestId = pendingRequestId;
+    const errorCode = "WPS_PANEL_READY_TERMINAL_TIMEOUT";
+    stateWaitStopped = true;
+    pendingRequestId = "";
+    pendingRequestedAt = 0;
+    pendingClaimed = false;
+    pendingAckTimedOut = false;
+    setBusinessButtonsDisabled(true);
+    node("status").textContent = displayStatus("ERROR");
+    node("message").textContent = "工作区重算未返回最终状态，请重启 WPS 后重新打开状态面板。";
+    node("error").textContent = displayError(errorCode);
+    log("ERROR", "taskpane.panel_ready.terminal_timeout", "任务窗格工作区重算终态等待超时", {
+      request_id: requestId, command: "panel_ready", pane_instance_id: paneInstanceId,
+      host_generation: hostGeneration, error_code: errorCode
+    });
+    prepareTaskpaneRecovery(errorCode);
+    log("ERROR", "taskpane.bridge.state.wait.stopped", "任务窗格状态长请求已停止", {
+      pane_instance_id: paneInstanceId, host_generation: hostGeneration,
+      state_revision: stateRevision,
+      cause_event: "taskpane.panel_ready.terminal_timeout",
+      error_code: errorCode
+    });
   }
 
   function updatePendingRequest(state) {
-    if (!pendingRequestId) return;
+    if (!pendingRequestId) return false;
     const active = [state.active_request, state.last_request].find((item) => item && item.request_id === pendingRequestId) || {};
     if (active.request_id === pendingRequestId && ["CLAIMED", "RUNNING"].includes(active.request_status) && !pendingClaimed) {
       pendingClaimed = true;
+      pendingAckTimedOut = false;
       log("INFO", "taskpane.request.claimed", "任务窗格请求已被 Host 领取", { request_id: pendingRequestId, request_status: active.request_status });
       logLayoutEvent(
         "taskpane.command.layout.snapshot",
@@ -588,25 +668,39 @@
       pendingRequestId = "";
       pendingRequestedAt = 0;
       pendingClaimed = false;
+      pendingAckTimedOut = false;
       setBusinessButtonsDisabled(!panelReadyCompleted);
-      return;
+      return false;
     }
-    if (Date.now() - pendingRequestedAt >= REQUEST_ACK_TIMEOUT_MS) {
-      node("error").textContent = "REQUEST_ACK_TIMEOUT";
+    const elapsed = pendingRequestedAt ? Date.now() - pendingRequestedAt : 0;
+    if (
+      pendingRequestId === panelReadyRequestId
+      && elapsed >= PANEL_READY_TERMINAL_TIMEOUT_MS
+    ) {
+      stopPanelReadyTerminalWait();
+      return true;
+    }
+    if (!pendingClaimed && !pendingAckTimedOut && elapsed >= REQUEST_ACK_TIMEOUT_MS) {
+      node("error").textContent = displayError("WPS_REQUEST_ACK_TIMEOUT");
       log("WARNING", "taskpane.request.timeout", "任务窗格请求领取超时", { request_id: pendingRequestId, error_code: "WPS_REQUEST_ACK_TIMEOUT" });
-      pendingRequestId = "";
-      pendingRequestedAt = 0;
-      pendingClaimed = false;
-      setBusinessButtonsDisabled(!panelReadyCompleted);
+      pendingAckTimedOut = true;
+      if (pendingRequestId !== panelReadyRequestId) {
+        pendingRequestId = "";
+        pendingRequestedAt = 0;
+        pendingClaimed = false;
+        pendingAckTimedOut = false;
+        setBusinessButtonsDisabled(!panelReadyCompleted);
+      }
     }
+    return false;
   }
 
   function render(state) {
-    updatePendingRequest(state);
+    if (updatePendingRequest(state)) return;
     if (state.host_ready !== true) {
       node("status").textContent = displayStatus("NOT_READY");
       node("message").textContent = "WPS Host 尚未就绪，请重启 WPS。";
-      node("error").textContent = state.error_code || "";
+      node("error").textContent = displayError(state.error_code || "");
       node("summary").textContent = "尚未识别。";
       node("warnings").textContent = "";
       node("rows").replaceChildren();
@@ -641,8 +735,19 @@
       lastStatus = currentStatus;
     }
     node("status").textContent = displayStatus(currentStatus);
-    node("message").textContent = state.message || "就绪";
-    node("error").textContent = state.error_code || "";
+    const waitingForLatePanelReady = pendingRequestId === panelReadyRequestId && pendingAckTimedOut;
+    node("message").textContent = waitingForLatePanelReady
+      ? "WPS 尚未领取工作区重算请求，继续等待最终状态…"
+      : !accountNetworkAvailable && accountErrorCode
+        ? "服务器无法连接。"
+        : state.message || "就绪";
+    node("error").textContent = displayError(
+      waitingForLatePanelReady
+        ? "WPS_REQUEST_ACK_TIMEOUT"
+        : !accountNetworkAvailable && accountErrorCode
+          ? accountErrorCode
+          : state.error_code || ""
+    );
     const warnings = Array.isArray(state.compatibility_warnings) ? state.compatibility_warnings.map(formatWarning) : [];
     if (state.result_sync_status === "pending" && accountPendingResultCount > 0) {
       warnings.unshift("排版已完成，结果尚未同步");
@@ -665,7 +770,7 @@
       node("rows").replaceChildren();
       return;
     }
-    node("summary").textContent = `文档模式 ${recognition.document_mode || "UNKNOWN"}；识别 ${recognition.block_count || 0} 项；批注 ${state.preview_comment_count || 0}；确认 ${state.preview_confirmed_count || 0}；复核 ${state.preview_review_count || 0}；未定位 ${recognition.unresolved_count || 0}`;
+    node("summary").textContent = `文档模式 ${displayDocumentMode(recognition.document_mode)}；识别 ${recognition.block_count || 0} 项；批注 ${state.preview_comment_count || 0}；确认 ${state.preview_confirmed_count || 0}；复核 ${state.preview_review_count || 0}；未定位 ${recognition.unresolved_count || 0}`;
     const rows = Array.isArray(state.recognition_rows) ? state.recognition_rows : [];
     node("rows").replaceChildren(...rows.map((item) => {
       const row = document.createElement("div");
@@ -673,7 +778,7 @@
       const paragraph = Number.isInteger(item.paragraph_index) ? `段落 ${item.paragraph_index + 1}` : "结构项";
       const confidence = Math.round(Number(item.confidence || 0) * 100);
       const binding = item.binding_status === "confirmed" ? "已确认" : item.binding_status === "review" ? "需复核" : "未定位";
-      row.textContent = `${paragraph} · ${item.role_name || item.type_id || "未知"} · ${confidence}% · ${binding}${item.review_level === "review" || item.review_level === "critical_review" ? " · 识别建议复核" : ""}`;
+      row.textContent = `${paragraph} · ${item.role_name || "未知"} · ${confidence}% · ${binding}${item.review_level === "review" || item.review_level === "critical_review" ? " · 识别建议复核" : ""}`;
       return row;
     }));
   }
@@ -685,7 +790,8 @@
     setBusinessButtonsDisabled(true);
     node("status").textContent = displayStatus("ERROR");
     node("message").textContent = "任务窗格状态通道不可用，请重新打开状态面板。";
-    node("error").textContent = errorCode;
+    node("error").textContent = displayError(errorCode);
+    prepareTaskpaneRecovery(errorCode);
     log("ERROR", "taskpane.bridge.state.wait.failed", "任务窗格状态长请求失败", {
       pane_instance_id: paneInstanceId, host_generation: hostGeneration,
       state_revision: stateRevision,
@@ -719,7 +825,8 @@
       pendingRequestId = "";
       pendingRequestedAt = 0;
       pendingClaimed = false;
-      node("error").textContent = "WPS_HOST_CONTEXT_REPLACED";
+      pendingAckTimedOut = false;
+      node("error").textContent = displayError("WPS_HOST_CONTEXT_REPLACED");
     }
   }
 
@@ -736,7 +843,9 @@
         result = await bridgeApi("/v1/bridge/state/wait", {
           after_revision: stateRevision,
           host_generation: hostGeneration,
-          timeout_seconds: pendingRequestId && !pendingClaimed ? 5 : 25
+          timeout_seconds: pendingRequestId && (
+            !pendingClaimed || pendingRequestId === panelReadyRequestId
+          ) ? 5 : 25
         }, pendingRequestId);
       } catch (error) {
         stateWaitInFlight = false;
@@ -801,8 +910,10 @@
     );
     void request(id).catch((error) => {
       const code = stableErrorCode(error, "WPS_TASKPANE_REQUEST_FAILED");
-      node("message").textContent = "命令发送失败。";
-      node("error").textContent = code;
+      node("message").textContent = code === "WPS_PUBLIC_SERVER_UNAVAILABLE"
+        ? "服务器无法连接。"
+        : "命令发送失败。";
+      node("error").textContent = displayError(code);
       log("ERROR", "taskpane.request.failed", "任务窗格命令发送失败", {
         command: id, error_code: code,
         error_type: error && error.name ? error.name : "Error"
@@ -830,7 +941,7 @@
     const errorCode = stableErrorCode(error, "WPS_TASKPANE_LOAD_FAILED");
     node("status").textContent = displayStatus("ERROR");
     node("message").textContent = "任务窗格加载失败，请重新打开状态面板。";
-    node("error").textContent = errorCode;
+    node("error").textContent = displayError(errorCode);
     log("ERROR", "taskpane.load.failed", "任务窗格初始化失败", {
       pane_instance_id: paneInstanceId,
       error_code: errorCode,

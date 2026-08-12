@@ -41,7 +41,7 @@ SAFE_WPS_LOG_FIELDS = frozenset(
         "control_host", "control_port", "control_url_present",
         "current_status",
         "deleted_count", "device_id_short", "device_pixel_ratio", "document_client_height", "document_client_width",
-        "document_has_focus", "document_id_short", "document_matches_expected", "document_mode", "document_name",
+        "document_has_focus", "document_id_short", "document_matches_expected", "document_mode",
         "document_ready_state", "document_scroll_height", "document_scroll_width",
         "docxtool_version", "duration_ms", "end_utf16", "error_code", "error_type",
         "event_sequence", "executable", "failed_count", "file_id", "flushed_count",

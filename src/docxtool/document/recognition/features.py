@@ -111,6 +111,15 @@ class ParagraphFeatures:
     colon_key_value_candidate: bool = False
     colon_body_label_candidate: bool = False
     colon_explanatory_body: bool = False
+    native_numbering_level: int | None = None
+    native_numbering_ordinal: int | None = None
+    native_numbering_family: str = ""
+    native_numbering_present: bool = False
+    native_numbering_template_level: int | None = None
+    native_numbering_ilvl: int | None = None
+    native_numbering_start: int | None = None
+    native_numbering_level_source: str = ""
+    native_numbering_body_list: bool = False
 
 
 def normalize_text(value: str) -> str:
@@ -198,6 +207,14 @@ def extract_features(block: DocumentBlock, previous: DocumentBlock | None = None
         kv_level = level
     dispatch = DISPATCH_RE.fullmatch(compact)
     style = block.style_name or ""
+    source_features = getattr(block.raw_reference, "features", None)
+    native_numbering = getattr(source_features, "native_numbering", None)
+    from .numbering import native_numbering_heading_level
+
+    native_level = native_numbering_heading_level(native_numbering)
+    heading_level = level
+    if not (label and colon.meeting_label):
+        kv_level = heading_level
     return ParagraphFeatures(
         block.index, block.paragraph_index if block.paragraph_index is not None else -1,
         raw, normalized, compact, prefix, kv_level, content,
@@ -206,8 +223,8 @@ def extract_features(block: DocumentBlock, previous: DocumentBlock | None = None
         bool(dispatch), dispatch.groupdict() if dispatch else None,
         bool(DATE_RE.fullmatch(compact)), bool(colon.recipient_candidate),
         bool(ATTACHMENT_RE.match(compact)), bool(len(compact) <= 16 and not re.search(r"[。！？]", compact)),
-        bool(SOURCE_NOTE_RE.match(compact)), level,
-        0.8 if level and len(content) <= 40 else 0.2,
+        bool(SOURCE_NOTE_RE.match(compact)), heading_level,
+        0.8 if heading_level and len(content) <= 40 else 0.2,
         0.8 if block.alignment and "CENTER" in str(block.alignment).upper() and len(normalized) <= 50 else 0.1,
         normalized.endswith(("。", "！", "？", ".", "!", "?")), ":" in normalized or "：" in normalized,
         len(compact), bool(block.alignment and "CENTER" in str(block.alignment).upper()), block.bold_char_ratio >= 0.5 if block.bold_char_ratio else bool(block.bold), block.weighted_font_size or block.font_size_pt,
@@ -221,6 +238,19 @@ def extract_features(block: DocumentBlock, previous: DocumentBlock | None = None
         colon.standalone_addressing, colon.inline_addressing_body,
         colon.key_value_candidate, colon.body_label_candidate,
         colon.explanatory_body_candidate,
+        None,
+        getattr(native_numbering, "ordinal", None),
+        str(getattr(native_numbering, "family_id", "") or ""),
+        native_numbering is not None,
+        native_level,
+        getattr(native_numbering, "ilvl", None),
+        (
+            getattr(native_numbering, "effective_start", None)
+            if native_numbering is not None
+            else None
+        ),
+        "",
+        False,
     )
 
 

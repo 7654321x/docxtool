@@ -120,6 +120,61 @@ def test_source_heading_cue_audit_accepts_preserved_heading_and_ignores_long_pro
     assert audit == {"cue_count": 1, "mismatch_count": 0, "mismatches": []}
 
 
+def test_native_numbering_heading_audit_is_text_free() -> None:
+    text = "自动编号标题"
+    features = SimpleNamespace(
+        native_numbering=object(),
+        source_physical_paragraph_index=8,
+    )
+    source = SimpleNamespace(
+        paragraphs=[SimpleNamespace(text=text, type_id="heading2", features=features)],
+        recognition_diagnostics={
+            "paragraphs": [
+                {
+                    "paragraph_index": 0,
+                    "evidence_summary": [
+                        "numbered-heading-level-2",
+                        "native-numbering-template",
+                    ],
+                }
+            ]
+        },
+    )
+
+    output = SimpleNamespace(
+        paragraphs=[SimpleNamespace(text=f"（一）{text}", type_id="heading2")]
+    )
+
+    audit = batch_test_docx.native_numbering_heading_audit(source, output)
+
+    assert audit["clue_count"] == 1
+    assert audit["unpreserved_count"] == 0
+    assert audit["details"][0]["type"] == "heading2"
+    assert text not in str(audit)
+
+
+def test_legacy_source_heading_audit_skips_parsed_native_numbering() -> None:
+    features = SimpleNamespace(
+        native_numbering=object(),
+        segment_numbering_features="@lvl_0",
+        numbering_prefix="@lvl_0",
+        segment_bold_char_ratio=1.0,
+        source_physical_paragraph_index=2,
+    )
+    source = SimpleNamespace(
+        paragraphs=[SimpleNamespace(text="原生一级标题", features=features)]
+    )
+    output = SimpleNamespace(
+        paragraphs=[SimpleNamespace(text="原生一级标题", type_id="heading1")]
+    )
+
+    assert batch_test_docx.source_heading_cue_audit(source, output) == {
+        "cue_count": 0,
+        "mismatch_count": 0,
+        "mismatches": [],
+    }
+
+
 def test_signature_continuity_audit_detects_attachment_between_org_and_date() -> None:
     output = SimpleNamespace(paragraphs=[
         SimpleNamespace(text="测试单位", type_id="sign_org"),

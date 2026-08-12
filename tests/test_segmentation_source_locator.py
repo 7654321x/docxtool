@@ -15,6 +15,7 @@ from docxtool.document.segmentation import (
 )
 from docxtool.document.segmentation.source_locator import build_physical_source_features
 from docxtool.document.source_tape import canonicalize_text
+from docxtool.document.models import NativeNumbering
 
 
 def test_importer_reexports_segmentation_source_helpers():
@@ -121,6 +122,24 @@ def test_build_segment_features_preserves_locator_format_and_callback_flags():
     assert child.segment_font_name == "黑体"
     assert child.segment_bold_char_ratio == 1.0
     assert child.inline_lead_bold is True
+
+
+def test_only_first_split_segment_keeps_native_numbering():
+    marker = NativeNumbering(
+        1, 1, 0, "decimal", "%1.", 1, None, 1, "num:1",
+        object(), object(), object(),
+    )
+    parent = ParagraphFeatures(
+        source_physical_paragraph_index=2,
+        source_physical_text="标题。正文内容",
+        native_numbering=marker,
+    )
+
+    first = build_segment_features(parent, 0, 3, paragraph_index=0)
+    second = build_segment_features(parent, 3, len(parent.source_physical_text), paragraph_index=1)
+
+    assert first.native_numbering is marker
+    assert second.native_numbering is None
 
 
 def test_assign_segment_ordinals_groups_by_physical_paragraph():

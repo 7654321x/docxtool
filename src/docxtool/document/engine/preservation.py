@@ -275,6 +275,60 @@ class ReferencedStyleCopier:
                 return candidate
 
 
+class NativeNumberingCopier:
+    """把导入段落实际引用的原生编号定义合并到输出文档。"""
+
+    def __init__(self, target_numbering_element):
+        self._target = target_numbering_element
+        self._num_ids: dict[int, int] = {}
+
+    def apply(self, paragraph, native_numbering) -> None:
+        """为输出段落写入已重映射的原生 ``w:numPr``。"""
+        num_id = self._num_ids.get(native_numbering.num_id)
+        if num_id is None:
+            num_id = self._copy_definition(native_numbering)
+            self._num_ids[native_numbering.num_id] = num_id
+        num_pr = copy.deepcopy(native_numbering.num_pr_xml)
+        num_id_element = num_pr.find(qn("w:numId"))
+        if num_id_element is None:
+            raise ExportError("源段落原生编号缺少 numId")
+        num_id_element.set(qn("w:val"), str(num_id))
+        properties = paragraph._element.get_or_add_pPr()
+        old = properties.find(qn("w:numPr"))
+        if old is not None:
+            properties.remove(old)
+        properties.append(num_pr)
+
+    def _copy_definition(self, native_numbering) -> int:
+        abstract_num_id = self._next_id("w:abstractNum", "w:abstractNumId")
+        num_id = self._next_id("w:num", "w:numId")
+        abstract_num = copy.deepcopy(native_numbering.abstract_num_xml)
+        abstract_num.set(qn("w:abstractNumId"), str(abstract_num_id))
+        num = copy.deepcopy(native_numbering.num_xml)
+        num.set(qn("w:numId"), str(num_id))
+        abstract_ref = num.find(qn("w:abstractNumId"))
+        if abstract_ref is None:
+            raise ExportError("源原生编号定义缺少 abstractNumId")
+        abstract_ref.set(qn("w:val"), str(abstract_num_id))
+        first_num = self._target.find(qn("w:num"))
+        if first_num is None:
+            self._target.extend((abstract_num, num))
+        else:
+            first_num.addprevious(abstract_num)
+            self._target.append(num)
+        return num_id
+
+    def _next_id(self, tag: str, attribute: str) -> int:
+        used = {
+            int(element.get(qn(attribute), "0"))
+            for element in self._target.findall(qn(tag))
+        }
+        candidate = 0 if tag == "w:abstractNum" else 1
+        while candidate in used:
+            candidate += 1
+        return candidate
+
+
 def copy_table(doc, table, part_copier, style_copier) -> None:
     """原样复制表格和其引用资源。
 

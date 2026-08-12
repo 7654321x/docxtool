@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 
+import pytest
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
@@ -128,8 +129,8 @@ def test_importing_features_calls_physical_numbering_application(monkeypatch) ->
     paragraph = document.add_paragraph("自动列表标题")
     calls = []
 
-    def fake_apply(features, paragraph_element, text, *, debug_logger):
-        calls.append((features, paragraph_element, text, debug_logger))
+    def fake_apply(features, paragraph_value, text, *, debug_logger):
+        calls.append((features, paragraph_value, text, debug_logger))
         features.numbering_prefix = "@lvl_7"
 
     monkeypatch.setattr(
@@ -145,7 +146,7 @@ def test_importing_features_calls_physical_numbering_application(monkeypatch) ->
     )
 
     assert result.numbering_prefix == "@lvl_7"
-    assert calls == [(result, paragraph._element, paragraph.text.strip(), importer_module.logger)]
+    assert calls == [(result, paragraph, paragraph.text.strip(), importer_module.logger)]
 
 
 def test_physical_numbering_application_keeps_native_and_literal_precedence() -> None:
@@ -176,8 +177,8 @@ def test_physical_numbering_application_keeps_native_and_literal_precedence() ->
     assert literal_features.numbering_prefix == "1."
 
 
-def test_physical_numbering_application_keeps_exception_and_style_behavior(monkeypatch) -> None:
-    """原生编号读取失败仍被吞掉，随后继续应用既有 Heading 样式事实。"""
+def test_physical_numbering_application_exposes_numbering_read_failure(monkeypatch) -> None:
+    """编号读取失败必须明确暴露，不能靠 Heading 样式静默降级。"""
     document = Document()
     paragraph = document.add_paragraph("样式标题", style="Heading 1")
 
@@ -186,13 +187,12 @@ def test_physical_numbering_application_keeps_exception_and_style_behavior(monke
 
     monkeypatch.setattr(numbering_module, "word_list_level_prefix", fail_word_numbering)
 
-    features = extract_paragraph_features(
-        paragraph,
-        0,
-        detect_numbering_prefix_func=detect_numbering_prefix,
-    )
-
-    assert features.numbering_prefix == "@style_heading1"
+    with pytest.raises(ValueError, match="fixture failure"):
+        extract_paragraph_features(
+            paragraph,
+            0,
+            detect_numbering_prefix_func=detect_numbering_prefix,
+        )
 
 
 def test_importing_features_calls_physical_format_application(monkeypatch) -> None:

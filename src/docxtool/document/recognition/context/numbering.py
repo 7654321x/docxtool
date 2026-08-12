@@ -35,6 +35,8 @@ def _cn_ordinal(value: str) -> int | None:
 
 
 def _numbering_ordinal(feature: ParagraphFeatures) -> int | None:
+    if feature.native_numbering_ordinal is not None:
+        return feature.native_numbering_ordinal
     prefix = str(feature.numbering_prefix or "").strip()
     if not prefix or prefix.startswith("@"):
         return None

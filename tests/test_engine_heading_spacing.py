@@ -133,17 +133,38 @@ class EngineHeadingSpacingTest(unittest.TestCase):
         self.assertEqual(first.get(qn("w:val")), "0")
         self.assertEqual(last.get(qn("w:val")), "1")
 
-    def test_standalone_heading1_terminal_period_is_removed(self):
+    def test_standalone_heading_terminal_period_is_removed_at_every_level(self):
+        cases = (
+            ("heading1", "一、一级标题。", "一、一级标题"),
+            ("heading2", "（一）二级标题。", "（一）二级标题"),
+            ("heading3", "1.三级标题。", "1.三级标题"),
+            ("heading4", "（1）四级标题。", "（1）四级标题"),
+        )
+        for type_id, source, expected in cases:
+            with self.subTest(type_id=type_id):
+                doc = self._export([
+                    ParagraphData(
+                        text=source,
+                        type_id=type_id,
+                        original_text=source,
+                        features=ParagraphFeatures(),
+                    )
+                ], processing_strategy="structural")
+
+                self.assertEqual(doc.paragraphs[0].text, expected)
+
+    def test_heading_period_before_body_is_not_removed_as_terminal_punctuation(self):
+        source = "（一）二级标题。这里是标题后的正文内容。"
         doc = self._export([
             ParagraphData(
-                text="一、一级标题。",
-                type_id="heading1",
-                original_text="一、一级标题。",
+                text=source,
+                type_id="heading2",
+                original_text=source,
                 features=ParagraphFeatures(),
             )
         ], processing_strategy="structural")
 
-        self.assertEqual(doc.paragraphs[0].text, "一、一级标题")
+        self.assertEqual(doc.paragraphs[0].text, source)
 
     def test_head_area_inserts_blank_line_before_body_or_heading1(self):
         cases = [

@@ -358,12 +358,12 @@ src/docxtool/web/
 ```text
 src/docxtool/wps_server/
 ├─ __init__.py                    # WPS 公网服务包入口
-├─ config.py                      # 24 小时会话、心跳、受控命令和数据库路径配置
+├─ config.py                      # 7 天会话、心跳、受控命令和数据库路径配置
 ├─ database.py                    # 独立 wps_plugin.db 的四张核心表和连接初始化
 ├─ validation.py                  # 账号、密码、设备、请求编号和结果字段校验
 ├─ auth.py                        # 会话哈希、设备指纹和 Bearer 会话认证
 ├─ format_config.py               # 当前服务器排版配置和配置版本加载
-├─ service.py                     # 注册、登录、心跳、排版授权和结果回传事务
+├─ service.py                     # 注册、双槽 Argon2 登录、心跳、排版授权和结果回传事务
 ├─ route_handlers.py              # /wps-api/v1 JSON HTTP 边界
 ├─ admin.py                       # WPS 用户、设备和排版请求管理查询
 └─ admin_routes.py                # WPS 管理页面和启停动作路由
@@ -371,9 +371,11 @@ src/docxtool/wps_server/
 apps/wps/
 ├─ main.py                        # 源码和冻结 EXE 的独立启动入口
 ├─ account_store.py               # %LOCALAPPDATA% 本地账号库和 Windows DPAPI 加密
-├─ account_runtime.py             # 静默登录、10 分钟心跳、授权和结果回传
+├─ account_runtime.py             # 运行期会话刷新、10 分钟心跳、授权和结果回传
 ├─ public_api.py                  # 严格 HTTPS WPS 公网 JSON 客户端
-├─ login_window.py                # 独立 Tkinter 登录注册窗口
+├─ login_window.py                # PySide2 Qt Widgets 登录注册窗口与认证线程
+├─ desktop_runtime.py              # 系统托盘、单实例和桌面生命周期
+├─ windows_startup.py              # 当前用户 Windows 登录启动项
 ├─ client-config.json             # 源码开发服务器 Origin；生产构建时替换
 ├─ DocxToolWps.spec               # PyInstaller 控制台单文件构建规格
 ├─ requirements-build.txt         # Python 3.8 兼容的固定 PyInstaller 版本
@@ -639,7 +641,7 @@ tests/
 ├─ test_web_user_auth.py           # 用户 session、Cookie 和 CSRF
 ├─ test_web_admin_workspace.py     # 统一管理员工作台和 WPS 页面渲染
 ├─ test_wps_server_admin.py        # WPS 用户、设备和请求管理查询
-├─ test_wps_server_auth.py         # 注册、登录、24 小时会话和心跳
+├─ test_wps_server_auth.py         # 注册、登录、7 天会话、Argon2 并发和心跳
 ├─ test_wps_server_database.py     # WPS 独立四表数据库结构
 ├─ test_wps_server_format_requests.py # 排版授权幂等和结果终态
 ├─ test_wps_server_http_flow.py    # 真实 HTTP 注册到后台统计闭环

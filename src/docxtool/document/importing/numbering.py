@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import copy
 import re
 from typing import Any
+
+from docxtool.document.models import NativeNumbering
 
 
 NUMBERING_PATTERNS = [
@@ -58,6 +61,141 @@ def word_list_level_prefix(paragraph_element, text: str) -> str:
     return f"@lvl_{lvl}"
 
 
+def _value(element, child_tag: str, default: str = "") -> str:
+    """读取一个编号子元素的 ``w:val``。"""
+    from docx.oxml.ns import qn
+
+    child = element.find(qn(child_tag)) if element is not None else None
+    return child.get(qn("w:val"), default) if child is not None else default
+
+
+def _find_by_id(root, tag: str, attribute: str, value: int):
+    from docx.oxml.ns import qn
+
+    expected = str(value)
+    return next(
+        (
+            element
+            for element in root.findall(qn(tag))
+            if element.get(qn(attribute)) == expected
+        ),
+        None,
+    )
+
+
+def _direct_num_pr(paragraph_element):
+    from docx.oxml.ns import qn
+
+    properties = paragraph_element.find(qn("w:pPr"))
+    return properties.find(qn("w:numPr")) if properties is not None else None
+
+
+def _style_num_pr(paragraph):
+    from docx.oxml.ns import qn
+
+    style = getattr(paragraph, "style", None)
+    visited: set[str] = set()
+    while style is not None:
+        style_id = str(getattr(style, "style_id", "") or "")
+        if style_id in visited:
+            break
+        visited.add(style_id)
+        properties = style.element.find(qn("w:pPr"))
+        if properties is not None:
+            num_pr = properties.find(qn("w:numPr"))
+            if num_pr is not None:
+                return num_pr
+        style = style.base_style
+    return None
+
+
+def _level_definition(abstract_num, ilvl: int):
+    from docx.oxml.ns import qn
+
+    return next(
+        (
+            level
+            for level in abstract_num.findall(qn("w:lvl"))
+            if int(level.get(qn("w:ilvl"), "0")) == ilvl
+        ),
+        None,
+    )
+
+
+def _level_override(num, ilvl: int):
+    from docx.oxml.ns import qn
+
+    return next(
+        (
+            override
+            for override in num.findall(qn("w:lvlOverride"))
+            if int(override.get(qn("w:ilvl"), "0")) == ilvl
+        ),
+        None,
+    )
+
+
+def extract_native_numbering(paragraph, *, ordinal: int = 1) -> NativeNumbering | None:
+    """解析段落有效原生编号；损坏引用直接报错。"""
+    from docx.oxml.ns import qn
+
+    direct_num_pr = _direct_num_pr(paragraph._element)
+    num_pr = direct_num_pr
+    if num_pr is None:
+        num_pr = _style_num_pr(paragraph)
+    if num_pr is None:
+        return None
+    raw_num_id = _value(num_pr, "w:numId")
+    if not raw_num_id:
+        return None
+    num_id = int(raw_num_id)
+    if num_id == 0:
+        return None
+    ilvl = int(_value(num_pr, "w:ilvl", "0"))
+    numbering_root = paragraph.part.numbering_part.element
+    num = _find_by_id(numbering_root, "w:num", "w:numId", num_id)
+    if num is None:
+        raise ValueError(f"WPS_NATIVE_NUMBERING_NUM_MISSING:{num_id}")
+    raw_abstract_id = _value(num, "w:abstractNumId")
+    if not raw_abstract_id:
+        raise ValueError(f"WPS_NATIVE_NUMBERING_ABSTRACT_ID_MISSING:{num_id}")
+    abstract_num_id = int(raw_abstract_id)
+    abstract_num = _find_by_id(
+        numbering_root, "w:abstractNum", "w:abstractNumId", abstract_num_id
+    )
+    if abstract_num is None:
+        raise ValueError(
+            f"WPS_NATIVE_NUMBERING_ABSTRACT_MISSING:{abstract_num_id}"
+        )
+    level = _level_definition(abstract_num, ilvl)
+    override = _level_override(num, ilvl)
+    override_level = override.find(qn("w:lvl")) if override is not None else None
+    effective_level = override_level if override_level is not None else level
+    if effective_level is None:
+        raise ValueError(
+            f"WPS_NATIVE_NUMBERING_LEVEL_MISSING:{abstract_num_id}:{ilvl}"
+        )
+    start_override_raw = _value(override, "w:startOverride") if override is not None else ""
+    start_override = int(start_override_raw) if start_override_raw else None
+    start = int(_value(effective_level, "w:start", "1"))
+    return NativeNumbering(
+        num_id=num_id,
+        abstract_num_id=abstract_num_id,
+        ilvl=ilvl,
+        num_fmt=_value(effective_level, "w:numFmt"),
+        lvl_text=_value(effective_level, "w:lvlText"),
+        start=start,
+        start_override=start_override,
+        ordinal=ordinal,
+        family_id=f"abstract:{abstract_num_id}",
+        num_xml=copy.deepcopy(num),
+        abstract_num_xml=copy.deepcopy(abstract_num),
+        num_pr_xml=copy.deepcopy(
+            direct_num_pr if direct_num_pr is not None else num_pr
+        ),
+    )
+
+
 def heading_style_prefix(style_name: str) -> str:
     """传入 Word 样式名称，返回系统内部 heading 样式前缀或空字符串。"""
     normalized = (style_name or "").lower()
@@ -67,10 +205,11 @@ def heading_style_prefix(style_name: str) -> str:
 
 def apply_physical_numbering_features(
     features: Any,
-    paragraph_element,
+    paragraph,
     text: str,
     *,
     debug_logger: Any,
+    ordinal: int = 1,
 ) -> None:
     """把既有 Word 列表和标题样式事实写入段落特征。
 
@@ -79,18 +218,23 @@ def apply_physical_numbering_features(
     标题类型，也不构造新的编号元数据。
     """
     try:
-        word_prefix = word_list_level_prefix(paragraph_element, text)
+        native_numbering = extract_native_numbering(paragraph, ordinal=ordinal)
+        if native_numbering is not None:
+            features.native_numbering = native_numbering
+        word_prefix = (
+            f"@lvl_{native_numbering.ilvl}"
+            if native_numbering is not None and not literal_digit_numbering_present(text)
+            else word_list_level_prefix(paragraph._element, text)
+        )
         if word_prefix and not features.numbering_prefix:
             features.numbering_prefix = word_prefix
-            lvl = int(word_prefix[5:])
             debug_logger.debug(
-                "[多级列表] ilvl=%s → heading%s chars=%s",
-                lvl,
-                lvl + 2,
+                "[多级列表] 已保留原生编号事实 ilvl=%s chars=%s",
+                int(word_prefix[5:]),
                 len(text),
             )
-    except Exception as exc:
-        debug_logger.debug("[多级列表] 提取失败: %s", exc)
+    except Exception:
+        raise
 
     try:
         style_prefix = heading_style_prefix(features.style_name)

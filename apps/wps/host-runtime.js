@@ -37,7 +37,7 @@
     "stage", "start_utf16", "end_utf16", "table_paragraph_count", "token_present", "queued_count",
     "total_duration_ms", "type_id", "unresolved", "unresolved_count", "validated_count", "skipped_count",
     "failed_count", "wait_attempts", "request_status",
-    "deleted_count", "document_id_short", "document_name", "event_sequence", "log_file", "pending_present", "slot_occupied",
+    "deleted_count", "document_id_short", "event_sequence", "log_file", "pending_present", "slot_occupied",
     "callbacks_registered", "state", "host_ready", "cleared_count", "cause_event",
     "primary_error_code", "previous_status", "current_status", "preview_confirmed_count",
     "preview_eligible_count", "preview_review_count", "warning_code",
@@ -1043,7 +1043,7 @@
     const startedAt = Date.now();
     const validated = [];
     let skipped = 0;
-    log("INFO", "preview.range_validation.start", "开始验证预览范围", {
+    log("INFO", "preview.range_selection.start", "开始筛选可预览范围", {
       ...contextDetails(requestContext)
     });
     for (const item of result.items || []) {
@@ -1053,7 +1053,7 @@
       }
       validated.push(item);
     }
-    log("INFO", "preview.range_validation.completed", "预览范围验证完成", {
+    log("INFO", "preview.range_selection.completed", "可预览范围筛选完成", {
       ...contextDetails(requestContext), validated_count: validated.length,
       skipped_count: skipped, failed_count: 0,
       confirmed_count: validated.filter((item) => item.binding_status === "confirmed").length,
@@ -1553,7 +1553,7 @@
     const previewReviewCount = validatedRanges.filter((item) => item.binding_status === "review").length;
     const rows = (result.items || []).map((item) => ({
       block_index: item.block_index, paragraph_index: item.host_paragraph_index,
-      type_id: item.type_id, role_name: roleNames[item.type_id] || item.type_id,
+      type_id: item.type_id, role_name: roleNames[item.type_id] || "未知",
       confidence: item.confidence, review_level: item.review_level,
       locator_verified: item.preview_eligible, binding_status: item.binding_status,
       segment_index: item.segment_index, segment_count: item.segment_count
@@ -2668,8 +2668,8 @@
         });
         try {
           const startResult = start();
-          log("INFO", "host.start.lazy.completed", "状态面板已补充启动 Host Runtime", {
-            command: id, state: startResult, host_ready: true
+          log("INFO", "host.start.lazy.scheduled", "状态面板已调度 Host Runtime 启动", {
+            command: id, state: startResult, bridge_ready: false
           });
         } catch (error) {
           const errorCode = stableErrorCode(error, "WPS_HOST_START_FAILED");

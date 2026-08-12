@@ -72,8 +72,12 @@ def format_current_document(
         except Exception as exc:
             log_event("ERROR", "format", "config.load.failed", "正式排版配置加载失败", {"operation_id_short": operation_id[:12], "request_id": request_id, "stage": "config_load", "error_type": type(exc).__name__, "error_code": "WPS_FORMAT_CONFIG_FAILED", "duration_ms": int((time.monotonic() - stage_started) * 1000)})
             raise RuntimeError("WPS_FORMAT_CONFIG_FAILED") from exc
+        # WPS one-click formatting always rebuilds recognized heading
+        # numbering as editable text. This removes source automatic heading
+        # numbering while leaving native body lists under Core's existing
+        # preservation rule.
+        features["numbering"]["enabled"] = True
         if format_config is None:
-            features["numbering"]["enabled"] = True
             features["punctuation"]["enabled"] = True
         processing = features.setdefault("processing", {})
         if not isinstance(processing, dict):

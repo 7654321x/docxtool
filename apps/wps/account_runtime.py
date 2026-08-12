@@ -1,4 +1,4 @@
-"""Runtime account state, silent login, heartbeat, and controlled authorization."""
+"""Runtime account state, session refresh, heartbeat, and controlled authorization."""
 
 from __future__ import annotations
 
@@ -22,7 +22,16 @@ def device_payload(device_key: str) -> dict:
     }
 
 
-def account_from_response(response: dict, *, origin: str, username: str, password: str, device_key: str) -> dict:
+def account_from_response(
+    response: dict,
+    *,
+    origin: str,
+    username: str,
+    password: str,
+    device_key: str,
+    remember_password: bool = True,
+    auto_login: bool = False,
+) -> dict:
     return {
         "server_origin": origin,
         "username": response["user"]["username"],
@@ -32,6 +41,8 @@ def account_from_response(response: dict, *, origin: str, username: str, passwor
         "session_token": response["session_token"],
         "device_key": device_key,
         "session_expires_at": int(response["session_expires_at"]),
+        "remember_password": bool(remember_password),
+        "auto_login": bool(auto_login),
     }
 
 
@@ -50,7 +61,6 @@ class AccountRuntime:
         self._heartbeat_observed = False
         self._heartbeat_network_failed = False
         self._heartbeat_error_code = ""
-        self._pending_results = {}
 
     def _record_public_error(self, exc: PublicApiError) -> None:
         self._network_available = not exc.network
@@ -59,9 +69,17 @@ class AccountRuntime:
             self._account["session_token"] = ""
             self._account["session_expires_at"] = 0
         elif exc.code in {"INVALID_CREDENTIALS", "ACCOUNT_DISABLED", "DEVICE_DISABLED"}:
-            self._store.clear_account()
+            deleted_count = self._store.clear_account()
             self._account["session_token"] = ""
             self._account["session_expires_at"] = 0
+            if deleted_count:
+                log_event(
+                    "WARNING",
+                    "account",
+                    "account.format_result.deleted.account_rejected",
+                    "账号被服务器拒绝，本机待发排版结果已删除",
+                    {"error_code": exc.code, "deleted_count": deleted_count},
+                )
 
     def summary(self) -> dict:
         with self._lock:
@@ -72,7 +90,7 @@ class AccountRuntime:
                 "session_expires_at": int(self._account.get("session_expires_at", 0)),
                 "network_available": self._network_available,
                 "apply_available": self._network_available and bool(self._account.get("session_token")),
-                "pending_result_count": len(self._pending_results),
+                "pending_result_count": self._store.count_format_results(),
                 "error_code": self._error_code,
             }
 
@@ -106,6 +124,8 @@ class AccountRuntime:
             username=self._account["username"],
             password=self._account["password"],
             device_key=self._account["device_key"],
+            remember_password=self._account.get("remember_password", True),
+            auto_login=self._account.get("auto_login", False),
         )
         self._store.save_account(updated)
         self._account = updated
@@ -125,8 +145,33 @@ class AccountRuntime:
     def ensure_session(self) -> str:
         with self._lock:
             if int(self._account.get("session_expires_at", 0)) <= int(self._now()):
+                if not self._account.get("password"):
+                    raise PublicApiError(
+                        "SESSION_EXPIRED",
+                        "登录已过期，请重新启动并登录",
+                        401,
+                    )
                 self._login()
             return self._account["session_token"]
+
+    def logout(self) -> None:
+        with self._lock:
+            token = self._account.get("session_token", "")
+            if token:
+                self._api.logout(token)
+            self._account["session_token"] = ""
+            self._account["session_expires_at"] = 0
+            self._account["auto_login"] = False
+            if not self._account.get("remember_password"):
+                self._account["password"] = ""
+            self._store.save_account(self._account)
+
+    def reload_account(self) -> None:
+        with self._lock:
+            updated = self._store.load_account()
+            if not updated:
+                raise RuntimeError("WPS_LOCAL_ACCOUNT_MISSING")
+            self._account = updated
 
     def heartbeat_once(self) -> dict:
         try:
@@ -139,23 +184,23 @@ class AccountRuntime:
                 was_offline = self._heartbeat_network_failed
                 self._network_available = True
                 self._error_code = ""
-                if not self._heartbeat_observed:
-                    log_event(
-                        "INFO",
-                        "account",
-                        "account.heartbeat.online",
-                        "WPS 账号心跳已上线",
-                        {
-                            "user_id_short": self._account["user_id"][:12],
-                            "device_id_short": self._account["device_id"][:12],
-                        },
-                    )
-                elif was_offline:
+                if was_offline:
                     log_event(
                         "INFO",
                         "account",
                         "account.heartbeat.recovered",
                         "WPS 账号心跳已恢复",
+                        {
+                            "user_id_short": self._account["user_id"][:12],
+                            "device_id_short": self._account["device_id"][:12],
+                        },
+                    )
+                elif not self._heartbeat_observed:
+                    log_event(
+                        "INFO",
+                        "account",
+                        "account.heartbeat.online",
+                        "WPS 账号心跳已上线",
                         {
                             "user_id_short": self._account["user_id"][:12],
                             "device_id_short": self._account["device_id"][:12],
@@ -168,7 +213,20 @@ class AccountRuntime:
         except PublicApiError as exc:
             with self._lock:
                 self._record_public_error(exc)
-                if self._heartbeat_error_code != exc.code:
+                if exc.network and not self._heartbeat_network_failed:
+                    log_event(
+                        "WARNING",
+                        "account",
+                        "account.heartbeat.failed",
+                        "服务器无法连接",
+                        {
+                            "user_id_short": self._account.get("user_id", "")[:12],
+                            "device_id_short": self._account.get("device_id", "")[:12],
+                            "error_code": exc.code,
+                            "network_available": not exc.network,
+                        },
+                    )
+                elif not exc.network and self._heartbeat_error_code != exc.code:
                     log_event(
                         "WARNING",
                         "account",
@@ -178,7 +236,7 @@ class AccountRuntime:
                             "user_id_short": self._account.get("user_id", "")[:12],
                             "device_id_short": self._account.get("device_id", "")[:12],
                             "error_code": exc.code,
-                            "network_available": not exc.network,
+                            "network_available": True,
                         },
                     )
                 self._heartbeat_error_code = exc.code
@@ -210,17 +268,13 @@ class AccountRuntime:
             "app_version": package_version(),
         }
         with self._lock:
-            existing = self._pending_results.get(request_id)
-            if existing is not None and existing != payload:
-                raise RuntimeError("WPS_FORMAT_RESULT_QUEUE_CONFLICT")
-            reused = existing is not None
-            self._pending_results[request_id] = payload
+            reused = self._store.enqueue_format_result(payload)
         self._wake.set()
         log_event(
             "INFO",
             "account",
             "account.format_result.queued",
-            "WPS 排版结果已进入内存待发队列",
+            "WPS 排版结果已进入本机待发队列",
             {
                 "request_id": request_id,
                 "request_status": status,
@@ -233,17 +287,24 @@ class AccountRuntime:
     def _flush_pending_results(self) -> None:
         while True:
             with self._lock:
-                if not self._pending_results:
+                pending = self._store.list_format_results()
+                if not pending:
                     return
-                request_id, payload = next(iter(self._pending_results.items()))
+                payload = pending[0]
+                request_id = payload["request_id"]
                 token = self.ensure_session()
             try:
                 self._api.report_format_result(token, payload)
             except PublicApiError as exc:
                 with self._lock:
                     self._record_public_error(exc)
+                    account_rejected = exc.code in {
+                        "INVALID_CREDENTIALS",
+                        "ACCOUNT_DISABLED",
+                        "DEVICE_DISABLED",
+                    }
                     if exc.code == "REQUEST_STATUS_CONFLICT":
-                        self._pending_results.pop(request_id, None)
+                        self._store.delete_format_result(request_id)
                 if exc.code == "REQUEST_STATUS_CONFLICT":
                     log_event(
                         "ERROR",
@@ -257,6 +318,8 @@ class AccountRuntime:
                         },
                     )
                     continue
+                if account_rejected:
+                    raise
                 log_event(
                     "WARNING",
                     "account",
@@ -271,7 +334,7 @@ class AccountRuntime:
                 )
                 raise
             with self._lock:
-                self._pending_results.pop(request_id, None)
+                self._store.delete_format_result(request_id)
                 self._network_available = True
                 self._error_code = ""
             log_event(
@@ -308,7 +371,7 @@ class AccountRuntime:
                         pass
                     next_heartbeat = time.monotonic() + 600
                 with self._lock:
-                    pending = bool(self._pending_results)
+                    pending = self._store.count_format_results() > 0
                 if pending and (heartbeat_succeeded or triggered):
                     try:
                         self._flush_pending_results()
@@ -318,7 +381,6 @@ class AccountRuntime:
                 self._wake.wait(wait_seconds)
         except Exception as exc:
             with self._lock:
-                self._network_available = False
                 self._error_code = "WPS_ACCOUNT_HEARTBEAT_THREAD_FAILED"
             log_event(
                 "ERROR",
@@ -339,14 +401,3 @@ class AccountRuntime:
             self._thread.join(timeout=3)
             if self._thread.is_alive():
                 raise RuntimeError("WPS_ACCOUNT_HEARTBEAT_STOP_TIMEOUT")
-        pending_count = self.summary()["pending_result_count"]
-        if pending_count:
-            with self._lock:
-                self._pending_results.clear()
-            log_event(
-                "WARNING",
-                "account",
-                "account.format_result.discarded",
-                "WPS 进程退出，内存中的待发排版结果已丢弃",
-                {"pending_result_count": pending_count},
-            )

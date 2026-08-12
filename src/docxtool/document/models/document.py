@@ -43,6 +43,9 @@ class DocumentData:
     recognition_mode: str = "authoritative"
     normalization_changes: list = field(default_factory=list)
     recognition_diagnostics: dict = field(default_factory=dict)
+    native_numbering_definitions: Dict[int, tuple[object, object]] = field(
+        default_factory=dict
+    )
 
 
 @dataclass(frozen=True)

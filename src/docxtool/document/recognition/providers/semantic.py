@@ -73,6 +73,8 @@ class SourceListNumberingCandidateProvider:
     name = "source-list-numbering"
 
     def propose(self, block, features, context):
+        if features.native_numbering_level is not None:
+            return []
         if features.heading_shape_level is not None:
             return []
         source_features = getattr(block.raw_reference, "features", None)

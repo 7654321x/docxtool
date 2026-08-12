@@ -3,6 +3,8 @@ import logging
 import sqlite3
 import threading
 
+from argon2 import extract_parameters
+from argon2.low_level import Type
 import pytest
 
 from docxtool.auth.passwords import verify_password
@@ -44,12 +46,22 @@ def _register(connect, lock, now=1000):
     )
 
 
-def test_register_session_is_exactly_24_hours_and_username_is_case_insensitive(tmp_path):
+def test_register_and_login_sessions_are_exactly_seven_days_and_username_is_case_insensitive(tmp_path):
     _path, connect, lock = _setup(tmp_path)
-    result = _register(connect, lock)
+    registered = _register(connect, lock)
 
-    assert result["session_expires_at"] - result["session_created_at"] == 86400
-    assert set(result["user"]) == {"id", "username", "status"}
+    assert registered["session_expires_at"] - registered["session_created_at"] == 604800
+    assert set(registered["user"]) == {"id", "username", "status"}
+    logged_in = login_user(
+        {"username": "user01", "password": "Pass01", "device": _device()},
+        connect_func=connect,
+        sql_lock=lock,
+        client_ip="127.0.0.1",
+        now_func=lambda: 1100,
+        config_version="test-config",
+    )
+    assert logged_in["session_expires_at"] - logged_in["session_created_at"] == 604800
+
     with pytest.raises(WpsServiceError) as exc_info:
         register_user(
             {"username": "user01", "password": "Pass02", "device": _device()},
@@ -188,6 +200,206 @@ def test_missing_account_uses_a_valid_argon2_dummy_hash():
     assert valid is True
 
 
+def test_wps_argon2id_parameters_are_unchanged():
+    parameters = extract_parameters(service_module._DUMMY_PASSWORD_HASH)
+
+    assert parameters.type == Type.ID
+    assert parameters.memory_cost == 65536
+    assert parameters.time_cost == 3
+    assert parameters.parallelism == 4
+
+
+def test_wps_argon2_process_limit_allows_two_operations_and_queues_the_third(monkeypatch):
+    release = threading.Event()
+    two_entered = threading.Event()
+    all_attempted = threading.Event()
+    state_lock = threading.Lock()
+    active = 0
+    entered = 0
+    attempted = 0
+    peak = 0
+
+    def controlled_operation():
+        nonlocal active, entered, peak
+        with state_lock:
+            active += 1
+            entered += 1
+            peak = max(peak, active)
+            if entered == 2:
+                two_entered.set()
+        assert release.wait(5)
+        with state_lock:
+            active -= 1
+
+    def controlled_hash(_password):
+        controlled_operation()
+        return "controlled-hash"
+
+    def controlled_verify(_password_hash, _password):
+        controlled_operation()
+        return True, False
+
+    def invoke(operation):
+        nonlocal attempted
+        with state_lock:
+            attempted += 1
+            if attempted == 3:
+                all_attempted.set()
+        return operation()
+
+    monkeypatch.setattr(service_module, "_WPS_ARGON2_LIMIT", threading.BoundedSemaphore(2))
+    monkeypatch.setattr(service_module, "hash_password", controlled_hash)
+    monkeypatch.setattr(service_module, "verify_password", controlled_verify)
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        futures = [
+            pool.submit(invoke, lambda: service_module._hash_wps_password("Pass01")),
+            pool.submit(
+                invoke,
+                lambda: service_module._verify_wps_password("digest", "Pass01"),
+            ),
+            pool.submit(invoke, lambda: service_module._hash_wps_password("Pass02")),
+        ]
+        try:
+            assert all_attempted.wait(2)
+            assert two_entered.wait(2)
+            with state_lock:
+                assert active == 2
+                assert entered == 2
+                assert peak == 2
+        finally:
+            release.set()
+        assert [future.result(timeout=5) for future in futures] == [
+            "controlled-hash",
+            (True, False),
+            "controlled-hash",
+        ]
+
+    assert entered == 3
+    assert peak == 2
+
+
+def test_registration_real_missing_and_rehash_paths_share_the_wps_argon2_limit(
+    tmp_path,
+    monkeypatch,
+):
+    path, connect, lock = _setup(tmp_path)
+    operations = []
+    needs_rehash = False
+    hash_count = 0
+
+    class TrackingLimit:
+        def __init__(self):
+            self.active = 0
+            self.entries = 0
+
+        def __enter__(self):
+            self.active += 1
+            self.entries += 1
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            self.active -= 1
+
+    limit = TrackingLimit()
+
+    def fake_hash(password):
+        nonlocal hash_count
+        assert limit.active == 1
+        hash_count += 1
+        digest = f"controlled-hash-{hash_count}"
+        operations.append(("hash", password, digest))
+        return digest
+
+    def fake_verify(password_hash, password):
+        assert limit.active == 1
+        operations.append(("verify", password_hash, password))
+        if password_hash == service_module._DUMMY_PASSWORD_HASH:
+            return False, False
+        return True, needs_rehash
+
+    monkeypatch.setattr(service_module, "_WPS_ARGON2_LIMIT", limit)
+    monkeypatch.setattr(service_module, "hash_password", fake_hash)
+    monkeypatch.setattr(service_module, "verify_password", fake_verify)
+
+    _register(connect, lock)
+    login_user(
+        {"username": "User01", "password": "Pass01", "device": _device()},
+        connect_func=connect,
+        sql_lock=lock,
+        client_ip="127.0.0.1",
+        now_func=lambda: 1100,
+        config_version="test-config",
+    )
+    with pytest.raises(WpsServiceError, match="INVALID_CREDENTIALS"):
+        login_user(
+            {"username": "Missing1", "password": "Pass01", "device": _device()},
+            connect_func=connect,
+            sql_lock=lock,
+            client_ip="127.0.0.1",
+            now_func=lambda: 1200,
+            config_version="test-config",
+        )
+    needs_rehash = True
+    login_user(
+        {"username": "User01", "password": "Pass01", "device": _device()},
+        connect_func=connect,
+        sql_lock=lock,
+        client_ip="127.0.0.1",
+        now_func=lambda: 1300,
+        config_version="test-config",
+    )
+
+    assert [operation[0] for operation in operations] == [
+        "hash",
+        "verify",
+        "verify",
+        "verify",
+        "hash",
+    ]
+    assert operations[2][1] == service_module._DUMMY_PASSWORD_HASH
+    assert limit.entries == 5
+    assert limit.active == 0
+    with sqlite3.connect(str(path)) as conn:
+        stored_hash = conn.execute(
+            "SELECT password_hash FROM wps_users WHERE username_norm='user01'"
+        ).fetchone()[0]
+    assert stored_hash == "controlled-hash-2"
+
+
+def test_password_rehash_is_computed_before_the_sqlite_write_lock(tmp_path, monkeypatch):
+    path, connect, lock = _setup(tmp_path)
+    _register(connect, lock)
+    hash_lock_states = []
+
+    monkeypatch.setattr(
+        service_module,
+        "_verify_wps_password",
+        lambda _password_hash, _password: (True, True),
+    )
+
+    def precompute_hash(_password):
+        hash_lock_states.append(lock.locked())
+        return "precomputed-upgraded-hash"
+
+    monkeypatch.setattr(service_module, "_hash_wps_password", precompute_hash)
+
+    login_user(
+        {"username": "User01", "password": "Pass01", "device": _device()},
+        connect_func=connect,
+        sql_lock=lock,
+        client_ip="127.0.0.1",
+        now_func=lambda: 1400,
+        config_version="test-config",
+    )
+
+    assert hash_lock_states == [False]
+    with sqlite3.connect(str(path)) as conn:
+        stored_hash = conn.execute(
+            "SELECT password_hash FROM wps_users WHERE username_norm='user01'"
+        ).fetchone()[0]
+    assert stored_hash == "precomputed-upgraded-hash"
+
+
 def test_bearer_rejects_non_ascii_before_hashing():
     with pytest.raises(WpsAuthError) as exc_info:
         bearer_token({"Authorization": "Bearer " + ("é" * 43)})
@@ -211,12 +423,40 @@ def test_heartbeat_updates_activity_without_extending_expiry(tmp_path, caplog):
         config_version="test-config",
     )
 
-    assert result["session_expires_at"] == 2000 + 86400
+    assert result["session_expires_at"] == 2000 + 604800
     with sqlite3.connect(str(path)) as conn:
         row = conn.execute("SELECT last_seen_at,expires_at FROM wps_sessions").fetchone()
-    assert row == (2500, 2000 + 86400)
+    assert row == (2500, 2000 + 604800)
 
     with pytest.raises(WpsAuthError) as exc_info:
-        authenticated_session(headers, connect_func=connect, sql_lock=lock, now_func=lambda: 2000 + 86400)
+        authenticated_session(headers, connect_func=connect, sql_lock=lock, now_func=lambda: 2000 + 604800)
     assert exc_info.value.code == "SESSION_EXPIRED"
     assert "wps.auth.session.expired" in caplog.text
+
+
+def test_existing_24_hour_session_keeps_its_stored_expiry(tmp_path):
+    path, connect, lock = _setup(tmp_path)
+    created_at = 5000
+    old_expires_at = created_at + 86400
+    registered = _register(connect, lock, now=created_at)
+    headers = {"Authorization": f"Bearer {registered['session_token']}"}
+    with sqlite3.connect(str(path)) as conn:
+        conn.execute("UPDATE wps_sessions SET expires_at=?", (old_expires_at,))
+        conn.commit()
+
+    principal = authenticated_session(
+        headers,
+        connect_func=connect,
+        sql_lock=lock,
+        now_func=lambda: old_expires_at - 1,
+    )
+    assert principal["expires_at"] == old_expires_at
+
+    with pytest.raises(WpsAuthError) as exc_info:
+        authenticated_session(
+            headers,
+            connect_func=connect,
+            sql_lock=lock,
+            now_func=lambda: old_expires_at,
+        )
+    assert exc_info.value.code == "SESSION_EXPIRED"

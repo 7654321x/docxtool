@@ -95,7 +95,7 @@ def test_wps_public_http_flow_updates_admin_statistics(tmp_path, monkeypatch, ca
             token=token,
         )
         assert status == 200
-        assert heartbeat["data"]["session_expires_at"] == 1000 + 24 * 60 * 60
+        assert heartbeat["data"]["session_expires_at"] == 1000 + 7 * 24 * 60 * 60
 
         rejected_request_id = "http-format-rejected-001"
         status, rejected = request(

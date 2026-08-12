@@ -59,7 +59,10 @@ a = Analysis(
     pathex=[str(project_root), str(project_root / "src")],
     binaries=[],
     datas=datas,
-    hiddenimports=["docxtool.resources", "docxtool.resources.schemas"],
+    hiddenimports=[
+        "docxtool.resources",
+        "docxtool.resources.schemas",
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -80,6 +83,6 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
-    console=True,
+    console=False,
     disable_windowed_traceback=False,
 )

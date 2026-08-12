@@ -11,6 +11,8 @@ from xml.etree import ElementTree
 
 import pytest
 from docx import Document
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 
 import apps.wps.main as wps_main
 from apps.wps.control import logging_adapter
@@ -27,6 +29,7 @@ from apps.wps.control.logging_adapter import (
 from apps.wps.control.recognize_document import bind_preview
 from apps.wps.control.server import _safe_warnings
 from docxtool.sdk import recognize_docx
+from docxtool.wps_server.format_config import load_active_format_profile
 
 
 def _fake_result(output_path: Path, log_dir: Path) -> FormatResult:
@@ -42,6 +45,39 @@ def _fake_result(output_path: Path, log_dir: Path) -> FormatResult:
         body_count=2,
         export_stats={},
     )
+
+
+def _add_native_heading2_numbering(document: Document, text: str) -> None:
+    numbering = document.part.numbering_part.element
+    abstract = OxmlElement("w:abstractNum")
+    abstract.set(qn("w:abstractNumId"), "91")
+    level = OxmlElement("w:lvl")
+    level.set(qn("w:ilvl"), "0")
+    start = OxmlElement("w:start")
+    start.set(qn("w:val"), "1")
+    number_format = OxmlElement("w:numFmt")
+    number_format.set(qn("w:val"), "chineseCounting")
+    level_text = OxmlElement("w:lvlText")
+    level_text.set(qn("w:val"), "（%1）")
+    level.extend((start, number_format, level_text))
+    abstract.append(level)
+    numbering.find(qn("w:num")).addprevious(abstract)
+
+    number = OxmlElement("w:num")
+    number.set(qn("w:numId"), "91")
+    abstract_ref = OxmlElement("w:abstractNumId")
+    abstract_ref.set(qn("w:val"), "91")
+    number.append(abstract_ref)
+    numbering.append(number)
+
+    paragraph = document.add_paragraph(text)
+    num_pr = OxmlElement("w:numPr")
+    ilvl = OxmlElement("w:ilvl")
+    ilvl.set(qn("w:val"), "0")
+    num_id = OxmlElement("w:numId")
+    num_id.set(qn("w:val"), "91")
+    num_pr.extend((ilvl, num_id))
+    paragraph._p.get_or_add_pPr().append(num_pr)
 
 
 def _install_fake_formatter(monkeypatch):
@@ -1234,6 +1270,39 @@ def test_wps_one_click_format_rebuilds_heading_numbering_by_default(tmp_path):
     ]
 
 
+def test_wps_one_click_rebuilds_native_heading_numbering_from_server_config(tmp_path):
+    source = tmp_path / "native-source.docx"
+    target = tmp_path / "native-output.docx"
+    document = Document()
+    document.add_paragraph("测试材料", style="Title")
+    document.add_paragraph("正文内容已经开始，并完整说明有关工作情况。")
+    _add_native_heading2_numbering(document, "自动编号二级标题")
+    document.add_paragraph("后续正文对该标题展开具体说明。")
+    document.save(source)
+
+    server_config = load_active_format_profile()["format_config"]
+    assert server_config["numbering"]["enabled"] is False
+    format_module.format_current_document(
+        str(source),
+        str(target),
+        operation_id="operation-native-numbering",
+        log_dir=tmp_path / "logs",
+        format_config=server_config,
+        request_id="request-native-numbering",
+    )
+
+    output = Document(target)
+    heading = next(
+        paragraph
+        for paragraph in output.paragraphs
+        if paragraph.style.style_id == "DCT-Heading2"
+    )
+    assert heading.text == "（一）自动编号二级标题"
+    assert heading._p.get_or_add_pPr().find(qn("w:numPr")) is None
+    assert heading.runs[0].text == "（一）"
+    assert heading.runs[0].bold is True
+
+
 def test_wps_one_click_format_uses_safe_punctuation_by_default(tmp_path, monkeypatch):
     source = tmp_path / "source.docx"
     target = tmp_path / "output.docx"
@@ -1286,14 +1355,14 @@ def test_file_identity_does_not_expose_path(tmp_path):
     assert "private-name" not in value
 
 
-def test_wps_log_accepts_document_name_but_not_document_path():
+def test_wps_log_rejects_document_name_and_document_path():
     fields = sanitize_wps_log_fields(
         {
             "document_name": "sample.docx",
             "source_path": r"C:\\fixtures\\sample.docx",
         }
     )
-    assert fields == {"document_name": "sample.docx"}
+    assert fields == {}
 
 
 def test_wps_log_accepts_taskpane_scroll_diagnostics():
@@ -1502,8 +1571,8 @@ def test_wps_bootstrap_structure_is_explicit():
     ):
         assert token not in main_source
     expected_order = (
+        "runtime/config",
         "js/bootstrap-log.js",
-        "runtime/runtime-config.js",
         "host-runtime.js",
         "js/ribbon.js",
         "js/bootstrap-complete.js",
@@ -1512,14 +1581,11 @@ def test_wps_bootstrap_structure_is_explicit():
         assert source in main_source
     positions = [main_source.index(source) for source in expected_order]
     assert positions == sorted(positions)
-    assert "document.write(" in main_source
-    assert "language='javascript'" in main_source
-    assert "onload=" not in main_source
-    assert "onerror=" not in main_source
+    assert "document.write(" not in main_source
+    assert "response.json()" in main_source
+    assert "document.createElement(\"script\")" in main_source
     assert "?v=" not in main_source
-    assert "Promise" not in main_source
-    assert "async " not in main_source
-    assert "defer" not in main_source
+    assert "async " in main_source
 
     ribbon_source = (root / "js" / "ribbon.js").read_text(encoding="utf-8")
     for callback in ("onAddinLoad", "onAction", "getActionEnabled", "getImage"):
@@ -1957,6 +2023,9 @@ def test_verify_files_requires_new_bootstrap_files(monkeypatch, tmp_path):
         "js/bootstrap-complete.js",
         "js/ribbon.js",
         "images/taskpane.svg",
+        "images/eye.svg",
+        "images/eye-off.svg",
+        "images/login-window.png",
         "host-runtime.js",
         "taskpane.html",
         "taskpane.js",
@@ -1965,6 +2034,8 @@ def test_verify_files_requires_new_bootstrap_files(monkeypatch, tmp_path):
         "account_runtime.py",
         "public_api.py",
         "login_window.py",
+        "desktop_runtime.py",
+        "windows_startup.py",
             "control/server.py",
             "control/host_bridge.py",
             "control/format_current_document.py",
@@ -1995,9 +2066,13 @@ def test_taskpane_scrolls_content_without_moving_header():
     assert '<header id="taskpane_header">' in source
     assert 'id="focus_document"' not in source
     assert "返回文档" not in source
-    assert '<div id="status" class="meta">Connecting</div>' in source
+    assert '<div id="status" class="meta">连接中</div>' in source
+    assert 'document.getElementById("status").textContent="错误"' in source
+    assert 'document.getElementById("message").textContent="运行配置加载失败，请重新打开状态面板。"' in source
+    assert 'document.getElementById("error").textContent="错误代码：WPS_RUNTIME_CONFIG_LOAD_FAILED"' in source
     assert '<main id="content">' in source
-    assert '<script src="./taskpane.js?v=10"></script>' in source
+    assert 'fetch("./runtime/config"' in source
+    assert 'script.src="./taskpane.js?v=11"' in source
 
 
 def test_start_handles_keyboard_interrupt_without_traceback(monkeypatch):
@@ -2057,17 +2132,288 @@ def test_start_handles_keyboard_interrupt_without_traceback(monkeypatch):
     assert events[-1] == "launcher.session.stop"
 
 
-def test_runtime_config_contains_only_control_transport(tmp_path, monkeypatch):
-    config_path = tmp_path / "runtime" / "runtime-config.js"
-    monkeypatch.setattr(wps_main, "RUNTIME_DIR", config_path.parent)
-    monkeypatch.setattr(wps_main, "RUNTIME_CONFIG", config_path)
+@pytest.mark.parametrize(
+    ("failed_stage", "expected_error", "expected_event", "expected_error_code"),
+    [
+        (
+            "account-stop",
+            "ACCOUNT_STOP_FAILED",
+            "launcher.account_runtime.stop.failed",
+            "WPS_ACCOUNT_RUNTIME_STOP_FAILED",
+        ),
+        (
+            "web-close",
+            "WEB_CLOSE_FAILED",
+            "launcher.web.close.failed",
+            "WPS_WEB_SERVER_CLOSE_FAILED",
+        ),
+        (
+            "control-shutdown",
+            "CONTROL_SHUTDOWN_FAILED",
+            "launcher.control.shutdown.failed",
+            "WPS_CONTROL_SERVER_SHUTDOWN_FAILED",
+        ),
+        (
+            "control-close",
+            "CONTROL_CLOSE_FAILED",
+            "launcher.control.close.failed",
+            "WPS_CONTROL_SERVER_CLOSE_FAILED",
+        ),
+        (
+            "thread-join",
+            "THREAD_JOIN_FAILED",
+            "launcher.control.thread.join.failed",
+            "WPS_CONTROL_THREAD_JOIN_FAILED",
+        ),
+        (
+            "thread-state",
+            "THREAD_STATE_FAILED",
+            "launcher.control.thread.state_check.failed",
+            "WPS_CONTROL_THREAD_STATE_CHECK_FAILED",
+        ),
+        (
+            "thread-timeout",
+            "WPS_CONTROL_THREAD_STOP_TIMEOUT",
+            "launcher.control.thread.stop_timeout",
+            "WPS_CONTROL_THREAD_STOP_TIMEOUT",
+        ),
+        (
+            "runtime-config",
+            "RUNTIME_CONFIG_FAILED",
+            "launcher.runtime_config.cleanup.failed",
+            "WPS_RUNTIME_CONFIG_CLEANUP_FAILED",
+        ),
+    ],
+)
+def test_start_attempts_all_cleanup_after_each_failure(
+    monkeypatch,
+    failed_stage,
+    expected_error,
+    expected_event,
+    expected_error_code,
+):
+    events = []
+    log_records = []
 
+    def step(name):
+        events.append(name)
+        if name == failed_stage:
+            raise RuntimeError(expected_error)
+
+    class FakeAccountRuntime:
+        def start(self):
+            events.append("account-start")
+
+        def stop(self):
+            step("account-stop")
+
+    class FakeControlServer:
+        def serve_forever(self, **_kwargs):
+            pass
+
+        def shutdown(self):
+            step("control-shutdown")
+
+        def server_close(self):
+            step("control-close")
+
+    class FakeWebServer:
+        def serve_forever(self, **_kwargs):
+            raise KeyboardInterrupt
+
+        def server_close(self):
+            step("web-close")
+
+    class FakeThread:
+        def __init__(self, **_kwargs):
+            pass
+
+        def start(self):
+            events.append("thread-start")
+
+        def join(self, timeout):
+            events.append(("thread-join-timeout", timeout))
+            step("thread-join")
+
+        def is_alive(self):
+            if failed_stage == "thread-timeout":
+                events.append("thread-state")
+                return True
+            step("thread-state")
+            return False
+
+    monkeypatch.setattr(wps_main, "verify_files", lambda: None)
+    monkeypatch.setattr(wps_main, "configure_wps_logging", lambda _root: None)
+    monkeypatch.setattr(
+        wps_main,
+        "_start_control",
+        lambda _port, _runtime: (FakeControlServer(), 45678),
+    )
+    monkeypatch.setattr(
+        wps_main, "_start_web_server", lambda _port: (FakeWebServer(), 3889)
+    )
+    monkeypatch.setattr(wps_main, "_publish_addin", lambda _port: None)
+    monkeypatch.setattr(wps_main.threading, "Thread", FakeThread)
+    monkeypatch.setattr(wps_main, "clear_runtime_config", lambda: step("runtime-config"))
+    monkeypatch.setattr(
+        wps_main,
+        "log_event",
+        lambda _level, _component, event, _message, fields=None: (
+            events.append(event),
+            log_records.append((event, fields or {})),
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match=expected_error):
+        wps_main.start(0, FakeAccountRuntime())
+
+    assert expected_event in events
+    assert (expected_event, expected_error_code) in [
+        (event, fields.get("error_code")) for event, fields in log_records
+    ]
+    for cleanup_stage in (
+        "account-stop",
+        "web-close",
+        "control-shutdown",
+        "control-close",
+        "thread-join",
+        "runtime-config",
+    ):
+        assert cleanup_stage in events
+
+
+def test_start_raises_first_cleanup_failure_and_continues(monkeypatch):
+    events = []
+
+    class FakeControlServer:
+        def serve_forever(self, **_kwargs):
+            pass
+
+        def shutdown(self):
+            events.append("control-shutdown")
+            raise RuntimeError("CONTROL_SHUTDOWN_SECOND")
+
+        def server_close(self):
+            events.append("control-close")
+            raise RuntimeError("CONTROL_CLOSE_THIRD")
+
+    class FakeWebServer:
+        def serve_forever(self, **_kwargs):
+            raise KeyboardInterrupt
+
+        def server_close(self):
+            events.append("web-close")
+            raise RuntimeError("WEB_CLOSE_FIRST")
+
+    class FakeThread:
+        def __init__(self, **_kwargs):
+            pass
+
+        def start(self):
+            pass
+
+        def join(self, timeout):
+            events.append(("thread-join", timeout))
+
+        def is_alive(self):
+            return False
+
+    monkeypatch.setattr(wps_main, "verify_files", lambda: None)
+    monkeypatch.setattr(wps_main, "configure_wps_logging", lambda _root: None)
+    monkeypatch.setattr(
+        wps_main, "_start_control", lambda _port: (FakeControlServer(), 45678)
+    )
+    monkeypatch.setattr(
+        wps_main, "_start_web_server", lambda _port: (FakeWebServer(), 3889)
+    )
+    monkeypatch.setattr(wps_main, "_publish_addin", lambda _port: None)
+    monkeypatch.setattr(wps_main.threading, "Thread", FakeThread)
+    monkeypatch.setattr(
+        wps_main, "clear_runtime_config", lambda: events.append("runtime-config")
+    )
+    monkeypatch.setattr(wps_main, "log_event", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(RuntimeError, match="WEB_CLOSE_FIRST"):
+        wps_main.start(0)
+
+    assert events == [
+        "web-close",
+        "control-shutdown",
+        "control-close",
+        ("thread-join", 3),
+        "runtime-config",
+    ]
+
+
+def test_start_preserves_business_error_when_cleanup_also_fails(monkeypatch):
+    events = []
+
+    class FakeControlServer:
+        def serve_forever(self, **_kwargs):
+            pass
+
+        def shutdown(self):
+            events.append("control-shutdown")
+            raise RuntimeError("CLEANUP_FAILED")
+
+        def server_close(self):
+            events.append("control-close")
+
+    class FakeWebServer:
+        def serve_forever(self, **_kwargs):
+            raise ValueError("BUSINESS_FAILED")
+
+        def server_close(self):
+            events.append("web-close")
+
+    class FakeThread:
+        def __init__(self, **_kwargs):
+            pass
+
+        def start(self):
+            pass
+
+        def join(self, timeout):
+            events.append(("thread-join", timeout))
+
+        def is_alive(self):
+            return False
+
+    monkeypatch.setattr(wps_main, "verify_files", lambda: None)
+    monkeypatch.setattr(wps_main, "configure_wps_logging", lambda _root: None)
+    monkeypatch.setattr(
+        wps_main, "_start_control", lambda _port: (FakeControlServer(), 45678)
+    )
+    monkeypatch.setattr(
+        wps_main, "_start_web_server", lambda _port: (FakeWebServer(), 3889)
+    )
+    monkeypatch.setattr(wps_main, "_publish_addin", lambda _port: None)
+    monkeypatch.setattr(wps_main.threading, "Thread", FakeThread)
+    monkeypatch.setattr(
+        wps_main, "clear_runtime_config", lambda: events.append("runtime-config")
+    )
+    monkeypatch.setattr(wps_main, "log_event", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(ValueError, match="BUSINESS_FAILED"):
+        wps_main.start(0)
+
+    assert events == [
+        "web-close",
+        "control-shutdown",
+        "control-close",
+        ("thread-join", 3),
+        "runtime-config",
+    ]
+
+
+def test_runtime_config_is_kept_in_launcher_memory():
     wps_main.write_runtime_config(9527, "test-token")
-
-    source = config_path.read_text(encoding="utf-8")
-    assert '"controlBaseUrl": "http://127.0.0.1:9527"' in source
-    assert '"sessionToken": "test-token"' in source
-    assert "sessionId" not in source
+    assert wps_main._RUNTIME_CONFIG == {
+        "controlBaseUrl": "http://127.0.0.1:9527",
+        "sessionToken": "test-token",
+    }
+    wps_main.clear_runtime_config()
+    assert wps_main._RUNTIME_CONFIG == {}
 
 
 def test_wps_static_server_serves_plugin_without_launching_wps(tmp_path, monkeypatch):
@@ -2075,6 +2421,7 @@ def test_wps_static_server_serves_plugin_without_launching_wps(tmp_path, monkeyp
     monkeypatch.setattr(wps_main, "APP_ROOT", tmp_path)
     monkeypatch.setattr(wps_main, "log_event", lambda *_args, **_kwargs: None)
 
+    wps_main.write_runtime_config(9527, "test-token")
     server, port = wps_main._start_web_server(0)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -2089,6 +2436,18 @@ def test_wps_static_server_serves_plugin_without_launching_wps(tmp_path, monkeyp
         assert response.getheader("Pragma") == "no-cache"
         assert response.getheader("Expires") == "0"
         assert response.read().decode("utf-8") == "WPS_BACKGROUND_READY"
+        connection.request("GET", "/runtime/config")
+        response = connection.getresponse()
+        assert response.status == 200
+        assert response.getheader("Content-Type").startswith("application/json")
+        assert response.getheader("X-Content-Type-Options") == "nosniff"
+        assert response.getheader("Access-Control-Allow-Origin") is None
+        assert json.loads(response.read()) == {
+            "controlBaseUrl": "http://127.0.0.1:9527",
+            "sessionToken": "test-token",
+        }
+        connection.request("GET", "/runtime/runtime-config.js")
+        assert connection.getresponse().status == 404
     finally:
         connection.close()
         server.shutdown()
@@ -2206,7 +2565,8 @@ def test_wps_diagnostic_event_contract_is_present():
             '"bootstrap." + label + ".loaded"',
             '"bootstrap." + label + ".failed"',
             '"bootstrap_log"',
-            '"runtime_config"',
+                "bootstrap.runtime_config.load.start",
+                "bootstrap.runtime_config.loaded",
             '"ribbon"',
             '"host_runtime"',
         ),
@@ -2220,7 +2580,7 @@ def test_wps_diagnostic_event_contract_is_present():
         "host": (
             "host.start.enter",
             "host.start.lazy.enter",
-            "host.start.lazy.completed",
+            "host.start.lazy.scheduled",
             "host.start.lazy.failed",
             "host.start.failed",
             "host.bridge.register.start",
@@ -2249,8 +2609,8 @@ def test_wps_diagnostic_event_contract_is_present():
             "preview.document_path.wait.start",
             "preview.document_path.wait.completed",
             "preview.document_path.wait.failed",
-            "preview.range_validation.start",
-            "preview.range_validation.completed",
+            "preview.range_selection.start",
+            "preview.range_selection.completed",
             "preview.range.binding_unconfirmed",
             "preview.range.paragraph_unresolved",
             "preview.range.offset_invalid",
@@ -2422,14 +2782,22 @@ def test_wps_python_diagnostic_event_contract_is_present():
         ),
         "launcher": (
             "launcher.control.create.failed",
-            "launcher.runtime_config.write.failed",
+            "launcher.runtime_config.publish.start",
+            "launcher.runtime_config.publish.completed",
             "launcher.publish.parse.failed",
             "launcher.publish.schema.failed",
             "launcher.publish.write.failed",
             "launcher.web.create.failed",
             "launcher.web.serve.failed",
             "launcher.control.thread.failed",
+            "launcher.account_runtime.stop.failed",
+            "launcher.web.close.failed",
+            "launcher.control.shutdown.failed",
+            "launcher.control.close.failed",
+            "launcher.control.thread.join.failed",
+            "launcher.control.thread.state_check.failed",
             "launcher.control.thread.stop_timeout",
+            "launcher.runtime_config.cleanup.failed",
         ),
     }
     for source_name, events in expected.items():
@@ -2449,8 +2817,9 @@ def test_wps_python_diagnostic_event_contract_is_present():
 def test_main_action_defaults_and_routes(monkeypatch, argv, expected):
     calls = []
 
-    def fake_start(port, account_runtime=None):
-        calls.append(("start", port, account_runtime))
+    def fake_desktop(port, *, force_login=False):
+        calls.append(("start", port, force_login))
+        return 0
 
     def fake_control(port):
         calls.append(("control", port))
@@ -2458,18 +2827,30 @@ def test_main_action_defaults_and_routes(monkeypatch, argv, expected):
     def fake_verify():
         calls.append(("verify",))
 
-    monkeypatch.setattr(wps_main, "start", fake_start)
+    monkeypatch.setattr(wps_main, "run_desktop", fake_desktop)
     monkeypatch.setattr(wps_main, "control_only", fake_control)
     monkeypatch.setattr(wps_main, "verify_files", fake_verify)
     monkeypatch.setattr(wps_main.sys, "argv", argv)
-    monkeypatch.setattr(wps_main, "WpsPublicApi", lambda: "api")
-    monkeypatch.setattr(wps_main, "resolve_startup_account", lambda _api: {"username": "User01"})
-    monkeypatch.setattr(wps_main, "AccountRuntime", lambda account, api: (account, api))
-
     assert wps_main.main() == 0
     if expected == "start":
-        assert calls == [("start", wps_main.DEFAULT_PORT, ({"username": "User01"}, "api"))]
+        assert calls == [("start", wps_main.DEFAULT_PORT, False)]
     elif expected == "control":
         assert calls == [("control", wps_main.DEFAULT_PORT)]
     else:
         assert calls == [("verify",)]
+
+
+def test_main_closing_login_window_stops_before_start(monkeypatch):
+    application = type("Application", (), {})()
+    instance = type("Instance", (), {"acquire": lambda self: True})()
+    monkeypatch.setattr("apps.wps.desktop_runtime.ensure_application", lambda: application)
+    monkeypatch.setattr("apps.wps.desktop_runtime.SingleInstance", lambda: instance)
+    monkeypatch.setattr("apps.wps.desktop_runtime.shift_pressed", lambda: False)
+    monkeypatch.setattr(wps_main, "WpsPublicApi", lambda: "api")
+    monkeypatch.setattr(
+        wps_main,
+        "resolve_startup_account",
+        lambda _api, force_login=False: {},
+    )
+
+    assert wps_main.run_desktop(wps_main.DEFAULT_PORT) == 0

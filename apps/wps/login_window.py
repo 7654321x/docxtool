@@ -1,9 +1,26 @@
-"""Standalone login and registration window shown before WPS services start."""
+"""PySide2 login and registration dialog shown before WPS services start."""
 
 from __future__ import annotations
 
-import sqlite3
-import tkinter as tk
+import ctypes
+import sys
+
+from PySide2.QtCore import QObject, Qt, QThread, Signal
+from PySide2.QtGui import QIcon, QPixmap
+from PySide2.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QDialog,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+)
 
 from docxtool.wps_server.validation import (
     WpsValidationError,
@@ -12,27 +29,47 @@ from docxtool.wps_server.validation import (
 )
 
 from .account_runtime import account_from_response, device_payload
+from .control.logging_adapter import log_event
 from .public_api import PublicApiError
+from . import windows_startup
 
 
-WINDOW_WIDTH = 420
-HERO_HEIGHT = 118
-CONTENT_TOP = 136
-CONTENT_BOTTOM_PADDING = 34
-HERO_BG = "#EDF4F2"
-HERO_ACCENT = "#DCEBE8"
-PANEL_BG = "#FFFFFF"
-BRAND_DARK = "#222827"
-BRAND_GREEN = "#32786C"
-BRAND_GREEN_ACTIVE = "#255F56"
-TEXT_PRIMARY = "#202525"
-TEXT_MUTED = "#7B8381"
-FIELD_BG = "#FAFBFB"
-FIELD_BORDER = "#E1E5E4"
-FIELD_FOCUS = "#86AAA3"
-BUTTON_BG = "#2D3231"
-BUTTON_ACTIVE = "#202423"
-ERROR_RED = "#D92D20"
+LOGIN_STYLE = """
+QWidget { font-family: "Microsoft YaHei UI", "Microsoft YaHei"; }
+QDialog#LoginDialog { background: #EEF3F1; }
+QFrame#WindowTitleBar { background: #E7EFEC; border: none; }
+QLabel#WindowTitleIcon { background: transparent; border: none; }
+QLabel#WindowTitleLabel { color: #3E4945; font-size: 13px; font-weight: 600; }
+QPushButton#WindowControlButton, QPushButton#WindowCloseButton { min-width: 44px; max-width: 44px; min-height: 42px; max-height: 42px; border: none; border-radius: 0; background: transparent; color: #59645F; font-size: 18px; font-weight: 400; padding: 0; }
+QPushButton#WindowControlButton:hover { background: #D8E2DE; color: #202624; }
+QPushButton#WindowCloseButton:hover { background: #D9655B; color: white; }
+QFrame#BrandHeader { background: #E7EFEC; border: none; }
+QLabel#Logo { background: transparent; border: none; }
+QLabel#BrandName { color: #202624; font-size: 24px; font-weight: 700; }
+QFrame#LoginCard { background: #FFFFFF; border: none; border-radius: 16px; }
+QLabel#PageTitle { color: #202624; font-size: 25px; font-weight: 700; }
+QLabel#PageHint { color: #7A8581; font-size: 13px; }
+QLabel#FieldLabel { color: #4F5A56; font-size: 13px; font-weight: 600; }
+QLineEdit { min-height: 42px; border: 1px solid #DCE3E0; border-radius: 8px; padding: 0 14px; background: #FFFFFF; color: #202624; font-size: 14px; selection-background-color: #71827C; }
+QLineEdit:hover { border-color: #C4CFCA; }
+QLineEdit:focus { border-color: #778A83; }
+QLineEdit:disabled { background: #F4F6F5; color: #8C9692; }
+QCheckBox { color: #59645F; font-size: 13px; spacing: 7px; }
+QCheckBox::indicator { width: 17px; height: 17px; }
+QLabel#StatusLabel { color: #7A8581; font-size: 12px; }
+QLabel#StatusLabel[error="true"] { color: #C63C32; }
+QPushButton#PrimaryButton { min-height: 46px; border: none; border-radius: 8px; background: #2D3431; color: white; font-size: 15px; font-weight: 600; }
+QPushButton#PrimaryButton:hover { background: #39413E; }
+QPushButton#PrimaryButton:pressed { background: #202624; }
+QPushButton#PrimaryButton:disabled { background: #9CA4A1; color: #E9EBEA; }
+QPushButton#SwitchButton { border: none; background: transparent; color: #32786C; font-size: 13px; font-weight: 600; padding: 4px; }
+QPushButton#SwitchButton:hover { color: #255F56; }
+QLabel#SwitchPrompt { color: #8A9490; font-size: 12px; }
+"""
+
+
+APPLICATION_USER_MODEL_ID = "DocxTool.WPS.5.2"
+_app_user_model_id_configured = False
 
 
 def window_geometry(
@@ -41,7 +78,6 @@ def window_geometry(
     screen_width: int,
     screen_height: int,
 ) -> str:
-    """Return centered geometry that never clips the requested client area."""
     height = max(1, int(requested_height))
     left = max(0, (int(screen_width) - int(width)) // 2)
     top = max(0, (int(screen_height) - height) // 2)
@@ -53,46 +89,26 @@ def required_window_height(
     requested_content_height: int,
     bottom_padding: int,
 ) -> int:
-    """Return enough client height for the currently visible form."""
     return max(1, int(content_top) + int(requested_content_height) + int(bottom_padding))
 
 
 def password_mask(visible: bool) -> str:
-    """Return the Tk entry mask for the requested password visibility."""
     return "" if visible else "*"
 
 
-def _rounded_rectangle(canvas: tk.Canvas, coordinates, *, radius: int, **options):
-    left, top, right, bottom = coordinates
-    points = (
-        left + radius,
-        top,
-        right - radius,
-        top,
-        right,
-        top,
-        right,
-        top + radius,
-        right,
-        bottom - radius,
-        right,
-        bottom,
-        right - radius,
-        bottom,
-        left + radius,
-        bottom,
-        left,
-        bottom,
-        left,
-        bottom - radius,
-        left,
-        top + radius,
-        left,
-        top,
-        left + radius,
-        top,
-    )
-    return canvas.create_polygon(points, smooth=True, **options)
+def _friendly_error(exc: BaseException) -> str:
+    if isinstance(exc, PublicApiError):
+        messages = {
+            "INVALID_CREDENTIALS": "账号或密码错误",
+            "SESSION_EXPIRED": "登录已过期，请重新登录",
+            "ACCOUNT_DISABLED": "账号已停用",
+            "DEVICE_DISABLED": "当前设备已停用",
+            "WPS_PUBLIC_SERVER_UNAVAILABLE": "服务器暂时无法连接，请检查网络后重试。",
+        }
+        return messages.get(exc.code, "登录失败，请稍后重试。")
+    if isinstance(exc, (WpsValidationError, ValueError)):
+        return str(exc)
+    return "登录失败，请稍后重试。"
 
 
 def submit_account(
@@ -104,8 +120,12 @@ def submit_account(
     api,
     account_store,
     device_key: str,
+    remember_password: bool = False,
+    auto_login: bool = False,
 ) -> dict:
     """Validate one form submission, authenticate it, and save the account."""
+    if auto_login and not remember_password:
+        raise ValueError("自动登录需要同时记住密码")
     validated_username, _ = validate_username(username)
     validated_password = validate_password(password)
     payload = {
@@ -127,420 +147,665 @@ def submit_account(
         username=validated_username,
         password=validated_password,
         device_key=device_key,
+        remember_password=remember_password,
+        auto_login=auto_login,
     )
     account_store.save_account(account)
     return account
 
 
-def show_login_register_window(*, api, account_store) -> dict:
-    root = tk.Tk()
-    root.withdraw()
-    root.title("DocxTool WPS")
-    root.resizable(False, False)
-    root.configure(bg=HERO_BG)
-    result = {}
-    mode = tk.StringVar(value="login")
-    username = tk.StringVar()
-    password = tk.StringVar()
-    confirmation = tk.StringVar()
-    status = tk.StringVar(value="请输入账号和密码")
-    device_key = account_store.new_device_key()
-    submitting = False
+class AuthenticationWorker(QObject):
+    completed = Signal(object)
+    failed = Signal(object)
+    finished = Signal()
 
-    background = tk.Canvas(
-        root,
-        bg=HERO_BG,
-        highlightthickness=0,
-        borderwidth=0,
-    )
-    background.place(x=0, y=0, relwidth=1, relheight=1)
+    def __init__(self, kwargs: dict) -> None:
+        super().__init__()
+        self._kwargs = kwargs
 
-    brand = tk.Frame(root, bg=HERO_BG)
-    brand.place(x=30, y=26)
-    mark = tk.Canvas(
-        brand,
-        width=38,
-        height=38,
-        bg=HERO_BG,
-        highlightthickness=0,
-    )
-    _rounded_rectangle(
-        mark,
-        (1, 1, 37, 37),
-        radius=10,
-        fill=BRAND_DARK,
-        outline=BRAND_DARK,
-    )
-    mark.create_text(
-        19,
-        19,
-        text="D",
-        fill="#FFFFFF",
-        font=("Microsoft YaHei", 16, "bold"),
-    )
-    mark.pack(side="left", padx=(0, 11))
-    brand_text = tk.Frame(brand, bg=HERO_BG)
-    brand_text.pack(side="left")
-    tk.Label(
-        brand_text,
-        text="DocxTool",
-        bg=HERO_BG,
-        fg=TEXT_PRIMARY,
-        font=("Microsoft YaHei", 14, "bold"),
-    ).pack(anchor="w")
-    tk.Label(
-        brand_text,
-        text="WPS WORKSPACE",
-        bg=HERO_BG,
-        fg=TEXT_MUTED,
-        font=("Microsoft YaHei", 7),
-    ).pack(anchor="w", pady=(3, 0))
-
-    content = tk.Frame(root, bg=PANEL_BG, width=360)
-    content.place(x=30, y=CONTENT_TOP, width=360)
-    view_title = tk.StringVar(value="账号登录")
-    view_hint = tk.StringVar(value="欢迎回来，继续进入你的工作台。")
-    tk.Label(
-        content,
-        textvariable=view_title,
-        bg=PANEL_BG,
-        fg=TEXT_PRIMARY,
-        font=("Microsoft YaHei", 17, "bold"),
-    ).pack(anchor="w")
-    tk.Label(
-        content,
-        textvariable=view_hint,
-        bg=PANEL_BG,
-        fg=TEXT_MUTED,
-        font=("Microsoft YaHei", 9),
-    ).pack(anchor="w", pady=(6, 22))
-
-    fields = tk.Frame(content, bg=PANEL_BG)
-    fields.pack(fill="x")
-
-    def field(
-        label: str,
-        variable: tk.StringVar,
-        *,
-        password_field: bool = False,
-    ):
-        block = tk.Frame(fields, bg=PANEL_BG)
-        tk.Label(
-            block,
-            text=label,
-            bg=PANEL_BG,
-            fg="#5E6664",
-            font=("Microsoft YaHei", 9),
-        ).pack(anchor="w", pady=(0, 6))
-        shell = tk.Canvas(
-            block,
-            height=48,
-            bg=PANEL_BG,
-            highlightthickness=0,
-            borderwidth=0,
-        )
-        shell.pack(fill="x")
-        entry = tk.Entry(
-            shell,
-            textvariable=variable,
-            show=password_mask(False) if password_field else "",
-            relief="flat",
-            borderwidth=0,
-            bg=FIELD_BG,
-            fg=TEXT_PRIMARY,
-            insertbackground=TEXT_PRIMARY,
-            font=("Microsoft YaHei", 10),
-        )
-
-        def draw_border(color: str) -> None:
-            shell.delete("field")
-            _rounded_rectangle(
-                shell,
-                (1, 1, max(2, shell.winfo_width() - 1), 47),
-                radius=10,
-                fill=FIELD_BG,
-                outline=color,
-                width=1,
-                tags="field",
-            )
-            shell.tag_lower("field")
-
-        entry_width_offset = -62 if password_field else -26
-        entry.place(x=13, y=7, relwidth=1, width=entry_width_offset, height=34)
-        shell.bind("<Configure>", lambda _event: draw_border(FIELD_BORDER))
-        entry.bind("<FocusIn>", lambda _event: draw_border(FIELD_FOCUS))
-        entry.bind("<FocusOut>", lambda _event: draw_border(FIELD_BORDER))
-
-        if password_field:
-            password_visible = False
-            eye = tk.Canvas(
-                shell,
-                width=34,
-                height=34,
-                bg=FIELD_BG,
-                highlightthickness=0,
-                borderwidth=0,
-                cursor="hand2",
-            )
-
-            def draw_eye() -> None:
-                eye.delete("all")
-                color = BRAND_GREEN if password_visible else "#8B9391"
-                eye.create_oval(
-                    5,
-                    10,
-                    29,
-                    24,
-                    outline=color,
-                    width=1,
-                )
-                eye.create_oval(14, 14, 20, 20, fill=color, outline=color)
-                if password_visible:
-                    eye.create_line(7, 7, 27, 27, fill=color, width=2)
-
-            def toggle_password(_event=None) -> None:
-                nonlocal password_visible
-                password_visible = not password_visible
-                entry.configure(show=password_mask(password_visible))
-                draw_eye()
-                entry.focus_set()
-
-            eye.place(relx=1, x=-47, y=7, width=34, height=34)
-            eye.bind("<Button-1>", toggle_password)
-            draw_eye()
-        return block, entry
-
-    username_block, username_entry = field("账号", username)
-    password_block, _password_entry = field(
-        "密码", password, password_field=True
-    )
-    confirmation_block, _confirmation_entry = field(
-        "确认密码", confirmation, password_field=True
-    )
-    username_block.pack(fill="x")
-    password_block.pack(fill="x", pady=(16, 0))
-
-    status_label = tk.Label(
-        content,
-        textvariable=status,
-        bg=PANEL_BG,
-        fg=TEXT_MUTED,
-        justify="left",
-        anchor="w",
-        wraplength=360,
-        font=("Microsoft YaHei", 8),
-        height=2,
-    )
-    status_label.pack(fill="x", pady=(13, 0))
-
-    submit = tk.Canvas(
-        content,
-        height=50,
-        highlightthickness=0,
-        borderwidth=0,
-        bg=PANEL_BG,
-        cursor="hand2",
-        takefocus=True,
-    )
-    submit.pack(fill="x", pady=(16, 0))
-    submit_state = {"enabled": True, "text": "登录", "active": False}
-
-    def draw_submit() -> None:
-        submit.delete("all")
-        if submit_state["enabled"]:
-            color = BUTTON_ACTIVE if submit_state["active"] else BUTTON_BG
-            text_color = "#FFFFFF"
-        else:
-            color = "#666D6B"
-            text_color = "#D8DCDB"
-        _rounded_rectangle(
-            submit,
-            (0, 0, max(1, submit.winfo_width()), 50),
-            radius=10,
-            fill=color,
-            outline=color,
-        )
-        submit.create_text(
-            max(1, submit.winfo_width()) // 2,
-            25,
-            text=submit_state["text"],
-            fill=text_color,
-            font=("Microsoft YaHei", 10, "bold"),
-        )
-
-    def set_submit(*, text: str, enabled=None) -> None:
-        submit_state["text"] = text
-        if enabled is not None:
-            submit_state["enabled"] = enabled
-            submit.configure(cursor="hand2" if enabled else "arrow")
-        draw_submit()
-
-    def activate_submit(_event=None) -> None:
-        if submit_state["enabled"]:
-            submit_form()
-
-    submit.bind("<Configure>", lambda _event: draw_submit())
-    submit.bind("<Button-1>", activate_submit)
-    submit.bind("<Return>", activate_submit)
-    submit.bind("<space>", activate_submit)
-    submit.bind(
-        "<Enter>",
-        lambda _event: (
-            submit_state.update(active=True),
-            draw_submit(),
-        ),
-    )
-    submit.bind(
-        "<Leave>",
-        lambda _event: (
-            submit_state.update(active=False),
-            draw_submit(),
-        ),
-    )
-
-    switch_prompt = tk.StringVar(value="还没有账号？")
-    switch_text = tk.StringVar(value="注册账号")
-    switch_row = tk.Frame(content, bg=PANEL_BG)
-    switch_row.pack(pady=(18, 0))
-    tk.Label(
-        switch_row,
-        textvariable=switch_prompt,
-        bg=PANEL_BG,
-        fg=TEXT_MUTED,
-        font=("Microsoft YaHei", 9),
-    ).pack(side="left")
-    switch = tk.Button(
-        switch_row,
-        textvariable=switch_text,
-        command=lambda: switch_mode(),
-        relief="flat",
-        borderwidth=0,
-        bg=PANEL_BG,
-        activebackground=PANEL_BG,
-        fg=BRAND_GREEN,
-        activeforeground=BRAND_GREEN_ACTIVE,
-        cursor="hand2",
-        font=("Microsoft YaHei", 9),
-        padx=2,
-        pady=0,
-    )
-    switch.pack(side="left")
-
-    def set_status(message: str, *, error: bool = False) -> None:
-        status.set(message)
-        status_label.configure(fg=ERROR_RED if error else TEXT_MUTED)
-
-    def fit_window() -> None:
-        root.update_idletasks()
-        requested_height = required_window_height(
-            CONTENT_TOP,
-            content.winfo_reqheight(),
-            CONTENT_BOTTOM_PADDING,
-        )
-        root.geometry(
-            window_geometry(
-                WINDOW_WIDTH,
-                requested_height,
-                root.winfo_screenwidth(),
-                root.winfo_screenheight(),
-            )
-        )
-        background.delete("all")
-        background.create_rectangle(
-            0,
-            0,
-            WINDOW_WIDTH,
-            requested_height,
-            fill=HERO_BG,
-            outline=HERO_BG,
-        )
-        background.create_polygon(
-            250,
-            0,
-            WINDOW_WIDTH,
-            0,
-            WINDOW_WIDTH,
-            HERO_HEIGHT - 14,
-            342,
-            HERO_HEIGHT - 40,
-            fill=HERO_ACCENT,
-            outline=HERO_ACCENT,
-        )
-        _rounded_rectangle(
-            background,
-            (0, HERO_HEIGHT - 20, WINDOW_WIDTH, requested_height + 30),
-            radius=30,
-            fill=PANEL_BG,
-            outline=PANEL_BG,
-        )
-
-    def refresh_mode() -> None:
-        if mode.get() == "register":
-            confirmation_block.pack(fill="x", pady=(16, 0))
-            view_title.set("注册账号")
-            view_hint.set("创建账号后将自动登录。")
-            set_submit(text="注册并登录")
-            switch_prompt.set("已有账号？")
-            switch_text.set("返回登录")
-            set_status("账号和密码至少 5 位，必须同时包含字母和数字")
-        else:
-            confirmation_block.pack_forget()
-            view_title.set("账号登录")
-            view_hint.set("欢迎回来，继续进入你的工作台。")
-            set_submit(text="登录")
-            switch_prompt.set("还没有账号？")
-            switch_text.set("注册账号")
-            set_status("请输入账号和密码")
-        root.after_idle(fit_window)
-
-    def switch_mode() -> None:
-        if submitting:
-            return
-        mode.set("register" if mode.get() == "login" else "login")
-        refresh_mode()
-        username_entry.focus_set()
-
-    def submit_form() -> None:
-        nonlocal submitting
-        if submitting:
-            return
-        submitting = True
-        current_mode = mode.get()
-        idle_text = "注册并登录" if current_mode == "register" else "登录"
-        set_submit(
-            enabled=False,
-            text="注册中..." if current_mode == "register" else "登录中...",
-        )
-        set_status("正在连接账号服务...")
-        root.update_idletasks()
-        completed = False
+    def run(self) -> None:
         try:
-            account = submit_account(
-                mode=current_mode,
-                username=username.get(),
-                password=password.get(),
-                confirmation=confirmation.get(),
-                api=api,
-                account_store=account_store,
-                device_key=device_key,
-            )
-            result.update(account)
-            completed = True
-            root.destroy()
-        except PublicApiError as exc:
-            set_status(exc.message, error=True)
-        except (WpsValidationError, ValueError, OSError, sqlite3.Error) as exc:
-            set_status(str(exc), error=True)
+            self.completed.emit(submit_account(**self._kwargs))
+        except Exception as exc:
+            self.failed.emit(exc)
         finally:
-            if not completed:
-                submitting = False
-                set_submit(enabled=True, text=idle_text)
-                fit_window()
+            self.finished.emit()
 
-    refresh_mode()
-    fit_window()
-    root.bind("<Return>", lambda _event: submit_form())
-    username_entry.focus_set()
-    root.deiconify()
-    root.mainloop()
-    return result
+
+class WindowTitleBar(QFrame):
+    def __init__(self, window: QDialog, title: str, *, allow_minimize: bool) -> None:
+        super().__init__(window)
+        self._window = window
+        self._drag_offset = None
+        self.setObjectName("WindowTitleBar")
+        self.setFixedHeight(42)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(14, 0, 0, 0)
+        layout.setSpacing(8)
+
+        self.icon_label = QLabel()
+        self.icon_label.setObjectName("WindowTitleIcon")
+        self.icon_label.setFixedSize(24, 25)
+        self.icon_label.setPixmap(_login_icon_pixmap(24))
+        self.icon_label.setAlignment(Qt.AlignCenter)
+        self.icon_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        layout.addWidget(self.icon_label)
+
+        self.title_label = QLabel(title)
+        self.title_label.setObjectName("WindowTitleLabel")
+        self.title_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        layout.addWidget(self.title_label)
+        layout.addStretch()
+
+        self.minimize_button = None
+        if allow_minimize:
+            self.minimize_button = QPushButton("−")
+            self.minimize_button.setObjectName("WindowControlButton")
+            self.minimize_button.setToolTip("最小化")
+            self.minimize_button.setAccessibleName("最小化窗口")
+            self.minimize_button.clicked.connect(window.showMinimized)
+            layout.addWidget(self.minimize_button)
+
+        self.close_button = QPushButton("×")
+        self.close_button.setObjectName("WindowCloseButton")
+        self.close_button.setToolTip("关闭")
+        self.close_button.setAccessibleName("关闭窗口")
+        self.close_button.clicked.connect(window.reject)
+        layout.addWidget(self.close_button)
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            self._drag_offset = event.globalPos() - self._window.frameGeometry().topLeft()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._drag_offset is not None and event.buttons() & Qt.LeftButton:
+            self._window.move(event.globalPos() - self._drag_offset)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            self._drag_offset = None
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+
+class LoginDialog(QDialog):
+    def __init__(
+        self,
+        *,
+        api,
+        account_store,
+        initial_username: str = "",
+        initial_password: str = "",
+        device_key: str = "",
+        remember_password: bool = False,
+        auto_login: bool = False,
+        startup_enabled: bool = False,
+        initial_message: str = "",
+    ) -> None:
+        super().__init__()
+        self._api = api
+        self._account_store = account_store
+        self._device_key = device_key or account_store.new_device_key()
+        self._result = {}
+        self._mode = "login"
+        self._submitting = False
+        self._thread = None
+        self._worker = None
+        self._authentication_error = None
+        self._startup_error = None
+        self.setObjectName("LoginDialog")
+        self.setWindowTitle("DocxTool WPS")
+        self.setWindowIcon(login_window_icon())
+        self.setWindowFlags(
+            Qt.Window | Qt.FramelessWindowHint | Qt.WindowMinimizeButtonHint
+        )
+        self.setMinimumWidth(480)
+        self.resize(500, 580)
+        self.setStyleSheet(LOGIN_STYLE)
+        self._build_ui()
+        self.username_input.setText(initial_username)
+        self.password_input.setText(initial_password)
+        self.remember_checkbox.setChecked(remember_password)
+        self.auto_checkbox.setChecked(auto_login)
+        self.startup_checkbox.setChecked(startup_enabled)
+        self._set_status(initial_message)
+        self._update_mode()
+        self.username_input.setFocus()
+
+    @property
+    def account_result(self) -> dict:
+        return dict(self._result)
+
+    def _build_ui(self) -> None:
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        self.title_bar = WindowTitleBar(
+            self,
+            "DocxTool WPS",
+            allow_minimize=True,
+        )
+        root.addWidget(self.title_bar)
+
+        header = QFrame()
+        header.setObjectName("BrandHeader")
+        header.setFixedHeight(82)
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(42, 17, 42, 17)
+        logo = QLabel()
+        logo.setObjectName("Logo")
+        logo.setAlignment(Qt.AlignCenter)
+        logo.setFixedSize(48, 48)
+        logo.setPixmap(_login_icon_pixmap(48))
+        header_layout.addWidget(logo, 0, Qt.AlignTop)
+        brand_name = QLabel("DocxTool")
+        brand_name.setObjectName("BrandName")
+        header_layout.addSpacing(14)
+        header_layout.addWidget(brand_name, 0, Qt.AlignVCenter)
+        header_layout.addStretch()
+        root.addWidget(header)
+
+        outer = QWidget()
+        outer_layout = QVBoxLayout(outer)
+        outer_layout.setContentsMargins(28, 0, 28, 14)
+        card = QFrame()
+        card.setObjectName("LoginCard")
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(34, 18, 34, 14)
+        card_layout.setSpacing(0)
+
+        self.title_label = QLabel()
+        self.title_label.setObjectName("PageTitle")
+        self.hint_label = QLabel()
+        self.hint_label.setObjectName("PageHint")
+        card_layout.addWidget(self.title_label)
+        card_layout.addSpacing(5)
+        card_layout.addWidget(self.hint_label)
+        card_layout.addSpacing(12)
+
+        card_layout.addWidget(self._field_label("账号"))
+        card_layout.addSpacing(6)
+        self.username_input = QLineEdit()
+        self.username_input.setPlaceholderText("请输入账号")
+        self.username_input.setAccessibleName("账号")
+        card_layout.addWidget(self.username_input)
+        card_layout.addSpacing(8)
+
+        card_layout.addWidget(self._field_label("密码"))
+        card_layout.addSpacing(6)
+        self.password_input = QLineEdit()
+        self.password_input.setPlaceholderText("请输入密码")
+        self.password_input.setEchoMode(QLineEdit.Password)
+        self.password_input.setAccessibleName("密码")
+        self.password_input.returnPressed.connect(self._submit)
+        self.visibility_action = self.password_input.addAction(
+            QIcon(str(_resource_path("images/eye.svg"))),
+            QLineEdit.TrailingPosition,
+        )
+        self.visibility_action.setCheckable(True)
+        self.visibility_action.setToolTip("显示密码")
+        self.visibility_action.setText("显示密码")
+        self.visibility_action.triggered.connect(self._toggle_password)
+        card_layout.addWidget(self.password_input)
+
+        self.confirmation_label = self._field_label("确认密码")
+        self.confirmation_input = QLineEdit()
+        self.confirmation_input.setPlaceholderText("请再次输入密码")
+        self.confirmation_input.setEchoMode(QLineEdit.Password)
+        self.confirmation_input.setAccessibleName("确认密码")
+        self.confirmation_input.returnPressed.connect(self._submit)
+        card_layout.addSpacing(8)
+        card_layout.addWidget(self.confirmation_label)
+        card_layout.addSpacing(6)
+        card_layout.addWidget(self.confirmation_input)
+
+        preference_row = QHBoxLayout()
+        preference_row.setContentsMargins(0, 10, 0, 0)
+        self.remember_checkbox = QCheckBox("记住密码")
+        self.auto_checkbox = QCheckBox("自动登录")
+        self.remember_checkbox.toggled.connect(self._remember_changed)
+        self.auto_checkbox.toggled.connect(self._auto_changed)
+        preference_row.addWidget(self.remember_checkbox)
+        preference_row.addSpacing(18)
+        preference_row.addWidget(self.auto_checkbox)
+        preference_row.addStretch()
+        card_layout.addLayout(preference_row)
+
+        self.startup_checkbox = QCheckBox("随 Windows 登录启动 DocxTool WPS")
+        card_layout.addSpacing(8)
+        card_layout.addWidget(self.startup_checkbox)
+
+        self.status_label = QLabel()
+        self.status_label.setObjectName("StatusLabel")
+        self.status_label.setWordWrap(True)
+        self.status_label.setMinimumHeight(28)
+        card_layout.addSpacing(5)
+        card_layout.addWidget(self.status_label)
+
+        self.primary_button = QPushButton()
+        self.primary_button.setObjectName("PrimaryButton")
+        self.primary_button.setDefault(True)
+        self.primary_button.clicked.connect(self._submit)
+        card_layout.addSpacing(5)
+        card_layout.addWidget(self.primary_button)
+
+        switch_row = QHBoxLayout()
+        switch_row.setContentsMargins(0, 8, 0, 0)
+        switch_row.addStretch()
+        self.switch_prompt = QLabel()
+        self.switch_prompt.setObjectName("SwitchPrompt")
+        self.switch_button = QPushButton()
+        self.switch_button.setObjectName("SwitchButton")
+        self.switch_button.clicked.connect(self._switch_mode)
+        switch_row.addWidget(self.switch_prompt)
+        switch_row.addWidget(self.switch_button)
+        switch_row.addStretch()
+        card_layout.addLayout(switch_row)
+
+        outer_layout.addWidget(card)
+        root.addWidget(outer)
+        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+
+        self.setTabOrder(self.username_input, self.password_input)
+        self.setTabOrder(self.password_input, self.remember_checkbox)
+        self.setTabOrder(self.remember_checkbox, self.auto_checkbox)
+        self.setTabOrder(self.auto_checkbox, self.primary_button)
+
+    @staticmethod
+    def _field_label(text: str) -> QLabel:
+        label = QLabel(text)
+        label.setObjectName("FieldLabel")
+        return label
+
+    def _update_mode(self) -> None:
+        registering = self._mode == "register"
+        self.title_label.setText("创建账号" if registering else "账号登录")
+        self.hint_label.setText(
+            "创建账号后将直接进入你的工作台。"
+            if registering
+            else "欢迎回来，继续进入你的工作台。"
+        )
+        self.confirmation_label.setVisible(registering)
+        self.confirmation_input.setVisible(registering)
+        self.primary_button.setText("注册并登录" if registering else "登录")
+        self.switch_prompt.setText("已有账号？" if registering else "还没有账号？")
+        self.switch_button.setText("返回登录" if registering else "注册账号")
+
+    def _switch_mode(self) -> None:
+        if self._submitting:
+            return
+        self._mode = "register" if self._mode == "login" else "login"
+        if self._mode == "register":
+            log_event("INFO", "login", "login.register.opened", "已切换到 WPS 注册视图")
+        self._set_status(
+            "账号和密码至少 5 位，必须同时包含字母和数字"
+            if self._mode == "register"
+            else ""
+        )
+        self._update_mode()
+        self.adjustSize()
+
+    def _toggle_password(self, visible: bool) -> None:
+        mode = QLineEdit.Normal if visible else QLineEdit.Password
+        self.password_input.setEchoMode(mode)
+        self.confirmation_input.setEchoMode(mode)
+        self.visibility_action.setIcon(
+            QIcon(str(_resource_path("images/eye-off.svg" if visible else "images/eye.svg")))
+        )
+        tooltip = "隐藏密码" if visible else "显示密码"
+        self.visibility_action.setToolTip(tooltip)
+        self.visibility_action.setText(tooltip)
+        log_event(
+            "INFO",
+            "login",
+            "login.password.visibility.changed",
+            "WPS 登录密码可见性已切换",
+            {"visible": bool(visible)},
+        )
+
+    def _auto_changed(self, checked: bool) -> None:
+        if checked and not self.remember_checkbox.isChecked():
+            self.remember_checkbox.setChecked(True)
+
+    def _remember_changed(self, checked: bool) -> None:
+        if not checked and self.auto_checkbox.isChecked():
+            self.auto_checkbox.setChecked(False)
+
+    def _set_status(self, message: str, *, error: bool = False) -> None:
+        self.status_label.setText(message)
+        self.status_label.setVisible(bool(message))
+        self.status_label.setProperty("error", error)
+        self.status_label.style().unpolish(self.status_label)
+        self.status_label.style().polish(self.status_label)
+
+    def _set_busy(self, busy: bool) -> None:
+        self._submitting = busy
+        for widget in (
+            self.username_input,
+            self.password_input,
+            self.confirmation_input,
+            self.remember_checkbox,
+            self.auto_checkbox,
+            self.startup_checkbox,
+            self.switch_button,
+        ):
+            widget.setEnabled(not busy)
+        self.visibility_action.setEnabled(not busy)
+        self.primary_button.setEnabled(not busy)
+        if busy:
+            self.primary_button.setText("注册中…" if self._mode == "register" else "正在登录…")
+        else:
+            self.primary_button.setText("注册并登录" if self._mode == "register" else "登录")
+
+    def _submit(self) -> None:
+        if self._submitting:
+            return
+        mode = self._mode
+        event = "login.register.submit.start" if mode == "register" else "login.submit.start"
+        log_event("INFO", "login", event, "开始提交 WPS 账号认证")
+        self._set_busy(True)
+        self._set_status("正在连接账号服务...")
+        kwargs = {
+            "mode": mode,
+            "username": self.username_input.text(),
+            "password": self.password_input.text(),
+            "confirmation": self.confirmation_input.text(),
+            "api": self._api,
+            "account_store": self._account_store,
+            "device_key": self._device_key,
+            "remember_password": self.remember_checkbox.isChecked(),
+            "auto_login": self.auto_checkbox.isChecked(),
+        }
+        self._thread = QThread(self)
+        self._worker = AuthenticationWorker(kwargs)
+        self._worker.moveToThread(self._thread)
+        self._thread.started.connect(self._worker.run)
+        self._worker.completed.connect(self._authentication_completed)
+        self._worker.failed.connect(self._authentication_failed)
+        self._worker.finished.connect(self._thread.quit)
+        self._worker.finished.connect(self._worker.deleteLater)
+        self._thread.finished.connect(self._thread_finished)
+        self._thread.start()
+
+    def _authentication_completed(self, account: dict) -> None:
+        self._result = dict(account)
+        try:
+            windows_startup.set_enabled(self.startup_checkbox.isChecked())
+        except OSError as exc:
+            self._startup_error = exc
+            log_event(
+                "WARNING",
+                "launcher",
+                "launcher.startup.preference.failed",
+                "Windows 启动偏好保存失败",
+                {
+                    "error_code": "WPS_STARTUP_PREFERENCE_FAILED",
+                    "error_type": type(exc).__name__,
+                },
+            )
+        event = (
+            "login.register.submit.completed"
+            if self._mode == "register"
+            else "login.submit.completed"
+        )
+        log_event("INFO", "login", event, "WPS 账号认证与本地保存已完成")
+        log_event(
+            "INFO",
+            "login",
+            "login.preference.saved",
+            "WPS 登录偏好已保存",
+            {
+                "remember_password": bool(account.get("remember_password")),
+                "auto_login": bool(account.get("auto_login")),
+            },
+        )
+        log_event(
+            "INFO",
+            "login",
+            (
+                "login.password.saved"
+                if account.get("remember_password")
+                else "login.password.cleared"
+            ),
+            (
+                "WPS 登录密码已使用 DPAPI 保存"
+                if account.get("remember_password")
+                else "WPS 本地登录密码已清除"
+            ),
+        )
+
+    def _authentication_failed(self, exc: BaseException) -> None:
+        event = (
+            "login.register.submit.failed"
+            if self._mode == "register"
+            else "login.submit.failed"
+        )
+        fields = {
+            "error_code": exc.code if isinstance(exc, PublicApiError) else type(exc).__name__,
+            "error_type": type(exc).__name__,
+            "network_available": not exc.network if isinstance(exc, PublicApiError) else True,
+        }
+        log_event("WARNING", "login", event, "WPS 账号认证失败", fields)
+        self._authentication_error = exc
+
+    def _thread_finished(self) -> None:
+        if self._thread is not None:
+            self._thread.deleteLater()
+        self._thread = None
+        self._worker = None
+        if self._result:
+            if self._startup_error is not None:
+                QMessageBox.warning(
+                    self,
+                    "DocxTool WPS",
+                    "账号登录成功，但无法修改 Windows 启动设置。",
+                )
+            self.accept()
+            return
+        error = self._authentication_error
+        self._authentication_error = None
+        if error is not None:
+            self._set_status(_friendly_error(error), error=True)
+        self._set_busy(False)
+
+    def reject(self) -> None:
+        if self._submitting:
+            return
+        super().reject()
+
+
+class PreferencesDialog(QDialog):
+    def __init__(
+        self,
+        *,
+        account: dict,
+        account_store,
+        startup_enabled: bool,
+    ) -> None:
+        super().__init__()
+        self._account_store = account_store
+        self.setWindowTitle("DocxTool WPS 登录设置")
+        self.setWindowIcon(login_window_icon())
+        self.setObjectName("LoginDialog")
+        self.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint)
+        self.setMinimumWidth(430)
+        self.setStyleSheet(LOGIN_STYLE)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+        self.title_bar = WindowTitleBar(
+            self,
+            "DocxTool WPS 登录设置",
+            allow_minimize=False,
+        )
+        root.addWidget(self.title_bar)
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(32, 24, 32, 28)
+        root.addWidget(content)
+        title = QLabel("登录与启动设置")
+        title.setObjectName("PageTitle")
+        layout.addWidget(title)
+        layout.addSpacing(6)
+        hint = QLabel(f"当前账号：{account['username']}")
+        hint.setObjectName("PageHint")
+        layout.addWidget(hint)
+        layout.addSpacing(20)
+        self.remember_checkbox = QCheckBox("记住密码")
+        self.remember_checkbox.setChecked(bool(account.get("remember_password")))
+        if not account.get("password"):
+            self.remember_checkbox.setEnabled(False)
+        self.auto_checkbox = QCheckBox("自动登录")
+        self.auto_checkbox.setChecked(bool(account.get("auto_login")))
+        self.startup_checkbox = QCheckBox("随 Windows 登录启动 DocxTool WPS")
+        self.startup_checkbox.setChecked(startup_enabled)
+        self.remember_checkbox.toggled.connect(self._remember_changed)
+        self.auto_checkbox.toggled.connect(self._auto_changed)
+        layout.addWidget(self.remember_checkbox)
+        layout.addSpacing(9)
+        layout.addWidget(self.auto_checkbox)
+        layout.addSpacing(9)
+        layout.addWidget(self.startup_checkbox)
+        layout.addSpacing(20)
+        self.status_label = QLabel(
+            "关闭自动登录后，下次启动会显示登录窗口。"
+            if account.get("password")
+            else "如需重新记住密码，请先退出当前账号并重新登录。"
+        )
+        self.status_label.setObjectName("StatusLabel")
+        self.status_label.setWordWrap(True)
+        layout.addWidget(self.status_label)
+        layout.addSpacing(12)
+        save_button = QPushButton("保存设置")
+        save_button.setObjectName("PrimaryButton")
+        save_button.clicked.connect(self._save)
+        layout.addWidget(save_button)
+
+    def _auto_changed(self, checked: bool) -> None:
+        if checked and not self.remember_checkbox.isChecked():
+            self.remember_checkbox.setChecked(True)
+
+    def _remember_changed(self, checked: bool) -> None:
+        if not checked and self.auto_checkbox.isChecked():
+            self.auto_checkbox.setChecked(False)
+
+    def _save(self) -> None:
+        try:
+            self._account_store.update_preferences(
+                remember_password=self.remember_checkbox.isChecked(),
+                auto_login=self.auto_checkbox.isChecked(),
+            )
+            windows_startup.set_enabled(self.startup_checkbox.isChecked())
+        except (OSError, ValueError, RuntimeError) as exc:
+            self.status_label.setText(_friendly_error(exc))
+            self.status_label.setProperty("error", True)
+            self.status_label.style().unpolish(self.status_label)
+            self.status_label.style().polish(self.status_label)
+            return
+        log_event(
+            "INFO",
+            "login",
+            "login.preference.saved",
+            "WPS 登录与启动偏好已保存",
+            {
+                "remember_password": self.remember_checkbox.isChecked(),
+                "auto_login": self.auto_checkbox.isChecked(),
+                "startup_enabled": self.startup_checkbox.isChecked(),
+            },
+        )
+        self.accept()
+
+
+def _resource_path(relative: str):
+    from pathlib import Path
+
+    root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+    return root / relative
+
+
+def login_window_icon() -> QIcon:
+    return QIcon(str(_resource_path("images/login-window.png")))
+
+
+def _login_icon_pixmap(size: int) -> QPixmap:
+    pixmap = QPixmap(str(_resource_path("images/login-window.png")))
+    if pixmap.isNull():
+        raise RuntimeError("WPS_LOGIN_WINDOW_ICON_INVALID")
+    return pixmap.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+
+
+def configure_windows_application_identity() -> None:
+    global _app_user_model_id_configured
+    if sys.platform != "win32" or _app_user_model_id_configured:
+        return
+    result = ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+        APPLICATION_USER_MODEL_ID
+    )
+    if result != 0:
+        raise OSError(result, "WPS_APP_USER_MODEL_ID_FAILED")
+    _app_user_model_id_configured = True
+
+
+def _configure_high_dpi() -> None:
+    configure_windows_application_identity()
+    if QApplication.instance() is not None:
+        return
+    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+    QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+
+
+def show_login_register_window(
+    *,
+    api,
+    account_store,
+    initial_username: str = "",
+    initial_password: str = "",
+    device_key: str = "",
+    remember_password: bool = False,
+    auto_login: bool = False,
+    startup_enabled: bool = False,
+    initial_message: str = "",
+) -> dict:
+    _configure_high_dpi()
+    application = QApplication.instance() or QApplication(sys.argv[:1])
+    application.setWindowIcon(login_window_icon())
+    application.setFont(application.font())
+    log_event("INFO", "login", "login.window.opened", "WPS 登录注册窗口已打开")
+    dialog = LoginDialog(
+        api=api,
+        account_store=account_store,
+        initial_username=initial_username,
+        initial_password=initial_password,
+        device_key=device_key,
+        remember_password=remember_password,
+        auto_login=auto_login,
+        startup_enabled=startup_enabled,
+        initial_message=initial_message,
+    )
+    screen = application.primaryScreen().availableGeometry()
+    target_height = min(dialog.sizeHint().height(), max(560, screen.height() - 32))
+    dialog.resize(500, target_height)
+    dialog.move(
+        screen.left() + max(0, (screen.width() - dialog.width()) // 2),
+        screen.top() + max(0, (screen.height() - dialog.height()) // 2),
+    )
+    dialog.exec_()
+    return dialog.account_result
+
+
+def show_preferences_window(*, account: dict, account_store) -> bool:
+    dialog = PreferencesDialog(
+        account=account,
+        account_store=account_store,
+        startup_enabled=windows_startup.is_enabled(),
+    )
+    return dialog.exec_() == QDialog.Accepted
