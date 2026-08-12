@@ -1,0 +1,137 @@
+"""Strict HTTPS JSON client for the WPS public account service."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+import sys
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
+
+API_PREFIX = "/wps-api/v1"
+API_VERSION = "wps-api-v1"
+DEFAULT_TIMEOUT_SECONDS = 8
+
+
+class PublicApiError(RuntimeError):
+    def __init__(self, code: str, message: str, status: int = 0, *, network: bool = False) -> None:
+        self.code = code
+        self.message = message
+        self.status = status
+        self.network = network
+        super().__init__(code)
+
+
+def _config_path() -> Path:
+    root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+    return root / "client-config.json"
+
+
+def _validate_server_origin(origin: str) -> str:
+    if not isinstance(origin, str):
+        raise RuntimeError("WPS_SERVER_ORIGIN_INVALID")
+    parsed = urlparse(origin)
+    is_loopback = parsed.scheme == "http" and parsed.hostname in {"127.0.0.1", "localhost"}
+    try:
+        _ = parsed.port
+    except ValueError as exc:
+        raise RuntimeError("WPS_SERVER_ORIGIN_INVALID") from exc
+    if (
+        not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or (parsed.scheme != "https" and not is_loopback)
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise RuntimeError("WPS_SERVER_ORIGIN_INVALID")
+    return origin.rstrip("/")
+
+
+def configured_server_origin() -> str:
+    value = json.loads(_config_path().read_text(encoding="utf-8"))
+    if not isinstance(value, dict) or set(value) != {"server_origin"}:
+        raise RuntimeError("WPS_CLIENT_CONFIG_INVALID")
+    return _validate_server_origin(value["server_origin"])
+
+
+class WpsPublicApi:
+    def __init__(self, origin: str = "", timeout: int = DEFAULT_TIMEOUT_SECONDS) -> None:
+        self.origin = _validate_server_origin(origin) if origin else configured_server_origin()
+        self.timeout = timeout
+
+    def _request(self, method: str, path: str, payload=None, *, token: str = "", request_id: str = "") -> dict:
+        body = None if payload is None else json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        headers = {"Accept": "application/json"}
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        if request_id:
+            headers["X-DocxTool-Request-Id"] = request_id
+        request = Request(self.origin + API_PREFIX + path, data=body, headers=headers, method=method)
+        try:
+            response = urlopen(request, timeout=self.timeout)
+            raw = response.read()
+            status = int(response.status)
+        except HTTPError as exc:
+            raw = exc.read()
+            status = int(exc.code)
+        except (URLError, TimeoutError, OSError) as exc:
+            raise PublicApiError("WPS_PUBLIC_SERVER_UNAVAILABLE", "暂时无法连接 WPS 服务", network=True) from exc
+        try:
+            envelope = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise PublicApiError("WPS_PUBLIC_RESPONSE_INVALID", "WPS 服务返回无效响应", status) from exc
+        if not isinstance(envelope, dict) or envelope.get("api_version") != API_VERSION or not isinstance(envelope.get("ok"), bool):
+            raise PublicApiError("WPS_PUBLIC_RESPONSE_INVALID", "WPS 服务返回无效响应", status)
+        if request_id and envelope.get("request_id") != request_id:
+            raise PublicApiError(
+                "WPS_PUBLIC_REQUEST_ID_MISMATCH",
+                "WPS 服务响应与当前请求不匹配",
+                status,
+            )
+        if envelope["ok"] is not True:
+            error = envelope.get("error")
+            if not isinstance(error, dict) or not isinstance(error.get("code"), str) or not isinstance(error.get("message"), str):
+                raise PublicApiError("WPS_PUBLIC_RESPONSE_INVALID", "WPS 服务返回无效错误", status)
+            raise PublicApiError(error["code"], error["message"], status)
+        data = envelope.get("data")
+        if not isinstance(data, dict):
+            raise PublicApiError("WPS_PUBLIC_RESPONSE_INVALID", "WPS 服务返回无效数据", status)
+        return data
+
+    def register(self, payload: dict) -> dict:
+        return self._request("POST", "/auth/register", payload)
+
+    def login(self, payload: dict) -> dict:
+        return self._request("POST", "/auth/login", payload)
+
+    def current_user(self, session_token: str) -> dict:
+        return self._request("GET", "/auth/me", token=session_token)
+
+    def logout(self, session_token: str) -> dict:
+        return self._request("POST", "/auth/logout", {}, token=session_token)
+
+    def heartbeat(self, session_token: str, payload: dict) -> dict:
+        return self._request("POST", "/heartbeat", payload, token=session_token)
+
+    def authorize_format(self, session_token: str, payload: dict) -> dict:
+        data = self._request("POST", "/format/authorize", payload, token=session_token, request_id=payload["request_id"])
+        if data.get("request_id") != payload["request_id"]:
+            raise PublicApiError(
+                "WPS_PUBLIC_REQUEST_ID_MISMATCH",
+                "WPS 服务授权数据与当前请求不匹配",
+            )
+        return data
+
+    def report_format_result(self, session_token: str, payload: dict) -> dict:
+        data = self._request("POST", "/format/result", payload, token=session_token, request_id=payload["request_id"])
+        if data.get("request_id") != payload["request_id"]:
+            raise PublicApiError(
+                "WPS_PUBLIC_REQUEST_ID_MISMATCH",
+                "WPS 服务结果数据与当前请求不匹配",
+            )
+        return data

@@ -474,7 +474,7 @@ function makeHostHarness({
           data: {
             timed_out: false,
             command: Object.assign({
-              schema_version: "wps-command-v1",
+              schema_version: "wps-command-v2",
               pane_instance_id: "pane-test",
               command_sequence: 1,
               host_generation: bridgeGeneration,
@@ -897,6 +897,19 @@ test("Host keeps a bridge document open while replacing and reopening the source
   }
 });
 
+test("Host sends only the authorization identity to the local Engine route", async () => {
+  const harness = makeHostHarness();
+  harness.runtime.start();
+  const context = requestContext("apply", "request-authorized-config");
+  context.config_version = "config-1";
+
+  await harness.runtime.runCommand("apply", context);
+
+  const prepare = harness.apiCalls.find((item) => item.path === "/v1/format/prepare");
+  assert.equal(prepare.headers["X-DocxTool-Request-Id"], context.request_id);
+  assert.equal(Object.hasOwn(prepare.body, "format_config"), false);
+});
+
 test("Host operation logs identify the active document by file name", async () => {
   const harness = makeHostHarness();
   harness.runtime.start();
@@ -1194,8 +1207,8 @@ test("Panel action starts one Host bridge when OnAddinLoad was not observed", as
   assert.equal(harness.bridgeWaiterCount, 1);
   assert.equal(harness.taskpaneCreateCalls.length, 1);
   assert.equal(harness.taskpaneCreateCalls[0].length, 1);
-  assert.match(harness.taskpaneCreateCalls[0][0], /taskpane\.html\?v=9$/);
-  assert.equal(harness.values.get(TASKPANE_VERSION_KEY), "9");
+  assert.match(harness.taskpaneCreateCalls[0][0], /taskpane\.html\?v=10$/);
+  assert.equal(harness.values.get(TASKPANE_VERSION_KEY), "10");
   assert.ok(harness.events().includes("host.start.lazy.enter"));
   assert.ok(harness.events().includes("host.start.lazy.completed"));
 
@@ -1382,8 +1395,8 @@ test("Panel replaces a stale TaskPane page before showing it", () => {
 
   assert.equal(stalePane.Visible, false);
   assert.equal(harness.taskpaneCreateCalls.length, 2);
-  assert.match(harness.taskpaneCreateCalls[1][0], /taskpane\.html\?v=9$/);
-  assert.equal(harness.values.get(TASKPANE_VERSION_KEY), "9");
+  assert.match(harness.taskpaneCreateCalls[1][0], /taskpane\.html\?v=10$/);
+  assert.equal(harness.values.get(TASKPANE_VERSION_KEY), "10");
   assert.ok(harness.events().includes("taskpane.page_version.mismatch"));
 });
 
@@ -1548,8 +1561,8 @@ test("Host distinguishes TaskPane creation, layout, focus, and storage failures"
 test("Host long request distinguishes schema and field failures", async () => {
   const cases = [
     [{ schema_version: "invalid", request_id: "request-1", command: "health" }, "host.bridge.command.schema_invalid"],
-    [{ schema_version: "wps-command-v1", command: "health" }, "host.bridge.command.request_id_missing"],
-    [{ schema_version: "wps-command-v1", request_id: "request-no-command" }, "host.bridge.command.command_missing"],
+    [{ schema_version: "wps-command-v2", command: "health" }, "host.bridge.command.request_id_missing"],
+    [{ schema_version: "wps-command-v2", request_id: "request-no-command" }, "host.bridge.command.command_missing"],
   ];
   for (const [command, event] of cases) {
     const harness = makeHostHarness();
@@ -1560,6 +1573,20 @@ test("Host long request distinguishes schema and field failures", async () => {
     assert.ok(harness.events().includes(event), event);
     assert.equal(harness.runtime.getBridgeReady(), false);
   }
+});
+
+test("Host rejects apply bridge commands without matching public authorization", async () => {
+  const harness = makeHostHarness();
+  harness.runtime.start();
+  await harness.waitForBridgeReady();
+  harness.deliverBridgeCommand({
+    request_id: "request-apply-no-auth",
+    command: "apply",
+  });
+  await harness.flushAsync();
+
+  assert.ok(harness.events().includes("host.bridge.command.authorization_invalid"));
+  assert.equal(harness.runtime.getBridgeReady(), false);
 });
 
 function makeElement(id) {
@@ -1597,6 +1624,14 @@ function makeTaskpaneHarness(initialState, {
   commandFailure = "",
   invalidJsonPath = "",
   stateWaitFailure = "",
+  account = {
+    signed_in: true,
+    username: "User01",
+    network_available: true,
+    apply_available: true,
+    pending_result_count: 0,
+    error_code: "",
+  },
 } = {}) {
   const { storage, values } = makeStorage();
   const elements = new Map();
@@ -1614,9 +1649,10 @@ function makeTaskpaneHarness(initialState, {
   let hostGeneration = initialState && initialState.host_ready ? 1 : 0;
   let stateRevision = 1;
   let nextStateWaitFailure = stateWaitFailure;
+  let currentAccount = account;
   const ids = [
     "preview", "apply", "clear_preview", "health",
-    "close_panel", "status", "message", "error", "warnings", "summary", "rows",
+    "close_panel", "status", "account", "message", "error", "warnings", "summary", "rows",
     "taskpane_header", "content",
   ];
   for (const id of ids) elements.set(id, makeElement(id));
@@ -1696,6 +1732,7 @@ function makeTaskpaneHarness(initialState, {
             host_generation: hostGeneration,
             state_revision: stateRevision,
             state: initialState,
+            account: currentAccount,
           },
         });
       }
@@ -1830,10 +1867,11 @@ function makeTaskpaneHarness(initialState, {
     async flushAsync(turns = 12) {
       for (let index = 0; index < turns; index += 1) await Promise.resolve();
     },
-    pushState(state, { generationChanged = false, generation } = {}) {
+    pushState(state, { generationChanged = false, generation, account: nextAccount } = {}) {
       const waiter = stateWaiters.shift();
       assert.ok(waiter, "TaskPane has no pending state wait request");
       hostGeneration = generation ?? hostGeneration;
+      if (nextAccount) currentAccount = nextAccount;
       stateRevision += 1;
       waiter.resolve(response({
         ok: true,
@@ -1843,6 +1881,7 @@ function makeTaskpaneHarness(initialState, {
           host_generation: hostGeneration,
           state_revision: stateRevision,
           state,
+          account: currentAccount,
         },
       }));
     },
@@ -1857,6 +1896,7 @@ function makeTaskpaneHarness(initialState, {
           host_generation: hostGeneration,
           state_revision: stateRevision,
           state: initialState,
+          account: currentAccount,
         },
       }));
     },
@@ -2158,6 +2198,99 @@ test("TaskPane summary separates confirmed, review, and unresolved preview items
   assert.match(harness.elements.get("summary").textContent, /未定位 1/);
 });
 
+test("TaskPane clears the pending-result warning after account synchronization", async () => {
+  const completed = {
+      host_ready: true,
+      status: "PASS",
+      updated_at: "1",
+      result_sync_status: "pending",
+      active_request: {
+        request_id: "request-apply-sync",
+        command: "apply",
+        request_status: "PASS",
+      },
+    };
+  const harness = makeTaskpaneHarness(completed, {
+    account: {
+      signed_in: true,
+      username: "User01",
+      network_available: false,
+      apply_available: false,
+      pending_result_count: 1,
+      error_code: "WPS_PUBLIC_SERVER_UNAVAILABLE",
+    },
+  });
+  await harness.flushAsync();
+
+  assert.equal(harness.elements.get("status").textContent, "Pass");
+  assert.match(harness.elements.get("warnings").textContent, /排版已完成，结果尚未同步/);
+  assert.equal(
+    harness.events().filter((event) => event === "taskpane.result.sync.pending").length,
+    1,
+  );
+
+  harness.pushState(completed, {
+    account: {
+      signed_in: true,
+      username: "User01",
+      network_available: true,
+      apply_available: true,
+      pending_result_count: 0,
+      error_code: "",
+    },
+  });
+  await harness.flushAsync();
+
+  assert.equal(harness.elements.get("warnings").textContent, "");
+  assert.equal(
+    harness.bridgeCalls.filter((item) => item.path === "/v1/account").length,
+    0,
+  );
+});
+
+test("TaskPane restores apply availability from the bridge account state", async () => {
+  const ready = { host_ready: true, status: "READY", updated_at: "1" };
+  const offlineAccount = {
+    signed_in: true,
+    username: "User01",
+    network_available: false,
+    apply_available: false,
+    pending_result_count: 0,
+    error_code: "WPS_PUBLIC_SERVER_UNAVAILABLE",
+  };
+  const harness = makeTaskpaneHarness(ready, { account: offlineAccount });
+  await harness.flushAsync();
+  harness.dispatchWindowEvent("load");
+  harness.flushTimeouts();
+  await harness.flushAsync();
+  const panelRequest = harness.commandRequests.find((item) => item.command === "panel_ready");
+  harness.pushState({
+    host_ready: true,
+    status: "READY",
+    active_request: {
+      request_id: panelRequest.request_id,
+      command: "panel_ready",
+      request_status: "PASS",
+    },
+  });
+  await harness.flushAsync();
+  assert.equal(harness.elements.get("apply").disabled, true);
+  assert.match(harness.elements.get("account").textContent, /离线/);
+
+  harness.pushState(ready, {
+    account: {
+      ...offlineAccount,
+      network_available: true,
+      apply_available: true,
+      error_code: "",
+    },
+  });
+  await harness.flushAsync();
+
+  assert.equal(harness.elements.get("apply").disabled, false);
+  assert.doesNotMatch(harness.elements.get("account").textContent, /离线/);
+});
+
 test("TaskPane logs bridge command failure before request summary", async () => {
   const harness = makeTaskpaneHarness(
     { host_ready: true, status: "READY", updated_at: "1" },
@@ -2203,6 +2336,29 @@ test("TaskPane stops when its initial state long request fails", async () => {
   assert.equal(
     harness.events().filter((event) => event === "taskpane.bridge.state.wait.stopped").length,
     1,
+  );
+  assert.equal(harness.stateWaiterCount, 0);
+});
+
+test("TaskPane stops with a specific error when bridge account state is invalid", async () => {
+  const harness = makeTaskpaneHarness(
+    { host_ready: true, status: "READY", updated_at: "1" },
+    { account: { signed_in: true, apply_available: true } },
+  );
+  await harness.flushAsync();
+
+  assert.equal(harness.elements.get("preview").disabled, true);
+  assert.equal(
+    harness.events().filter((event) => event === "taskpane.account.state.invalid").length,
+    1,
+  );
+  assert.equal(
+    harness.events().filter((event) => event === "taskpane.bridge.state.wait.stopped").length,
+    1,
+  );
+  assert.equal(
+    harness.elements.get("error").textContent,
+    "WPS_ACCOUNT_PENDING_RESULT_COUNT_INVALID",
   );
   assert.equal(harness.stateWaiterCount, 0);
 });
@@ -2253,6 +2409,35 @@ test("TaskPane terminates a pending command when Host generation changes", async
   assert.ok(harness.events().includes("taskpane.request.failed.host_replaced"));
   assert.equal(harness.elements.get("error").textContent, "WPS_HOST_CONTEXT_REPLACED");
   assert.ok(request.request_id);
+});
+
+test("TaskPane submits panel_ready again after Host generation changes", async () => {
+  const ready = { host_ready: true, status: "READY", updated_at: "1" };
+  const harness = makeTaskpaneHarness(ready);
+  await harness.flushAsync();
+  harness.dispatchWindowEvent("load");
+  harness.flushTimeouts();
+  await harness.flushAsync();
+  const firstPanelRequest = harness.commandRequests.find((item) => item.command === "panel_ready");
+  harness.pushState({
+    host_ready: true,
+    status: "READY",
+    active_request: {
+      request_id: firstPanelRequest.request_id,
+      command: "panel_ready",
+      request_status: "PASS",
+    },
+  });
+  await harness.flushAsync();
+
+  harness.pushState(ready, { generationChanged: true, generation: 2 });
+  await harness.flushAsync();
+
+  const panelRequests = harness.commandRequests.filter((item) => item.command === "panel_ready");
+  assert.equal(panelRequests.length, 2);
+  assert.equal(panelRequests[1].host_generation, 2);
+  assert.notEqual(panelRequests[1].request_id, firstPanelRequest.request_id);
+  assert.equal(harness.elements.get("preview").disabled, true);
 });
 
 test("Host and TaskPane keep local evidence when log transport is unavailable", () => {

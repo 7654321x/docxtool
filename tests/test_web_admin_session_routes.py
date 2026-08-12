@@ -84,7 +84,7 @@ def test_handle_admin_login_creates_session_and_redirects() -> None:
     )
 
     assert calls == [("create", ("ua", "127.0.0.1"))]
-    assert handler.responses == [("redirect", ("/monitor", [("Set-Cookie", "admin=sid")]))]
+    assert handler.responses == [("redirect", ("/admin", [("Set-Cookie", "admin=sid")]))]
 
 
 def test_handle_admin_logout_deletes_session_and_clears_cookie() -> None:

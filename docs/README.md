@@ -37,6 +37,8 @@
 ### SDK 与宿主适配
 
 - [`SDK.md`](SDK.md)：wheel 安装、Python 调用、CLI 和隐私边界。
+- [`../WPS_SERVER_PRD.md`](../WPS_SERVER_PRD.md)：WPS 插件公网账号、设备、会话、免费排版授权和统计服务的第一阶段产品需求。
+- [`../WPS_SERVER_TECHNICAL_DESIGN.md`](../WPS_SERVER_TECHNICAL_DESIGN.md)：WPS 公网服务第一阶段的代码结构、数据库、函数、HTTP 契约和实施顺序。
 - [`INTEGRATION_CONTRACT_V1.md`](INTEGRATION_CONTRACT_V1.md)：宿主无关 JSON 协议、状态、坐标和错误契约。
 - [`RECOGNITION_SOURCE_LOCATORS.md`](RECOGNITION_SOURCE_LOCATORS.md)：来源定位、UTF-16 范围和安全绑定规则。
 - [`HOST_ADAPTER_GUIDE.md`](HOST_ADAPTER_GUIDE.md)：WPS、Office.js 和 VSTO/COM 的宿主职责与伪代码。
@@ -66,6 +68,8 @@
 | 单个迁移阶段状态 | `migration/phase-*-checklist.md` |
 | SDK 对外协议 | `INTEGRATION_CONTRACT_V1.md` |
 | SDK 使用说明 | `SDK.md` |
+| WPS 公网服务产品边界 | `../WPS_SERVER_PRD.md` |
+| WPS 公网服务实现设计 | `../WPS_SERVER_TECHNICAL_DESIGN.md` |
 
 ## 扩展规则
 

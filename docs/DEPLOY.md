@@ -126,6 +126,7 @@ export TRUSTED_PROXY_IPS=127.0.0.1,::1
 export FRONTEND_ORIGIN="https://你的Pages域名"
 export PRODUCTION_MODE=true
 export DATABASE_PATH=var/data/stats.db
+export WPS_DATABASE_PATH=var/data/wps_plugin.db
 ./run.sh
 ```
 
@@ -139,6 +140,7 @@ export DATABASE_PATH=var/data/stats.db
 - `FRONTEND_ORIGIN` 必须是精确 Origin，例如 `https://example.pages.dev`，不要带路径、查询参数或末尾多余斜杠。
 - `COOKIE_SECURE` 未设置时会根据 `FRONTEND_ORIGIN` 自动推导。
 - 如果根目录仍有旧版 `stats.db` 且未设置 `DATABASE_PATH`，程序会继续使用旧库，避免生成第二份空数据库。迁移前先停服务，运行 `scripts/migrate_legacy_database.ps1` 做 dry run；加 `-Execute` 时脚本会先备份旧库，再复制到目标位置，并在复制前后执行 SQLite `integrity_check`。
+- `WPS_DATABASE_PATH` 必须指向独立于 `DATABASE_PATH` 的 SQLite 文件；默认值为 `var/data/wps_plugin.db`。
 - wheel 安装后默认运行数据根不在 `site-packages`。如需固定生产数据位置，显式设置 `DATABASE_PATH`、`LOG_DIR`、`OUTPUT_DIR` 和 `RUNTIME_DIR`。
 
 ## Cloudflare Pages 环境变量
@@ -189,6 +191,16 @@ server {
     }
 }
 ```
+
+## WPS 客户端构建
+
+WPS 客户端与公网服务器分开交付。服务器继续通过根目录 `server.py` 启动；用户端运行控制台单文件 `DocxToolWps.exe`。生产构建必须把可直接访问 `/wps-api/v1/*` 的 HTTPS Origin 写入客户端：
+
+```pwsh
+pwsh -NoProfile -File .\apps\wps\scripts\build-exe.ps1 -ServerOrigin https://wps.example.com
+```
+
+构建脚本固定 PyInstaller 6.22.0，输出 `dist/wps/DocxToolWps.exe`，随后从仓库外目录执行 `DocxToolWps.exe verify`。源码中的 `apps/wps/client-config.json` 保持本机开发地址；正式地址只在构建时注入。公网服务器只接收账号、设备、心跳、命令授权和结果统计，不接收 DOCX 内容。
 
 ## 安全组建议
 

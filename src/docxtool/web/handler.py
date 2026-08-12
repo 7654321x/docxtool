@@ -377,6 +377,90 @@ class Handler(BaseHTTPRequestHandler):
             user_cookie_header=_user_cookie_header,
         )
 
+    def _handle_wps_api(self, action: str):
+        """传入 WPS API 动作，执行独立账号或排版授权请求。"""
+        _wps_route_handle_action(
+            self,
+            action,
+            connect_func=_wps_sql,
+            sql_lock=_WPS_SQL_LOCK,
+            format_profile=_WPS_FORMAT_PROFILE,
+            now_func=_now_unix,
+            client_ip_func=_client_ip,
+            rate_allow=_auth_rate_allow,
+        )
+
+    def _handle_admin_workspace(self, parsed):
+        """发送统一管理员工作台。"""
+        _wps_admin_route_handle_workspace(
+            self,
+            parsed,
+            require_admin=self._require_admin,
+            web_stats=get_sql_stats,
+            web_runtime=_version_payload,
+            wps_connect=_wps_sql,
+            wps_lock=_WPS_SQL_LOCK,
+            now_func=_now_unix,
+            ready_payload=_ready_payload,
+            csrf_input=_csrf_hidden_input,
+            render_page=_admin_workspace_render_home,
+        )
+
+    def _handle_admin_web(self, parsed):
+        """发送统一外壳中的网页业务模块。"""
+        self._handle_monitor(parsed)
+
+    def _handle_admin_wps_users(self, parsed):
+        """发送 WPS 用户列表。"""
+        _wps_admin_route_handle_users(
+            self,
+            parsed,
+            require_admin=self._require_admin,
+            wps_connect=_wps_sql,
+            wps_lock=_WPS_SQL_LOCK,
+            now_func=_now_unix,
+            csrf_input=_csrf_hidden_input,
+            render_page=_admin_workspace_render_users,
+        )
+
+    def _handle_admin_wps_user(self, parsed, user_id: str):
+        """发送 WPS 用户详情。"""
+        _wps_admin_route_handle_user(
+            self,
+            parsed,
+            user_id,
+            require_admin=self._require_admin,
+            wps_connect=_wps_sql,
+            wps_lock=_WPS_SQL_LOCK,
+            csrf_input=_csrf_hidden_input,
+            render_page=_admin_workspace_render_user,
+        )
+
+    def _handle_admin_wps_user_status(self, parsed, user_id: str):
+        """更新 WPS 用户状态。"""
+        _wps_admin_route_handle_user_status(
+            self,
+            parsed,
+            user_id,
+            require_admin_post=self._require_admin_post,
+            request_params=self._request_params,
+            wps_connect=_wps_sql,
+            wps_lock=_WPS_SQL_LOCK,
+            now_func=_now_unix,
+        )
+
+    def _handle_admin_wps_device_status(self, parsed, device_id: str):
+        """更新 WPS 设备状态。"""
+        _wps_admin_route_handle_device_status(
+            self,
+            parsed,
+            device_id,
+            require_admin_post=self._require_admin_post,
+            request_params=self._request_params,
+            wps_connect=_wps_sql,
+            wps_lock=_WPS_SQL_LOCK,
+        )
+
     def _handle_upload_raw(self):
         """无需传入数据，处理 DOCX 上传、校验和任务入队，并发送 JSON 响应。"""
         _upload_route_handle_raw(

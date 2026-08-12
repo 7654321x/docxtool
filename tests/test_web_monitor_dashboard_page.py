@@ -55,4 +55,6 @@ def test_render_monitor_dashboard_html_uses_injected_stats_and_fragments() -> No
     assert "限额已开启" in html
     assert "最近任务/页" in html
     assert "max=\"100\"" in html
+    assert 'href="/admin/web"' in html
+    assert 'action="/admin/web"' in html
     assert "最后生成：2026-08-02 05:30:00" in html

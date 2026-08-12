@@ -32,6 +32,19 @@ def match_get_route(path: str) -> RouteMatch:
         return RouteMatch("version")
     if path == "/auth/me":
         return RouteMatch("auth_me")
+    if path == "/wps-api/v1/auth/me":
+        return RouteMatch("wps_auth_me")
+    if path == "/admin":
+        return RouteMatch("admin_workspace")
+    if path == "/admin/web":
+        return RouteMatch("admin_web")
+    if path == "/admin/wps/users":
+        return RouteMatch("admin_wps_users")
+    wps_user_prefix = "/admin/wps/users/"
+    if path.startswith(wps_user_prefix):
+        user_id = path[len(wps_user_prefix):]
+        if user_id and "/" not in user_id:
+            return RouteMatch("admin_wps_user", user_id)
     if path == "/stats":
         return RouteMatch("stats")
     if path == "/monitor":
@@ -63,6 +76,26 @@ def match_post_route(path: str) -> RouteMatch:
         return RouteMatch("auth_login")
     if path == "/auth/logout":
         return RouteMatch("auth_logout")
+    if path == "/wps-api/v1/auth/register":
+        return RouteMatch("wps_auth_register")
+    if path == "/wps-api/v1/auth/login":
+        return RouteMatch("wps_auth_login")
+    if path == "/wps-api/v1/auth/logout":
+        return RouteMatch("wps_auth_logout")
+    if path == "/wps-api/v1/heartbeat":
+        return RouteMatch("wps_heartbeat")
+    if path == "/wps-api/v1/format/authorize":
+        return RouteMatch("wps_format_authorize")
+    if path == "/wps-api/v1/format/result":
+        return RouteMatch("wps_format_result")
+    if path.startswith("/admin/wps/users/") and path.endswith("/status"):
+        user_id = path[len("/admin/wps/users/"):-len("/status")].strip("/")
+        if user_id and "/" not in user_id:
+            return RouteMatch("admin_wps_user_status", user_id)
+    if path.startswith("/admin/wps/devices/") and path.endswith("/status"):
+        device_id = path[len("/admin/wps/devices/"):-len("/status")].strip("/")
+        if device_id and "/" not in device_id:
+            return RouteMatch("admin_wps_device_status", device_id)
     if path == "/admin/login":
         return RouteMatch("admin_login")
     if path == "/admin/logout":

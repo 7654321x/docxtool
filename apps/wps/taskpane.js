@@ -22,13 +22,17 @@
   let panelReadySubmitted = false;
   let panelReadyCompleted = false;
   let panelReadyRequestId = "";
+  let accountApplyAvailable = false;
+  let accountPendingResultCount = 0;
+  let lastAccountStatusKey = "";
+  let lastResultSyncPending = "";
   const layoutDiagnosticsStartedAt = Date.now();
   const lifecycleEventCounts = Object.create(null);
   const REQUEST_ACK_TIMEOUT_MS = 5000;
   const LAYOUT_EVENT_LIMIT = 4;
   const LAYOUT_PROBE_DELAYS_MS = [100, 500, 1000];
   const SAFE_DETAIL_FIELDS = new Set([
-    "active_element_id", "active_element_tag", "actual_delay_ms", "body_client_height", "body_client_width",
+    "active_element_id", "active_element_tag", "actual_delay_ms", "apply_available", "body_client_height", "body_client_width",
     "body_scroll_height", "body_scroll_top", "body_scroll_width", "command", "content_bottom",
     "content_client_height", "content_client_width", "content_height", "content_scroll_height",
     "content_scroll_top", "content_top", "current_status", "device_pixel_ratio", "document_client_height",
@@ -38,14 +42,14 @@
     "header_top", "header_visibility", "host_ready", "inner_height", "inner_width", "layout_event_count",
     "outer_height", "outer_width", "page_persisted", "page_x_offset", "page_y_offset",
     "pane_instance_id", "pending_present", "previous_status", "readback_present", "reason",
-    "request_id", "request_status", "stage", "cause_event", "root_scroll_top", "bridge_ready",
+    "request_id", "request_status", "result_sync_error_code", "result_sync_status", "stage", "cause_event", "root_scroll_top", "bridge_ready",
     "command_sequence", "generation_changed", "host_generation",
     "scheduled_delay_ms", "state_revision", "state_wait_in_flight", "state_wait_stopped", "timer_drift_ms",
     "top_element_id", "top_element_tag", "trigger", "visibility_state", "visual_viewport_height",
     "visual_viewport_offset_top", "visual_viewport_page_top", "visual_viewport_width", "wait_timed_out",
     "frame_element_present", "header_offset_height", "header_opacity", "header_overflow",
     "header_transform", "header_z_index", "physical_header_height", "physical_inner_height",
-    "physical_inner_width", "screen_avail_height", "screen_avail_left", "screen_avail_top",
+    "network_available", "pending_result_count", "physical_inner_width", "screen_avail_height", "screen_avail_left", "screen_avail_top",
     "screen_avail_width", "screen_height", "screen_width", "window_screen_left",
     "window_screen_top", "window_screen_x", "window_screen_y", "window_top_is_self"
   ]);
@@ -341,8 +345,38 @@
     return payload.data;
   }
 
+  function renderAccountStatus(account) {
+    if (!account || typeof account !== "object") throw new Error("WPS_ACCOUNT_STATUS_MISSING");
+    if (!Number.isInteger(account.pending_result_count) || account.pending_result_count < 0) {
+      throw new Error("WPS_ACCOUNT_PENDING_RESULT_COUNT_INVALID");
+    }
+    accountApplyAvailable = account.apply_available === true;
+    accountPendingResultCount = account.pending_result_count;
+    node("account").textContent = account.signed_in
+      ? `${account.username || "当前账号"}${account.network_available ? "" : " · 离线"}`
+      : "未登录";
+    if (!accountApplyAvailable) node("apply").disabled = true;
+    else if (currentState.host_ready === true && panelReadyCompleted && !pendingRequestId) node("apply").disabled = false;
+    const statusKey = [
+      account.signed_in === true,
+      accountApplyAvailable,
+      account.network_available === true,
+      accountPendingResultCount,
+      account.error_code || ""
+    ].join(":");
+    if (statusKey === lastAccountStatusKey) return;
+    lastAccountStatusKey = statusKey;
+    log("INFO", "taskpane.account.changed", "任务窗格账号状态已更新", {
+      apply_available: accountApplyAvailable,
+      network_available: account.network_available === true,
+      pending_result_count: accountPendingResultCount,
+      error_code: account.error_code || ""
+    });
+  }
+
   function setBusinessButtonsDisabled(disabled) {
     ["preview", "apply", "clear_preview", "health"].forEach((id) => { node(id).disabled = Boolean(disabled); });
+    if (!disabled && !accountApplyAvailable) node("apply").disabled = true;
   }
 
   async function request(commandName, requestedId) {
@@ -609,8 +643,22 @@
     node("status").textContent = displayStatus(currentStatus);
     node("message").textContent = state.message || "就绪";
     node("error").textContent = state.error_code || "";
-    const warnings = Array.isArray(state.compatibility_warnings) ? state.compatibility_warnings : [];
-    node("warnings").textContent = warnings.length ? `兼容性提示：${warnings.map(formatWarning).join("；")}` : "";
+    const warnings = Array.isArray(state.compatibility_warnings) ? state.compatibility_warnings.map(formatWarning) : [];
+    if (state.result_sync_status === "pending" && accountPendingResultCount > 0) {
+      warnings.unshift("排版已完成，结果尚未同步");
+      const pendingKey = `${(state.active_request || state.last_request || {}).request_id || ""}:${accountPendingResultCount}`;
+      if (pendingKey !== lastResultSyncPending) {
+        lastResultSyncPending = pendingKey;
+        log("WARNING", "taskpane.result.sync.pending", "排版已完成，结果正在等待公网补报", {
+          request_id: (state.active_request || state.last_request || {}).request_id || "",
+          result_sync_status: state.result_sync_status,
+          pending_result_count: accountPendingResultCount
+        });
+      }
+    } else {
+      lastResultSyncPending = "";
+    }
+    node("warnings").textContent = warnings.length ? `提示：${warnings.join("；")}` : "";
     const recognition = state.recognition;
     if (!recognition) {
       node("summary").textContent = "尚未识别。";
@@ -659,15 +707,20 @@
       state_revision: result.state_revision, generation_changed: true,
       error_code: "WPS_HOST_CONTEXT_REPLACED"
     });
-    if (!pendingRequestId) return;
-    log("WARNING", "taskpane.request.failed.host_replaced", "任务窗格请求因 Host 更换而终止", {
-      request_id: pendingRequestId, host_generation: result.host_generation,
-      error_code: "WPS_HOST_CONTEXT_REPLACED"
-    });
-    pendingRequestId = "";
-    pendingRequestedAt = 0;
-    pendingClaimed = false;
-    node("error").textContent = "WPS_HOST_CONTEXT_REPLACED";
+    panelReadySubmitted = false;
+    panelReadyCompleted = false;
+    panelReadyRequestId = "";
+    setBusinessButtonsDisabled(true);
+    if (pendingRequestId) {
+      log("WARNING", "taskpane.request.failed.host_replaced", "任务窗格请求因 Host 更换而终止", {
+        request_id: pendingRequestId, host_generation: result.host_generation,
+        error_code: "WPS_HOST_CONTEXT_REPLACED"
+      });
+      pendingRequestId = "";
+      pendingRequestedAt = 0;
+      pendingClaimed = false;
+      node("error").textContent = "WPS_HOST_CONTEXT_REPLACED";
+    }
   }
 
   async function waitForStateChanges() {
@@ -692,8 +745,22 @@
       }
       stateWaitInFlight = false;
       if (stateWaitStopped) return;
+      try {
+        renderAccountStatus(result.account);
+      } catch (error) {
+        const errorCode = stableErrorCode(error, "WPS_ACCOUNT_STATUS_INVALID");
+        log("ERROR", "taskpane.account.state.invalid", "任务窗格收到的账号状态无效", {
+          pane_instance_id: paneInstanceId,
+          host_generation: hostGeneration,
+          state_revision: stateRevision,
+          error_code: errorCode,
+          error_type: error && error.name ? error.name : "Error"
+        });
+        stopStateWait(error);
+        return;
+      }
       if (result.timed_out) {
-        updatePendingRequest(currentState);
+        render(currentState);
         continue;
       }
       handleHostGenerationChange(result);

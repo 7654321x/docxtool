@@ -52,11 +52,16 @@ class HostBridge:
                     "host_generation": self._host_generation,
                     "state_revision": self._state_revision,
                     "replaced": False,
+                    "displaced_command": None,
                 }
 
             replaced = bool(self._host_context_id)
+            previous_command = deepcopy(self._command) if self._command else None
+            previous_delivered = self._command_delivered
             previous_request_id = (
-                str(self._command.get("request_id", "")) if self._command else ""
+                str(previous_command.get("request_id", ""))
+                if previous_command
+                else ""
             )
             self._host_context_id = context
             self._host_generation += 1
@@ -72,6 +77,7 @@ class HostBridge:
                 "last_request": (
                     {
                         "request_id": previous_request_id,
+                        "command": str(previous_command.get("command", "")),
                         "request_status": "FAIL",
                         "error_code": "WPS_HOST_CONTEXT_REPLACED",
                     }
@@ -85,6 +91,18 @@ class HostBridge:
                 "host_generation": self._host_generation,
                 "state_revision": self._state_revision,
                 "replaced": replaced,
+                "displaced_command": (
+                    {
+                        "request_id": previous_request_id,
+                        "command": str(previous_command.get("command", "")),
+                        "command_sequence": int(
+                            previous_command.get("command_sequence", 0)
+                        ),
+                        "delivered": previous_delivered,
+                    }
+                    if previous_command
+                    else None
+                ),
             }
 
     def enqueue_command(
@@ -93,6 +111,7 @@ class HostBridge:
         command: str,
         pane_instance_id: str,
         host_generation: int,
+        authorization: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         request = self._required_text(
             request_id, "WPS_REQUEST_ID_MISSING", maximum=160
@@ -105,6 +124,13 @@ class HostBridge:
         )
         if command_name not in ALLOWED_COMMANDS:
             raise HostBridgeError("WPS_REQUEST_COMMAND_INVALID")
+        if command_name == "apply":
+            if not isinstance(authorization, dict):
+                raise HostBridgeError("WPS_APPLY_AUTHORIZATION_REQUIRED")
+            if authorization.get("request_id") != request:
+                raise HostBridgeError("WPS_APPLY_AUTHORIZATION_MISMATCH")
+            if not isinstance(authorization.get("config_version"), str) or not authorization["config_version"]:
+                raise HostBridgeError("WPS_APPLY_CONFIG_VERSION_REQUIRED")
         with self._condition:
             self._require_open()
             self._require_generation(host_generation)
@@ -114,19 +140,48 @@ class HostBridge:
                 raise HostBridgeError("WPS_COMMAND_BUSY")
             self._command_sequence += 1
             self._command = {
-                "schema_version": "wps-command-v1",
+                "schema_version": "wps-command-v2",
                 "request_id": request,
                 "command": command_name,
                 "pane_instance_id": pane,
                 "command_sequence": self._command_sequence,
                 "host_generation": self._host_generation,
             }
+            if command_name == "apply":
+                self._command["authorization"] = {
+                    "request_id": request,
+                    "config_version": authorization["config_version"],
+                }
             self._command_delivered = False
             self._state_revision += 1
             self._condition.notify_all()
             return {
                 "request_id": request,
                 "command_sequence": self._command_sequence,
+                "state_revision": self._state_revision,
+            }
+
+    def ensure_command_available(self, host_generation: int) -> None:
+        """Fail before external authorization when the bridge cannot accept work."""
+        with self._condition:
+            self._require_open()
+            self._require_generation(host_generation)
+            if self._state.get("host_ready") is not True:
+                raise HostBridgeError("WPS_HOST_NOT_READY")
+            if self._command is not None:
+                raise HostBridgeError("WPS_COMMAND_BUSY")
+
+    def validate_host(
+        self, host_context_id: str, host_generation: int
+    ) -> Dict[str, int]:
+        context = self._required_text(
+            host_context_id, "WPS_HOST_CONTEXT_REQUIRED", maximum=160
+        )
+        with self._condition:
+            self._require_open()
+            self._require_host(context, host_generation)
+            return {
+                "host_generation": self._host_generation,
                 "state_revision": self._state_revision,
             }
 

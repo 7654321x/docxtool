@@ -1,5 +1,6 @@
 import http.client
 import json
+from pathlib import Path
 import threading
 import time
 from typing import Tuple
@@ -7,7 +8,10 @@ from typing import Tuple
 import pytest
 
 from apps.wps.control.host_bridge import HostBridge, HostBridgeError
+from apps.wps.control import document_transaction as transaction_module
 from apps.wps.control import server as server_module
+from apps.wps.control.format_current_document import FormatResult
+from apps.wps.public_api import PublicApiError
 
 
 def _ready_bridge() -> Tuple[HostBridge, int]:
@@ -57,7 +61,7 @@ def test_command_wait_blocks_until_taskpane_submits_command():
     assert result == {
         "timed_out": False,
         "command": {
-            "schema_version": "wps-command-v1",
+            "schema_version": "wps-command-v2",
             "request_id": "request-1",
             "command": "health",
             "pane_instance_id": "pane-1",
@@ -150,6 +154,32 @@ def test_single_command_slot_remains_busy_until_terminal_state():
 
     queued = bridge.enqueue_command("request-2", "health", "pane-1", generation)
     assert queued["request_id"] == "request-2"
+
+
+def test_apply_command_requires_matching_authorized_config():
+    bridge, generation = _ready_bridge()
+    with pytest.raises(HostBridgeError, match="WPS_APPLY_AUTHORIZATION_REQUIRED"):
+        bridge.enqueue_command("request-apply", "apply", "pane-1", generation)
+
+    queued = bridge.enqueue_command(
+        "request-apply",
+        "apply",
+        "pane-1",
+        generation,
+        {
+            "request_id": "request-apply",
+            "config_version": "config-1",
+            "format_config": {"features": {}},
+        },
+    )
+    delivered = bridge.wait_command("host-context-a", generation, timeout_seconds=0)
+
+    assert queued["request_id"] == "request-apply"
+    assert delivered["command"]["schema_version"] == "wps-command-v2"
+    assert delivered["command"]["authorization"] == {
+        "request_id": "request-apply",
+        "config_version": "config-1",
+    }
 
 
 def test_wrong_host_context_and_generation_are_rejected():
@@ -331,6 +361,520 @@ def _post(server, path, payload, token="test-token"):
         connection.close()
 
 
+def _get(server, path, token="test-token"):
+    connection = http.client.HTTPConnection(
+        "127.0.0.1", server.server_address[1], timeout=2
+    )
+    try:
+        connection.request(
+            "GET",
+            path,
+            headers={"Authorization": "Bearer " + token},
+        )
+        response = connection.getresponse()
+        return response.status, json.loads(response.read().decode("utf-8"))
+    finally:
+        connection.close()
+
+
+def _install_fake_formatter(monkeypatch):
+    def fake_format(
+        source_path,
+        output_path,
+        *,
+        operation_id,
+        log_dir,
+        format_config=None,
+        request_id="",
+    ):
+        target = Path(output_path)
+        target.write_bytes(b"formatted")
+        log_path = Path(log_dir) / "test.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text("", encoding="utf-8")
+        return FormatResult(
+            output_path=target,
+            log_path=log_path,
+            document_mode="NORMAL",
+            paragraph_count=1,
+            heading_count=0,
+            body_count=1,
+            export_stats={},
+        )
+
+    monkeypatch.setattr(transaction_module, "format_current_document", fake_format)
+
+
+class _AccountRuntime:
+    def __init__(self):
+        self.reports = []
+
+    def authorize_format(self, request_id):
+        return {
+            "allowed": True,
+            "request_id": request_id,
+            "config_version": "config-1",
+            "format_config": {"features": {}},
+        }
+
+    def report_format_result(self, *args):
+        self.reports.append(args)
+
+
+def _prepare_apply(application, request_id, source_path):
+    registration = application.dispatch_bridge(
+        "/v1/bridge/host/register", {"host_context_id": "host-context-a"}
+    )
+    generation = registration["host_generation"]
+    application.dispatch_bridge(
+        "/v1/bridge/state",
+        {
+            "host_context_id": "host-context-a",
+            "host_generation": generation,
+            "state": {"host_ready": True, "status": "READY"},
+        },
+    )
+    application.dispatch_bridge(
+        "/v1/bridge/command",
+        {
+            "request_id": request_id,
+            "command": "apply",
+            "pane_instance_id": "pane-1",
+            "host_generation": generation,
+        },
+    )
+    result = application.dispatch(
+        "/v1/format/prepare",
+        {"source_path": str(source_path)},
+        request_id=request_id,
+    )
+    return generation, result["operation_id"]
+
+
+def test_apply_fail_rolls_back_prepared_transaction_by_request_id(
+    tmp_path, monkeypatch
+):
+    _install_fake_formatter(monkeypatch)
+    first = tmp_path / "first.docx"
+    second = tmp_path / "second.docx"
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+    account = _AccountRuntime()
+    application = server_module.WpsControlApplication(
+        tmp_path, "test-token", account
+    )
+    generation, operation_id = _prepare_apply(
+        application, "request-failed", first
+    )
+
+    application.dispatch_bridge(
+        "/v1/bridge/state",
+        {
+            "host_context_id": "host-context-a",
+            "host_generation": generation,
+            "state": {
+                "host_ready": True,
+                "status": "FAIL",
+                "active_request": {
+                    "request_id": "request-failed",
+                    "command": "apply",
+                    "request_status": "FAIL",
+                    "error_code": "WPS_FORMAT_RESPONSE_FAILED",
+                },
+            },
+        },
+    )
+
+    with pytest.raises(
+        transaction_module.DocumentTransactionError,
+        match="WPS_TRANSACTION_NOT_FOUND",
+    ):
+        application.transactions.get(operation_id, "request-failed")
+    _next_generation, next_operation_id = _prepare_apply(
+        application, "request-next", second
+    )
+    application.transactions.rollback(
+        next_operation_id, request_id="request-next"
+    )
+
+
+def test_apply_pass_does_not_roll_back_prepared_transaction(tmp_path, monkeypatch):
+    _install_fake_formatter(monkeypatch)
+    source = tmp_path / "sample.docx"
+    source.write_bytes(b"original")
+    account = _AccountRuntime()
+    application = server_module.WpsControlApplication(
+        tmp_path, "test-token", account
+    )
+    generation, operation_id = _prepare_apply(
+        application, "request-passed", source
+    )
+
+    application.dispatch_bridge(
+        "/v1/bridge/state",
+        {
+            "host_context_id": "host-context-a",
+            "host_generation": generation,
+            "state": {
+                "host_ready": True,
+                "status": "PASS",
+                "active_request": {
+                    "request_id": "request-passed",
+                    "command": "apply",
+                    "request_status": "PASS",
+                },
+            },
+        },
+    )
+
+    assert application.transactions.get(
+        operation_id, "request-passed"
+    ).state == "prepared"
+    application.transactions.rollback(operation_id, request_id="request-passed")
+
+
+def test_apply_is_authorized_before_host_delivery_and_result_is_reported(tmp_path):
+    class AccountRuntime:
+        def __init__(self):
+            self.reports = []
+
+        def summary(self):
+            return {"username": "User01", "apply_available": True, "network_available": True}
+
+        def authorize_format(self, request_id):
+            return {
+                "allowed": True,
+                "request_id": request_id,
+                "config_version": "config-1",
+                "format_config": {"features": {}},
+            }
+
+        def report_format_result(self, *args):
+            self.reports.append(args)
+
+    account = AccountRuntime()
+    server = server_module.create_server(
+        tmp_path, "test-token", 0, account_runtime=account
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, account_status = _get(server, "/v1/account")
+        assert status == 200
+        assert account_status["data"]["apply_available"] is True
+
+        _, registered = _post(
+            server,
+            "/v1/bridge/host/register",
+            {"host_context_id": "host-context-http"},
+        )
+        generation = registered["data"]["host_generation"]
+        _post(
+            server,
+            "/v1/bridge/state",
+            {
+                "host_context_id": "host-context-http",
+                "host_generation": generation,
+                "state": {"host_ready": True, "status": "READY"},
+            },
+        )
+        status, _queued = _post(
+            server,
+            "/v1/bridge/command",
+            {
+                "request_id": "request-http-apply",
+                "command": "apply",
+                "pane_instance_id": "pane-http-1",
+                "host_generation": generation,
+            },
+        )
+        assert status == 200
+        _, delivered = _post(
+            server,
+            "/v1/bridge/host/wait",
+            {
+                "host_context_id": "host-context-http",
+                "host_generation": generation,
+                "timeout_seconds": 0,
+            },
+        )
+        command = delivered["data"]["command"]
+        assert command["schema_version"] == "wps-command-v2"
+        assert command["authorization"]["config_version"] == "config-1"
+
+        _post(
+            server,
+            "/v1/bridge/state",
+            {
+                "host_context_id": "host-context-http",
+                "host_generation": generation,
+                "state": {
+                    "host_ready": True,
+                    "status": "PASS",
+                    "active_request": {
+                        "request_id": "request-http-apply",
+                        "command": "apply",
+                        "request_status": "PASS",
+                        "error_code": "",
+                        "duration_ms": 321,
+                    },
+                },
+            },
+        )
+        assert account.reports == [("request-http-apply", "success", 321, "")]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
+
+
+def test_enqueue_error_is_not_replaced_when_public_result_reporting_fails(monkeypatch, tmp_path):
+    class AccountRuntime:
+        def authorize_format(self, request_id):
+            return {
+                "allowed": True,
+                "request_id": request_id,
+                "config_version": "config-1",
+                "format_config": {"features": {}},
+            }
+
+        def report_format_result(self, *args):
+            raise PublicApiError("WPS_PUBLIC_SERVER_UNAVAILABLE", "offline", network=True)
+
+    application = server_module.WpsControlApplication(tmp_path, "test-token", AccountRuntime())
+    registration = application.host_bridge.register_host("host-context-http")
+    generation = registration["host_generation"]
+    application.host_bridge.publish_state(
+        "host-context-http", generation, {"host_ready": True, "status": "READY"}
+    )
+    monkeypatch.setattr(
+        application.host_bridge,
+        "enqueue_command",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(HostBridgeError("WPS_COMMAND_BUSY")),
+    )
+
+    with pytest.raises(HostBridgeError, match="WPS_COMMAND_BUSY"):
+        application.dispatch_bridge(
+            "/v1/bridge/command",
+            {
+                "request_id": "request-http-apply",
+                "command": "apply",
+                "pane_instance_id": "pane-http-1",
+                "host_generation": generation,
+            },
+        )
+
+
+def test_public_result_is_queued_without_changing_command_pass(tmp_path):
+    class AccountRuntime:
+        def __init__(self):
+            self.reports = []
+
+        def summary(self):
+            return {
+                "apply_available": True,
+                "network_available": True,
+                "pending_result_count": len(self.reports),
+            }
+
+        def authorize_format(self, request_id):
+            return {
+                "allowed": True,
+                "request_id": request_id,
+                "config_version": "config-1",
+                "format_config": {"features": {}},
+            }
+
+        def report_format_result(self, *args):
+            self.reports.append(args)
+            return {"queued": True}
+
+    account = AccountRuntime()
+    server = server_module.create_server(tmp_path, "test-token", 0, account_runtime=account)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        _, registered = _post(server, "/v1/bridge/host/register", {"host_context_id": "host-context-http"})
+        generation = registered["data"]["host_generation"]
+        _post(
+            server,
+            "/v1/bridge/state",
+            {
+                "host_context_id": "host-context-http",
+                "host_generation": generation,
+                "state": {"host_ready": True, "status": "READY"},
+            },
+        )
+        _post(
+            server,
+            "/v1/bridge/command",
+            {
+                "request_id": "request-http-apply",
+                "command": "apply",
+                "pane_instance_id": "pane-http-1",
+                "host_generation": generation,
+            },
+        )
+        status, published = _post(
+            server,
+            "/v1/bridge/state",
+            {
+                "host_context_id": "host-context-http",
+                "host_generation": generation,
+                "state": {
+                    "host_ready": True,
+                    "status": "PASS",
+                    "active_request": {
+                        "request_id": "request-http-apply",
+                        "command": "apply",
+                        "request_status": "PASS",
+                        "duration_ms": 321,
+                    },
+                },
+            },
+        )
+        assert status == 200
+        status, state = _post(
+            server,
+            "/v1/bridge/state/wait",
+            {"after_revision": 0, "host_generation": generation, "timeout_seconds": 0},
+        )
+        assert status == 200
+        assert published["data"]["state_revision"] == state["data"]["state_revision"]
+        assert state["data"]["state"]["status"] == "PASS"
+        assert state["data"]["state"]["result_sync_status"] == "pending"
+        assert state["data"]["state"]["result_sync_error_code"] == ""
+        assert state["data"]["account"]["pending_result_count"] == 1
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
+
+
+def test_stale_host_terminal_state_cannot_consume_apply_authorization(tmp_path):
+    class AccountRuntime:
+        def __init__(self):
+            self.reports = []
+
+        def authorize_format(self, request_id):
+            return {
+                "allowed": True,
+                "request_id": request_id,
+                "config_version": "config-1",
+                "format_config": {"features": {}},
+            }
+
+        def report_format_result(self, *args):
+            self.reports.append(args)
+
+    account = AccountRuntime()
+    application = server_module.WpsControlApplication(
+        tmp_path, "test-token", account
+    )
+    registration = application.dispatch_bridge(
+        "/v1/bridge/host/register", {"host_context_id": "host-context-a"}
+    )
+    generation = registration["host_generation"]
+    application.dispatch_bridge(
+        "/v1/bridge/state",
+        {
+            "host_context_id": "host-context-a",
+            "host_generation": generation,
+            "state": {"host_ready": True, "status": "READY"},
+        },
+    )
+    application.dispatch_bridge(
+        "/v1/bridge/command",
+        {
+            "request_id": "request-stale-host",
+            "command": "apply",
+            "pane_instance_id": "pane-1",
+            "host_generation": generation,
+        },
+    )
+
+    with pytest.raises(HostBridgeError, match="WPS_HOST_GENERATION_MISMATCH"):
+        application.dispatch_bridge(
+            "/v1/bridge/state",
+            {
+                "host_context_id": "host-context-a",
+                "host_generation": generation + 1,
+                "state": {
+                    "host_ready": True,
+                    "status": "PASS",
+                    "active_request": {
+                        "request_id": "request-stale-host",
+                        "command": "apply",
+                        "request_status": "PASS",
+                    },
+                },
+            },
+        )
+
+    assert account.reports == []
+    assert "request-stale-host" in application._authorized_requests
+
+
+def test_host_replacement_queues_one_failure_for_the_displaced_apply(tmp_path):
+    class AccountRuntime:
+        def __init__(self):
+            self.reports = []
+
+        def authorize_format(self, request_id):
+            return {
+                "allowed": True,
+                "request_id": request_id,
+                "config_version": "config-1",
+                "format_config": {"features": {}},
+            }
+
+        def report_format_result(self, *args):
+            self.reports.append(args)
+
+    account = AccountRuntime()
+    application = server_module.WpsControlApplication(
+        tmp_path, "test-token", account
+    )
+    registration = application.dispatch_bridge(
+        "/v1/bridge/host/register", {"host_context_id": "host-context-a"}
+    )
+    generation = registration["host_generation"]
+    application.dispatch_bridge(
+        "/v1/bridge/state",
+        {
+            "host_context_id": "host-context-a",
+            "host_generation": generation,
+            "state": {"host_ready": True, "status": "READY"},
+        },
+    )
+    application.dispatch_bridge(
+        "/v1/bridge/command",
+        {
+            "request_id": "request-replaced-host",
+            "command": "apply",
+            "pane_instance_id": "pane-1",
+            "host_generation": generation,
+        },
+    )
+
+    application.dispatch_bridge(
+        "/v1/bridge/host/register", {"host_context_id": "host-context-b"}
+    )
+    application.dispatch_bridge(
+        "/v1/bridge/host/register", {"host_context_id": "host-context-c"}
+    )
+
+    assert account.reports == [
+        (
+            "request-replaced-host",
+            "failed",
+            account.reports[0][2],
+            "WPS_HOST_CONTEXT_REPLACED",
+        )
+    ]
+    assert "request-replaced-host" not in application._authorized_requests
+
+
 def test_bridge_http_routes_bypass_command_monitor(tmp_path):
     server = server_module.create_server(tmp_path, "test-token", 0)
     monitor_calls = []
@@ -370,6 +914,7 @@ def test_bridge_http_routes_bypass_command_monitor(tmp_path):
         )
         assert status == 200
         assert state["data"]["state"]["status"] == "READY"
+        assert state["data"]["account"]["pending_result_count"] == 0
 
         status, queued = _post(
             server,

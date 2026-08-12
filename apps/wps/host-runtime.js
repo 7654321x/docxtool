@@ -6,7 +6,7 @@
   const config = globalObject.DocxToolWpsConfig || {};
   const TASKPANE_KEY = "docxtool_wps_taskpane_id_v1";
   const TASKPANE_VERSION_KEY = "docxtool_wps_taskpane_version_v1";
-  const TASKPANE_PAGE_VERSION = "9";
+  const TASKPANE_PAGE_VERSION = "10";
   const PREVIEW_KEY_PREFIX = "docxtool_wps_preview_v2:";
   const PREVIEW_BATCH_SIZE = 5;
   const TASKPANE_HOST_PROBE_DELAYS_MS = [0, 100, 500, 1000];
@@ -1866,7 +1866,7 @@
       stage = "reserve";
       const reserved = await api(
         "/v1/format/upgrade/reserve",
-        { source_path: sourcePath },
+        { source_path: sourcePath, command },
         undefined,
         requestContext
       );
@@ -2124,7 +2124,12 @@
           { command: "apply" }
         );
         log("INFO", "format.transaction.prepare.start", "开始准备排版事务", contextDetails(requestContext));
-        prepared = await api("/v1/format/prepare", { source_path: sourcePath }, undefined, requestContext);
+        prepared = await api(
+          "/v1/format/prepare",
+          { source_path: sourcePath },
+          undefined,
+          requestContext
+        );
         operationId = prepared.operation_id;
         bridgeDocument = document;
         bridgePath = formatBridgePath(sourcePath, operationId);
@@ -2322,10 +2327,11 @@
     });
   }
 
-  function completeTaskpaneRequest(requestContext, status, errorCode) {
+  function completeTaskpaneRequest(requestContext, status, errorCode, durationMs) {
     if (!requestContext || requestContext.source !== "taskpane") return;
     writeState({ active_request: Object.assign({}, contextDetails(requestContext), {
-      request_id: requestContext.request_id, command: requestContext.command, request_status: status, error_code: errorCode || ""
+      request_id: requestContext.request_id, command: requestContext.command, request_status: status,
+      error_code: errorCode || "", duration_ms: durationMs
     }) });
   }
 
@@ -2377,7 +2383,7 @@
         });
         throw new Error("WPS_COMMAND_UNKNOWN");
       }
-      completeTaskpaneRequest(requestContext, "PASS");
+      completeTaskpaneRequest(requestContext, "PASS", "", Date.now() - startedAt);
       log("INFO", "host.command.completed", "WPS 命令执行完成", {
         ...contextDetails(requestContext), command: name, duration_ms: Date.now() - startedAt
       });
@@ -2391,7 +2397,7 @@
       if (requestContext && requestContext.source === "taskpane") {
         failureState.active_request = Object.assign({}, contextDetails(requestContext), {
           request_id: requestContext.request_id, command: requestContext.command,
-          request_status: "FAIL", error_code: code
+          request_status: "FAIL", error_code: code, duration_ms: Date.now() - startedAt
         });
       }
       try {
@@ -2441,7 +2447,7 @@
   }
 
   async function runBridgeCommand(command) {
-    if (!command || command.schema_version !== "wps-command-v1") {
+    if (!command || command.schema_version !== "wps-command-v2") {
       log("ERROR", "host.bridge.command.schema_invalid", "通信桥命令协议无效", {
         error_code: "WPS_BRIDGE_COMMAND_SCHEMA_INVALID"
       });
@@ -2459,6 +2465,24 @@
       });
       throw new Error("WPS_REQUEST_COMMAND_MISSING");
     }
+    let authorization = null;
+    if (command.command === "apply") {
+      authorization = command.authorization;
+      if (!authorization || authorization.request_id !== command.request_id) {
+        log("ERROR", "host.bridge.command.authorization_invalid", "一键排版命令缺少有效公网授权", {
+          request_id: command.request_id, command: command.command,
+          error_code: "WPS_APPLY_AUTHORIZATION_INVALID"
+        });
+        throw new Error("WPS_APPLY_AUTHORIZATION_INVALID");
+      }
+      if (!authorization.config_version) {
+        log("ERROR", "host.bridge.command.config_version_invalid", "一键排版命令缺少服务器配置版本", {
+          request_id: command.request_id, command: command.command,
+          error_code: "WPS_APPLY_CONFIG_VERSION_REQUIRED"
+        });
+        throw new Error("WPS_APPLY_CONFIG_VERSION_REQUIRED");
+      }
+    }
     if (command.request_id === lastRequestId) {
       log("ERROR", "host.bridge.command.duplicate", "通信桥返回了重复命令", {
         request_id: command.request_id, command: command.command,
@@ -2469,7 +2493,8 @@
     }
     const requestContext = Object.freeze({
       request_id: command.request_id, command: command.command, source: "taskpane",
-      document_name: activeDocumentName()
+      document_name: activeDocumentName(),
+      config_version: authorization ? authorization.config_version : ""
     });
     lastRequestId = command.request_id;
     writeState({ active_request: Object.assign({}, contextDetails(requestContext), {

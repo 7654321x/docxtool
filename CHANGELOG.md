@@ -1,5 +1,14 @@
 # Changelog
 
+## 5.2 - 2026-08-12
+
+- Added an independent WPS account service with user registration and login, device and session lifecycle management, heartbeat, controlled formatting authorization, result reporting, and dedicated SQLite storage.
+- Added a unified administrator workspace for Web runtime status, WPS users, devices, online activity, and account or device enable/disable actions.
+- Added WPS client login and account persistence, silent session refresh, authorization-aware formatting, pending result delivery, and explicit network or account-state feedback.
+- Strengthened transactional handling for `.doc` and `.wps` conversion, document replacement, rollback, and host-side formatting while preserving single-thread WPS document access.
+- Added reproducible WPS executable build inputs, public API and server contracts, deployment guidance, and focused Python and JavaScript regression coverage.
+- Improved front-matter role/name recognition using document-wide title, date, salutation, style, alignment, and name-shape evidence without person or organization allowlists.
+
 ## 5.1 - 2026-08-10
 
 - Replaced high-frequency PluginStorage command polling with a single-slot HostBridge long-request transport while keeping all WPS document objects on the Host thread and Core work serialized by the existing monitor.

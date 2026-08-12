@@ -150,7 +150,7 @@ def test_legacy_upgrade_commit_then_rollback_restores_original(tmp_path, monkeyp
     _install_fake_formatter(monkeypatch)
 
     manager = transaction_module.DocumentTransactionManager(tmp_path / "logs")
-    operation = manager.reserve_upgrade(str(source))
+    operation = manager.reserve_upgrade(str(source), command="apply")
     assert operation.state == "conversion_pending"
     assert operation.target_path == tmp_path / "sample.docx"
     operation.conversion_path.write_bytes(b"converted-docx")
@@ -176,7 +176,7 @@ def test_legacy_upgrade_finalize_keeps_only_docx(tmp_path, monkeypatch):
     _install_fake_formatter(monkeypatch)
 
     manager = transaction_module.DocumentTransactionManager(tmp_path / "logs")
-    operation = manager.reserve_upgrade(str(source))
+    operation = manager.reserve_upgrade(str(source), command="apply")
     operation.conversion_path.write_bytes(b"converted-docx")
     manager.prepare_upgrade(operation.operation_id)
     manager.commit(operation.operation_id)
@@ -197,7 +197,7 @@ def test_legacy_upgrade_rejects_existing_docx_before_reservation(tmp_path):
 
     manager = transaction_module.DocumentTransactionManager(tmp_path / "logs")
     with pytest.raises(transaction_module.DocumentTransactionError) as exc_info:
-        manager.reserve_upgrade(str(source))
+        manager.reserve_upgrade(str(source), command="preview")
 
     assert exc_info.value.code == "WPS_LEGACY_UPGRADE_TARGET_EXISTS"
     assert source.read_bytes() == b"legacy-original"
@@ -209,7 +209,7 @@ def test_legacy_upgrade_prepare_converted_preserves_docx_bytes(tmp_path):
     source = tmp_path / "sample.doc"
     source.write_bytes(b"legacy-original")
     manager = transaction_module.DocumentTransactionManager(tmp_path / "logs")
-    operation = manager.reserve_upgrade(str(source))
+    operation = manager.reserve_upgrade(str(source), command="preview")
     operation.conversion_path.write_bytes(b"converted-docx")
 
     prepared = manager.prepare_converted_upgrade(operation.operation_id)
@@ -221,13 +221,65 @@ def test_legacy_upgrade_prepare_converted_preserves_docx_bytes(tmp_path):
     manager.rollback(operation.operation_id)
 
 
+@pytest.mark.parametrize("command", ["preview", "apply"])
+def test_legacy_upgrade_prepare_rejects_the_wrong_transaction_command(
+    tmp_path, monkeypatch, command
+):
+    source = tmp_path / "sample.doc"
+    source.write_bytes(b"legacy-original")
+    _install_fake_formatter(monkeypatch)
+    manager = transaction_module.DocumentTransactionManager(tmp_path / "logs")
+    operation = manager.reserve_upgrade(
+        str(source), command=command, request_id="request-owner"
+    )
+    operation.conversion_path.write_bytes(b"converted-docx")
+
+    with pytest.raises(
+        transaction_module.DocumentTransactionError,
+        match="WPS_TRANSACTION_COMMAND_MISMATCH",
+    ):
+        if command == "preview":
+            manager.prepare_upgrade(
+                operation.operation_id, request_id="request-owner"
+            )
+        else:
+            manager.prepare_converted_upgrade(
+                operation.operation_id, request_id="request-owner"
+            )
+
+    manager.rollback(operation.operation_id, request_id="request-owner")
+
+
+@pytest.mark.parametrize("action", ["commit", "finalize", "rollback"])
+def test_transaction_lifecycle_rejects_a_different_request_id(
+    tmp_path, monkeypatch, action
+):
+    source = tmp_path / f"{action}.docx"
+    source.write_bytes(b"original")
+    _install_fake_formatter(monkeypatch)
+    manager = transaction_module.DocumentTransactionManager(tmp_path / f"logs-{action}")
+    operation = manager.prepare(str(source), request_id="request-owner")
+    if action == "finalize":
+        manager.commit(operation.operation_id, request_id="request-owner")
+
+    with pytest.raises(
+        transaction_module.DocumentTransactionError,
+        match="WPS_TRANSACTION_REQUEST_MISMATCH",
+    ):
+        getattr(manager, action)(
+            operation.operation_id, request_id="request-other"
+        )
+
+    manager.rollback(operation.operation_id, request_id="request-owner")
+
+
 def test_legacy_upgrade_recovery_cleans_uncommitted_conversion(tmp_path):
     source = tmp_path / "sample.doc"
     source.write_bytes(b"legacy-original")
     log_dir = tmp_path / "logs"
 
     manager = transaction_module.DocumentTransactionManager(log_dir)
-    operation = manager.reserve_upgrade(str(source))
+    operation = manager.reserve_upgrade(str(source), command="preview")
     operation.conversion_path.write_bytes(b"converted-docx")
 
     recovered = transaction_module.DocumentTransactionManager(log_dir)
@@ -243,7 +295,7 @@ def test_legacy_upgrade_recovery_cleans_unjournaled_publish_copy(tmp_path):
     source.write_bytes(b"legacy-original")
     log_dir = tmp_path / "logs"
     manager = transaction_module.DocumentTransactionManager(log_dir)
-    operation = manager.reserve_upgrade(str(source))
+    operation = manager.reserve_upgrade(str(source), command="preview")
     operation.conversion_path.write_bytes(b"converted-docx")
     operation.temporary_path.write_bytes(b"converted-docx")
 
@@ -263,7 +315,7 @@ def test_legacy_upgrade_recovery_restores_committed_source(tmp_path, monkeypatch
     _install_fake_formatter(monkeypatch)
 
     manager = transaction_module.DocumentTransactionManager(log_dir)
-    operation = manager.reserve_upgrade(str(source))
+    operation = manager.reserve_upgrade(str(source), command="apply")
     operation.conversion_path.write_bytes(b"converted-docx")
     manager.prepare_upgrade(operation.operation_id)
     manager.commit(operation.operation_id)
@@ -285,10 +337,21 @@ def test_control_legacy_upgrade_routes_share_one_transaction(tmp_path, monkeypat
     application = object.__new__(server_module.WpsControlApplication)
     application.log_dir = log_dir
     application.transactions = transaction_module.DocumentTransactionManager(log_dir)
+    application._authorization_lock = threading.RLock()
+    application._authorized_requests = {
+        "request-upgrade": {
+            "started_at": 0.0,
+            "config_version": "config-1",
+            "format_config": {"features": {}},
+            "host_generation": 1,
+            "state": "authorized",
+            "operation_id": "",
+        }
+    }
 
     reserved = application.dispatch(
         "/v1/format/upgrade/reserve",
-        {"source_path": str(source)},
+        {"source_path": str(source), "command": "apply"},
         request_id="request-upgrade",
     )
     conversion_path = Path(reserved["conversion_path"])
@@ -323,7 +386,7 @@ def test_control_prepare_converted_upgrade_route(tmp_path):
     application.transactions = transaction_module.DocumentTransactionManager(log_dir)
     reserved = application.dispatch(
         "/v1/format/upgrade/reserve",
-        {"source_path": str(source)},
+        {"source_path": str(source), "command": "preview"},
         request_id="request-preview-upgrade",
     )
     Path(reserved["conversion_path"]).write_bytes(b"converted-docx")
@@ -342,6 +405,92 @@ def test_control_prepare_converted_upgrade_route(tmp_path):
         "/v1/format/rollback",
         {"operation_id": reserved["operation_id"]},
         request_id="request-preview-upgrade",
+    )
+
+
+def test_control_format_prepare_requires_public_authorization(tmp_path):
+    application = object.__new__(server_module.WpsControlApplication)
+    application.log_dir = tmp_path / "logs"
+    application.transactions = transaction_module.DocumentTransactionManager(
+        application.log_dir
+    )
+    application._authorization_lock = threading.RLock()
+    application._authorized_requests = {}
+
+    with pytest.raises(
+        transaction_module.DocumentTransactionError,
+        match="WPS_APPLY_AUTHORIZATION_REQUIRED",
+    ):
+        application.dispatch(
+            "/v1/format/prepare",
+            {"source_path": str(tmp_path / "sample.docx")},
+            request_id="request-without-authorization",
+        )
+
+
+def test_control_uses_authorized_config_once_and_ignores_request_body_config(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "sample.docx"
+    source.write_bytes(b"original")
+    log_dir = tmp_path / "logs"
+    observed_configs = []
+
+    def fake_format(
+        source_path,
+        output_path,
+        *,
+        operation_id,
+        log_dir,
+        format_config=None,
+        request_id="",
+    ):
+        target = Path(output_path)
+        target.write_bytes(b"formatted")
+        observed_configs.append(format_config)
+        return _fake_result(target, Path(log_dir))
+
+    monkeypatch.setattr(transaction_module, "format_current_document", fake_format)
+    application = object.__new__(server_module.WpsControlApplication)
+    application.log_dir = log_dir
+    application.transactions = transaction_module.DocumentTransactionManager(log_dir)
+    application._authorization_lock = threading.RLock()
+    application._authorized_requests = {
+        "request-authorized": {
+            "started_at": 0.0,
+            "config_version": "config-1",
+            "format_config": {"features": {"numbering": {"enabled": True}}},
+            "host_generation": 1,
+            "state": "authorized",
+            "operation_id": "",
+        }
+    }
+
+    prepared = application.dispatch(
+        "/v1/format/prepare",
+        {
+            "source_path": str(source),
+            "format_config": {"features": {"numbering": {"enabled": False}}},
+        },
+        request_id="request-authorized",
+    )
+
+    assert observed_configs == [
+        {"features": {"numbering": {"enabled": True}}}
+    ]
+    with pytest.raises(
+        transaction_module.DocumentTransactionError,
+        match="WPS_APPLY_AUTHORIZATION_CONSUMED",
+    ):
+        application.dispatch(
+            "/v1/format/prepare",
+            {"source_path": str(source)},
+            request_id="request-authorized",
+        )
+    application.dispatch(
+        "/v1/format/rollback",
+        {"operation_id": prepared["operation_id"]},
+        request_id="request-authorized",
     )
 
 
@@ -505,6 +654,24 @@ def test_recovery_refuses_wrong_backup(tmp_path, monkeypatch):
     assert exc_info.value.code == "WPS_TRANSACTION_RECOVERY_REQUIRED"
     assert source.read_bytes() == b"formatted"
     assert operation.backup_path.read_bytes() == b"wrong backup"
+
+
+def test_restart_discards_committed_transaction_when_backup_is_missing(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "sample.docx"
+    source.write_bytes(b"original")
+    log_dir = tmp_path / "logs"
+    _install_fake_formatter(monkeypatch)
+    manager = transaction_module.DocumentTransactionManager(log_dir)
+    operation = manager.prepare(str(source))
+    manager.commit(operation.operation_id)
+    operation.backup_path.unlink()
+
+    restarted = transaction_module.DocumentTransactionManager(log_dir)
+
+    assert source.read_bytes() == b"formatted"
+    assert not restarted.journal_path.exists()
 
 
 def test_second_format_transaction_is_rejected_until_first_finishes(tmp_path, monkeypatch):
@@ -1791,8 +1958,13 @@ def test_verify_files_requires_new_bootstrap_files(monkeypatch, tmp_path):
         "js/ribbon.js",
         "images/taskpane.svg",
         "host-runtime.js",
-            "taskpane.html",
-            "taskpane.js",
+        "taskpane.html",
+        "taskpane.js",
+        "client-config.json",
+        "account_store.py",
+        "account_runtime.py",
+        "public_api.py",
+        "login_window.py",
             "control/server.py",
             "control/host_bridge.py",
             "control/format_current_document.py",
@@ -1825,7 +1997,7 @@ def test_taskpane_scrolls_content_without_moving_header():
     assert "返回文档" not in source
     assert '<div id="status" class="meta">Connecting</div>' in source
     assert '<main id="content">' in source
-    assert '<script src="./taskpane.js?v=9"></script>' in source
+    assert '<script src="./taskpane.js?v=10"></script>' in source
 
 
 def test_start_handles_keyboard_interrupt_without_traceback(monkeypatch):
@@ -1965,7 +2137,7 @@ def test_wps_request_context_and_preview_safety_contracts_are_present():
 
     assert "currentRequestId" not in host
     for token in (
-        'schema_version !== "wps-command-v1"',
+        'schema_version !== "wps-command-v2"',
         "/v1/bridge/host/register",
         "/v1/bridge/host/wait",
         "/v1/bridge/state",
@@ -2277,8 +2449,8 @@ def test_wps_python_diagnostic_event_contract_is_present():
 def test_main_action_defaults_and_routes(monkeypatch, argv, expected):
     calls = []
 
-    def fake_start(port):
-        calls.append(("start", port))
+    def fake_start(port, account_runtime=None):
+        calls.append(("start", port, account_runtime))
 
     def fake_control(port):
         calls.append(("control", port))
@@ -2290,10 +2462,13 @@ def test_main_action_defaults_and_routes(monkeypatch, argv, expected):
     monkeypatch.setattr(wps_main, "control_only", fake_control)
     monkeypatch.setattr(wps_main, "verify_files", fake_verify)
     monkeypatch.setattr(wps_main.sys, "argv", argv)
+    monkeypatch.setattr(wps_main, "WpsPublicApi", lambda: "api")
+    monkeypatch.setattr(wps_main, "resolve_startup_account", lambda _api: {"username": "User01"})
+    monkeypatch.setattr(wps_main, "AccountRuntime", lambda account, api: (account, api))
 
     assert wps_main.main() == 0
     if expected == "start":
-        assert calls == [("start", wps_main.DEFAULT_PORT)]
+        assert calls == [("start", wps_main.DEFAULT_PORT, ({"username": "User01"}, "api"))]
     elif expected == "control":
         assert calls == [("control", wps_main.DEFAULT_PORT)]
     else:

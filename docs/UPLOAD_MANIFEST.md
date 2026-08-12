@@ -20,6 +20,8 @@ https://github.com/7654321x/docxtool.git
 | --- | --- | --- |
 | `README.md` | 项目说明和本地运行方式 | GitHub 首页会使用 |
 | `CHANGELOG.md` | 发布版本与变更记录 | 与 `pyproject.toml` 版本同步维护 |
+| `WPS_SERVER_PRD.md` | WPS 公网服务第一阶段产品需求 | 账号、设备、会话、授权与统计边界 |
+| `WPS_SERVER_TECHNICAL_DESIGN.md` | WPS 公网服务第一阶段技术设计 | 实现文件、函数、数据库与 HTTP 契约 |
 | `docs/README.md` | 文档导航和职责索引 | 新增或调整文档时的入口 |
 | `docs/DEPLOY.md` | 生产部署说明 | Cloudflare Pages + Python 后端 |
 | `docs/API.md` | HTTP 接口、鉴权、错误码 | 前后端联调和排错 |
@@ -74,7 +76,7 @@ apps/wps/js/bootstrap-complete.js
 apps/wps/js/ribbon.js
 ```
 
-同时保留 `apps/wps/main.js`、`index.html`、`main.py`、`manifest.xml`、`ribbon.xml`、`images/taskpane.svg`、`taskpane.*`、`control/*.py`（包含单线程 `control/monitor.py` 和长请求通信桥 `control/host_bridge.py`）、`tests/test_wps_app.py`、`tests/test_command_monitor.py`、`tests/test_host_bridge.py`、`tests/wps-runtime.test.mjs`、`scripts/verify.ps1`、`package.json`、`package-lock.json`、`README.md` 和 `AGENTS.md`。不得上传 `apps/wps/node_modules/`、`logs/`、运行时生成的 `runtime/runtime-config.js` 或本机 WPS 注册文件。
+同时保留 `apps/wps/main.js`、`index.html`、`main.py`、`manifest.xml`、`ribbon.xml`、`images/taskpane.svg`、`taskpane.*`、`control/*.py`（包含单线程 `control/monitor.py` 和长请求通信桥 `control/host_bridge.py`）、`account_store.py`、`account_runtime.py`、`public_api.py`、`login_window.py`、`client-config.json`、`DocxToolWps.spec`、`requirements-build.txt`、`scripts/build-exe.ps1`、全部 WPS 测试（包括登录窗口测试）、`scripts/verify.ps1`、`package.json`、`package-lock.json`、`README.md` 和 `AGENTS.md`。不得上传 `apps/wps/node_modules/`、`logs/`、运行时生成的 `runtime/runtime-config.js`、`build/`、`dist/`、打包 EXE 或本机 WPS 注册文件。
 
 ## 2. 后端和排版核心
 
@@ -91,6 +93,8 @@ apps/wps/js/ribbon.js
 | `src/docxtool/auth/service.py` | 用户名和密码输入归一化及验证 |
 | `src/docxtool/web/__init__.py` | Web 包入口 |
 | `src/docxtool/web/app.py` | Web 服务兼容入口、路由 facade 和全局依赖注入 |
+| `src/docxtool/web/admin_workspace_page.py` | 网页业务与 WPS 用户统一管理员工作台页面 |
+| `src/docxtool/wps_server/*.py` | WPS 独立数据库、注册登录、会话、心跳、排版授权、结果统计和管理路由 |
 | `src/docxtool/application/__init__.py` | 应用层包入口 | 标记应用层编排模块 |
 | `src/docxtool/application/process_document.py` | 上传 DOCX 任务应用层编排 | 串联 Importer、Recognition、Renderer 和完整性校验，不实现识别规则 |
 | `src/docxtool/web/admin_access.py` | 管理员请求上下文和 POST CSRF 校验 | 只消费已解析上下文、请求参数和请求头 |

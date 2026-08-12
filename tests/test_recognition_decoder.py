@@ -1037,6 +1037,138 @@ def test_front_matter_scan_skips_empty_and_caption_placeholders() -> None:
     assert context["body_start"] == 17
 
 
+@pytest.mark.parametrize(
+    "title_text",
+    (
+        "关于有关事项的决议",
+        "关于有关事项的决定",
+        "关于有关事项的命令",
+        "某机关令",
+        "关于有关事项的公报",
+        "关于有关事项的公告",
+        "关于有关事项的通告",
+        "关于有关事项的意见",
+        "关于有关事项的通知",
+        "关于有关事项的通报",
+        "关于有关事项的报告",
+        "关于有关事项的请示",
+        "关于有关事项的批复",
+        "关于有关事项的议案",
+        "关于协商有关事项的函",
+        "关于有关事项的纪要",
+    ),
+)
+def test_front_official_document_type_suffix_promotes_title_without_visual_style(
+    title_text: str,
+) -> None:
+    title = _paragraph(title_text, "body", 0, style_name="DCT-Body")
+    data = _document(
+        title,
+        _paragraph("各有关单位：", "body", 1),
+        _paragraph("现将有关事项说明如下，请结合实际抓好落实。", "body", 2),
+    )
+
+    apply_recognition(data)
+
+    assert title.type_id == "title"
+    assert "document-type-title-suffix" in data.recognition_diagnostics["paragraphs"][0][
+        "title_context_evidence"
+    ]
+
+
+def test_front_report_briefing_suffix_supports_multiline_title_group() -> None:
+    first = _paragraph("某委员会", "body", 0, style_name="DCT-Body")
+    continuation = _paragraph(
+        "关于推进重点工作整改情况汇报",
+        "body",
+        1,
+        style_name="DCT-Body",
+    )
+    data = _document(
+        first,
+        continuation,
+        _paragraph("某委员会：", "body", 2),
+        _paragraph("现将有关事项说明如下，请结合实际抓好落实。", "body", 3),
+    )
+
+    apply_recognition(data)
+
+    assert [item.type_id for item in data.paragraphs[:4]] == [
+        "title",
+        "title_cont",
+        "addressing",
+        "body",
+    ]
+    diagnostics = data.recognition_diagnostics["paragraphs"]
+    assert "following-document-type-title" in diagnostics[0]["title_context_evidence"]
+    assert "document-type-title-suffix" in diagnostics[1]["title_context_evidence"]
+
+
+def test_short_body_before_recipient_is_rechecked_as_title() -> None:
+    title = _paragraph("基层治理重点工作安排", "body", 0, style_name="DCT-Body")
+    data = _document(
+        title,
+        _paragraph("各有关单位：", "body", 1),
+        _paragraph("现将有关事项说明如下，请结合实际抓好落实。", "body", 2),
+    )
+
+    apply_recognition(data)
+
+    assert title.type_id == "title"
+    assert "pre-recipient-title-context" in data.recognition_diagnostics["paragraphs"][0][
+        "title_context_evidence"
+    ]
+
+
+def test_front_document_type_words_inside_prose_do_not_promote_title() -> None:
+    first = _paragraph("根据有关通知要求开展自查", "body", 0)
+    second = _paragraph("现将有关情况报告如下，供审阅。", "body", 1)
+    data = _document(first, second)
+
+    apply_recognition(data)
+
+    assert [first.type_id, second.type_id] == ["body", "body"]
+
+
+def test_front_short_lines_are_rechecked_as_title_before_body_and_first_heading() -> None:
+    first = _paragraph("重点工作推进情况", "body", 0, style_name="DCT-Body")
+    continuation = _paragraph("阶段性安排", "body", 1, style_name="DCT-Body")
+    body = _paragraph(
+        "今年以来，各项重点工作有序推进，现将有关情况说明如下。",
+        "body",
+        2,
+    )
+    heading = _paragraph("一、下一阶段重点任务", "heading1", 3)
+    data = _document(first, continuation, body, heading)
+
+    apply_recognition(data)
+
+    assert [item.type_id for item in data.paragraphs] == [
+        "title",
+        "title_cont",
+        "body",
+        "heading1",
+    ]
+    diagnostics = data.recognition_diagnostics["paragraphs"]
+    assert "following-body-first-heading" in diagnostics[0]["title_context_evidence"]
+    assert "following-body-first-heading" in diagnostics[1]["title_context_evidence"]
+
+
+def test_front_short_lines_without_following_first_heading_remain_body() -> None:
+    first = _paragraph("重点工作推进情况", "body", 0, style_name="DCT-Body")
+    continuation = _paragraph("阶段性安排", "body", 1, style_name="DCT-Body")
+    body = _paragraph(
+        "今年以来，各项重点工作有序推进，现将有关情况说明如下。",
+        "body",
+        2,
+    )
+    data = _document(first, continuation, body)
+
+    apply_recognition(data)
+
+    assert [item.type_id for item in data.paragraphs] == ["body", "body", "body"]
+
+
 def test_front_scan_uses_soft_threshold_until_real_structure_boundary() -> None:
     prefix = [
         _paragraph(f"联合发文机关{index}", "body", index)

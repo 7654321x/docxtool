@@ -29,6 +29,8 @@ docxtool/
 ├─ AGENTS.md                       # AI 与维护者必须遵守的仓库协作、回归和发布规则
 ├─ README.md                       # 项目功能、安装、启动和主要使用入口
 ├─ CHANGELOG.md                    # 正式版本及变更记录
+├─ WPS_SERVER_PRD.md               # WPS 公网账号、设备、授权和统计产品需求
+├─ WPS_SERVER_TECHNICAL_DESIGN.md  # WPS 公网服务与本地客户端技术设计
 ├─ CONVENTIONS.md                  # 开发、排版边界和人工验证约定
 ├─ 公文格式规范.md                  # 公文版式与样式配置依据
 ├─ pyproject.toml                  # Python 包元数据、依赖、入口和 wheel 配置
@@ -344,13 +346,46 @@ src/docxtool/web/
 ├─ monitoring_pages.py           # 统计、IP 和任务日志局部 HTML
 ├─ monitor_dashboard_page.py      # 监控仪表盘整页 HTML
 ├─ monitor_route_handlers.py      # 监控首页和统计 JSON 路由
+├─ admin_workspace_page.py        # 网页业务与 WPS 用户的统一管理员工作台页面
 ├─ preset_config.py               # 预设模板 ID、名称和格式配置校验
 ├─ preset_defaults.py             # 官方默认模板和功能开关 seed
 ├─ preset_store.py                # 预设模板 SQLite CRUD
 └─ preset_route_handlers.py       # 预设模板列表、创建、修改和删除路由
 ```
 
-## 六、前端资源
+## 六、WPS 插件与公网服务
+
+```text
+src/docxtool/wps_server/
+├─ __init__.py                    # WPS 公网服务包入口
+├─ config.py                      # 24 小时会话、心跳、受控命令和数据库路径配置
+├─ database.py                    # 独立 wps_plugin.db 的四张核心表和连接初始化
+├─ validation.py                  # 账号、密码、设备、请求编号和结果字段校验
+├─ auth.py                        # 会话哈希、设备指纹和 Bearer 会话认证
+├─ format_config.py               # 当前服务器排版配置和配置版本加载
+├─ service.py                     # 注册、登录、心跳、排版授权和结果回传事务
+├─ route_handlers.py              # /wps-api/v1 JSON HTTP 边界
+├─ admin.py                       # WPS 用户、设备和排版请求管理查询
+└─ admin_routes.py                # WPS 管理页面和启停动作路由
+
+apps/wps/
+├─ main.py                        # 源码和冻结 EXE 的独立启动入口
+├─ account_store.py               # %LOCALAPPDATA% 本地账号库和 Windows DPAPI 加密
+├─ account_runtime.py             # 静默登录、10 分钟心跳、授权和结果回传
+├─ public_api.py                  # 严格 HTTPS WPS 公网 JSON 客户端
+├─ login_window.py                # 独立 Tkinter 登录注册窗口
+├─ client-config.json             # 源码开发服务器 Origin；生产构建时替换
+├─ DocxToolWps.spec               # PyInstaller 控制台单文件构建规格
+├─ requirements-build.txt         # Python 3.8 兼容的固定 PyInstaller 版本
+├─ host-runtime.js                # WPS Host 主线程、长请求命令和文档操作
+├─ taskpane.html / taskpane.js    # 侧边栏界面、账号状态和命令提交
+├─ control/                       # 本机 Control、HostBridge、识别、排版和事务
+├─ js/ / images/                  # Ribbon bootstrap 脚本和图标资源
+├─ scripts/build-exe.ps1          # 注入 HTTPS Origin、构建并在仓库外验证 EXE
+└─ scripts/verify.ps1             # WPS 源码门禁
+```
+
+## 七、前端资源
 
 ```text
 resources/frontend/pages/
@@ -358,7 +393,7 @@ resources/frontend/pages/
 └─ _worker.js                     # Cloudflare Pages Functions/API 代理和静态资源回退
 ```
 
-## 七、维护脚本
+## 八、维护脚本
 
 ```text
 scripts/
@@ -378,7 +413,7 @@ scripts/
 └─ publish_to_github.ps1          # 在临时干净克隆中按白名单校验、提交并推送
 ```
 
-## 八、项目文档
+## 九、项目文档
 
 ```text
 docs/
@@ -411,12 +446,12 @@ docs/
    └─ phase-b0-report.md          # Phase B-0 Finding 与差异聚类报告
 ```
 
-## 九、测试文件
+## 十、测试文件
 
 测试文件遵循 `test_<被测职责>.py` 命名。下面逐文件列出验证对象；测试夹具均应脱敏，
 真实 DOCX 与生成结果不属于 GitHub 发布范围。
 
-### 9.1 项目、应用、安全和存储
+### 10.1 项目、应用、安全和存储
 
 ```text
 tests/
@@ -436,7 +471,7 @@ tests/
 └─ test_version_consistency.py     # pyproject、运行时和文档版本一致性
 ```
 
-### 9.2 导入、分段、识别和规范化
+### 10.2 导入、分段、识别和规范化
 
 ```text
 tests/
@@ -479,7 +514,7 @@ tests/
 └─ test_normalization_text.py      # 通用文本清理
 ```
 
-### 9.3 渲染、格式和 DOCX 结构
+### 10.3 渲染、格式和 DOCX 结构
 
 ```text
 tests/
@@ -522,7 +557,7 @@ tests/
 └─ test_table_engine.py            # 表格格式安全边界
 ```
 
-### 9.4 SDK 与宿主协议
+### 10.4 SDK 与宿主协议
 
 ```text
 tests/
@@ -532,7 +567,7 @@ tests/
 └─ test_sdk_contract_v1.py         # 模型、Schema、严格校验、CLI 和错误码
 ```
 
-### 9.5 Web、任务和服务器
+### 10.5 Web、任务和服务器
 
 ```text
 tests/
@@ -601,10 +636,17 @@ tests/
 ├─ test_web_task_worker.py         # worker、子进程和超时
 ├─ test_web_time_check.py          # 启动时间提示
 ├─ test_web_upload_route_handlers.py # 上传路由编排
-└─ test_web_user_auth.py           # 用户 session、Cookie 和 CSRF
+├─ test_web_user_auth.py           # 用户 session、Cookie 和 CSRF
+├─ test_web_admin_workspace.py     # 统一管理员工作台和 WPS 页面渲染
+├─ test_wps_server_admin.py        # WPS 用户、设备和请求管理查询
+├─ test_wps_server_auth.py         # 注册、登录、24 小时会话和心跳
+├─ test_wps_server_database.py     # WPS 独立四表数据库结构
+├─ test_wps_server_format_requests.py # 排版授权幂等和结果终态
+├─ test_wps_server_http_flow.py    # 真实 HTTP 注册到后台统计闭环
+└─ test_wps_server_routes.py       # WPS 公网路由显式映射
 ```
 
-### 9.6 批量回归、迁移快照和 Node
+### 10.6 批量回归、迁移快照和 Node
 
 ```text
 tests/
@@ -614,7 +656,7 @@ tests/
 └─ worker-routing.test.mjs         # Cloudflare Worker 路由、方法和敏感头转发
 ```
 
-## 十、维护时如何定位
+## 十一、维护时如何定位
 
 ```text
 识别错了        → importing → segmentation → recognition → normalization

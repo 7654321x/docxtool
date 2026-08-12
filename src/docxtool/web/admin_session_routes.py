@@ -37,7 +37,7 @@ def handle_admin_login(
         handler.client_address[0] if handler.client_address else "",
     )
     cookie = admin_cookie_header(session["session_id"])
-    handler._redirect("/monitor", extra_headers=[("Set-Cookie", cookie)])
+    handler._redirect("/admin", extra_headers=[("Set-Cookie", cookie)])
 
 
 def handle_admin_logout(

@@ -39,6 +39,7 @@ class FormatOperation:
     temporary_sha256: Optional[str] = None
     format_result: Optional[FormatResult] = None
     request_id: str = ""
+    command: str = "apply"
     state: str = "prepared"
     transaction_mode: str = "replace"
     conversion_path: Optional[Path] = None
@@ -485,6 +486,44 @@ class DocumentTransactionManager:
                         log_event("ERROR", "transaction", "transaction.recovery.backup_cleanup.failed", "未使用排版备份清理失败", {"error_code": "WPS_TRANSACTION_RECOVERY_BACKUP_CLEANUP_FAILED", "error_type": type(exc).__name__, **recovery_details})
                         raise DocumentTransactionError("WPS_TRANSACTION_RECOVERY_BACKUP_CLEANUP_FAILED") from exc
                     log_event("DEBUG", "transaction", "transaction.recovery.backup_cleanup.completed", "未使用的排版备份已清理", recovery_details)
+                elif (
+                    state == "committed"
+                    and source_state == "formatted_match"
+                    and backup_state == "missing"
+                    and temporary_state == "missing"
+                ):
+                    log_event(
+                        "WARNING",
+                        "transaction",
+                        "transaction.recovery.backup_missing.discarded",
+                        "排版结果已生效但事务备份缺失，结束旧事务",
+                        recovery_details,
+                    )
+                    try:
+                        self._clear_journal()
+                    except OSError as exc:
+                        log_event(
+                            "ERROR",
+                            "transaction",
+                            "transaction.recovery.backup_missing.discard_failed",
+                            "备份缺失的旧事务登记清理失败",
+                            {
+                                "error_code": "WPS_TRANSACTION_RECOVERY_JOURNAL_CLEAR_FAILED",
+                                "error_type": type(exc).__name__,
+                                **recovery_details,
+                            },
+                        )
+                        raise DocumentTransactionError(
+                            "WPS_TRANSACTION_RECOVERY_JOURNAL_CLEAR_FAILED"
+                        ) from exc
+                    log_event(
+                        "WARNING",
+                        "transaction",
+                        "transaction.recovery.backup_missing.discard_completed",
+                        "备份缺失的旧事务已结束",
+                        recovery_details,
+                    )
+                    return
                 else:
                     log_event(
                         "ERROR", "transaction", "transaction.recovery.committed_state.invalid",
@@ -559,8 +598,10 @@ class DocumentTransactionManager:
             self._preparing = False
 
     def reserve_upgrade(
-        self, source_path: str, *, request_id: str = ""
+        self, source_path: str, *, command: str, request_id: str = ""
     ) -> FormatOperation:
+        if command not in {"preview", "apply"}:
+            raise DocumentTransactionError("WPS_TRANSACTION_COMMAND_INVALID")
         source = Path(source_path).expanduser().resolve()
         if source.suffix.lower() not in {".doc", ".wps"} or not source.is_file():
             log_event(
@@ -624,6 +665,7 @@ class DocumentTransactionManager:
                 temporary_path=temporary,
                 backup_path=backup,
                 request_id=request_id,
+                command=command,
                 state="conversion_pending",
                 transaction_mode="legacy_upgrade",
                 conversion_path=conversion,
@@ -655,6 +697,8 @@ class DocumentTransactionManager:
     ) -> FormatOperation:
         operation = self.get(operation_id, request_id)
         operation.request_id = request_id or operation.request_id
+        if operation.command != "apply":
+            raise DocumentTransactionError("WPS_TRANSACTION_COMMAND_MISMATCH")
         if not operation.is_upgrade or operation.state != "conversion_pending":
             raise DocumentTransactionError("WPS_TRANSACTION_INVALID_STATE")
         if operation.conversion_path is None or not operation.conversion_path.is_file():
@@ -742,6 +786,8 @@ class DocumentTransactionManager:
     ) -> FormatOperation:
         operation = self.get(operation_id, request_id)
         operation.request_id = request_id or operation.request_id
+        if operation.command != "preview":
+            raise DocumentTransactionError("WPS_TRANSACTION_COMMAND_MISMATCH")
         if not operation.is_upgrade or operation.state != "conversion_pending":
             raise DocumentTransactionError("WPS_TRANSACTION_INVALID_STATE")
         if operation.conversion_path is None or not operation.conversion_path.is_file():
@@ -899,7 +945,7 @@ class DocumentTransactionManager:
                     },
                 )
                 raise DocumentTransactionError("DOCUMENT_CHANGED")
-            operation = FormatOperation(operation_id=operation_id, source_path=source, target_path=source, source_sha256=source_hash, temporary_sha256=temporary_hash, temporary_path=temporary, backup_path=backup, format_result=result, request_id=request_id)
+            operation = FormatOperation(operation_id=operation_id, source_path=source, target_path=source, source_sha256=source_hash, temporary_sha256=temporary_hash, temporary_path=temporary, backup_path=backup, format_result=result, request_id=request_id, command="apply")
             with self._lock:
                 try:
                     self._write_journal(operation)
@@ -926,6 +972,19 @@ class DocumentTransactionManager:
                     },
                 )
                 raise DocumentTransactionError("WPS_TRANSACTION_NOT_FOUND")
+            if operation.request_id and request_id != operation.request_id:
+                log_event(
+                    "ERROR",
+                    "transaction",
+                    "transaction.request.mismatch",
+                    "WPS 排版事务与请求编号不匹配",
+                    {
+                        "operation_id_short": operation_id[:12],
+                        "request_id": request_id,
+                        "error_code": "WPS_TRANSACTION_REQUEST_MISMATCH",
+                    },
+                )
+                raise DocumentTransactionError("WPS_TRANSACTION_REQUEST_MISMATCH")
             return operation
 
     def commit(self, operation_id: str, *, request_id: str = "") -> FormatOperation:
@@ -1123,3 +1182,69 @@ class DocumentTransactionManager:
                 log_event("ERROR", "transaction", "rollback.journal_clear.failed", "回滚事务日志清理失败", {"operation_id_short": operation_id[:12], "request_id": operation.request_id, "error_code": "WPS_TRANSACTION_JOURNAL_CLEAR_FAILED", "error_type": type(exc).__name__})
                 raise DocumentTransactionError("WPS_TRANSACTION_JOURNAL_CLEAR_FAILED") from exc
         log_event("WARNING", "transaction", "rollback.completed", "WPS 排版事务已回滚", {"operation_id_short": operation_id[:12], "request_id": operation.request_id, "file_id": file_identity(operation.source_path)})
+
+    def rollback_request(self, request_id: str) -> bool:
+        if not request_id:
+            raise DocumentTransactionError("WPS_TRANSACTION_REQUEST_REQUIRED")
+        with self._lock:
+            operation = next(
+                (
+                    candidate
+                    for candidate in self._operations.values()
+                    if candidate.request_id == request_id
+                ),
+                None,
+            )
+            if operation is None:
+                log_event(
+                    "DEBUG",
+                    "transaction",
+                    "transaction.request_rollback.not_found",
+                    "未找到需要按请求回滚的 WPS 排版事务",
+                    {"request_id": request_id},
+                )
+                return False
+            operation_id = operation.operation_id
+            state = operation.state
+        log_event(
+            "WARNING",
+            "transaction",
+            "transaction.request_rollback.start",
+            "开始按请求编号回滚残留的 WPS 排版事务",
+            {
+                "request_id": request_id,
+                "operation_id_short": operation_id[:12],
+                "state": state,
+            },
+        )
+        try:
+            self.rollback(operation_id, request_id=request_id)
+        except Exception as exc:
+            log_event(
+                "ERROR",
+                "transaction",
+                "transaction.request_rollback.failed",
+                "按请求编号回滚残留的 WPS 排版事务失败",
+                {
+                    "request_id": request_id,
+                    "operation_id_short": operation_id[:12],
+                    "state": state,
+                    "error_code": _error_code(
+                        exc, "WPS_TRANSACTION_REQUEST_ROLLBACK_FAILED"
+                    ),
+                    "error_type": type(exc).__name__,
+                },
+            )
+            raise
+        log_event(
+            "WARNING",
+            "transaction",
+            "transaction.request_rollback.completed",
+            "已按请求编号回滚残留的 WPS 排版事务",
+            {
+                "request_id": request_id,
+                "operation_id_short": operation_id[:12],
+                "state": state,
+            },
+        )
+        return True

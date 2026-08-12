@@ -7,18 +7,20 @@ executed by the existing DocxTool package in the same Python process.
 from __future__ import annotations
 
 from collections import OrderedDict
+from copy import deepcopy
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
 import threading
 import time
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from docxtool.sdk import RecognitionPlan
+from docxtool.document.style_config import ConfigValidationError, validate_format_config
 from docxtool.version import package_version
 
 from .document_transaction import DocumentTransactionError, DocumentTransactionManager
-from .host_bridge import HostBridge
+from .host_bridge import HostBridge, HostBridgeError
 from .logging_adapter import configure_wps_logging, log_event, sanitize_wps_log_fields
 from .monitor import CommandMonitor
 from .recognize_document import bind_preview, recognize_document
@@ -117,6 +119,12 @@ def _request_failure_event(code: str) -> str:
         "WPS_BRIDGE_STATE_REVISION_INVALID": "bridge.state.revision_invalid",
         "WPS_BRIDGE_CLOSED": "bridge.closed",
         "WPS_BRIDGE_WAIT_TIMEOUT_INVALID": "bridge.wait.timeout_invalid",
+        "WPS_PUBLIC_ACCOUNT_REQUIRED": "public.account.required",
+        "WPS_PUBLIC_AUTHORIZATION_REJECTED": "public.authorization.rejected",
+        "WPS_APPLY_AUTHORIZATION_REQUIRED": "bridge.command.authorization_required",
+        "WPS_APPLY_AUTHORIZATION_MISMATCH": "bridge.command.authorization_mismatch",
+        "WPS_APPLY_CONFIG_VERSION_REQUIRED": "bridge.command.config_version_required",
+        "WPS_APPLY_FORMAT_CONFIG_REQUIRED": "bridge.command.format_config_required",
     }.get(code, "control.request.execution_failed")
 
 
@@ -147,12 +155,15 @@ class WpsControlHttpServer(ThreadingHTTPServer):
 
 
 class WpsControlApplication:
-    def __init__(self, app_root: Path, session_token: str) -> None:
+    def __init__(self, app_root: Path, session_token: str, account_runtime=None) -> None:
         self.app_root = Path(app_root)
         self.session_token = session_token
         self.log_dir = configure_wps_logging(self.app_root)
         self.transactions = DocumentTransactionManager(self.log_dir)
         self.host_bridge = HostBridge()
+        self.account_runtime = account_runtime
+        self._authorization_lock = threading.RLock()
+        self._authorized_requests: Dict[str, Dict[str, Any]] = {}
         self._plans: "OrderedDict[str, RecognitionPlan]" = OrderedDict()
         self._plans_lock = threading.RLock()
 
@@ -178,6 +189,135 @@ class WpsControlApplication:
             "host": HOST,
         }
 
+    def account_summary(self) -> Dict[str, Any]:
+        if self.account_runtime is None:
+            return {
+                "signed_in": False,
+                "network_available": False,
+                "apply_available": False,
+                "pending_result_count": 0,
+                "error_code": "WPS_PUBLIC_ACCOUNT_REQUIRED",
+            }
+        return {"signed_in": True, **self.account_runtime.summary()}
+
+    def _authorize_apply(self, request_id: str) -> Dict[str, Any]:
+        if self.account_runtime is None:
+            raise DocumentTransactionError("WPS_PUBLIC_ACCOUNT_REQUIRED")
+        result = self.account_runtime.authorize_format(request_id)
+        if result.get("allowed") is not True:
+            raise DocumentTransactionError("WPS_PUBLIC_AUTHORIZATION_REJECTED")
+        config = result.get("format_config")
+        if not isinstance(config, dict):
+            raise DocumentTransactionError("WPS_APPLY_FORMAT_CONFIG_REQUIRED")
+        try:
+            validated = validate_format_config(config)
+        except ConfigValidationError as exc:
+            log_event(
+                "ERROR",
+                "public",
+                "public.format.config.validation_failed",
+                "公网下发的排版配置校验失败",
+                {"request_id": request_id, "error_code": exc.code},
+            )
+            raise
+        return {
+            "request_id": request_id,
+            "config_version": str(result.get("config_version", "")),
+            "format_config": validated,
+        }
+
+    def _claim_apply_authorization(self, request_id: str) -> Dict[str, Any]:
+        with self._authorization_lock:
+            pending = self._authorized_requests.get(request_id)
+            if pending is None:
+                raise DocumentTransactionError("WPS_APPLY_AUTHORIZATION_REQUIRED")
+            if pending["state"] != "authorized":
+                raise DocumentTransactionError("WPS_APPLY_AUTHORIZATION_CONSUMED")
+            pending["state"] = "starting"
+            return deepcopy(pending["format_config"])
+
+    def _bind_apply_operation(self, request_id: str, operation_id: str) -> None:
+        with self._authorization_lock:
+            pending = self._authorized_requests.get(request_id)
+            if pending is None:
+                raise DocumentTransactionError("WPS_APPLY_AUTHORIZATION_REQUIRED")
+            if pending["state"] != "starting":
+                raise DocumentTransactionError("WPS_APPLY_AUTHORIZATION_CONSUMED")
+            pending["state"] = "executing"
+            pending["operation_id"] = operation_id
+
+    def _require_apply_operation(
+        self, request_id: str, operation_id: str
+    ) -> Dict[str, Any]:
+        with self._authorization_lock:
+            pending = self._authorized_requests.get(request_id)
+            if pending is None:
+                raise DocumentTransactionError("WPS_APPLY_AUTHORIZATION_REQUIRED")
+            if (
+                pending["state"] != "executing"
+                or pending["operation_id"] != operation_id
+            ):
+                raise DocumentTransactionError("WPS_APPLY_OPERATION_MISMATCH")
+            return deepcopy(pending["format_config"])
+
+    def _discard_unbound_operation(
+        self, operation_id: str, request_id: str
+    ) -> None:
+        try:
+            self.transactions.rollback(operation_id, request_id=request_id)
+        except Exception as exc:
+            log_event(
+                "ERROR",
+                "transaction",
+                "transaction.unbound.cleanup.failed",
+                "授权上下文失效后清理未绑定事务失败",
+                {
+                    "operation_id_short": operation_id[:12],
+                    "request_id": request_id,
+                    "error_code": _error_code(exc),
+                    "error_type": type(exc).__name__,
+                },
+            )
+
+    def _queue_completed_authorization(
+        self, state: Dict[str, Any]
+    ) -> Optional[Dict[str, str]]:
+        completed = None
+        for key in ("active_request", "last_request"):
+            candidate = state.get(key)
+            if isinstance(candidate, dict) and candidate.get("request_status") in {"PASS", "FAIL"}:
+                completed = candidate
+                break
+        if completed is None or completed.get("command") != "apply":
+            return None
+        request_id = str(completed.get("request_id", ""))
+        pending = self._authorized_requests.get(request_id)
+        if pending is None or self.account_runtime is None:
+            return None
+        duration_ms = completed.get("duration_ms")
+        if isinstance(duration_ms, bool) or not isinstance(duration_ms, int):
+            duration_ms = int((time.monotonic() - pending["started_at"]) * 1000)
+        status = "success" if completed["request_status"] == "PASS" else "failed"
+        error_code = "" if status == "success" else str(completed.get("error_code", "WPS_COMMAND_FAILED"))
+        if status == "failed":
+            self.transactions.rollback_request(request_id)
+        self.account_runtime.report_format_result(
+            request_id, status, duration_ms, error_code
+        )
+        self._authorized_requests.pop(request_id, None)
+        log_event(
+            "INFO",
+            "public",
+            "public.format.result.queued",
+            "WPS 排版结果已进入公网补报队列",
+            {
+                "request_id": request_id,
+                "request_status": status,
+                "duration_ms": duration_ms,
+            },
+        )
+        return {"result_sync_status": "pending", "result_sync_error_code": ""}
+
     def dispatch_bridge(
         self,
         path: str,
@@ -185,7 +325,38 @@ class WpsControlApplication:
         request_id: str = "",
     ) -> Dict[str, Any]:
         if path == "/v1/bridge/host/register":
-            result = self.host_bridge.register_host(body.get("host_context_id"))
+            with self._authorization_lock:
+                result = self.host_bridge.register_host(body.get("host_context_id"))
+                displaced = result.get("displaced_command")
+                if (
+                    isinstance(displaced, dict)
+                    and displaced.get("command") == "apply"
+                ):
+                    displaced_id = str(displaced.get("request_id", ""))
+                    pending = self._authorized_requests.get(displaced_id)
+                    if pending is not None and self.account_runtime is not None:
+                        duration_ms = int(
+                            (time.monotonic() - pending["started_at"]) * 1000
+                        )
+                        self.account_runtime.report_format_result(
+                            displaced_id,
+                            "failed",
+                            duration_ms,
+                            "WPS_HOST_CONTEXT_REPLACED",
+                        )
+                        self._authorized_requests.pop(displaced_id, None)
+                        log_event(
+                            "WARNING",
+                            "public",
+                            "public.format.result.queued.host_replaced",
+                            "Host 更换导致排版请求失败，结果已进入补报队列",
+                            {
+                                "request_id": displaced_id,
+                                "request_status": "failed",
+                                "duration_ms": duration_ms,
+                                "error_code": "WPS_HOST_CONTEXT_REPLACED",
+                            },
+                        )
             log_event(
                 "INFO",
                 "bridge",
@@ -229,12 +400,64 @@ class WpsControlApplication:
                 )
             return result
         if path == "/v1/bridge/command":
-            result = self.host_bridge.enqueue_command(
-                body.get("request_id"),
-                body.get("command"),
-                body.get("pane_instance_id"),
-                body.get("host_generation"),
-            )
+            command_name = body.get("command")
+            authorization = None
+            with self._authorization_lock:
+                self.host_bridge.ensure_command_available(body.get("host_generation"))
+                if command_name == "apply":
+                    authorization = self._authorize_apply(str(body.get("request_id", "")))
+                    log_event(
+                        "INFO",
+                        "public",
+                        "public.format.authorize.allowed",
+                        "WPS 一键排版已获得公网授权",
+                        {"request_id": authorization["request_id"], "config_version": authorization["config_version"]},
+                    )
+                try:
+                    host_authorization = None
+                    if authorization is not None:
+                        host_authorization = {
+                            "request_id": authorization["request_id"],
+                            "config_version": authorization["config_version"],
+                        }
+                        self._authorized_requests[authorization["request_id"]] = {
+                            "started_at": time.monotonic(),
+                            "config_version": authorization["config_version"],
+                            "format_config": authorization["format_config"],
+                            "host_generation": int(body.get("host_generation", 0)),
+                            "state": "authorized",
+                            "operation_id": "",
+                        }
+                    result = self.host_bridge.enqueue_command(
+                        body.get("request_id"),
+                        command_name,
+                        body.get("pane_instance_id"),
+                        body.get("host_generation"),
+                        host_authorization,
+                    )
+                except HostBridgeError as exc:
+                    if authorization is not None and self.account_runtime is not None:
+                        self._authorized_requests.pop(
+                            authorization["request_id"], None
+                        )
+                        try:
+                            self.account_runtime.report_format_result(
+                                authorization["request_id"], "failed", 0, _error_code(exc)
+                            )
+                        except Exception as report_error:
+                            log_event(
+                                "ERROR",
+                                "public",
+                                "public.format.result.failed",
+                                "WPS 命令入槽失败，且失败结果未能回传公网服务",
+                                {
+                                    "request_id": authorization["request_id"],
+                                    "primary_error_code": _error_code(exc),
+                                    "error_code": _error_code(report_error),
+                                    "error_type": type(report_error).__name__,
+                                },
+                            )
+                    raise
             log_event(
                 "INFO",
                 "bridge",
@@ -250,12 +473,22 @@ class WpsControlApplication:
             )
             return result
         if path == "/v1/bridge/state":
-            result = self.host_bridge.publish_state(
-                body.get("host_context_id"),
-                body.get("host_generation"),
-                body.get("state"),
-            )
             state = body.get("state")
+            with self._authorization_lock:
+                self.host_bridge.validate_host(
+                    body.get("host_context_id"), body.get("host_generation")
+                )
+                if isinstance(state, dict):
+                    result_sync = self._queue_completed_authorization(state)
+                else:
+                    result_sync = None
+                if result_sync is not None:
+                    state = {**state, **result_sync}
+                result = self.host_bridge.publish_state(
+                    body.get("host_context_id"),
+                    body.get("host_generation"),
+                    state,
+                )
             log_event(
                 "INFO",
                 "bridge",
@@ -279,11 +512,13 @@ class WpsControlApplication:
             )
             return result
         if path == "/v1/bridge/state/wait":
-            return self.host_bridge.wait_state(
+            result = self.host_bridge.wait_state(
                 body.get("after_revision"),
                 body.get("host_generation"),
                 body.get("timeout_seconds"),
             )
+            result["account"] = self.account_summary()
+            return result
         raise DocumentTransactionError("WPS_CONTROL_ROUTE_NOT_FOUND")
 
     def dispatch(
@@ -378,11 +613,26 @@ class WpsControlApplication:
             return result
         if path == "/v1/format/upgrade/reserve":
             started_at = time.monotonic()
+            command = str(body.get("command", ""))
             log_event("INFO", "control", "format.upgrade.reserve.request.start", "开始预留旧格式升级事务", {"request_id": request_id, "stage": "format_upgrade_reserve"})
             try:
+                if command == "apply":
+                    self._claim_apply_authorization(request_id)
                 operation = self.transactions.reserve_upgrade(
-                    str(body.get("source_path", "")), request_id=request_id
+                    str(body.get("source_path", "")),
+                    command=command,
+                    request_id=request_id,
                 )
+                if command == "apply":
+                    try:
+                        self._bind_apply_operation(
+                            request_id, operation.operation_id
+                        )
+                    except Exception:
+                        self._discard_unbound_operation(
+                            operation.operation_id, request_id
+                        )
+                        raise
             except Exception as exc:
                 log_event("ERROR", "control", "format.upgrade.reserve.request.failed", "旧格式升级事务预留失败", {"request_id": request_id, "stage": "format_upgrade_reserve", "duration_ms": int((time.monotonic() - started_at) * 1000), "error_type": type(exc).__name__, "error_code": _error_code(exc)})
                 raise
@@ -399,9 +649,12 @@ class WpsControlApplication:
             operation_id = str(body.get("operation_id", ""))
             log_event("INFO", "control", "format.upgrade.prepare.request.start", "开始处理旧格式升级排版请求", {"request_id": request_id, "stage": "format_upgrade_prepare", "operation_id_short": operation_id[:12]})
             try:
+                format_config = self._require_apply_operation(
+                    request_id, operation_id
+                )
                 operation = self.transactions.prepare_upgrade(
                     operation_id,
-                    body.get("format_config") if isinstance(body.get("format_config"), dict) else None,
+                    format_config,
                     request_id=request_id,
                 )
             except Exception as exc:
@@ -480,11 +733,19 @@ class WpsControlApplication:
             started_at = time.monotonic()
             log_event("INFO", "control", "format.prepare.request.start", "开始处理 WPS 排版准备请求", {"request_id": request_id, "stage": "format_prepare"})
             try:
+                format_config = self._claim_apply_authorization(request_id)
                 operation = self.transactions.prepare(
                     str(body.get("source_path", "")),
-                    body.get("format_config") if isinstance(body.get("format_config"), dict) else None,
+                    format_config,
                     request_id=request_id,
                 )
+                try:
+                    self._bind_apply_operation(request_id, operation.operation_id)
+                except Exception:
+                    self._discard_unbound_operation(
+                        operation.operation_id, request_id
+                    )
+                    raise
             except Exception as exc:
                 log_event("ERROR", "control", "format.prepare.request.failed", "WPS 排版准备请求失败", {"request_id": request_id, "stage": "format_prepare", "duration_ms": int((time.monotonic() - started_at) * 1000), "error_type": type(exc).__name__, "error_code": _error_code(exc)})
                 raise
@@ -509,6 +770,9 @@ class WpsControlApplication:
             operation_id = str(body.get("operation_id", ""))
             log_event("INFO", "control", "format.commit.request.start", "开始处理 WPS 排版提交请求", {"request_id": request_id, "stage": "format_commit", "operation_id_short": operation_id[:12]})
             try:
+                existing = self.transactions.get(operation_id, request_id)
+                if existing.command == "apply":
+                    self._require_apply_operation(request_id, operation_id)
                 operation = self.transactions.commit(operation_id, request_id=request_id)
             except Exception as exc:
                 log_event("ERROR", "control", "format.commit.request.failed", "WPS 排版提交请求失败", {"request_id": request_id, "stage": "format_commit", "operation_id_short": operation_id[:12], "duration_ms": int((time.monotonic() - started_at) * 1000), "error_type": type(exc).__name__, "error_code": _error_code(exc)})
@@ -520,6 +784,9 @@ class WpsControlApplication:
             started_at = time.monotonic()
             log_event("INFO", "control", "format.finalize.request.start", "开始处理 WPS 排版完成请求", {"request_id": request_id, "stage": "format_finalize", "operation_id_short": operation_id[:12]})
             try:
+                existing = self.transactions.get(operation_id, request_id)
+                if existing.command == "apply":
+                    self._require_apply_operation(request_id, operation_id)
                 self.transactions.finalize(operation_id, request_id=request_id)
             except Exception as exc:
                 log_event("ERROR", "control", "format.finalize.request.failed", "WPS 排版完成请求失败", {"request_id": request_id, "stage": "format_finalize", "operation_id_short": operation_id[:12], "duration_ms": int((time.monotonic() - started_at) * 1000), "error_type": type(exc).__name__, "error_code": _error_code(exc)})
@@ -531,6 +798,9 @@ class WpsControlApplication:
             started_at = time.monotonic()
             log_event("WARNING", "control", "format.rollback.request.start", "开始处理 WPS 排版回滚请求", {"request_id": request_id, "stage": "format_rollback", "operation_id_short": operation_id[:12]})
             try:
+                existing = self.transactions.get(operation_id, request_id)
+                if existing.command == "apply":
+                    self._require_apply_operation(request_id, operation_id)
                 self.transactions.rollback(
                     operation_id,
                     request_id=request_id,
@@ -554,8 +824,14 @@ class WpsControlApplication:
         raise DocumentTransactionError("WPS_CONTROL_ROUTE_NOT_FOUND")
 
 
-def create_server(app_root: Path, session_token: str, port: int = DEFAULT_PORT) -> WpsControlHttpServer:
-    application = WpsControlApplication(app_root, session_token)
+def create_server(
+    app_root: Path,
+    session_token: str,
+    port: int = DEFAULT_PORT,
+    *,
+    account_runtime=None,
+) -> WpsControlHttpServer:
+    application = WpsControlApplication(app_root, session_token, account_runtime)
     monitor = CommandMonitor(application.dispatch)
 
     class Handler(BaseHTTPRequestHandler):
@@ -639,7 +915,7 @@ def create_server(app_root: Path, session_token: str, port: int = DEFAULT_PORT) 
             started_at = time.monotonic()
             request_id = self._request_id()
             log_event("INFO", "control", "request.start", "WPS Control 请求开始", {"method": "GET", "path": self.path, "request_id": request_id})
-            if self.path != "/v1/health":
+            if self.path not in {"/v1/health", "/v1/account"}:
                 self._json(404, {"ok": False, "error_code": "WPS_CONTROL_ROUTE_NOT_FOUND"})
                 log_event("ERROR", "control", "control.route.not_found", "WPS Control 路由不存在", {"method": "GET", "path": self.path, "request_id": request_id, "http_status": 404, "error_code": "WPS_CONTROL_ROUTE_NOT_FOUND"})
                 return
@@ -647,7 +923,8 @@ def create_server(app_root: Path, session_token: str, port: int = DEFAULT_PORT) 
                 self._json(401, {"ok": False, "error_code": "WPS_CONTROL_UNAUTHORIZED"})
                 log_event("ERROR", "control", "control.auth.rejected", "WPS Control 请求鉴权失败", {"method": "GET", "path": self.path, "request_id": request_id, "http_status": 401, "error_code": "WPS_CONTROL_UNAUTHORIZED"})
                 return
-            self._json(200, {"ok": True, "data": application.health()})
+            data = application.health() if self.path == "/v1/health" else application.account_summary()
+            self._json(200, {"ok": True, "data": data})
             log_event(
                 "INFO", "control", "request.completed", "WPS Control 请求完成",
                 {"method": "GET", "path": self.path, "request_id": request_id, "http_status": 200, "duration_ms": int((time.monotonic() - started_at) * 1000)},

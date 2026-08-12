@@ -8,6 +8,7 @@ It never changes paragraph text, ordering, or legacy classifications.
 
 from __future__ import annotations
 
+import re
 from statistics import median
 
 from ..features import ParagraphFeatures
@@ -39,6 +40,80 @@ from .tail import (
     _signature_org_shape,
     _tail_bridge_item,
 )
+
+
+_DOCUMENT_TYPE_TITLE_SUFFIX_RE = re.compile(
+    r"(?:决议|决定|命令|公报|公告|通告|意见|通知|通报|报告|请示|批复|议案|函|纪要|令|汇报)"
+    r"(?:[（(][^（）()]{1,12}[）)])?$"
+)
+_DOCUMENT_TYPE_FRONT_VISIBLE_LIMIT = 5
+_PRE_RECIPIENT_TITLE_VISIBLE_LIMIT = 3
+_FRONT_TITLE_VISIBLE_LIMIT = 3
+_BODY_FIRST_HEADING_LOOKAHEAD = 4
+
+
+def _document_type_title_suffix(item: ParagraphFeatures) -> bool:
+    """Return whether a short front line ends with a bounded document type."""
+    return bool(
+        4 <= item.text_length <= 60
+        and not item.dispatch_number_match
+        and not item.date_match
+        and not item.recipient_match
+        and not item.key_value_label
+        and not item.attachment_note_match
+        and not item.heading_shape_level
+        and not item.ends_with_sentence_punctuation
+        and not any(mark in item.compact_text for mark in "：:；;")
+        and _DOCUMENT_TYPE_TITLE_SUFFIX_RE.search(item.compact_text)
+    )
+
+
+def _front_titles_before_body_and_first_heading(
+    features: list[ParagraphFeatures],
+) -> set[int]:
+    """Find bounded front title lines supported by prose and a first heading."""
+    semantic_positions = [
+        position for position, item in enumerate(features) if _front_semantic_item(item)
+    ]
+    body_rank = next(
+        (
+            rank
+            for rank, position in enumerate(semantic_positions)
+            if _body_like(features[position])
+            and not features[position].recipient_match
+            and not features[position].key_value_label
+        ),
+        None,
+    )
+    if body_rank is None or not 0 < body_rank <= _FRONT_TITLE_VISIBLE_LIMIT:
+        return set()
+
+    first_heading_level = next(
+        (
+            features[position].heading_shape_level
+            for position in semantic_positions[
+                body_rank + 1 : body_rank + 1 + _BODY_FIRST_HEADING_LOOKAHEAD
+            ]
+            if features[position].heading_shape_level is not None
+        ),
+        None,
+    )
+    if first_heading_level != 1:
+        return set()
+
+    return {
+        position
+        for position in semantic_positions[:body_rank]
+        if 4 <= features[position].text_length <= 60
+        and not features[position].dispatch_number_match
+        and not features[position].date_match
+        and not features[position].recipient_match
+        and not features[position].key_value_label
+        and not features[position].attachment_note_match
+        and not features[position].heading_shape_level
+        and not features[position].ends_with_sentence_punctuation
+        and not any(mark in features[position].compact_text for mark in "：:；;")
+    }
 
 
 def analyze_document_context(features: list[ParagraphFeatures]) -> DocumentContext:
@@ -73,6 +148,12 @@ def analyze_document_context(features: list[ParagraphFeatures]) -> DocumentConte
         features
     )
     front_scan_rank = {position: rank for rank, position in enumerate(front_scan_positions)}
+    document_type_title_positions = {
+        position
+        for position in front_scan_positions[:_DOCUMENT_TYPE_FRONT_VISIBLE_LIMIT]
+        if _document_type_title_suffix(features[position])
+    }
+    body_first_heading_title_positions = _front_titles_before_body_and_first_heading(features)
     title_scores: list[float] = [0.0] * count
     title_reasons: list[tuple[str, ...]] = [()] * count
     front_metadata_kinds: list[str | None] = [None] * count
@@ -106,6 +187,19 @@ def analyze_document_context(features: list[ParagraphFeatures]) -> DocumentConte
             evidence.append("first-visible-line")
         elif front_scan_rank.get(position, 99) < 5:
             score += 0.08
+        if position in document_type_title_positions:
+            score += 0.24
+            evidence.append("document-type-title-suffix")
+        current_rank = front_scan_rank.get(position, 99)
+        if any(
+            0 < front_scan_rank[candidate] - current_rank <= 2
+            for candidate in document_type_title_positions
+        ):
+            score += 0.18
+            evidence.append("following-document-type-title")
+        if position in body_first_heading_title_positions:
+            score += 0.28
+            evidence.append("following-body-first-heading")
         if item.is_centered:
             score += 0.18
             evidence.append("centered")
@@ -146,6 +240,9 @@ def analyze_document_context(features: list[ParagraphFeatures]) -> DocumentConte
             if following.recipient_match:
                 score += 0.14
                 evidence.append("following-recipient")
+                if current_rank < _PRE_RECIPIENT_TITLE_VISIBLE_LIMIT:
+                    score += 0.14
+                    evidence.append("pre-recipient-title-context")
                 break
             if _body_like(following) or following.heading_shape_level:
                 score += 0.10

@@ -2,7 +2,7 @@
 
 这是一个公文排版 Web 服务，支持 `.docx` 上传、格式识别、自动排版、任务状态查询、文件下载、管理后台和 Cloudflare Pages Worker 代理。
 
-当前正式版本为 **5.1**。本版本完成了 WPS 正式可用性收尾：固定插件网页来源，使用 HostBridge 长请求替代高频轮询，稳定首次任务窗格布局、Ribbon 回调和阶段化日志，并补齐自动列表标题与正文的可靠分段；识别优先 wheel 继续供 WPS、Office.js、VSTO 和其他本地宿主复用。
+当前正式版本为 **5.2**。本版本新增 WPS 独立账号、设备、会话、心跳和排版授权服务，提供统一管理员工作台，并补齐 WPS 客户端登录、授权、结果回传、旧格式文档事务处理和可复现 EXE 构建流程；同时强化文首职务姓名识别，继续保持识别优先 wheel 供 WPS、Office.js、VSTO 和其他本地宿主复用。
 
 当前项目只保留 Web 服务新架构。重构前的桌面端文件和旧前端入口已从发布树移除。
 
@@ -200,6 +200,20 @@ DATABASE_PATH=var/data/stats.db
 ```
 
 数据库父目录只会在实际建立 SQLite 连接时创建；仅导入包、读取默认配置或执行 `python -m docxtool --help` 不会创建 `stats.db`。源码树以仓库根目录作为运行数据根；wheel 安装后默认使用用户数据目录，避免把数据库、日志或输出写入 `site-packages`。可用 `DOCXTOOL_HOME`、`LOG_DIR`、`OUTPUT_DIR`、`RUNTIME_DIR` 和 `DATABASE_PATH` 显式覆盖。
+
+## WPS 插件公网账号与客户端
+
+根目录 `server.py` 同时提供网页排版服务和 `/wps-api/v1/*` WPS 公网账号接口，但网页业务与 WPS 插件分别使用 `stats.db` 和 `wps_plugin.db`。WPS 第一阶段包含注册、登录、设备、固定 24 小时会话、10 分钟心跳、免费一键排版授权、服务器格式配置下发、结果统计和独立管理页面。
+
+WPS 用户端由 `apps/wps/main.py` 或打包后的 `DocxToolWps.exe` 单独启动。本地没有账号时显示独立登录注册窗口；已有账号时直接启动插件服务。账号密码、会话和设备密钥使用 Windows DPAPI 加密后存入 `%LOCALAPPDATA%\DocxTool\wps\account.db`。预览、清除预览和本机检测保留本地可用；一键排版执行前必须取得公网授权。文档内容不上传公网服务器。
+
+构建控制台单文件客户端时必须显式传入正式 HTTPS Origin：
+
+```pwsh
+pwsh -NoProfile -File .\apps\wps\scripts\build-exe.ps1 -ServerOrigin https://wps.example.com
+```
+
+脚本使用 Python 3.8 兼容的 PyInstaller 6.22.0，生成 `dist/wps/DocxToolWps.exe`，并自动在仓库外执行冻结态 `verify`。`dist/`、`build/` 和 EXE 不进入源码发布清单。
 
 ## 测试
 

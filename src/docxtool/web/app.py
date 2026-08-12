@@ -89,6 +89,17 @@ from docxtool.web.auth_route_handlers import (
     handle_auth_register as _auth_route_handle_register,
     read_auth_json_request as _auth_route_read_json_request,
 )
+from docxtool.wps_server.config import (
+    require_separate_database_paths as _wps_require_separate_database_paths,
+    resolve_wps_database_path as _wps_resolve_database_path,
+)
+from docxtool.wps_server.database import (
+    connect as _wps_database_connect,
+    database_ready as _wps_database_ready_check,
+    initialize_database as _wps_initialize_database,
+)
+from docxtool.wps_server.format_config import load_active_format_profile as _wps_load_active_format_profile
+from docxtool.wps_server.route_handlers import handle_wps_action as _wps_route_handle_action
 from docxtool.web.admin_auth import (
     admin_authorized as _admin_auth_authorized,
     admin_request_context as _admin_auth_request_context,
@@ -116,6 +127,11 @@ from docxtool.web.admin_actions import (
 )
 from docxtool.web.admin_forms import parse_admin_login_token as _admin_forms_parse_login_token
 from docxtool.web.admin_pages import render_admin_login_html as _admin_pages_render_login_html
+from docxtool.web.admin_workspace_page import (
+    render_admin_home_page as _admin_workspace_render_home,
+    render_wps_user_page as _admin_workspace_render_user,
+    render_wps_users_page as _admin_workspace_render_users,
+)
 from docxtool.web.admin_route_handlers import (
     handle_ban as _admin_route_handle_ban,
     handle_cleanup as _admin_route_handle_cleanup,
@@ -127,6 +143,13 @@ from docxtool.web.admin_session_routes import (
     handle_admin_login as _admin_session_route_handle_login,
     handle_admin_logout as _admin_session_route_handle_logout,
     handle_admin_session as _admin_session_route_handle_session,
+)
+from docxtool.wps_server.admin_routes import (
+    handle_device_status as _wps_admin_route_handle_device_status,
+    handle_user as _wps_admin_route_handle_user,
+    handle_user_status as _wps_admin_route_handle_user_status,
+    handle_users as _wps_admin_route_handle_users,
+    handle_workspace as _wps_admin_route_handle_workspace,
 )
 from docxtool.web.file_utils import (
     content_disposition_filename as _file_content_disposition_filename,
@@ -429,6 +452,9 @@ _IMPORT_COMPATIBILITY = (
 BASE_DIR = _bootstrap_resolve_base_dir()
 _SQL_LOCK = _runtime_state_create_sql_lock()
 _DB_PATH = _bootstrap_resolve_database_path()
+_WPS_SQL_LOCK = _runtime_state_create_sql_lock()
+_WPS_DB_PATH = _wps_resolve_database_path()
+_WPS_FORMAT_PROFILE = None
 _RUNTIME_PATHS = _bootstrap_prepare_initial_runtime_paths(BASE_DIR, _DB_PATH)
 LOG_DIR = _RUNTIME_PATHS.log_dir
 RUNTIME_DIR = _RUNTIME_PATHS.runtime_dir
@@ -961,6 +987,54 @@ _COMPATIBILITY_FUNCTIONS = (
     _compare_secret,
     _client_ip,
 )
+
+
+_web_sql_init = _sql_init
+_web_ready_payload = _ready_payload
+
+
+def _wps_sql():
+    """返回 WPS 插件专用 SQLite 连接。"""
+    return _wps_database_connect(_WPS_DB_PATH)
+
+
+def _sql_init():
+    """初始化相互隔离的网页业务库和 WPS 插件库。"""
+    global _WPS_FORMAT_PROFILE
+    try:
+        _wps_require_separate_database_paths(_DB_PATH, _WPS_DB_PATH)
+    except RuntimeError:
+        logger.error(
+            "wps.database.initialize.failed | error_code=WPS_DATABASE_PATH_CONFLICT"
+        )
+        raise
+    _web_sql_init()
+    try:
+        _wps_initialize_database(_wps_sql, _WPS_SQL_LOCK)
+    except Exception:
+        logger.exception("wps.database.initialize.failed")
+        raise
+    logger.info(
+        "wps.database.initialize.completed"
+    )
+    try:
+        _WPS_FORMAT_PROFILE = _wps_load_active_format_profile()
+    except Exception:
+        logger.exception("wps.format_config.failed")
+        raise
+    logger.info(
+        "wps.format_config.loaded | config_version=%s",
+        _WPS_FORMAT_PROFILE["config_version"],
+    )
+
+
+def _ready_payload():
+    """返回包含两个数据库状态的服务 readiness。"""
+    payload = _web_ready_payload()
+    checks = dict(payload.get("checks", {}))
+    checks["wps_database"] = _wps_database_ready_check(_wps_sql, _WPS_SQL_LOCK)
+    checks["wps_format_config"] = isinstance(_WPS_FORMAT_PROFILE, dict)
+    return {"ok": all(checks.values()), "checks": checks}
 
 
 from docxtool.web.handler import Handler

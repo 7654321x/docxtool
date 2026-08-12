@@ -45,6 +45,7 @@ build/
 dist/
 *.egg-info/
 *.spec
+!apps/wps/DocxToolWps.spec
 *.zip
 tmp_wheels/
 

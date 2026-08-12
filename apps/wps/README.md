@@ -77,7 +77,7 @@ confirmed + verify_host_range
 创建预览批注
 ```
 
-`review` 和 `unresolved` 绑定不会创建编辑器 Range，只在任务窗格中显示供复核。
+`review + preview_only` 会在完整 Range 校验通过后创建明确标注“建议人工复核”的批注；`unresolved + skip` 不创建编辑器 Range，只在任务窗格中显示未定位结果。
 
 HostSnapshot 原文只通过带短期 Bearer token 的 `127.0.0.1` Control Server 传给本机 DocxTool Binder，不写入日志。Control Server 对请求体保留 16 MiB 硬上限。
 
@@ -141,11 +141,21 @@ pwsh -NoProfile -Command "python apps/wps/main.py start"
 
 `start` 会为 Control Server 分配随机本机端口，插件网页服务固定使用 `127.0.0.1:3889`，生成短期 `runtime/runtime-config.js`，并更新当前项目的 WPS 加载项注册。固定网页来源避免 WPS 因端口变化反复询问信任；若 `3889` 已被占用，启动器会直接报告端口绑定失败，不回退到随机端口。插件网页响应禁止缓存，避免 WPS 跨会话继续加载旧版 Bootstrap、Host 或 TaskPane。它不会自动打开或关闭 WPS；服务就绪后按需打开 WPS 文字即可。运行结束后会删除包含 session token 的 runtime config。
 
+首次启动且本机没有账号时，启动器显示独立登录注册窗口。账号密码、会话和设备密钥由 Windows DPAPI 加密后写入 `%LOCALAPPDATA%\DocxTool\wps\account.db`；已有账号时跳过窗口，过期会话通过保存的凭据静默登录。公网服务不可用时预览、清除预览和本机检测仍可使用，一键排版必须重新取得公网授权。
+
 只测试 Python Control Server：
 
 ```pwsh
 pwsh -NoProfile -Command "python apps/wps/main.py control"
 ```
+
+构建用户端控制台单文件 EXE：
+
+```pwsh
+pwsh -NoProfile -File apps/wps/scripts/build-exe.ps1 -ServerOrigin https://wps.example.com
+```
+
+生产构建只接受不带路径的 HTTPS Origin。脚本固定 PyInstaller 6.22.0，生成 `dist/wps/DocxToolWps.exe`，并自动从仓库外目录执行冻结态 `verify`。源码 `client-config.json` 继续使用本机开发地址，正式 Origin 只在构建时注入。
 
 ## 验证
 

@@ -11,6 +11,14 @@
 5. 不执行 `git commit` 或 `git push`，除非用户明确要求。
 6. 不静默忽略测试失败；失败时说明命令、错误和已排查内容。
 
+## 需求前提与事实边界
+
+1. 执行前根据当前源码、配置、测试和实际运行结果核实需求中的关键前提；不得把用户描述直接当作已验证事实。
+2. 发现前提错误、逻辑冲突或关键信息缺失时，应明确指出证据和影响。若不影响目标，可基于正确事实继续执行；只有会实质改变结果时才停止请求确认。
+3. 回答和报告应区分已验证事实、合理推断和主观建议。已验证事实必须有源码、测试、日志或官方文档支持；合理推断必须说明尚未直接验证；方案选择不得表述成客观事实。
+4. 不因迎合用户而认可有明显缺陷的方案。存在正确性、数据损失、兼容性或维护风险时，应直接说明，并提供范围最小的可行替代方案。
+5. 只提醒会实质影响当前目标的变量、成本和风险，不输出与任务无关的泛化警告，也不得借此扩大实现范围。
+
 ## Windows 命令
 
 在 Windows 上需要显式调用 PowerShell 时，固定使用 PowerShell 7：
@@ -153,6 +161,7 @@ pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m ruff check src tests scr
 2. Windows 启动统一使用根目录 `run.ps1`，脚本通过 `$PSScriptRoot` 定位项目；`.env`中的相对运行路径统一相对于项目根解析。
 3. Nginx模板只允许固定本机上游 `127.0.0.1:9527`，服务器公网地址通过 Cloudflare Pages 的 `BACKEND_BASE_URL`配置，不写入源码。
 4. 修改路径或部署入口后至少运行 `tests/test_paths.py`，并从项目目录之外执行 `pwsh -NoProfile -File <项目目录>\run.ps1 -CheckOnly`。
+5. Web 业务库 `DATABASE_PATH` 与 WPS 插件库 `WPS_DATABASE_PATH` 必须解析到不同文件；统一启动入口必须在初始化任一数据库前检查冲突，并以 `WPS_DATABASE_PATH_CONFLICT` 失败。不得通过 SQLite `ATTACH`、跨库 JOIN 或跨库事务合并两套业务数据。修改后运行 `tests/test_wps_server_database.py tests/test_web_admin_workspace.py`。
 
 ## IDE 快捷方式启动失败
 

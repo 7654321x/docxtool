@@ -11,12 +11,14 @@ import secrets
 import sys
 import tempfile
 import threading
+import time
 from typing import Tuple
 from xml.etree import ElementTree
 
-APP_ROOT = Path(__file__).resolve().parent
-REPO_ROOT = APP_ROOT.parent.parent
-SRC_ROOT = REPO_ROOT / "src"
+FROZEN = bool(getattr(sys, "frozen", False))
+APP_ROOT = Path(getattr(sys, "_MEIPASS")) if FROZEN else Path(__file__).resolve().parent
+REPO_ROOT = APP_ROOT if FROZEN else APP_ROOT.parent.parent
+SRC_ROOT = REPO_ROOT if FROZEN else REPO_ROOT / "src"
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 if str(SRC_ROOT) not in sys.path:
@@ -24,6 +26,10 @@ if str(SRC_ROOT) not in sys.path:
 
 from apps.wps.control.logging_adapter import configure_wps_logging, log_event  # noqa: E402
 from apps.wps.control.server import DEFAULT_PORT, create_server  # noqa: E402
+from apps.wps import account_store  # noqa: E402
+from apps.wps.account_runtime import AccountRuntime  # noqa: E402
+from apps.wps.login_window import show_login_register_window  # noqa: E402
+from apps.wps.public_api import PublicApiError, WpsPublicApi  # noqa: E402
 
 RUNTIME_DIR = APP_ROOT / "runtime"
 RUNTIME_CONFIG = RUNTIME_DIR / "runtime-config.js"
@@ -83,11 +89,15 @@ def verify_files() -> None:
     required = [
         "package.json", "manifest.xml", "ribbon.xml", "index.html", "main.js",
         "js/bootstrap-log.js", "js/bootstrap-complete.js", "js/ribbon.js", "images/taskpane.svg", "host-runtime.js",
-        "taskpane.html", "taskpane.js", "control/server.py", "control/host_bridge.py",
-        "control/format_current_document.py", "control/document_transaction.py",
-        "control/logging_adapter.py", "control/recognize_document.py",
-        "control/monitor.py",
+        "taskpane.html", "taskpane.js", "client-config.json",
     ]
+    if not FROZEN:
+        required.extend([
+            "account_store.py", "account_runtime.py", "public_api.py", "login_window.py",
+            "control/server.py", "control/host_bridge.py", "control/format_current_document.py",
+            "control/document_transaction.py", "control/logging_adapter.py",
+            "control/recognize_document.py", "control/monitor.py",
+        ])
     missing = [item for item in required if not (APP_ROOT / item).is_file()]
     if missing:
         raise RuntimeError("WPS_APP_FILES_MISSING: " + ", ".join(missing))
@@ -227,11 +237,16 @@ def _start_web_server(port: int) -> Tuple[ThreadingHTTPServer, int]:
     return server, actual_port
 
 
-def _start_control(port: int) -> Tuple[object, int]:
+def _start_control(port: int, account_runtime=None) -> Tuple[object, int]:
     log_event("INFO", "launcher", "launcher.control.create.start", "开始创建 WPS Control Server")
     token = secrets.token_urlsafe(32)
     try:
-        server = create_server(CONTROL_RUNTIME_ROOT, token, port)
+        server = create_server(
+            CONTROL_RUNTIME_ROOT,
+            token,
+            port,
+            account_runtime=account_runtime,
+        )
     except Exception as exc:
         log_event(
             "ERROR", "launcher", "launcher.control.create.failed",
@@ -277,10 +292,14 @@ def control_only(port: int) -> None:
         log_event("INFO", "launcher", "control.stop", "WPS Control Server 已停止")
 
 
-def start(port: int) -> None:
+def start(port: int, account_runtime=None) -> None:
     verify_files()
     configure_wps_logging(CONTROL_RUNTIME_ROOT)
-    control_server, actual_port = _start_control(port)
+    control_server, actual_port = (
+        _start_control(port)
+        if account_runtime is None
+        else _start_control(port, account_runtime)
+    )
     web_server = None
     control_thread = None
     thread_started = False
@@ -305,6 +324,8 @@ def start(port: int) -> None:
             "DocxTool WPS 后台服务已启动，请按需打开 WPS 文字",
             {"control_port": actual_port, "web_port": actual_web_port},
         )
+        if account_runtime is not None:
+            account_runtime.start()
         try:
             web_server.serve_forever(poll_interval=0.25)
         except KeyboardInterrupt:
@@ -317,6 +338,8 @@ def start(port: int) -> None:
             )
             raise
     finally:
+        if account_runtime is not None:
+            account_runtime.stop()
         if web_server is not None:
             web_server.server_close()
             log_event("INFO", "launcher", "launcher.web.stop", "WPS 插件网页服务已停止")
@@ -343,6 +366,30 @@ def start(port: int) -> None:
         log_event("INFO", "launcher", "launcher.session.stop", "DocxTool WPS 本地会话已停止")
 
 
+def resolve_startup_account(api) -> dict:
+    """Load the local account or complete standalone login before startup."""
+    account = account_store.load_account()
+    if not account:
+        log_event("INFO", "launcher", "launcher.account.window.open", "本机没有已保存账号，打开登录注册窗口")
+        return show_login_register_window(api=api, account_store=account_store)
+    if int(account["session_expires_at"]) > int(time.time()):
+        log_event("INFO", "launcher", "launcher.account.loaded", "已读取本机账号，跳过登录窗口", {"session_valid": True})
+        return account
+    runtime = AccountRuntime(account, api)
+    try:
+        runtime.ensure_session()
+    except PublicApiError as exc:
+        if exc.network:
+            log_event("WARNING", "launcher", "launcher.account.offline", "公网服务暂不可用，本地功能继续启动", {"error_code": exc.code})
+            return account
+        account_store.clear_account()
+        log_event("WARNING", "launcher", "launcher.account.rejected", "已保存账号被服务器拒绝，重新打开登录窗口", {"error_code": exc.code})
+        return show_login_register_window(api=api, account_store=account_store)
+    refreshed = account_store.load_account()
+    log_event("INFO", "launcher", "launcher.account.refreshed", "已静默刷新过期登录会话")
+    return refreshed
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="DocxTool WPS app launcher")
     parser.add_argument("action", nargs="?", default="start", choices=("start", "control", "verify"))
@@ -358,7 +405,12 @@ def main() -> int:
     if args.action == "control":
         control_only(args.port)
         return 0
-    start(args.port)
+    api = WpsPublicApi()
+    account = resolve_startup_account(api)
+    if not account:
+        log_event("INFO", "launcher", "launcher.account.window.closed", "登录注册窗口已关闭，停止启动")
+        return 0
+    start(args.port, AccountRuntime(account, api))
     return 0
 
 
