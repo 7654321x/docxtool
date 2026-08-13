@@ -71,15 +71,17 @@ https://github.com/7654321x/docxtool.git
 ```text
 apps/wps/host-runtime.js
 apps/wps/images/taskpane.svg
+apps/wps/images/check.svg
 apps/wps/images/eye.svg
 apps/wps/images/eye-off.svg
 apps/wps/images/login-window.png
+apps/wps/images/user.svg
 apps/wps/js/bootstrap-log.js
 apps/wps/js/bootstrap-complete.js
 apps/wps/js/ribbon.js
 ```
 
-同时保留 `apps/wps/main.js`、`index.html`、`main.py`、`manifest.xml`、`ribbon.xml`、`images/taskpane.svg`、`images/eye.svg`、`images/eye-off.svg`、`images/login-window.png`、`taskpane.*`、`control/*.py`（包含单线程 `control/monitor.py` 和长请求通信桥 `control/host_bridge.py`）、`account_store.py`、`account_runtime.py`、`public_api.py`、`login_window.py`、`desktop_runtime.py`、`windows_startup.py`、`client-config.json`、`DocxToolWps.spec`、`requirements-build.txt`、`scripts/build-exe.ps1`、全部 WPS 测试（包括登录窗口和 Windows 启动项测试）、`scripts/verify.ps1`、`package.json`、`package-lock.json`、`README.md` 和 `AGENTS.md`。不得上传 `apps/wps/node_modules/`、`logs/`、运行时生成的 `runtime/runtime-config.js`、`build/`、`dist/`、打包 EXE 或本机 WPS 注册文件。
+同时保留 `apps/wps/main.js`、`index.html`、`main.py`、`manifest.xml`、`ribbon.xml`、`images/taskpane.svg`、`images/check.svg`、`images/eye.svg`、`images/eye-off.svg`、`images/login-window.png`、`images/user.svg`、`taskpane.*`、`control/*.py`（包含版头适配 `control/add_letterhead.py`、单线程 `control/monitor.py` 和长请求通信桥 `control/host_bridge.py`）、`account_store.py`、`account_runtime.py`、`public_api.py`、`login_window.py`、`desktop_runtime.py`、`windows_startup.py`、`client-config.json`、`DocxToolWps.spec`、`requirements-build.txt`、`scripts/build-exe.ps1`、全部 WPS 测试（包括 `tests/test_add_letterhead.py`、登录窗口和 Windows 启动项测试）、`scripts/verify.ps1`、`package.json`、`package-lock.json`、`README.md` 和 `AGENTS.md`。不得上传 `apps/wps/node_modules/`、`logs/`、运行时生成的 `runtime/runtime-config.js`、`build/`、`dist/`、打包 EXE 或本机 WPS 注册文件。
 
 ## 2. 后端和排版核心
 
@@ -185,7 +187,7 @@ apps/wps/js/ribbon.js
 | `src/docxtool/document/normalization/` | 导入后的结构归一化 | 当前承载基础文本清理、标题编号剥离与编号 meta、日期/附件/落款/责任单位显示规范、规范化账本、尾部附件、落款、日期顺序修正和诊断同步 |
 | `src/docxtool/document/normalization/changes.py` | 规范化变更账本生成 | 只根据最终段落、规范化前快照和调用方传入的标点建议函数记录 strict 建议或 normalize 已应用变化，不修改正文、类型或顺序 |
 | `src/docxtool/document/normalization/numbering.py` | 识别后标题编号规范化 | 只消费最终 type_id、已识别编号前缀、兼容兜底正则和样式规则，剥离旧前缀、生成标题编号 meta 并修复跳号，不重新判断标题层级或正文类型 |
-| `src/docxtool/document/normalization/pipeline.py` | Recognition 后规范化兼容编排 | 仅按 importer 原调用顺序调度注入的尾部、编号、合并、清理和诊断同步回调；不生成候选、不改变最终类型或处理模式语义 |
+| `src/docxtool/document/normalization/pipeline.py` | Recognition 后规范化兼容编排 | 调度尾部、编号、清理和诊断同步回调，并以运行时不变量禁止修改 Recognition 最终类型 |
 | `src/docxtool/document/normalization/tail.py` | 识别后尾部结构归一化 | 只消费最终 type_id，整理附件说明、落款单位、成文日期、附件正文页和尾部窄重排，并同步诊断，不重新识别正文或标题 |
 | `src/docxtool/document/segmentation/` | 物理段到逻辑段的分段辅助 | 当前承载来源定位、标题正文边界、段内格式映射、来源范围分区与守恒核验、软换行强结构判断和尾部正文候选边界扫描 |
 | `src/docxtool/document/segmentation/partition.py` | 来源范围保序分区 | 将物理段可见范围机械划分为逻辑片段，不判断最终段落类型 |
@@ -220,6 +222,7 @@ apps/wps/js/ribbon.js
 | `src/docxtool/resources/schemas/` | SDK JSON Schema 资源 | 随 wheel 安装，作为跨语言协议来源 |
 | `src/docxtool/document/analysis/__init__.py` | 中立只读文档分析包入口 |
 | `src/docxtool/document/analysis/document_structure.py` | 只读结构化公文板块模型与边界分析 |
+| `src/docxtool/document/analysis/layout_policy.py` | 根据最终结构和物理格式事实唯一分配三种内部布局修改策略 |
 | `src/docxtool/document/analysis/letterhead.py` | 首页正文流已有版头的只读结构检测 |
 | `src/docxtool/document/text/__init__.py` | 中立纯文本转换包入口 |
 | `src/docxtool/document/text/punctuation.py` | 不依赖 OOXML 和渲染状态的安全标点算法 |

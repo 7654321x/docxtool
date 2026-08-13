@@ -18,6 +18,10 @@ def test_legacy_punctuation_keeps_broken_heading_dot() -> None:
     assert to_chinese_punctuation("正文,测试.") == "正文，测试。"
 
 
+def test_legacy_punctuation_preserves_space_after_colon() -> None:
+    assert to_chinese_punctuation("标题: 正文") == "标题： 正文"
+
+
 def test_normalize_quotes_preserves_english_apostrophes() -> None:
     """引号转换应处理中文语境，同时保留英文单词内部撇号。"""
     assert normalize_quotes('"你好"') == "“你好”"

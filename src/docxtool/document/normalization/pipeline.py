@@ -116,26 +116,25 @@ def apply_post_recognition_normalization(
     normalize_tail_structures_func: Callable[..., None],
     reorder_attachment_note_before_signature_func: Callable[[list[Any]], None],
     assign_numbering_func: Callable[..., None],
-    merge_siblings_func: Callable[[list[Any]], None],
     record_applied_normalization_changes_func: Callable[[Any, list[tuple[str, str, str]]], None],
     fix_numbering_gaps_func: Callable[[list[Any]], None],
     strip_auto_numbering_func: Callable[[Any], None],
     sync_recognition_consistency_func: Callable[[Any], None],
 ) -> None:
-    """Run the former importer post-recognition sequence in the same order.
+    """Run text/order normalization after Recognition finalizes semantic types.
 
-    It receives all behavioral functions from ``DocxImporter``.  Keeping those
-    calls injected is intentional: callers and tests that replace an existing
-    importer private entry observe the identical point in the chain as before
-    this mechanical extraction.
+    Existing importer callbacks remain injected for compatibility, but this
+    stage may not reclassify paragraphs. Heading-family decisions belong to
+    Recognition and are guarded by the semantic-type invariant below.
     """
-    if structural_preservation:
+    semantic_types = {id(paragraph): paragraph.type_id for paragraph in data.paragraphs}
+    local_scope = getattr(data, "format_scope", None) is not None
+    if structural_preservation and not local_scope:
         normalize_tail_structures_func(data.paragraphs, normalize_text=False)
     elif not strict_preservation:
         normalize_tail_structures_func(data.paragraphs)
         reorder_attachment_note_before_signature_func(data.paragraphs)
         assign_numbering_func(data.paragraphs, rules)
-        merge_siblings_func(data.paragraphs)
         record_applied_normalization_changes_func(data, before_normalization)
 
     if structural_preservation and numbering_enabled:
@@ -152,3 +151,14 @@ def apply_post_recognition_normalization(
             strip_auto_numbering_func(paragraph)
 
     sync_recognition_consistency_func(data)
+    changed_types = [
+        (semantic_types[id(paragraph)], paragraph.type_id)
+        for paragraph in data.paragraphs
+        if id(paragraph) in semantic_types
+        and semantic_types[id(paragraph)] != paragraph.type_id
+    ]
+    if changed_types:
+        raise ValueError(
+            "post-recognition normalization changed final semantic type: "
+            f"{changed_types[0][0]} -> {changed_types[0][1]}"
+        )

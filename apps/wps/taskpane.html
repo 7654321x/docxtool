@@ -8,21 +8,38 @@
   header{flex:0 0 auto;padding:10px 14px;border-bottom:1px solid #dce3ee;background:#fff}.toolbar{display:flex;justify-content:space-between;gap:8px;align-items:center}.toolbar-actions{white-space:nowrap}
   main{flex:1 1 auto;min-height:0;overflow-y:auto;box-sizing:border-box;padding:12px 14px}.panel{border:1px solid #dce3ee;border-radius:8px;padding:12px;margin:10px 0}
   button{padding:7px 10px;margin:3px;border:1px solid #cbd5e1;border-radius:5px;background:#fff}button.primary{background:#1769aa;color:#fff;border-color:#1769aa}
+  .scope{display:grid;grid-template-columns:88px 1fr;gap:8px;align-items:center;margin-bottom:8px}.scope select,.scope input{box-sizing:border-box;width:100%;height:34px;border:1px solid #cbd5e1;border-radius:5px;padding:5px 8px;background:#fff;color:#172033}.scope input:disabled{background:#f3f5f7;color:#8a94a3}
   .meta{font-size:12px;color:#5c6676}.error{color:#b42318}.warning{color:#8a5a00}.rows{max-height:320px;overflow:auto}.row{padding:7px 0;border-top:1px solid #eef1f5;overflow-wrap:anywhere}
+  .modal-mask{position:fixed;inset:0;z-index:20;display:flex;align-items:center;justify-content:center;padding:14px;background:rgba(15,23,42,.4)}.modal-mask[hidden]{display:none}.modal-card{box-sizing:border-box;width:min(360px,100%);max-height:calc(100vh - 28px);overflow:auto;border-radius:10px;background:#fff;padding:16px;box-shadow:0 16px 42px rgba(15,23,42,.24)}.modal-card h2{margin:0 0 12px;font-size:17px}.form-field{display:block;margin:10px 0}.form-field span{display:block;margin-bottom:4px;color:#334155}.form-field input,.form-field select{box-sizing:border-box;width:100%;height:36px;border:1px solid #cbd5e1;border-radius:5px;padding:6px 9px;color:#172033;background:#fff}.modal-actions{display:flex;justify-content:flex-end;gap:6px;margin-top:14px}.modal-note{margin:5px 0 0;color:#64748b;font-size:12px}
 </style>
 </head>
 <body>
 <header id="taskpane_header"><div class="toolbar"><div><strong>DocxTool WPS</strong><div id="status" class="meta">连接中</div><div id="account" class="meta">正在读取账号…</div></div><div class="toolbar-actions"><button id="close_panel">关闭</button></div></div></header>
 <main id="content">
   <div class="panel">
+    <div class="scope"><label for="format_scope_mode">排版范围</label><select id="format_scope_mode"><option value="whole">全文</option><option value="pre_format_pages">指定页码</option></select></div>
+    <div class="scope"><label for="format_page_spec">原始页码</label><input id="format_page_spec" type="text" inputmode="numeric" placeholder="例如：3-5 或 3,5,8-10" disabled></div>
     <button id="preview">预览排版</button>
     <button id="apply" class="primary">一键排版</button>
+    <button id="add_letterhead">添加版头</button>
     <button id="clear_preview">清除预览</button>
     <button id="health">本机检测</button>
   </div>
   <div class="panel"><strong>执行状态</strong><div id="message" class="meta">就绪</div><div id="error" class="error"></div><div id="warnings" class="warning"></div></div>
   <div class="panel"><strong>识别结果</strong><div id="summary" class="meta">尚未识别。</div><div id="rows" class="rows"></div></div>
 </main>
+<div id="letterhead_modal" class="modal-mask" hidden>
+  <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="letterhead_title">
+    <h2 id="letterhead_title">添加版头</h2>
+    <label class="form-field"><span>发文机关标志</span><input id="letterhead_mark" maxlength="80" placeholder="例如：北京市人民政府文件"></label>
+    <label class="form-field"><span>发文字号</span><input id="letterhead_number" maxlength="80" placeholder="例如：京政发〔2026〕1号"></label>
+    <label class="form-field"><span>签发人（选填）</span><input id="letterhead_signer" maxlength="30" placeholder="填写后按上行文生成"></label>
+    <label class="form-field"><span>分割线</span><select id="letterhead_separator"><option value="straight">直线型</option><option value="star">五角星型</option></select></label>
+    <p id="letterhead_form_error" class="error"></p>
+    <p class="modal-note">添加后将直接更新当前文档，不执行全文识别或一键排版。</p>
+    <div class="modal-actions"><button id="letterhead_cancel">取消</button><button id="letterhead_confirm" class="primary">添加</button></div>
+  </section>
+</div>
 <script>
 fetch("./runtime/config", {cache:"no-store", credentials:"same-origin"}).then(function(response){
   if(!response.ok) throw new Error("WPS_RUNTIME_CONFIG_LOAD_FAILED");
@@ -30,7 +47,7 @@ fetch("./runtime/config", {cache:"no-store", credentials:"same-origin"}).then(fu
 }).then(function(config){
   window.DocxToolWpsConfig=Object.freeze(config);
   var script=document.createElement("script");
-  script.src="./taskpane.js?v=11";
+  script.src="./taskpane.js?v=13";
   document.body.appendChild(script);
 }).catch(function(error){
   document.getElementById("status").textContent="错误";

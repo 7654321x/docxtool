@@ -5,6 +5,7 @@ import hashlib
 from pathlib import Path
 from zipfile import ZipFile
 
+import pytest
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_TAB_ALIGNMENT
 from docx.oxml import OxmlElement
@@ -17,6 +18,7 @@ from docxtool.document.engine.letterhead import (
     apply_letterhead,
     detect_letterhead,
 )
+from docxtool.document.analysis.letterhead import extract_letterhead_fields
 from docxtool.document.importer import DocumentData, ParagraphData, ParagraphFeatures, DocxImporter
 from docxtool.document.letterhead_config import default_letterhead_config
 from docxtool.document.style_config import PageSettings, StyleRule
@@ -100,19 +102,39 @@ def test_single_mark_document_number_separator_and_title_spacing(tmp_path):
     assert stats["letterhead_action"] == "generated"
     mark = document.paragraphs[3]
     assert mark.runs[0].font.size.pt == 32
-    assert mark.runs[0]._r.rPr.find(qn("w:w")) is None
+    assert mark.paragraph_format.line_spacing.pt == pytest.approx(
+        mark.runs[0].font.size.pt,
+        abs=0.1,
+    )
+    assert mark.paragraph_format.line_spacing.pt != pytest.approx(28, abs=0.1)
+    assert mark.runs[0]._r.rPr.find(qn("w:w")).get(qn("w:val")) == "100"
     assert spacing_value(mark, "beforeLines") == "0"
     assert spacing_value(mark, "afterLines") == "0"
-    assert spacing_value(mark, "before") is None
-    assert spacing_value(mark, "after") is None
+    assert spacing_value(mark, "before") == "0"
+    assert spacing_value(mark, "after") == "0"
     for spacer in document.paragraphs[:3] + document.paragraphs[4:6]:
         assert spacer.style.style_id == "DCT-LetterheadSpacer"
         assert spacing_value(spacer, "beforeLines") == "0"
         assert spacing_value(spacer, "afterLines") == "0"
+        assert spacer.paragraph_format.space_before.pt == 0
+        assert spacer.paragraph_format.space_after.pt == 0
+        assert spacer.paragraph_format.first_line_indent.pt == 0
+        assert spacer.paragraph_format.left_indent.pt == 0
+        assert spacer.paragraph_format.right_indent.pt == 0
+    assert [
+        spacer.paragraph_format.line_spacing.pt
+        for spacer in document.paragraphs[:3]
+    ] == pytest.approx([28, 28, 28], abs=0.1)
+    for paragraph in (mark, document.paragraphs[6]):
+        assert paragraph.paragraph_format.space_before.pt == 0
+        assert paragraph.paragraph_format.space_after.pt == 0
+        assert paragraph.paragraph_format.first_line_indent.pt == 0
+        assert paragraph.paragraph_format.left_indent.pt == 0
+        assert paragraph.paragraph_format.right_indent.pt == 0
     assert spacing_value(document.paragraphs[6], "beforeLines") == "0"
     assert spacing_value(document.paragraphs[6], "afterLines") == "0"
-    assert spacing_value(document.paragraphs[7], "afterLines") == "200"
-    assert spacing_value(document.paragraphs[7], "after") is None
+    assert spacing_value(document.paragraphs[7], "afterLines") is None
+    assert spacing_value(document.paragraphs[7], "after") == "1120"
     assert document.paragraphs[7].paragraph_format.left_indent.pt == 0
     assert document.paragraphs[7].paragraph_format.right_indent.pt == 0
     empty_styles = [p.style.style_id for p in document.paragraphs if not p.text]
@@ -133,7 +155,9 @@ def test_single_mark_document_number_separator_and_title_spacing(tmp_path):
         assert bottom.get(qn("w:space")) == "0"
         assert len(document_xml.findall(".//" + qn("w:pBdr") + "/" + qn("w:bottom"))) == 1
         assert not document_xml.findall(".//" + qn("w:drawing"))
-        assert not document_xml.findall(".//" + qn("w:pict"))
+        assert not document_xml.findall(
+            ".//" + qn("w:pict") + "/*[@id='DocxToolLetterheadStarSeparator']"
+        )
         assert not document_xml.findall(".//" + qn("w:object"))
         assert "DocxtoolLetterheadVersion" in custom_xml
         assert not any("header" in name and name.endswith(".xml") for name in archive.namelist())
@@ -145,6 +169,171 @@ def test_single_mark_document_number_separator_and_title_spacing(tmp_path):
         assert b"------" not in archive.read("word/document.xml")
     assert round(document.paragraphs[7].paragraph_format.space_before.cm, 1) == 0.4
     assert spacing_value(document.paragraphs[7], "beforeLines") is None
+
+
+def test_separator_title_gap_tracks_two_exact_body_lines(tmp_path):
+    output, _ = export(
+        tmp_path,
+        config(),
+        "line-spacing-28-8.docx",
+        page_settings=PageSettings(line_spacing_value=28.8),
+    )
+    document = Document(output)
+    separator = next(
+        paragraph
+        for paragraph in document.paragraphs
+        if paragraph.style.style_id == "DCT-LetterheadSeparator"
+    )
+    title = next(
+        paragraph
+        for paragraph in document.paragraphs
+        if paragraph.style.style_id == "DCT-Title"
+    )
+    assert spacing_value(separator, "after") == "1152"
+    assert spacing_value(separator, "afterLines") is None
+    assert spacing_value(title, "before") == "0"
+    assert spacing_value(title, "beforeLines") == "0"
+
+
+def test_long_mark_adapts_without_exceeding_text_width(tmp_path):
+    long_mark = "中华人民共和国超长测试发文机关名称文件"
+    output, _ = export(
+        tmp_path,
+        config(
+            mark_display_mode="agency_only",
+            agencies=[{
+                "id": "agency-1",
+                "name": long_mark,
+                "short_name": "",
+                "role": "sponsor",
+                "order": 1,
+            }],
+        ),
+        "long-mark.docx",
+    )
+    mark = next(
+        paragraph
+        for paragraph in Document(output).paragraphs
+        if paragraph.style.style_id == "DCT-LetterheadMark"
+    )
+    scale = int(mark.runs[0]._r.rPr.find(qn("w:w")).get(qn("w:val")))
+    assert 55 <= scale <= 100
+    assert mark.runs[0].font.size.pt == 32
+    assert mark.paragraph_format.line_spacing.pt == pytest.approx(
+        mark.runs[0].font.size.pt,
+        abs=0.1,
+    )
+
+
+def test_star_separator_uses_center_star_with_symmetric_red_lines(tmp_path):
+    output, _ = export(
+        tmp_path,
+        config(separator_style="star"),
+        "star-separator.docx",
+    )
+    generated = Document(output)
+    separator = next(
+        paragraph
+        for paragraph in generated.paragraphs
+        if paragraph.style.style_id == "DCT-LetterheadSeparator"
+    )
+    assert separator.text == ""
+    assert separator._p.find(".//" + qn("w:pBdr")) is None
+    group = next(
+        node
+        for node in separator._p.iter()
+        if node.tag.endswith("}group")
+    )
+    assert group.get("id") == "DocxToolLetterheadStarSeparator"
+    children = list(group)
+    assert len([node for node in children if node.tag.endswith("}line")]) == 2
+    stars = [
+        node
+        for node in children
+        if node.tag.endswith("}shape")
+        and node.get("id") == "DocxToolLetterheadCenterStar"
+    ]
+    assert len(stars) == 1
+    assert stars[0].get("path", "").startswith("m5000,10 ")
+    assert stars[0].get("path", "").endswith(" x e")
+    assert stars[0].get("filled") == "t"
+    assert stars[0].get("fillcolor") == "#FF0000"
+    assert not any(node.tag.endswith("}polyline") for node in children)
+    fields = extract_letterhead_fields(generated, detect_letterhead(generated))
+    assert fields is not None
+    assert fields.separator_style == "star"
+
+
+def test_extracts_managed_letterhead_fields_and_auto_rebuilds(tmp_path):
+    first, _ = export(
+        tmp_path,
+        config(
+            document_direction="upward",
+            signers=[{
+                "id": "signer-1",
+                "agency_id": "agency-1",
+                "name": "张三",
+                "label": "签发人",
+                "order": 1,
+            }],
+            separator_style="star",
+        ),
+        "extract-source.docx",
+    )
+    document = Document(first)
+    detection = detect_letterhead(document)
+    fields = extract_letterhead_fields(document, detection)
+    assert fields is not None
+    assert fields.mark_text == "测试机关文件"
+    assert fields.agency_code == "测发"
+    assert fields.year == 2026
+    assert fields.sequence == 12
+    assert fields.signers == ("张三",)
+    assert fields.separator_style == "star"
+
+    auto = default_letterhead_config()
+    auto["enabled"] = True
+    result = apply_letterhead(
+        document,
+        auto,
+        detection=detection,
+        rules=rules(),
+        settings=PageSettings(),
+    )
+    assert result.action == "replaced"
+    assert [paragraph.text for paragraph in document.paragraphs].count("测试机关文件") == 1
+
+
+def test_full_export_auto_rebuilds_from_source_fields(tmp_path):
+    first, _ = export(tmp_path, config(separator_style="star"), "auto-source.docx")
+    imported = DocxImporter().load(str(first), rules(), features={})
+    assert imported.letterhead_detection.fields is not None
+    auto = default_letterhead_config()
+    auto["enabled"] = True
+    output = tmp_path / "auto-output.docx"
+
+    stats = export_doc(
+        imported,
+        rules(),
+        PageSettings(),
+        str(output),
+        page_number_enabled=False,
+        letterhead_options=auto,
+    )
+
+    result = Document(output)
+    assert stats["letterhead_action"] == "replaced"
+    assert [paragraph.text for paragraph in result.paragraphs].count("测试机关文件") == 1
+    separator = next(
+        paragraph
+        for paragraph in result.paragraphs
+        if paragraph.style.style_id == "DCT-LetterheadSeparator"
+    )
+    assert any(
+        node.tag.endswith("}group")
+        and node.get("id") == "DocxToolLetterheadStarSeparator"
+        for node in separator._p.iter()
+    )
 
 
 def test_enabled_letterhead_does_not_override_document_page_layout(tmp_path):
@@ -622,7 +811,8 @@ def test_disabled_letterhead_adds_separator_after_leading_document_number(tmp_pa
         "市委办〔2026〕1号", "", "关于推进重点工作的通知"
     ]
     assert result.paragraphs[1].style.style_id == "DCT-LetterheadSeparator"
-    assert spacing_value(result.paragraphs[1], "afterLines") == "200"
+    assert spacing_value(result.paragraphs[1], "afterLines") is None
+    assert spacing_value(result.paragraphs[1], "after") == "1120"
     assert len(result._element.findall(".//" + qn("w:pBdr") + "/" + qn("w:bottom"))) == 1
 
 
@@ -828,6 +1018,20 @@ def test_joint_agency_prefix_and_signer_continuation_are_bounded():
 
     assert detection.status == "recognized_external"
     assert detection.protected_body_indexes == (0, 1, 2, 3, 4, 5)
+    fields = extract_letterhead_fields(document, detection)
+    assert fields is not None
+    assert fields.issuance_mode == "joint"
+
+    auto = default_letterhead_config()
+    auto["enabled"] = True
+    with pytest.raises(ValueError, match="LETTERHEAD_JOINT_SOURCE_UNSUPPORTED"):
+        apply_letterhead(
+            document,
+            auto,
+            detection=detection,
+            rules=rules(),
+            settings=PageSettings(),
+        )
 
 
 def test_agency_file_mark_without_red_formatting_is_incomplete_letterhead():

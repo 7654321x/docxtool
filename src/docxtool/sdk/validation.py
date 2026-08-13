@@ -362,13 +362,15 @@ def _expected_plan_id(payload: Mapping[str, Any]) -> str:
 
 def _expected_physical_group_id(plan_id: str, block: Mapping[str, Any]) -> str:
     locator = block.get("source_locator") if isinstance(block.get("source_locator"), Mapping) else {}
-    return stable_id(
-        "pg",
+    group_parts = (
         plan_id,
         locator.get("physical_paragraph_index"),
         locator.get("physical_occurrence_index"),
         locator.get("physical_raw_text_sha256"),
     )
+    if locator.get("physical_paragraph_index") is None:
+        group_parts += (block.get("block_index"),)
+    return stable_id("pg", *group_parts)
 
 
 def _expected_block_id(plan_id: str, block: Mapping[str, Any], physical_group_id: str) -> str:

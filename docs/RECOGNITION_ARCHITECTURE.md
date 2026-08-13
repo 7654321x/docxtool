@@ -379,7 +379,17 @@ Web 服务启动顺序、启动日志、TCP_NODELAY 设置和 KeyboardInterrupt 
 - `responsibility.py`：提供已识别责任单位行的标签归一和重复标签换行规范化，只处理显示文本，不把正文重新分类为责任单位。
 - `text.py`：提供旧 importer 兼容的基础文本清理、中文语境引号转换和半角标点转换。该模块只封装文本转换 helper，不改变处理模式开关。
 - `tail.py`：消费最终 `type_id`，整理已确认的附件说明、落款单位、成文日期和附件正文页标记，承接 `sign_org + sign_date + attachment_note` 的尾部窄重排，并同步识别诊断。它不重新生成候选、不重新判定正文或标题，也不改变候选分数。
-- `pipeline.py`：仅承接 importer 原有的 Recognition 之后规范化调用顺序，包括尾部整理、编号 meta、同级合并、编号间隙修复、Word 自动编号清理和最终诊断同步。所有具体操作仍由 importer 注入的兼容回调执行，因此不改变私有 monkeypatch 边界、处理模式语义或 Recognition 的先后顺序。
+- `pipeline.py`：承接 Recognition 之后的文本与顺序规范化，包括尾部整理、编号 meta、编号间隙修复、Word 自动编号清理和最终诊断同步。标题家族与同级关系由 Recognition 的上下文、候选和 Beam 最终裁决；旧同级合并函数仅保留兼容 facade，真实主链不调用。规范化前后按段落对象核对 `type_id`，任何语义类型变化立即失败。
+
+最终处理顺序固定为：
+
+```text
+Physical Import -> Segmentation -> Recognition (final semantic types)
+-> post-recognition normalization -> consistency sync
+-> Final DocumentStructure -> LayoutPolicy -> Engine
+```
+
+`Final DocumentStructure` 只在规范化、尾部重排和一致性同步完成后构建，并写入 `DocumentData.recognition_structure`。`analysis/layout_policy.py` 是布局策略的唯一推断位置：普通文本为 `NORMALIZE`，附件区具有真实分页和重复人工列证据的文本为 `PRESERVE_LAYOUT`，表格、图片、题注和版头对象为 `PRESERVE_OBJECT`。Normalization 与 Engine 只消费该事实，不在 Web、WPS 或渲染器中重新识别附件名单。
 
 ## Phase A-2 Mechanical Boundary
 

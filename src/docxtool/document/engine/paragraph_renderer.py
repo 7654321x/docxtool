@@ -52,6 +52,7 @@ def render_document_items(
         paragraph_i += 1
         try:
             logger.debug("[引擎] 段落 %s: type=%s chars=%s", para_no, pd.type_id, len(pd.text))
+            preserve_layout = pd.meta.get("layout_policy") == "preserve_layout"
 
             # 确定对应的 StyleRule 索引
             rule_index = TYPE_TO_RULE_INDEX.get(pd.type_id)
@@ -109,7 +110,7 @@ def render_document_items(
             first_period = stripped_text.find("。")
             has_inline_body = (
                 first_period >= 0
-                and len(stripped_text[first_period + 1:-1].strip())
+                and len(stripped_text[first_period + 1:].strip())
                 >= _INLINE_HEADING_BODY_MIN_CHARS
             )
             if (
@@ -119,12 +120,12 @@ def render_document_items(
                 and not has_inline_body
             ):
                 text = stripped_text[:-1]
-            if numbering_enabled and normalization_processing:
+            if numbering_enabled and normalization_processing and not preserve_layout:
                 numbering_result = normalize_numbering_text(text, safe=numbering_mode != "off")
                 if numbering_result.changed:
                     text = numbering_result.text
             numbering_correction = bool(pd.meta.get("numbering_correction"))
-            if pd.type_id.startswith("heading") and (
+            if not preserve_layout and pd.type_id.startswith("heading") and (
                 normalization_processing or numbering_correction
             ):
                 text = _strip_heading_numbering(text)
@@ -133,7 +134,7 @@ def render_document_items(
                     text = _handle_heading_period(text)
 
             inline_tokens = list(getattr(pd, "inline_tokens", None) or [])
-            if normalization_processing:
+            if normalization_processing and not preserve_layout:
                 inline_tokens = _without_redundant_trailing_body_page_breaks(
                     pd,
                     render_items[i + 1] if i + 1 < len(render_items) else None,
@@ -296,32 +297,57 @@ def render_document_items(
                         f"行距={settings.line_spacing_value}pt固定 | 对网=1"
                     )
 
-            # heading2 句号分割，标题+正文同段（方案模式不拆分）
-            if normalization_processing and pd.type_id == "heading2" and "。" in para.text:
-                period_pos = para.text.find("。")
-                full_text = para.text
-                after = full_text[period_pos + 1:].strip()
-                if len(after) >= _INLINE_HEADING_BODY_MIN_CHARS and para.runs:
-                    para.runs[-1].text = full_text[:period_pos + 1]
-                    body_run = para.add_run(full_text[period_pos + 1:])
-                    body_rule = rules[5] if len(rules) > 5 else StyleRule.default_for_row(5)
-                    _set_run_fonts(body_run, cn_font=body_rule.font, en_font="Times New Roman")
-                    body_run.font.size = Pt(body_rule.font_size_pt)
-                    body_run.font.bold = body_rule.bold
-                    para.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-
             # X是/固定词组 特殊加粗
-            if pd.meta.get("numbered_bold") and para.runs:
+            inline_heading2_colon = bool(
+                pd.type_id == "heading2"
+                and (
+                    pd.meta.get("numbered_heading2_colon_inline_body")
+                    or getattr(
+                        getattr(pd, "features", None),
+                        "numbered_heading2_colon_inline_body",
+                        False,
+                    )
+                )
+            )
+            inline_heading2_period = bool(
+                pd.type_id == "heading2"
+                and (
+                    pd.meta.get("numbered_heading2_period_inline_body")
+                    or getattr(
+                        getattr(pd, "features", None),
+                        "numbered_heading2_period_inline_body",
+                        False,
+                    )
+                )
+            )
+            inline_heading2_body = inline_heading2_colon or inline_heading2_period
+            if (
+                not preserve_layout
+                and not inline_heading2_body
+                and pd.meta.get("numbered_bold")
+                and para.runs
+            ):
                 _apply_special_bold(para, pd.text)
 
-            if pd.type_id == "responsibility_line" and para.runs:
+            if not preserve_layout and pd.type_id == "responsibility_line" and para.runs:
                 _apply_responsibility_line(para, pd.text)
 
             # 冒号关键词加粗（如"责任单位：区政府" → "责任单位："加粗）
-            if pd.type_id != "responsibility_line" and pd.meta.get("colon_bold") and para.runs:
+            if (
+                not preserve_layout
+                and not inline_heading2_body
+                and pd.type_id != "responsibility_line"
+                and pd.meta.get("colon_bold")
+                and para.runs
+            ):
                 _apply_colon_bold(para, pd.text)
 
-            if (pd.type_id == "responsibility_line" or pd.meta.get("colon_bold")) and para.runs:
+            if (
+                not preserve_layout
+                and not inline_heading2_body
+                and (pd.type_id == "responsibility_line" or pd.meta.get("colon_bold"))
+                and para.runs
+            ):
                 _apply_key_value_line_format(para)
 
             # Legacy report metadata still reaches this compatibility branch
@@ -340,10 +366,20 @@ def render_document_items(
                     stats["body"] += 1
 
             # Source-backed inline emphasis keeps one physical body paragraph.
-            if pd.meta.get("inline_lead_bold") and para.runs:
+            if (
+                not preserve_layout
+                and not inline_heading2_body
+                and pd.meta.get("inline_lead_bold")
+                and para.runs
+            ):
                 _apply_inline_lead_bold(para, pd.text, resolved)
             # 报告首句加粗（首句楷体_GB2312 加粗，剩余仿宋正文）
-            elif pd.meta.get("report_first_sentence_bold") and para.runs:
+            elif (
+                not preserve_layout
+                and not inline_heading2_body
+                and pd.meta.get("report_first_sentence_bold")
+                and para.runs
+            ):
                 _apply_report_first_sentence(para, pd.text, resolved)
 
             # 编号：从 meta 读取预计算编号，插入到第一个 run 前
@@ -372,14 +408,24 @@ def render_document_items(
 
             if pd.type_id == "heading2":
                 body_rule = rules[5] if len(rules) > 5 else StyleRule.default_for_row(5)
-                _enforce_inline_heading2_format(para, resolved.bold, body_rule.bold)
+                if not strict_preservation and inline_heading2_colon:
+                    _apply_numbered_heading2_colon_format(
+                        para, para.text, resolved, body_rule
+                    )
+                elif not strict_preservation and inline_heading2_period:
+                    _apply_numbered_heading2_period_format(
+                        para, para.text, resolved, body_rule
+                    )
+                else:
+                    _enforce_inline_heading2_format(para, resolved.bold, body_rule.bold)
 
             # 名词解释条目（编号后执行：关键词黑体，正文仿宋）
-            if pd.meta.get("glossary_item") and para.runs:
+            if not preserve_layout and pd.meta.get("glossary_item") and para.runs:
                 _apply_glossary_item(para, pd.text, resolved)
 
             # 上标拆分
-            apply_superscript_split(para)
+            if not preserve_layout:
+                apply_superscript_split(para)
 
             # 最终强制 snapToGrid
             pPr_final = para._element.get_or_add_pPr()
@@ -436,6 +482,10 @@ def render_document_items(
         except ExportError:
             raise
         except Exception as e:
+            if is_structure_sensitive_type(pd.type_id):
+                raise ExportError(
+                    f"结构段落排版失败: type={pd.type_id} index={i}"
+                ) from e
             logger.error(f"[引擎] 段落 {i} 异常: {e}，降级为纯文本")
             # 降级兜底：不跳过，用原始文本 + 正文格式写入
             try:

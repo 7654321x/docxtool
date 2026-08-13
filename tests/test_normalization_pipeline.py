@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from docx import Document
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
+import pytest
 
 from docxtool.document.models import DocumentData, ParagraphData, ParagraphFeatures
 from docxtool.document.normalization.pipeline import (
@@ -37,9 +38,6 @@ def _callbacks(events: list[str]):
     def assign(_paragraphs, _rules, reset_on_attach: bool = True) -> None:
         events.append("assign:{0}".format(reset_on_attach))
 
-    def merge(_paragraphs) -> None:
-        events.append("merge")
-
     def record(_data, _before) -> None:
         events.append("record")
 
@@ -56,7 +54,6 @@ def _callbacks(events: list[str]):
         "normalize_tail_structures_func": tail,
         "reorder_attachment_note_before_signature_func": reorder,
         "assign_numbering_func": assign,
-        "merge_siblings_func": merge,
         "record_applied_normalization_changes_func": record,
         "fix_numbering_gaps_func": fix,
         "strip_auto_numbering_func": strip,
@@ -100,7 +97,7 @@ def test_post_recognition_normalization_preserves_normalize_order() -> None:
     )
 
     assert events == [
-        "tail:True", "reorder", "assign:True", "merge", "record", "fix",
+        "tail:True", "reorder", "assign:True", "record", "fix",
         "strip:first", "strip:second", "sync",
     ]
 
@@ -144,6 +141,31 @@ def test_post_recognition_normalization_preserves_strict_order() -> None:
     )
 
     assert events == ["sync"]
+
+
+def test_post_recognition_normalization_rejects_semantic_type_changes() -> None:
+    data = DocumentData(paragraphs=[_paragraph("heading3")])
+    callbacks = _callbacks([])
+
+    def retag(_data) -> None:
+        _data.paragraphs[0].type_id = "heading2"
+
+    callbacks["sync_recognition_consistency_func"] = retag
+    with pytest.raises(
+        ValueError,
+        match="post-recognition normalization changed final semantic type",
+    ):
+        apply_post_recognition_normalization(
+            data,
+            [],
+            [],
+            strict_preservation=True,
+            structural_preservation=False,
+            processing_strategy="strict",
+            numbering_enabled=False,
+            before_normalization=[],
+            **callbacks,
+        )
 
 
 def test_strip_word_auto_numbering_preserves_the_importer_cleanup_behavior() -> None:

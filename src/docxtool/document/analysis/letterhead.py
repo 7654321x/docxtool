@@ -20,6 +20,11 @@ LETTERHEAD_STYLE_IDS = (
 _STANDARD_DOCUMENT_NUMBER_RE = re.compile(
     r"^[^\s，。；：:（）()《》“”]{1,24}〔\d{4}〕\d+号(?:签发人[：:].{1,80})?$"
 )
+_STANDARD_DOCUMENT_NUMBER_CAPTURE_RE = re.compile(
+    r"^(?P<agency_code>[^\s，。；：:（）()《》“”]{1,24})"
+    r"〔(?P<year>\d{4})〕(?P<sequence>\d+)号"
+    r"(?P<signer>签发人[：:].{1,80})?$"
+)
 _COMPATIBLE_DOCUMENT_NUMBER_RE = re.compile(
     r"^[^\s，。；：:（）()《》“”\[\]【】〔〕]{1,24}"
     r"(?:\[\d{4}\]|【\d{4}】|（\d{4}）|\(\d{4}\)|〔\d{4}〕)"
@@ -68,10 +73,23 @@ _CUSTOM_FMTID = "{D5CDD505-2E9C-101B-9397-08002B2CF9AE}"
 
 
 @dataclass(frozen=True)
+class LetterheadFields:
+    mark_text: str = ""
+    mark_display_mode: str = "agency_with_document"
+    agency_code: str = ""
+    year: int | None = None
+    sequence: int | None = None
+    signers: tuple[str, ...] = ()
+    separator_style: str = "straight"
+    issuance_mode: str = "single"
+
+
+@dataclass(frozen=True)
 class LetterheadDetection:
     status: str = "none"
     protected_body_indexes: tuple[int, ...] = ()
     details: tuple[str, ...] = ()
+    fields: LetterheadFields | None = None
 
 
 def _style_id(element) -> str:
@@ -172,6 +190,21 @@ def _has_red_separator_border(element) -> bool:
         if edge is not None and _is_red_color(edge.get(qn("w:color"), "")):
             return True
     return False
+
+
+def _has_star_separator(element) -> bool:
+    if "★" in _paragraph_text(element):
+        return True
+    return any(
+        (
+            node.tag.endswith("}prstGeom") and node.get("prst") == "star5"
+        )
+        or (
+            node.tag.endswith("}group")
+            and node.get("id") == "DocxToolLetterheadStarSeparator"
+        )
+        for node in element.iter()
+    )
 
 
 def _is_document_number_line(text: str) -> bool:
@@ -352,7 +385,10 @@ def detect_letterhead(document) -> LetterheadDetection:
         for index, child in enumerate(top)
         if (
             child.tag == qn("w:p")
-            and _has_red_separator_border(child)
+            and (
+                _has_red_separator_border(child)
+                or _has_star_separator(child)
+            )
             and (
                 not texts[index]
                 or _is_document_number_line(texts[index])
@@ -514,10 +550,114 @@ def detect_letterhead(document) -> LetterheadDetection:
         details = ("ambiguous-letterhead-signals", "bounded-prefix")
     return LetterheadDetection("unknown", protected, details)
 
+
+def extract_letterhead_fields(
+    document,
+    detection: LetterheadDetection | None = None,
+) -> LetterheadFields | None:
+    """Extract reconstructable fields from one bounded recognized letterhead."""
+
+    detection = detection or detect_letterhead(document)
+    if detection.status not in {"managed", "recognized_external"}:
+        return None
+    body_children = [
+        child
+        for child in document._body._element.iterchildren()
+        if child.tag != qn("w:sectPr")
+    ]
+    elements = [
+        body_children[index]
+        for index in detection.protected_body_indexes
+        if 0 <= index < len(body_children) and body_children[index].tag == qn("w:p")
+    ]
+    mark_elements = [
+        element
+        for element in elements
+        if _style_id(element) == "DCT-LetterheadMark"
+        or _is_letterhead_mark(element, _paragraph_text(element))
+        or _is_semantic_agency_file_mark(_paragraph_text(element))
+        or _is_semantic_agency_name(_paragraph_text(element))
+    ]
+    mark_texts = [
+        re.sub(r"\s+", "", _paragraph_text(element))
+        for element in mark_elements
+        if _paragraph_text(element).strip()
+    ]
+    if not mark_texts:
+        return None
+    mark_text = mark_texts[0]
+    issuance_mode = "joint" if len(mark_texts) > 1 else "single"
+    mark_display_mode = "agency_with_document" if mark_text.endswith("文件") else "agency_only"
+    agency_name = mark_text[:-2] if mark_display_mode == "agency_with_document" else mark_text
+    if not agency_name:
+        return None
+
+    number_match = None
+    signer_values: list[str] = []
+    for element in elements:
+        compact = re.sub(r"\s+", "", _paragraph_text(element))
+        if not compact:
+            continue
+        candidate = _STANDARD_DOCUMENT_NUMBER_CAPTURE_RE.fullmatch(compact)
+        if candidate is not None:
+            if number_match is not None:
+                return None
+            number_match = candidate
+            inline_signer = candidate.group("signer") or ""
+            if inline_signer:
+                signer_values.append(re.split(r"[：:]", inline_signer, maxsplit=1)[1])
+            continue
+        if _SIGNER_LINE_RE.fullmatch(compact):
+            signer_values.extend(
+                value
+                for value in re.split(r"签发人[：:]", compact)
+                if value
+            )
+        elif signer_values and _looks_like_signer_continuation(compact):
+            signer_values.append(compact)
+    if number_match is None:
+        return None
+    signers = tuple(value for value in signer_values if value)
+    return LetterheadFields(
+        mark_text=mark_text,
+        mark_display_mode=mark_display_mode,
+        agency_code=number_match.group("agency_code"),
+        year=int(number_match.group("year")),
+        sequence=int(number_match.group("sequence")),
+        signers=signers,
+        separator_style=(
+            "star" if any(_has_star_separator(element) for element in elements) else "straight"
+        ),
+        issuance_mode=issuance_mode,
+    )
+
+
+def with_letterhead_fields(
+    document,
+    detection: LetterheadDetection | None = None,
+) -> LetterheadDetection:
+    """Attach reconstructable source fields without changing detection status."""
+
+    detection = detection or detect_letterhead(document)
+    if detection.fields is not None:
+        return detection
+    fields = extract_letterhead_fields(document, detection)
+    if fields is None:
+        return detection
+    return LetterheadDetection(
+        detection.status,
+        detection.protected_body_indexes,
+        detection.details,
+        fields,
+    )
+
 __all__ = [
     "LETTERHEAD_STYLE_IDS",
     "LetterheadDetection",
+    "LetterheadFields",
     "MANAGED_PROPERTY",
     "MANAGED_VERSION",
     "detect_letterhead",
+    "extract_letterhead_fields",
+    "with_letterhead_fields",
 ]

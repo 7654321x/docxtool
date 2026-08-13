@@ -49,6 +49,7 @@ def test_default_format_and_optional_section_are_backward_compatible():
     with_null["letterhead"] = None
     assert validate_format_config(with_null)["letterhead"] is None
     assert normalize_letterhead_config(None)["enabled"] is False
+    assert normalize_letterhead_config(None)["separator_style"] == "straight"
 
 
 @pytest.mark.parametrize(
@@ -59,6 +60,7 @@ def test_default_format_and_optional_section_are_backward_compatible():
         ({"document_direction": "sideways"}, "letterhead.document_direction"),
         ({"issuance_mode": "group"}, "letterhead.issuance_mode"),
         ({"existing_policy": "replace_all"}, "letterhead.existing_policy"),
+        ({"separator_style": "dots"}, "letterhead.separator_style"),
     ],
 )
 def test_rejects_invalid_scalar_fields(patch, field):
@@ -137,6 +139,24 @@ def test_document_number_validation(document_number, field):
     with pytest.raises(ConfigValidationError) as exc_info:
         normalize_letterhead_config(enabled_config(document_number=document_number))
     assert exc_info.value.field == field
+
+
+def test_enabled_empty_required_fields_selects_auto_recognition_but_partial_manual_input_fails():
+    auto = default_letterhead_config()
+    auto["enabled"] = True
+    normalized = normalize_letterhead_config(auto)
+    assert normalized["auto_recognize"] is True
+
+    partial = default_letterhead_config()
+    partial.update({"enabled": True, "agencies": [{**partial["agencies"][0], "name": "测试机关"}]})
+    with pytest.raises(ConfigValidationError) as exc_info:
+        normalize_letterhead_config(partial)
+    assert exc_info.value.field == "letterhead.document_number.agency_code"
+
+
+def test_separator_style_is_preserved():
+    normalized = normalize_letterhead_config(enabled_config(separator_style="star"))
+    assert normalized["separator_style"] == "star"
 
 
 def test_limits_agencies_signers_names_and_total_characters():

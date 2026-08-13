@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from docxtool.document.models import ParagraphData
+
 
 @dataclass
 class RenderContext:
@@ -82,12 +84,58 @@ def prepare_render_context(
     ).lower()
     strict_preservation = bool(getattr(doc_data, "strict_preservation", False))
     normalization_processing = getattr(doc_data, "processing_strategy", "") == "normalize"
-    render_items = (
-        list(doc_data.paragraphs)
-        if strict_preservation
-        else compatibility_module._normalize_signature_attachment_order(doc_data.paragraphs)
-    )
-    if not strict_preservation:
+    format_scope = getattr(doc_data, "format_scope", None)
+    if format_scope is not None:
+        by_physical_index: dict[int, list] = {}
+        for item in doc_data.paragraphs:
+            features = getattr(item, "features", None)
+            physical_index = getattr(features, "source_physical_paragraph_index", None)
+            if physical_index is not None:
+                by_physical_index.setdefault(physical_index, []).append(item)
+        render_items = []
+        selected = format_scope.source_physical_paragraph_indexes
+        for source_block in doc_data.source_body_blocks:
+            kind, physical_index, source = source_block[:3]
+            if kind == "table":
+                render_items.append(
+                    ParagraphData("", "__table__", "", None, {"table": source})
+                )
+                continue
+            candidates = by_physical_index.get(physical_index, [])
+            editable = [
+                item for item in candidates if not item.type_id.startswith("__")
+            ]
+            if physical_index in selected and editable:
+                render_items.extend(editable)
+                continue
+            source_features = source_block[3]
+            native_numbering = next(
+                (
+                    item.features.native_numbering
+                    for item in editable
+                    if item.features.native_numbering is not None
+                ),
+                source_features.native_numbering,
+            )
+            render_items.append(
+                ParagraphData(
+                    "",
+                    "__preserved_source__",
+                    "",
+                    None,
+                    {
+                        "paragraph_xml": source,
+                        "native_numbering": native_numbering,
+                    },
+                )
+            )
+    else:
+        render_items = (
+            list(doc_data.paragraphs)
+            if strict_preservation
+            else compatibility_module._normalize_signature_attachment_order(doc_data.paragraphs)
+        )
+    if not strict_preservation and format_scope is None:
         compatibility_module._validate_signature_attachment_order(render_items)
     letterhead_detection = (
         getattr(doc_data, "letterhead_detection", None)

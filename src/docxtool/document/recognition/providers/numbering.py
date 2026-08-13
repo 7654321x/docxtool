@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ..model import ParagraphType
+from ..model import ParagraphType, SectionKind
 from .base import Candidate
 
 
@@ -10,6 +10,26 @@ class NumberingCandidateProvider:
     name = "numbering"
 
     def propose(self, block, features, context):
+        if features.numbered_heading2_period_inline_body:
+            return [Candidate(
+                ParagraphType.HEADING_2,
+                1.0,
+                self.name,
+                ("numbered-heading2-period-inline-body",),
+                hard=True,
+                section_hint=SectionKind.BODY,
+                heading_level=2,
+            )]
+        if features.numbered_heading2_colon_inline_body:
+            return [Candidate(
+                ParagraphType.HEADING_2,
+                1.0,
+                self.name,
+                ("numbered-heading2-colon-inline-body",),
+                hard=True,
+                section_hint=SectionKind.BODY,
+                heading_level=2,
+            )]
         if features.heading_shape_level is None or features.key_value_label:
             return []
         mapping = {1: ParagraphType.HEADING_1, 2: ParagraphType.HEADING_2, 3: ParagraphType.HEADING_3, 4: ParagraphType.HEADING_4}

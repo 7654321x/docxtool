@@ -197,7 +197,9 @@ PUT /api/upload
 
 `X-Format-Config` 用于把前端“排版设置”随本次上传传入后端，不新增接口、不改变请求体格式。后端只把它作为当前任务的临时配置使用，不会覆盖随包安装的 `src/docxtool/resources/config/default-format.json`。
 
-可选顶层 `letterhead` 使用 `schema_version: 1`。`enabled` 默认为 `false`；启用时通过 `issuance_mode`、`document_direction`、`agencies`、`document_number` 和 `signers` 描述版头。机关及签发人使用稳定 ID 和正整数 `order`，联合发文必须且只能有一个 `role: sponsor`。已有外部或未知版头不会被强制替换，任务状态中的 `compatibility_warnings` 可能包含 `LETTERHEAD_SKIPPED_EXISTING_EXTERNAL` 或 `LETTERHEAD_SKIPPED_EXISTING_UNKNOWN`。
+可选顶层 `letterhead` 使用 `schema_version: 1`。`enabled` 默认为 `false`；启用且机关、文号均为空时自动读取源文档的机关标志、发文字号、签发人和分割线并重建，部分填写时按完整手工配置校验。当前 Web 界面固定提交单机关；Core 为历史配置保留联合发文结构，但自动识别到联合源版头时明确停止。机关标志按版心自适应，`separator_style` 支持 `straight` 和 `star`，红线至首个标题为正文行距 × 2。
+
+WPS 任务窗格的 `/v1/letterhead/inspect`、`/v1/letterhead/prepare` 是本机回环 Control 路由，不属于公网 HTTP API。它们只用于“添加版头”的检查和事务准备，不改变公网请求、Token 或数据库协议。
 
 配置 JSON 结构示例：
 

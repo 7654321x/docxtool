@@ -7,6 +7,7 @@ recognition, normalization, renderer, and SDK code.
 from docxtool.document.models.document import (
     BodyBlock,
     DocumentData,
+    FormatScope,
     NormalizationChange,
 )
 from docxtool.document.models.paragraph import (
@@ -23,6 +24,7 @@ from docxtool.document.models.source import (
 __all__ = [
     "BodyBlock",
     "DocumentData",
+    "FormatScope",
     "InlineToken",
     "NativeNumbering",
     "NormalizationChange",

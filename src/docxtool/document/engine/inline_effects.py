@@ -16,7 +16,7 @@ from docx.shared import Pt
 
 from docxtool.document.engine.inline import copy_run_style, segment_writer
 from docxtool.document.engine.typography import set_run_fonts
-from docxtool.document.recognition.colon import colon_bold_range
+from docxtool.document.recognition.colon import analyze_colon_structure, colon_bold_range
 from docxtool.document.style_config import NB_FIXED, NB_SUFFIXES
 
 
@@ -297,6 +297,128 @@ def enforce_inline_heading2_format(paragraph, heading_bold: bool, body_bold: boo
         copy_run_style(run, body_run)
         body_run.font.bold = body_bold
         run._element.addnext(body_run._element)
+
+
+def apply_numbered_heading2_colon_format(
+    paragraph,
+    text: str,
+    heading_rule,
+    body_rule,
+) -> None:
+    """Format a numbered heading-2 label and its same-paragraph body."""
+    analysis = analyze_colon_structure(text)
+    if (
+        not analysis.has_colon
+        or analysis.separator_index is None
+        or not analysis.label.strip()
+        or not analysis.value.strip()
+    ):
+        return
+    _apply_heading2_inline_body_format(
+        paragraph,
+        analysis.separator_index + 1,
+        heading_rule,
+        body_rule,
+    )
+
+
+def apply_numbered_heading2_period_format(
+    paragraph,
+    text: str,
+    heading_rule,
+    body_rule,
+) -> None:
+    """Format one physical heading-2 paragraph across its sentence boundary."""
+    period_position = text.find("。")
+    if (
+        period_position < 0
+        or len(text[period_position + 1:].strip()) < INLINE_HEADING_BODY_MIN_CHARS
+    ):
+        return
+    _apply_heading2_inline_body_format(
+        paragraph,
+        period_position + 1,
+        heading_rule,
+        body_rule,
+    )
+
+
+def _apply_heading2_inline_body_format(
+    paragraph,
+    split_at: int,
+    heading_rule,
+    body_rule,
+) -> None:
+    """Apply heading/body rules in place without changing the paragraph boundary."""
+    cursor = 0
+    for run in list(paragraph.runs):
+        run_text = run.text or ""
+        if not run_text:
+            continue
+        start = cursor
+        end = start + len(run_text)
+        cursor = end
+        if start < split_at < end:
+            _split_text_run(run, split_at - start)
+            break
+
+    cursor = 0
+    for run in paragraph.runs:
+        run_text = run.text or ""
+        if not run_text:
+            continue
+        end = cursor + len(run_text)
+        rule = heading_rule if end <= split_at else body_rule
+        set_run_fonts(run, cn_font=rule.font, en_font="Times New Roman")
+        run.font.size = Pt(rule.font_size_pt)
+        run.font.bold = rule.bold
+        cursor = end
+
+
+def _split_text_run(run, offset: int) -> None:
+    """Split one text run while moving, rather than copying, trailing XML."""
+    if offset <= 0 or offset >= len(run.text or ""):
+        return
+    text_tags = {
+        qn("w:t"),
+        qn("w:tab"),
+        qn("w:br"),
+        qn("w:cr"),
+        qn("w:noBreakHyphen"),
+        qn("w:ptab"),
+    }
+    consumed = 0
+    children = list(run._element)
+    for child_index, child in enumerate(children):
+        if child.tag == qn("w:rPr"):
+            continue
+        value = str(child) if child.tag in text_tags else ""
+        child_end = consumed + len(value)
+        if offset == consumed:
+            move_from = child_index
+        elif offset == child_end:
+            consumed = child_end
+            continue
+        elif consumed < offset < child_end and child.tag == qn("w:t"):
+            local_offset = offset - consumed
+            trailing_text = value[local_offset:]
+            child.text = value[:local_offset]
+            move_from = child_index + 1
+        elif consumed < offset < child_end:
+            raise ValueError("WPS_INLINE_HEADING2_COLON_RUN_SPLIT_FAILED")
+        else:
+            consumed = child_end
+            continue
+
+        new_run = run._parent.add_run("")
+        copy_run_style(run, new_run)
+        if consumed < offset < child_end:
+            new_run.add_text(trailing_text)
+        for trailing in children[move_from:]:
+            new_run._element.append(trailing)
+        run._element.addnext(new_run._element)
+        return
+    raise ValueError("WPS_INLINE_HEADING2_COLON_RUN_SPLIT_FAILED")
 
 
 def handle_heading_period(text: str) -> str:

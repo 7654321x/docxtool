@@ -115,8 +115,15 @@ function makeComments({ failAddAt = 0, failMetadataAt = 0, failDeleteAt = 0 } = 
   };
 }
 
-function makeDocument(rawText, comments) {
-  const paragraphRange = makeParagraphRange(rawText);
+function makeDocument(rawText, comments, paragraphSpecs = null, pageStarts = null) {
+  const specs = paragraphSpecs || [{ text: rawText, start: 0, end: rawText.length + 1 }];
+  const paragraphRanges = specs.map((spec) => {
+    const range = makeParagraphRange(spec.text);
+    range.Start = spec.start;
+    range.End = spec.end;
+    return range;
+  });
+  const paragraphRange = paragraphRanges[0];
   const document = {
     FullName: "C:\\fixtures\\sample.docx",
     Name: "sample.docx",
@@ -127,13 +134,16 @@ function makeDocument(rawText, comments) {
       this.Saved = true;
     },
     Paragraphs: {
-      Count: 1,
+      Count: paragraphRanges.length,
       Item(index) {
-        assert.equal(index, 1);
-        return { Range: paragraphRange };
+        return { Range: paragraphRanges[index - 1] };
       },
     },
   };
+  if (pageStarts) {
+    document.ComputeStatistics = () => pageStarts.length;
+    document.GoTo = (_what, _which, count) => ({ Start: pageStarts[count - 1] });
+  }
   return { document, paragraphRange };
 }
 
@@ -164,10 +174,14 @@ function makeHostHarness({
   transport = true,
   bootstrapId = "",
   convertedRawText = "",
+  paragraphSpecs = null,
+  pageStarts = null,
 } = {}) {
   const { storage, values } = makeStorage();
   const comments = makeComments({ failAddAt, failMetadataAt, failDeleteAt });
-  const { document, paragraphRange } = makeDocument(rawText, comments);
+  const { document, paragraphRange } = makeDocument(
+    rawText, comments, paragraphSpecs, pageStarts,
+  );
   const logs = [];
   const apiCalls = [];
   const intervals = [];
@@ -280,6 +294,9 @@ function makeHostHarness({
     Enum: {
       msoCTPDockPositionRight: 2,
       msoCTPDockPositionFloating: 4,
+      wdGoToPage: 1,
+      wdGoToAbsolute: 1,
+      wdStatisticPages: 2,
     },
   };
   document.Activate = () => {
@@ -372,6 +389,19 @@ function makeHostHarness({
         heading_count: 0,
         compatibility_warnings: [],
         log_file: "document.log",
+      };
+    } else if (path === "/v1/letterhead/inspect") {
+      data = {
+        status: "none",
+        exists: false,
+        replaceable: false,
+        fields: null,
+      };
+    } else if (path === "/v1/letterhead/prepare") {
+      data = {
+        operation_id: "operation-test",
+        state: "prepared",
+        action: "generated",
       };
     } else if (path === "/v1/format/upgrade/reserve") {
       data = {
@@ -910,6 +940,56 @@ test("Host sends only the authorization identity to the local Engine route", asy
   assert.equal(Object.hasOwn(prepare.body, "format_config"), false);
 });
 
+test("Host fixes requested pre-format pages before preparing the document", async () => {
+  const paragraphSpecs = [
+    { text: "第一页", start: 0, end: 4 },
+    { text: "跨页段落", start: 4, end: 13 },
+    { text: "第三页", start: 13, end: 17 },
+  ];
+  const harness = makeHostHarness({
+    rawText: "第一页",
+    paragraphSpecs,
+    pageStarts: [0, 8, 13],
+  });
+  harness.runtime.start();
+  const context = requestContext("apply", "request-page-scope");
+  context.config_version = "config-1";
+  context.format_scope = { mode: "pre_format_pages", page_spec: "2-3" };
+
+  await harness.runtime.runCommand("apply", context);
+
+  const prepare = harness.apiCalls.find((item) => item.path === "/v1/format/prepare");
+  assert.deepEqual(
+    Array.from(prepare.body.selected_host_paragraph_indexes),
+    [1, 2],
+  );
+  assert.equal(prepare.body.host_snapshot.paragraphs.length, 3);
+  assert.equal(
+    harness.logs.filter((item) => item.event === "format.scope.resolved").length,
+    1,
+  );
+});
+
+test("Host rejects a pre-format page beyond the original page count", async () => {
+  const harness = makeHostHarness({
+    paragraphSpecs: [{ text: "第一页", start: 0, end: 4 }],
+    pageStarts: [0],
+  });
+  harness.runtime.start();
+  const context = requestContext("apply", "request-page-out-of-range");
+  context.config_version = "config-1";
+  context.format_scope = { mode: "pre_format_pages", page_spec: "2" };
+
+  await assert.rejects(
+    harness.runtime.runCommand("apply", context),
+    /WPS_FORMAT_PAGE_OUT_OF_RANGE/,
+  );
+  assert.equal(
+    harness.apiCalls.some((item) => item.path === "/v1/format/prepare"),
+    false,
+  );
+});
+
 test("Host operation logs do not expose the active document name", async () => {
   const harness = makeHostHarness();
   harness.runtime.start();
@@ -1206,8 +1286,8 @@ test("Panel action starts one Host bridge when OnAddinLoad was not observed", as
   assert.equal(harness.bridgeWaiterCount, 1);
   assert.equal(harness.taskpaneCreateCalls.length, 1);
   assert.equal(harness.taskpaneCreateCalls[0].length, 1);
-  assert.match(harness.taskpaneCreateCalls[0][0], /taskpane\.html\?v=10$/);
-  assert.equal(harness.values.get(TASKPANE_VERSION_KEY), "10");
+  assert.match(harness.taskpaneCreateCalls[0][0], /taskpane\.html\?v=12$/);
+  assert.equal(harness.values.get(TASKPANE_VERSION_KEY), "12");
   assert.ok(harness.events().includes("host.start.lazy.enter"));
   assert.ok(harness.events().includes("host.start.lazy.scheduled"));
 
@@ -1394,8 +1474,8 @@ test("Panel replaces a stale TaskPane page before showing it", () => {
 
   assert.equal(stalePane.Visible, false);
   assert.equal(harness.taskpaneCreateCalls.length, 2);
-  assert.match(harness.taskpaneCreateCalls[1][0], /taskpane\.html\?v=10$/);
-  assert.equal(harness.values.get(TASKPANE_VERSION_KEY), "10");
+  assert.match(harness.taskpaneCreateCalls[1][0], /taskpane\.html\?v=12$/);
+  assert.equal(harness.values.get(TASKPANE_VERSION_KEY), "12");
   assert.ok(harness.events().includes("taskpane.page_version.mismatch"));
 });
 
@@ -1588,6 +1668,94 @@ test("Host rejects apply bridge commands without matching public authorization",
   assert.equal(harness.runtime.getBridgeReady(), false);
 });
 
+test("Host adds a letterhead through the document transaction without recognition", async () => {
+  const harness = makeHostHarness();
+  harness.runtime.start();
+  const request = requestContext("add_letterhead", "request-add-letterhead");
+  request.letterhead = {
+    mark_text: "测试机关文件",
+    document_number: "测发〔2026〕1号",
+    signer: "",
+    separator_style: "straight",
+    replace_existing: false,
+  };
+
+  await harness.runtime.runCommand("add_letterhead", request);
+
+  const businessPaths = harness.apiCalls
+    .filter((item) => !item.path.startsWith("/v1/bridge/") && item.path !== "/v1/log")
+    .map((item) => item.path);
+  assert.deepEqual(businessPaths, [
+    "/v1/letterhead/inspect",
+    "/v1/letterhead/prepare",
+    "/v1/format/commit",
+    "/v1/format/finalize",
+  ]);
+  assert.ok(!businessPaths.includes("/v1/recognize"));
+  assert.equal(harness.runtime.getStateSnapshot().message, "版头添加成功。");
+  assert.equal(harness.application.ActiveDocument.FullName, "C:\\fixtures\\sample.docx");
+});
+
+test("Host inspects a legacy letterhead without permanently upgrading the document", async () => {
+  const harness = makeHostHarness();
+  harness.document.FullName = "C:\\fixtures\\legacy.doc";
+  harness.document.Name = "legacy.doc";
+  harness.runtime.start();
+
+  await harness.runtime.runCommand(
+    "inspect_letterhead",
+    requestContext("inspect_letterhead", "request-inspect-legacy-letterhead"),
+  );
+
+  assert.deepEqual(harness.saveAsFormats, [12]);
+  assert.deepEqual(
+    harness.apiCalls
+      .filter((item) => !item.path.startsWith("/v1/bridge/") && item.path !== "/v1/log")
+      .map((item) => item.path),
+    [
+      "/v1/format/upgrade/reserve",
+      "/v1/letterhead/inspect",
+      "/v1/format/rollback",
+    ],
+  );
+  assert.equal(harness.application.ActiveDocument.FullName, "C:\\fixtures\\legacy.doc");
+  assert.equal(harness.deletedPaths.length, 1);
+  assert.match(harness.deletedPaths[0], /\.docxtool-convert-operation-te\.docx$/);
+});
+
+test("Host adds a letterhead to a legacy document and publishes one DOCX", async () => {
+  const harness = makeHostHarness();
+  harness.document.FullName = "C:\\fixtures\\legacy.wps";
+  harness.document.Name = "legacy.wps";
+  harness.runtime.start();
+  const request = requestContext("add_letterhead", "request-add-legacy-letterhead");
+  request.letterhead = {
+    mark_text: "测试机关文件",
+    document_number: "测发〔2026〕1号",
+    signer: "",
+    separator_style: "straight",
+    replace_existing: false,
+  };
+
+  await harness.runtime.runCommand("add_letterhead", request);
+
+  assert.deepEqual(harness.saveAsFormats, [12]);
+  assert.deepEqual(
+    harness.apiCalls
+      .filter((item) => !item.path.startsWith("/v1/bridge/") && item.path !== "/v1/log")
+      .map((item) => item.path),
+    [
+      "/v1/format/upgrade/reserve",
+      "/v1/letterhead/inspect",
+      "/v1/format/upgrade/prepare",
+      "/v1/format/commit",
+      "/v1/format/finalize",
+    ],
+  );
+  assert.equal(harness.application.ActiveDocument.FullName, "C:\\fixtures\\legacy.docx");
+  assert.equal(harness.runtime.getStateSnapshot().message, "版头添加成功。");
+});
+
 function makeElement(id) {
   const rect = id === "taskpane_header"
     ? { top: 0, right: 390, bottom: 64, left: 0, width: 390, height: 64 }
@@ -1607,6 +1775,8 @@ function makeElement(id) {
     offsetHeight: rect.height,
     rect,
     textContent: "",
+    hidden: false,
+    value: "",
     children: [],
     listeners: new Map(),
     addEventListener(name, callback) {
@@ -1616,6 +1786,7 @@ function makeElement(id) {
       return { ...this.rect };
     },
     replaceChildren(...children) { this.children = children; },
+    focus() {},
   };
 }
 
@@ -1656,11 +1827,18 @@ function makeTaskpaneHarness(initialState, {
     static now() { return currentNowMs; }
   };
   const ids = [
-    "preview", "apply", "clear_preview", "health",
+    "preview", "apply", "add_letterhead", "clear_preview", "health",
+    "format_scope_mode", "format_page_spec",
+    "letterhead_modal", "letterhead_mark", "letterhead_number", "letterhead_signer",
+    "letterhead_separator", "letterhead_form_error", "letterhead_cancel", "letterhead_confirm",
     "close_panel", "status", "account", "message", "error", "warnings", "summary", "rows",
     "taskpane_header", "content",
   ];
   for (const id of ids) elements.set(id, makeElement(id));
+  elements.get("format_scope_mode").value = "whole";
+  elements.get("format_page_spec").value = "";
+  elements.get("format_page_spec").focus = () => {};
+  elements.get("letterhead_separator").value = "straight";
   elements.get("content").scrollTop = 80;
   const body = {
     scrollTop: 80,
@@ -1837,6 +2015,7 @@ function makeTaskpaneHarness(initialState, {
     scrollTo(x, y) {
       scrollCalls.push([x, y]);
     },
+    confirm() { return false; },
     DocxToolWpsConfig: transport ? {
       controlBaseUrl: "http://127.0.0.1:9527",
       sessionToken: "test-token",
@@ -1855,6 +2034,7 @@ function makeTaskpaneHarness(initialState, {
     commandRequests,
     consoleLines,
     elements,
+    context,
     events: () => logs.map((item) => item.event),
     logs,
     document,
@@ -2178,6 +2358,128 @@ test("TaskPane uses the five-second ACK wait after command enqueue", async () =>
     (item) => item.path === "/v1/bridge/state/wait",
   );
   assert.equal(stateWaits.at(-1).body.timeout_seconds, 5);
+});
+
+test("TaskPane sends a pre-format page scope only for specified pages", async () => {
+  const ready = { host_ready: true, status: "READY", updated_at: "1" };
+  const scoped = makeTaskpaneHarness(ready);
+  await scoped.flushAsync();
+  scoped.elements.get("format_scope_mode").value = "pre_format_pages";
+  scoped.elements.get("format_page_spec").value = "3,5-6";
+  scoped.click("apply");
+  await scoped.flushAsync();
+  const scopedRequest = scoped.commandRequests.find((item) => item.command === "apply");
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(scopedRequest.format_scope)),
+    { mode: "pre_format_pages", page_spec: "3,5-6" },
+  );
+
+  const whole = makeTaskpaneHarness(ready);
+  await whole.flushAsync();
+  whole.click("apply");
+  await whole.flushAsync();
+  const wholeRequest = whole.commandRequests.find((item) => item.command === "apply");
+  assert.equal(wholeRequest.format_scope, null);
+});
+
+test("TaskPane validates and submits the add-letterhead form in Chinese", async () => {
+  const harness = makeTaskpaneHarness({ host_ready: true, status: "READY", updated_at: "1" });
+  await harness.flushAsync();
+  harness.click("add_letterhead");
+  await harness.flushAsync();
+  const inspectRequest = harness.commandRequests.find(
+    (item) => item.command === "inspect_letterhead",
+  );
+  assert.ok(inspectRequest);
+  harness.pushState({
+    host_ready: true,
+    status: "PASS",
+    active_request: {
+      request_id: inspectRequest.request_id,
+      command: "inspect_letterhead",
+      request_status: "PASS",
+    },
+    letterhead_inspection: { status: "none", exists: false, fields: null },
+  });
+  await harness.flushAsync();
+
+  harness.elements.get("letterhead_mark").value = "测试机关文件";
+  harness.elements.get("letterhead_number").value = "测发〔2026〕1号";
+  harness.elements.get("letterhead_signer").value = "张三";
+  harness.elements.get("letterhead_separator").value = "star";
+  harness.click("letterhead_confirm");
+  await harness.flushAsync();
+  const request = harness.commandRequests.find(
+    (item) => item.command === "add_letterhead",
+  );
+  assert.deepEqual(JSON.parse(JSON.stringify(request.letterhead)), {
+    mark_text: "测试机关文件",
+    document_number: "测发〔2026〕1号",
+    signer: "张三",
+    separator_style: "star",
+    replace_existing: false,
+  });
+
+  const invalid = makeTaskpaneHarness({ host_ready: true, status: "READY", updated_at: "1" });
+  await invalid.flushAsync();
+  invalid.elements.get("letterhead_mark").value = "测试机关文件";
+  invalid.elements.get("letterhead_number").value = "格式错误";
+  invalid.click("letterhead_confirm");
+  await invalid.flushAsync();
+  assert.match(
+    invalid.elements.get("letterhead_form_error").textContent,
+    /发文字号格式应为/,
+  );
+});
+
+test("TaskPane confirms before replacing an inspected existing letterhead", async () => {
+  const harness = makeTaskpaneHarness({
+    host_ready: true,
+    status: "PASS",
+    letterhead_inspection: {
+      status: "managed",
+      exists: true,
+      replaceable: true,
+      fields: {
+        mark_text: "旧机关文件",
+        document_number: "旧发〔2026〕1号",
+        signer: "",
+        separator_style: "straight",
+      },
+    },
+  });
+  let confirmed = 0;
+  harness.context.confirm = () => {
+    confirmed += 1;
+    return true;
+  };
+  await harness.flushAsync();
+  harness.elements.get("letterhead_mark").value = "新机关文件";
+  harness.elements.get("letterhead_number").value = "新发〔2026〕2号";
+  harness.click("letterhead_confirm");
+  await harness.flushAsync();
+
+  const request = harness.commandRequests.find(
+    (item) => item.command === "add_letterhead",
+  );
+  assert.equal(confirmed, 1);
+  assert.equal(request.letterhead.replace_existing, true);
+});
+
+test("TaskPane rejects an empty specified page range in Chinese", async () => {
+  const harness = makeTaskpaneHarness({ host_ready: true, status: "READY", updated_at: "1" });
+  await harness.flushAsync();
+  harness.elements.get("format_scope_mode").value = "pre_format_pages";
+  harness.elements.get("format_page_spec").value = "   ";
+
+  harness.click("apply");
+  await harness.flushAsync();
+
+  assert.equal(
+    harness.commandRequests.some((item) => item.command === "apply"),
+    false,
+  );
+  assert.equal(harness.elements.get("message").textContent, "请输入有效页码范围。");
 });
 
 test("TaskPane accepts a terminal panel_ready PASS that arrives after ACK timeout", async () => {

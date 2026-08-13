@@ -66,9 +66,21 @@ def _hard_veto(candidate: Candidate, features, mode: DocumentMode, context: _Con
         and not (candidate.source == "core" and candidate.score >= 0.85)
     ):
         return True
-    if features.key_value_label in _MEETING_LABELS and candidate.paragraph_type in {ParagraphType.HEADING_1, ParagraphType.HEADING_2, ParagraphType.HEADING_3, ParagraphType.HEADING_4}:
+    if (
+        features.key_value_label in _MEETING_LABELS
+        and not features.numbered_heading2_colon_inline_body
+        and candidate.paragraph_type in {
+            ParagraphType.HEADING_1, ParagraphType.HEADING_2,
+            ParagraphType.HEADING_3, ParagraphType.HEADING_4,
+        }
+    ):
         return True
-    if mode == DocumentMode.MEETING_MINUTES and features.key_value_label in _MEETING_LABELS and candidate.paragraph_type != ParagraphType.MEETING_META:
+    if (
+        mode == DocumentMode.MEETING_MINUTES
+        and features.key_value_label in _MEETING_LABELS
+        and not features.numbered_heading2_colon_inline_body
+        and candidate.paragraph_type != ParagraphType.MEETING_META
+    ):
         return True
     heading_levels = {
         ParagraphType.HEADING_1: 1,
@@ -82,8 +94,11 @@ def _hard_veto(candidate: Candidate, features, mode: DocumentMode, context: _Con
         features.date_match
         or features.attachment_note_match
         or features.recipient_match
-        or features.key_value_label
-        or features.colon_explanatory_body
+        or (features.key_value_label and not features.numbered_heading2_colon_inline_body)
+        or (
+            features.colon_explanatory_body
+            and not features.numbered_heading2_colon_inline_body
+        )
         or features.native_numbering_body_list
         or re.fullmatch(
             r"附件[0-9一二三四五六七八九十百千]*",

@@ -69,7 +69,7 @@ pwsh -NoProfile -Command "git ls-remote https://github.com/7654321x/docxtool.git
 - 脚本：`scripts/generate_secrets.py`、`scripts/benchmark_recognition.py`、`scripts/compare_recognition_runs.py`、`scripts/analyze_end_format.py`、`scripts/analyze_letterhead_batch.py`、`scripts/batch_test_docx.py`、`scripts/generate_005_format_fixtures.py`、`scripts/normalize_correct_template_role_spacing.py`、`scripts/phase_a_equivalence_snapshot.py`、`scripts/phase_a_web_contract_snapshot.py`、`scripts/build-local-recognition-runtime.ps1`、`scripts/migrate_legacy_database.ps1`、`scripts/publish_to_github.ps1`
 - 前端和 Cloudflare Pages：`resources/frontend/pages/index.html`、`resources/frontend/pages/_worker.js`
 - 运行目录占位：`var/data/.gitkeep`、`var/logs/.gitkeep`、`var/outputs/.gitkeep`、`var/runtime/.gitkeep`
-- WPS 应用：`apps/wps` 下的公开 Python/JavaScript/HTML/XML 源码、账号与公网客户端、`DocxToolWps.spec`、`requirements-build.txt`、`scripts/build-exe.ps1`、`package.json`、`package-lock.json`、README、测试和验证脚本；同步 bootstrap 必须包含 `host-runtime.js`、`js/bootstrap-log.js`、`js/bootstrap-complete.js`、`js/ribbon.js`
+- WPS 应用：`apps/wps` 下的公开 Python/JavaScript/HTML/XML/SVG/PNG 源码与界面资源、账号与公网客户端、`DocxToolWps.spec`、`requirements-build.txt`、`scripts/build-exe.ps1`、`package.json`、`package-lock.json`、README、测试和验证脚本；同步 bootstrap 必须包含 `host-runtime.js`、`js/bootstrap-log.js`、`js/bootstrap-complete.js`、`js/ribbon.js`
 - WPS 公网服务：`src/docxtool/wps_server/*.py`、`src/docxtool/web/admin_workspace_page.py`、WPS 服务测试以及根目录两份 WPS 服务设计文档
 - 测试：`tests/test_*.py`、`tests/*.test.mjs`
 

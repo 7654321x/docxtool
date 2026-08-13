@@ -129,6 +129,43 @@ def _coerce_plan(value: RecognitionPlan | Mapping[str, Any]) -> RecognitionPlan:
     raise BindingError("plan 必须为 RecognitionPlan 或 JSON 对象")
 
 
+def _validate_snapshot_contract(snapshot: HostSnapshot) -> None:
+    if snapshot.text_contract_version != SDK_HOST_TEXT_CONTRACT_VERSION:
+        raise UnsupportedContractError(
+            "不支持的宿主文本契约",
+            code="UNSUPPORTED_HOST_TEXT_CONTRACT",
+            details={"path": "host_snapshot.text_contract_version"},
+        )
+    if snapshot.offset_encoding != OFFSET_ENCODING:
+        raise UnsupportedContractError(
+            "不支持的 offset encoding",
+            code="UNSUPPORTED_OFFSET_ENCODING",
+            details={"path": "host_snapshot.offset_encoding"},
+        )
+
+
+def _host_texts(snapshot: HostSnapshot) -> Tuple[_HostText, ...]:
+    return tuple(
+        _HostText(
+            paragraph=item,
+            tape=SourceTape.from_text(
+                item.raw_text,
+                contract_version=snapshot.text_contract_version,
+            ),
+            raw_hash=_sha256(item.raw_text),
+            canonical_hash=_sha256(
+                canonicalize_text(item.raw_text)
+                if snapshot.text_contract_version == HOST_TEXT_CONTRACT_VERSION
+                else SourceTape.from_text(
+                    item.raw_text, snapshot.text_contract_version
+                ).canonical_text
+            ),
+        )
+        for item in snapshot.paragraphs
+        if item.story_type == "main" and not item.is_in_table
+    )
+
+
 def _physical_groups(plan: RecognitionPlan) -> Tuple[_PhysicalGroup, ...]:
     grouped = {}
     for block in plan.blocks:
@@ -218,6 +255,78 @@ def _align_groups(
             status = "matched_review"
         result[group.physical_index] = (status, position, score, candidate_positions, tuple(evidence), ())
     return result
+
+
+def _bind_physical_groups(
+    groups: Sequence[_PhysicalGroup],
+    hosts: Sequence[_HostText],
+) -> Tuple[PhysicalParagraphBinding, ...]:
+    alignments = _align_groups(groups, hosts)
+    host_by_position = {position: item for position, item in enumerate(hosts)}
+    result = []
+    for group in groups:
+        status, host_position, score, candidates, evidence, warnings = alignments[
+            group.physical_index
+        ]
+        host = host_by_position[host_position] if host_position is not None else None
+        result.append(
+            PhysicalParagraphBinding(
+                physical_group_id=(
+                    group.blocks[0].physical_group_id if group.blocks else ""
+                ),
+                source_physical_paragraph_index=group.physical_index,
+                host_paragraph_index=(
+                    host.paragraph.host_paragraph_index if host is not None else None
+                ),
+                host_paragraph_id=(
+                    host.paragraph.host_paragraph_id if host is not None else None
+                ),
+                status=status,
+                score=score,
+                candidate_host_paragraph_indexes=tuple(
+                    host_by_position[position].paragraph.host_paragraph_index
+                    for position in candidates
+                ),
+                candidate_host_paragraph_ids=tuple(
+                    host_by_position[position].paragraph.host_paragraph_id
+                    for position in candidates
+                ),
+                evidence=evidence,
+                warnings=warnings,
+            )
+        )
+    return tuple(result)
+
+
+def bind_physical_paragraphs(
+    source_paragraphs: Sequence[tuple[int, str]],
+    host_snapshot: HostSnapshot | Mapping[str, Any],
+) -> Tuple[PhysicalParagraphBinding, ...]:
+    """Align source physical paragraphs before logical recognition starts."""
+
+    snapshot = _coerce_snapshot(host_snapshot)
+    _validate_snapshot_contract(snapshot)
+    seen_indexes = set()
+    groups = []
+    for physical_index, raw_text in source_paragraphs:
+        if (
+            isinstance(physical_index, bool)
+            or not isinstance(physical_index, int)
+            or physical_index < 0
+            or physical_index in seen_indexes
+            or not isinstance(raw_text, str)
+        ):
+            raise BindingError("源物理段落输入无效")
+        seen_indexes.add(physical_index)
+        groups.append(
+            _PhysicalGroup(
+                physical_index=physical_index,
+                raw_hash=_sha256(raw_text),
+                canonical_hash=_sha256(canonicalize_text(raw_text)),
+                blocks=(),
+            )
+        )
+    return _bind_physical_groups(tuple(groups), _host_texts(snapshot))
 
 
 def _bound(
@@ -328,58 +437,15 @@ def bind_recognition_plan(
             code="UNSUPPORTED_SCHEMA_VERSION",
             details={"path": "plan.contracts.source_locator_version"},
         )
-    if snapshot.text_contract_version != SDK_HOST_TEXT_CONTRACT_VERSION:
-        raise UnsupportedContractError(
-            "不支持的宿主文本契约",
-            code="UNSUPPORTED_HOST_TEXT_CONTRACT",
-            details={"path": "host_snapshot.text_contract_version"},
-        )
-    if snapshot.offset_encoding != OFFSET_ENCODING:
-        raise UnsupportedContractError(
-            "不支持的 offset encoding",
-            code="UNSUPPORTED_OFFSET_ENCODING",
-            details={"path": "host_snapshot.offset_encoding"},
-        )
-    hosts = tuple(_HostText(
-        paragraph=item,
-        tape=SourceTape.from_text(item.raw_text, contract_version=snapshot.text_contract_version),
-        raw_hash=_sha256(item.raw_text),
-        canonical_hash=_sha256(
-            canonicalize_text(item.raw_text)
-            if snapshot.text_contract_version == HOST_TEXT_CONTRACT_VERSION
-            else SourceTape.from_text(item.raw_text, snapshot.text_contract_version).canonical_text
-        ),
-    ) for item in snapshot.paragraphs if item.story_type == "main" and not item.is_in_table)
+    _validate_snapshot_contract(snapshot)
+    hosts = _host_texts(snapshot)
     groups = _physical_groups(plan)
     alignments = _align_groups(groups, hosts)
     duplicates = {}
     for host in hosts:
         duplicates[host.raw_hash] = duplicates.get(host.raw_hash, 0) + 1
     host_by_position = {position: item for position, item in enumerate(hosts)}
-    group_by_index = {group.physical_index: group for group in groups}
-    physical_paragraphs = []
-    for physical_index in sorted(group_by_index):
-        status, host_position, score, candidates, evidence, warnings = alignments[physical_index]
-        host = host_by_position[host_position] if host_position is not None else None
-        physical_paragraphs.append(PhysicalParagraphBinding(
-            physical_group_id=group_by_index[physical_index].blocks[0].physical_group_id,
-            source_physical_paragraph_index=physical_index,
-            host_paragraph_index=(
-                host.paragraph.host_paragraph_index
-                if host is not None else None
-            ),
-            host_paragraph_id=host.paragraph.host_paragraph_id if host is not None else None,
-            status=status,
-            score=score,
-            candidate_host_paragraph_indexes=tuple(
-                host_by_position[position].paragraph.host_paragraph_index for position in candidates
-            ),
-            candidate_host_paragraph_ids=tuple(
-                host_by_position[position].paragraph.host_paragraph_id for position in candidates
-            ),
-            evidence=evidence,
-            warnings=warnings,
-        ))
+    physical_paragraphs = _bind_physical_groups(groups, hosts)
     result = []
 
     for block in plan.blocks:

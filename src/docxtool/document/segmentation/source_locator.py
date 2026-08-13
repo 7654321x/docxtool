@@ -304,6 +304,9 @@ def build_segment_features(
         bold_char_ratio=parent.bold_char_ratio,
         italic_char_ratio=parent.italic_char_ratio,
         explicitly_formatted_char_ratio=parent.explicitly_formatted_char_ratio,
+        page_break_before=parent.page_break_before,
+        layout_preservation_hint=parent.layout_preservation_hint,
+        layout_preservation_evidence=parent.layout_preservation_evidence,
     )
     set_source_locator(child, parent, start, end)
     apply_segment_format_features(child, parent, start, end)
@@ -334,6 +337,9 @@ def build_unresolved_empty_segment_features(
         numbering_prefix=parent.numbering_prefix,
         native_numbering=parent.native_numbering,
         paragraph_index=paragraph_index,
+        page_break_before=parent.page_break_before,
+        layout_preservation_hint=parent.layout_preservation_hint,
+        layout_preservation_evidence=parent.layout_preservation_evidence,
     )
     child.source_physical_paragraph_index = parent.source_physical_paragraph_index
     child.source_physical_text = parent.source_physical_text

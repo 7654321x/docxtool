@@ -386,11 +386,20 @@
   }
 
   function setBusinessButtonsDisabled(disabled) {
-    ["preview", "apply", "clear_preview", "health"].forEach((id) => { node(id).disabled = Boolean(disabled); });
+    ["preview", "apply", "add_letterhead", "clear_preview", "health"].forEach((id) => { node(id).disabled = Boolean(disabled); });
     if (!disabled && !accountApplyAvailable) node("apply").disabled = true;
   }
 
-  async function request(commandName, requestedId) {
+  function requestedFormatScope(commandName) {
+    if (commandName !== "apply" || node("format_scope_mode").value === "whole") {
+      return null;
+    }
+    const pageSpec = node("format_page_spec").value.trim();
+    if (!pageSpec) throw new Error("WPS_FORMAT_PAGE_SPEC_INVALID");
+    return { mode: "pre_format_pages", page_spec: pageSpec };
+  }
+
+  async function request(commandName, requestedId, commandPayload) {
     const state = currentState;
     if (pendingRequestId) {
       node("message").textContent = "命令正在处理中。";
@@ -440,11 +449,14 @@
       host_generation: hostGeneration
     });
     try {
+      const formatScope = requestedFormatScope(commandName);
       const result = await bridgeApi("/v1/bridge/command", {
         request_id: requestId,
         command: commandName,
         pane_instance_id: paneInstanceId,
-        host_generation: hostGeneration
+        host_generation: hostGeneration,
+        format_scope: formatScope,
+        letterhead: commandName === "add_letterhead" ? commandPayload : null
       }, requestId);
       log("INFO", "taskpane.bridge.command.submit.completed", "任务窗格命令已提交", {
         request_id: requestId, command: commandName,
@@ -466,6 +478,81 @@
       throw new Error(errorCode);
     }
     return requestId;
+  }
+
+  function openLetterheadForm() {
+    node("letterhead_form_error").textContent = "";
+    node("letterhead_modal").hidden = false;
+    node("letterhead_mark").focus();
+    void request("inspect_letterhead").then(() => {
+      node("letterhead_modal").hidden = false;
+      node("letterhead_mark").focus();
+    }).catch((error) => {
+      const code = stableErrorCode(error, "WPS_LETTERHEAD_INSPECT_FAILED");
+      const message = code === "WPS_LETTERHEAD_JOINT_SOURCE_UNSUPPORTED"
+        ? "当前只支持单机关发文版头，未修改文档。"
+        : "无法读取当前版头。";
+      node("letterhead_form_error").textContent = `${message} ${displayError(code)}`;
+    });
+  }
+
+  function closeLetterheadForm() {
+    node("letterhead_modal").hidden = true;
+    node("letterhead_form_error").textContent = "";
+  }
+
+  function letterheadPayload(replaceExisting) {
+    const markText = node("letterhead_mark").value.trim();
+    if (!markText) throw new Error("WPS_LETTERHEAD_MARK_REQUIRED");
+    const documentNumber = node("letterhead_number").value.trim();
+    if (!/^[^\s，。；：:（）()《》“”〔〕]{1,40}〔\d{4}〕\d{1,6}号$/.test(documentNumber)) {
+      throw new Error("WPS_LETTERHEAD_DOCUMENT_NUMBER_INVALID");
+    }
+    return {
+      mark_text: markText,
+      document_number: documentNumber,
+      signer: node("letterhead_signer").value.trim(),
+      separator_style: node("letterhead_separator").value,
+      replace_existing: Boolean(replaceExisting)
+    };
+  }
+
+  async function submitLetterhead(replaceExisting) {
+    const payload = letterheadPayload(replaceExisting);
+    const inspection = currentState.letterhead_inspection || {};
+    if (!replaceExisting && inspection.exists === true) {
+      if (inspection.replaceable !== true) {
+        const error = new Error("WPS_LETTERHEAD_EXISTING_AMBIGUOUS");
+        node("letterhead_form_error").textContent = `无法确定现有版头边界，未修改文档。 ${displayError(error.message)}`;
+        throw error;
+      }
+      if (!window.confirm("当前文档已存在版头，是否使用当前填写内容替换？")) {
+        node("letterhead_form_error").textContent = "已取消替换，文档未修改。";
+        return;
+      }
+      return submitLetterhead(true);
+    }
+    try {
+      await request("add_letterhead", undefined, payload);
+      node("letterhead_modal").hidden = true;
+    } catch (error) {
+      const code = stableErrorCode(error, "WPS_LETTERHEAD_ADD_FAILED");
+      if (code === "WPS_LETTERHEAD_ALREADY_EXISTS" && !replaceExisting) {
+        const confirmed = window.confirm("当前文档已存在版头，是否使用当前填写内容替换？");
+        if (confirmed) return submitLetterhead(true);
+        node("letterhead_form_error").textContent = "已取消替换，文档未修改。";
+        return;
+      }
+      const messages = {
+        WPS_LETTERHEAD_MARK_REQUIRED: "请输入发文机关标志。",
+        WPS_LETTERHEAD_DOCUMENT_NUMBER_INVALID: "发文字号格式应为：机关代字〔四位年份〕顺序号号。",
+        WPS_LETTERHEAD_EXISTING_AMBIGUOUS: "无法确定现有版头边界，未修改文档。",
+        WPS_LETTERHEAD_MARK_TOO_LONG: "发文机关标志过长，无法在版心内排下。",
+        WPS_LETTERHEAD_JOINT_SOURCE_UNSUPPORTED: "当前只支持单机关发文版头，未修改文档。"
+      };
+      node("letterhead_form_error").textContent = `${messages[code] || "版头添加失败。"}${displayError(code) ? ` ${displayError(code)}` : ""}`;
+      throw error;
+    }
   }
 
   async function maybeSubmitPanelReady() {
@@ -653,6 +740,33 @@
         );
       }
       log("INFO", "taskpane.request.completed", "任务窗格请求已完成", { request_id: pendingRequestId, request_status: active.request_status });
+      if (active.command === "inspect_letterhead" && active.request_status === "PASS") {
+        const inspection = state.letterhead_inspection || {};
+        const fields = inspection.fields;
+        if (fields && typeof fields === "object") {
+          node("letterhead_mark").value = fields.mark_text || "";
+          node("letterhead_number").value = fields.document_number || "";
+          node("letterhead_signer").value = fields.signer || "";
+          node("letterhead_separator").value = fields.separator_style || "straight";
+        }
+      }
+      if (active.command === "inspect_letterhead" && active.request_status === "FAIL") {
+        const code = active.error_code || "WPS_LETTERHEAD_INSPECT_FAILED";
+        const message = code === "WPS_LETTERHEAD_JOINT_SOURCE_UNSUPPORTED"
+          ? "当前只支持单机关发文版头，未修改文档。"
+          : "无法读取当前版头。";
+        node("letterhead_form_error").textContent = `${message} ${displayError(code)}`;
+      }
+      if (active.command === "add_letterhead") {
+        if (active.request_status === "FAIL") {
+          const code = active.error_code || "WPS_LETTERHEAD_ADD_FAILED";
+          node("letterhead_modal").hidden = false;
+          node("letterhead_form_error").textContent = `版头添加失败。 ${displayError(code)}`;
+        } else {
+          node("letterhead_modal").hidden = true;
+          node("letterhead_form_error").textContent = "";
+        }
+      }
       logLayoutEvent(
         "taskpane.command.layout.snapshot",
         "命令完成时任务窗格布局快照已采集",
@@ -670,6 +784,10 @@
       pendingClaimed = false;
       pendingAckTimedOut = false;
       setBusinessButtonsDisabled(!panelReadyCompleted);
+      if (active.command === "inspect_letterhead") {
+        node("letterhead_modal").hidden = false;
+        node("letterhead_mark").focus();
+      }
       return false;
     }
     const elapsed = pendingRequestedAt ? Date.now() - pendingRequestedAt : 0;
@@ -912,7 +1030,9 @@
       const code = stableErrorCode(error, "WPS_TASKPANE_REQUEST_FAILED");
       node("message").textContent = code === "WPS_PUBLIC_SERVER_UNAVAILABLE"
         ? "服务器无法连接。"
-        : "命令发送失败。";
+        : code === "WPS_FORMAT_PAGE_SPEC_INVALID"
+          ? "请输入有效页码范围。"
+          : "命令发送失败。";
       node("error").textContent = displayError(code);
       log("ERROR", "taskpane.request.failed", "任务窗格命令发送失败", {
         command: id, error_code: code,
@@ -920,6 +1040,31 @@
       });
     });
   }));
+  node("add_letterhead").addEventListener("click", openLetterheadForm);
+  node("letterhead_cancel").addEventListener("click", closeLetterheadForm);
+  node("letterhead_confirm").addEventListener("click", () => {
+    node("letterhead_form_error").textContent = "";
+    void submitLetterhead(false).catch((error) => {
+      const code = stableErrorCode(error, "WPS_LETTERHEAD_ADD_FAILED");
+      const messages = {
+        WPS_LETTERHEAD_MARK_REQUIRED: "请输入发文机关标志。",
+        WPS_LETTERHEAD_DOCUMENT_NUMBER_INVALID: "发文字号格式应为：机关代字〔四位年份〕顺序号号。"
+      };
+      if (!node("letterhead_form_error").textContent) {
+        node("letterhead_form_error").textContent = `${messages[code] || "版头添加失败。"} ${displayError(code)}`;
+      }
+      log("ERROR", "taskpane.letterhead.submit.failed", "任务窗格版头请求失败", {
+        command: "add_letterhead",
+        error_code: code,
+        error_type: error && error.name ? error.name : "Error"
+      });
+    });
+  });
+  node("format_scope_mode").addEventListener("change", () => {
+    const pageInput = node("format_page_spec");
+    pageInput.disabled = node("format_scope_mode").value !== "pre_format_pages";
+    if (!pageInput.disabled) pageInput.focus();
+  });
   node("close_panel").addEventListener("click", closePanel);
 
   try {

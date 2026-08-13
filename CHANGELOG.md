@@ -1,5 +1,17 @@
 # Changelog
 
+## 5.3 - 2026-08-13
+
+- Added a WPS “添加版头” flow that directly generates or transactionally replaces a single-agency letterhead in the current document without recognition, one-click formatting, or public authorization.
+- Added source-letterhead field extraction, page-width-adaptive red agency marks, straight/star separators, exact two-body-line title spacing, and explicit rejection of unsupported joint source letterheads.
+- Kept legacy `.doc/.wps` letterhead inspection non-publishing while allowing a confirmed add operation to produce the same-name `.docx` with rollback protection.
+- Made Recognition the final authority for semantic paragraph types; heading-family sibling evidence is now resolved by the existing context, candidates, and Beam decoder instead of post-recognition normalization.
+- Built the final `DocumentStructure` only after normalization, tail ordering, and diagnostics consistency synchronization so structure, paragraph order, and final types share one state.
+- Added the internal `NORMALIZE`, `PRESERVE_LAYOUT`, and `PRESERVE_OBJECT` layout policies, inferred once from final structure and physical document facts.
+- Preserved Tab, repeated spaces, full-width spaces, and NBSP in repeated manual-column rows on real attachment pages while still applying the final attachment font, size, line spacing, and paragraph style.
+- Made structural paragraph rendering fail fast with `ExportError` instead of silently degrading titles, headings, signatures, or attachment structures into body text.
+- Added anonymous generated-DOCX regressions for attachment manual columns, ordinary attachment text, body key-value lines, all processing modes, protected objects, semantic-type finality, and final tail structure ordering.
+
 ## 5.2.2 - 2026-08-13
 
 - Recognized Word/WPS native automatic-numbering headings across levels one through four without requiring bold formatting, while preserving numbering definitions and source locators for safe output decisions.

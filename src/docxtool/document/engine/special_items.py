@@ -65,4 +65,26 @@ def render_special_item(context, paragraph_data, *, compatibility_module) -> boo
                     f"已有版头完整复制失败，已中止导出: {exc}"
                 ) from exc
         return True
+    if paragraph_data.type_id == "__preserved_source__":
+        try:
+            element = compatibility_module._copy_preserved_paragraph(
+                doc,
+                paragraph_data.meta.get("paragraph_xml"),
+                relationship_part_copier,
+                referenced_style_copier,
+            )
+            native_numbering = paragraph_data.meta.get("native_numbering")
+            if native_numbering is not None:
+                from docx.text.paragraph import Paragraph
+
+                context.native_numbering_copier.apply(
+                    Paragraph(element, doc._body), native_numbering
+                )
+                context.native_numbering_elements.add(element)
+            protected_paragraph_elements.add(element)
+        except Exception as exc:
+            raise compatibility_module.ExportError(
+                f"范围外段落完整复制失败，已中止导出: {exc}"
+            ) from exc
+        return True
     return False

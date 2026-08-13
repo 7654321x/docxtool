@@ -112,6 +112,14 @@ def test_heading_has_inline_body_shared_boundary_helper() -> None:
     assert not heading_has_inline_body("一、标题。短")
 
 
+def test_visible_heading2_and_body_stay_in_one_physical_segment() -> None:
+    source = "（一）会议安排。后续正文内容完整说明有关工作要求。"
+
+    assert _split_inline_heading_body_spans(source, 0, len(source)) == [
+        (0, len(source))
+    ]
+
+
 def test_soft_break_decision_uses_structural_evidence_without_final_type() -> None:
     """软换行决策传入结构证据后，只返回是否拆段，不给出最终段落类型。"""
     assert _soft_break_decision(["一、标题。", "正文继续说明。"])
@@ -278,6 +286,58 @@ def test_organization_label_and_content_stay_in_one_sdk_block(tmp_path) -> None:
     assert blocks[0].type_id == "body"
     assert blocks[0].recognized_text == text
     assert blocks[0].locator_verified
+
+
+def test_heading2_period_body_keeps_source_physical_paragraph_boundaries(
+    tmp_path,
+) -> None:
+    one_source = tmp_path / "heading2-one-physical-paragraph.docx"
+    two_source = tmp_path / "heading2-two-physical-paragraphs.docx"
+    heading = "（一）会议安排。"
+    body = "后续正文内容完整说明有关工作要求。"
+
+    one = Document()
+    one.add_paragraph(f"{heading}{body}")
+    one.save(one_source)
+    two = Document()
+    two.add_paragraph(heading)
+    two.add_paragraph(body)
+    two.save(two_source)
+
+    one_plan = recognize_docx(one_source, processing_mode="structural", include_text=True)
+    one_blocks = [block for block in one_plan.blocks if block.kind == "paragraph"]
+    assert [(block.type_id, block.recognized_text) for block in one_blocks] == [
+        ("heading2", f"{heading}{body}")
+    ]
+    assert one_blocks[0].physical_paragraph_index == 0
+    assert one_blocks[0].locator_verified is True
+
+    two_plan = recognize_docx(two_source, processing_mode="structural", include_text=True)
+    two_blocks = [block for block in two_plan.blocks if block.kind == "paragraph"]
+    assert [(block.type_id, block.recognized_text) for block in two_blocks] == [
+        ("heading2", heading),
+        ("body", body),
+    ]
+    assert [block.physical_paragraph_index for block in two_blocks] == [0, 1]
+
+
+def test_heading2_word_style_period_body_stays_one_physical_paragraph(
+    tmp_path,
+) -> None:
+    source = tmp_path / "heading2-style-inline-body.docx"
+    text = "会议安排。后续正文内容完整说明有关工作要求。"
+    document = Document()
+    document.add_paragraph(text, style="Heading 2")
+    document.save(source)
+
+    plan = recognize_docx(source, processing_mode="structural", include_text=True)
+    blocks = [block for block in plan.blocks if block.kind == "paragraph"]
+
+    assert [(block.type_id, block.recognized_text) for block in blocks] == [
+        ("heading2", text)
+    ]
+    assert blocks[0].physical_paragraph_index == 0
+    assert blocks[0].locator_verified is True
 
 
 def test_inline_salutation_and_body_split_without_specific_name(tmp_path) -> None:

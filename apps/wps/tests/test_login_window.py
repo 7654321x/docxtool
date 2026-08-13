@@ -12,6 +12,8 @@ from apps.wps.login_window import (
     AuthenticationWorker,
     LoginDialog,
     PreferencesDialog,
+    _configure_high_dpi,
+    _login_icon_pixmap,
     password_mask,
     required_window_height,
     submit_account,
@@ -188,16 +190,21 @@ def test_dialog_prefills_account_password_and_preferences(qt_app):
     assert dialog.windowIcon().isNull() is False
     assert dialog.status_label.isVisible() is False
     assert dialog.password_input.width() == dialog.username_input.width()
+    assert dialog.username_icon_action in dialog.username_input.actions()
+    assert dialog.username_icon_action.icon().isNull() is False
 
 
-def test_login_dialog_uses_custom_title_bar_and_d_icon(qt_app):
+def test_login_dialog_uses_native_title_bar_and_d_icon(qt_app):
     dialog = LoginDialog(api=_Api(), account_store=_Store())
 
-    assert dialog.windowFlags() & Qt.FramelessWindowHint
-    assert dialog.title_bar.icon_label.pixmap().isNull() is False
-    assert dialog.title_bar.title_label.text() == "DocxTool WPS"
-    assert dialog.title_bar.minimize_button is not None
-    assert dialog.title_bar.close_button.accessibleName() == "关闭窗口"
+    assert not dialog.windowFlags() & Qt.FramelessWindowHint
+    assert dialog.windowFlags() & Qt.WindowTitleHint
+    assert dialog.windowFlags() & Qt.WindowMinimizeButtonHint
+    assert dialog.windowFlags() & Qt.WindowCloseButtonHint
+    assert dialog.windowTitle() == "DocxTool WPS"
+    assert dialog.windowIcon().isNull() is False
+    assert _login_icon_pixmap(52).size().width() == 52
+    assert _login_icon_pixmap(52).size().height() == 52
 
 
 def test_dialog_password_visibility_and_preference_relationship(qt_app):
@@ -206,6 +213,12 @@ def test_dialog_password_visibility_and_preference_relationship(qt_app):
     assert dialog.visibility_action in dialog.password_input.actions()
     dialog.visibility_action.trigger()
     assert dialog.password_input.echoMode() == QLineEdit.Normal
+    assert dialog.confirmation_input.echoMode() == QLineEdit.Normal
+    assert dialog.confirmation_visibility_action.isChecked() is True
+    dialog.confirmation_visibility_action.trigger()
+    assert dialog.password_input.echoMode() == QLineEdit.Password
+    assert dialog.confirmation_input.echoMode() == QLineEdit.Password
+    assert dialog.visibility_action.isChecked() is False
 
     dialog.auto_checkbox.setChecked(True)
     assert dialog.remember_checkbox.isChecked() is True
@@ -215,12 +228,73 @@ def test_dialog_password_visibility_and_preference_relationship(qt_app):
 
 def test_dialog_switches_between_login_and_register(qt_app):
     dialog = LoginDialog(api=_Api(), account_store=_Store())
-    assert dialog.confirmation_input.isVisible() is False
+    assert dialog.confirmation_group.isHidden() is True
+    assert dialog.height() <= 650
     dialog._switch_mode()
     assert dialog._mode == "register"
     assert dialog.primary_button.text() == "注册并登录"
+    assert dialog.title_label.text() == "注册账号"
+    assert dialog.confirmation_group.isHidden() is False
+    register_height = dialog.height()
     dialog._switch_mode()
     assert dialog._mode == "login"
+    assert dialog.confirmation_group.isHidden() is True
+    assert dialog.height() <= register_height
+
+
+def test_dialog_uses_shared_polished_component_contract(qt_app):
+    dialog = LoginDialog(api=_Api(), account_store=_Store())
+
+    assert dialog.card.objectName() == "AuthCard"
+    assert dialog.title_label.objectName() == "PageTitle"
+    assert dialog.hint_label.objectName() == "PageSubtitle"
+    assert dialog.username_input.objectName() == "AuthInput"
+    assert dialog.password_input.objectName() == "AuthInput"
+    assert dialog.confirmation_input.objectName() == "AuthInput"
+    assert dialog.remember_checkbox.objectName() == "PreferenceCheck"
+    assert dialog.auto_checkbox.objectName() == "PreferenceCheck"
+    assert dialog.startup_checkbox.objectName() == "PreferenceCheck"
+    assert dialog.status_label.objectName() == "ErrorLabel"
+    assert dialog.primary_button.objectName() == "PrimaryButton"
+    assert dialog.switch_button.objectName() == "FooterLink"
+    assert 46 <= dialog.username_input.minimumHeight() <= 50
+    assert 46 <= dialog.password_input.minimumHeight() <= 50
+    assert 48 <= dialog.primary_button.minimumHeight() <= 50
+
+
+def test_dialog_keeps_enter_submission_contract(qt_app, monkeypatch):
+    dialog = LoginDialog(api=_Api(), account_store=_Store())
+    submitted = []
+    monkeypatch.setattr(dialog, "_submit", lambda: submitted.append(True))
+
+    dialog.password_input.returnPressed.disconnect()
+    dialog.password_input.returnPressed.connect(dialog._submit)
+    dialog.password_input.returnPressed.emit()
+
+    assert submitted == [True]
+
+
+def test_high_dpi_attributes_remain_enabled_before_application_creation(monkeypatch):
+    attributes = []
+
+    class ApplicationProbe:
+        @staticmethod
+        def instance():
+            return None
+
+        @staticmethod
+        def setAttribute(attribute, enabled):
+            attributes.append((attribute, enabled))
+
+    monkeypatch.setattr("apps.wps.login_window.configure_windows_application_identity", lambda: None)
+    monkeypatch.setattr("apps.wps.login_window.QApplication", ApplicationProbe)
+
+    _configure_high_dpi()
+
+    assert attributes == [
+        (Qt.AA_EnableHighDpiScaling, True),
+        (Qt.AA_UseHighDpiPixmaps, True),
+    ]
 
 
 def test_authentication_worker_emits_success_and_finished():
@@ -322,9 +396,9 @@ def test_preferences_dialog_can_disable_auto_login(qt_app, monkeypatch):
         startup_enabled=False,
     )
     assert dialog.windowIcon().isNull() is False
-    assert dialog.windowFlags() & Qt.FramelessWindowHint
-    assert dialog.title_bar.icon_label.pixmap().isNull() is False
-    assert dialog.title_bar.minimize_button is None
+    assert not dialog.windowFlags() & Qt.FramelessWindowHint
+    assert dialog.windowFlags() & Qt.WindowTitleHint
+    assert dialog.windowFlags() & Qt.WindowCloseButtonHint
     dialog.auto_checkbox.setChecked(False)
 
     dialog._save()

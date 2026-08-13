@@ -6,13 +6,20 @@ from pathlib import Path
 import pytest
 from docx import Document
 from docx.enum.text import WD_BREAK
-from docx.shared import Pt
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
+from docx.shared import Pt, RGBColor
 
 from docxtool import __version__ as package_version
 from docxtool.document.importer import DocxImporter
 from docxtool.document.style_config import load_rules_and_settings
 from docxtool.paths import default_format_config_path
-from docxtool.sdk import InvalidRequestError, RecognitionInputError, recognize_docx
+from docxtool.sdk import (
+    InvalidRequestError,
+    RecognitionInputError,
+    recognize_docx,
+    validate_recognition_plan,
+)
 from docxtool.sdk.cli import main as sdk_main, recognize_main
 
 
@@ -55,6 +62,45 @@ def test_sdk_matches_existing_authoritative_recognition_and_redacts_text(tmp_pat
     assert "总体要求" not in payload
 
 
+def test_sdk_assigns_unique_ids_to_unlocated_letterhead_and_image_blocks(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "letterhead-objects.docx"
+    document = Document()
+    document.add_paragraph()
+    mark = document.add_paragraph("测试机关文件")
+    mark.alignment = 1
+    mark.runs[0].font.color.rgb = RGBColor(255, 0, 0)
+    document.add_paragraph("测发〔2026〕1号")
+    separator = document.add_paragraph()
+    borders = OxmlElement("w:pBdr")
+    bottom = OxmlElement("w:bottom")
+    bottom.set(qn("w:val"), "single")
+    bottom.set(qn("w:color"), "FF0000")
+    borders.append(bottom)
+    separator._p.get_or_add_pPr().append(borders)
+    document.add_paragraph()
+    document.add_paragraph("关于测试工作的通知")
+    document.add_paragraph("正文内容。")
+    for _ in range(2):
+        image = document.add_paragraph()
+        drawing = OxmlElement("w:drawing")
+        extent = OxmlElement("wp:extent")
+        extent.set("cx", "100")
+        extent.set("cy", "100")
+        drawing.append(extent)
+        image._p.append(drawing)
+    document.save(source)
+
+    plan = recognize_docx(source)
+    special = [block for block in plan.blocks if block.physical_paragraph_index is None]
+
+    assert len(special) >= 7
+    assert len({block.physical_group_id for block in special}) == len(special)
+    assert len({block.block_id for block in plan.blocks}) == len(plan.blocks)
+    assert validate_recognition_plan(plan).valid
+
+
 def test_sdk_emits_verified_physical_utf16_ranges_and_local_text_is_opt_in(tmp_path: Path) -> None:
     source = tmp_path / "mixed.docx"
     document = Document()
@@ -78,6 +124,27 @@ def test_sdk_emits_verified_physical_utf16_ranges_and_local_text_is_opt_in(tmp_p
         physical = "一、测试标题。这是同一物理段落中的测试正文内容。".encode("utf-16-le")
         selected = physical[block.range_start_utf16 * 2:block.range_end_utf16 * 2].decode("utf-16-le")
         assert selected == block.recognized_text
+
+
+def test_sdk_keeps_numbered_heading2_colon_body_in_one_verified_range(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "heading2-colon-inline-body.docx"
+    text = "（一）工作安排： 正文内容"
+    document = Document()
+    document.add_paragraph(text)
+    document.save(source)
+
+    plan = recognize_docx(source, include_text=True)
+
+    paragraph_blocks = [block for block in plan.blocks if block.kind == "paragraph"]
+    assert len(paragraph_blocks) == 1
+    block = paragraph_blocks[0]
+    assert block.type_id == "heading2"
+    assert block.recognized_text == text
+    assert block.locator_verified is True
+    assert block.range_start_utf16 == 0
+    assert block.range_end_utf16 == len(text.encode("utf-16-le")) // 2
 
 
 def test_sdk_locates_front_role_and_date_split_from_one_physical_paragraph(tmp_path: Path) -> None:

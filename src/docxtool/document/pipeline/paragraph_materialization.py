@@ -72,6 +72,8 @@ def materialize_text_paragraph(
     meta = dict(meta or {})
     if sect_pr is not None:
         meta["sectPr"] = sect_pr
+    if features.page_break_before:
+        meta["page_break_before"] = True
     meta["legacy_type_id"] = {
         "value": type_id,
         "source": "legacy_importer",

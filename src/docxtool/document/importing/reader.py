@@ -81,6 +81,9 @@ def read_body_blocks(
         if child.tag == qn("w:p"):
             paragraph = DocxParagraph(child, document._body)
             paragraph_features = extract_features_func(paragraph, paragraph_index)
+            data.source_body_blocks.append(
+                ("paragraph", paragraph_index, paragraph, paragraph_features)
+            )
             native_numbering = paragraph_features.native_numbering
             if native_numbering is not None:
                 key = (native_numbering.num_id, native_numbering.ilvl)
@@ -122,6 +125,7 @@ def read_body_blocks(
                 )
         elif child.tag == qn("w:tbl"):
             table = DocxTable(child, document._body)
+            data.source_body_blocks.append(("table", None, table))
             raw_blocks.append(("table", table))
             data.tables.append(table)
         elif child.tag == qn("w:sectPr"):
@@ -151,5 +155,27 @@ def read_body_blocks(
                 block[1],
                 block[2],
             )
+
+    format_scope = data.format_scope
+    if format_scope is not None:
+        selected = format_scope.source_physical_paragraph_indexes
+        source_index_by_element = {
+            id(source_block[2]._element): source_block[1]
+            for source_block in data.source_body_blocks
+            if source_block[0] == "paragraph"
+        }
+        raw_blocks = [
+            block
+            for block in raw_blocks
+            if block[0] != "table"
+            and (
+                (
+                    block[2].source_physical_paragraph_index
+                    if block[0] in {"paragraph", "protected_paragraph_xml"}
+                    else source_index_by_element[id(block[1]._element)]
+                )
+                in selected
+            )
+        ]
 
     return raw_blocks

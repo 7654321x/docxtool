@@ -17,6 +17,8 @@ class KeyValueCandidateProvider:
     name = "key-value"
 
     def propose(self, block, features, context):
+        if features.numbered_heading2_colon_inline_body:
+            return []
         label = features.key_value_label or ""
         if not label:
             return []

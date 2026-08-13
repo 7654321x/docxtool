@@ -94,7 +94,7 @@ pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m pytest tests/test_signat
 pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m ruff check src tests scripts"
 ```
 
-6. 触发场景：二级标题在句号后紧接行内正文时，导入和导出统一以“句号后至少 5 个非空字符”为正文阈值；标题部分使用二级标题规则，正文部分使用正文规则，不能因长度区间不同而整段加粗。
+6. 触发场景：明确二级标题在句号后紧接行内正文时，导入和导出统一以“句号后至少 5 个非空字符”为正文阈值；若源内容位于同一个 Word 物理段落，输出必须保持一个物理段，只在句号处切换 run 格式，标题部分完整使用二级标题字体、字号和粗体配置，正文部分完整使用正文配置。只有源文件本来就是两个物理段落时才保持“二级标题段 + 正文段”，不得因内容形态自动拆段或反向合并。可见`（一）`、明确二级标题样式和原生`（%1）`模板适用；泛化列表层级不得据此升级。修改后运行 `tests/test_segment_boundaries.py tests/test_engine_inline_effects.py tests/test_engine_heading_spacing.py tests/test_native_numbering.py tests/test_sdk.py`。
 7. 触发场景：用户通过浏览器将二、三级标题设为不加粗时，导出必须尊重该配置；不要在编号后处理阶段无条件把 run 设为粗体。修改后至少运行：
 
 ```pwsh
@@ -115,10 +115,10 @@ pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m pytest tests/test_struct
 19. 触发场景：正文前部引用“某通知（川组通〔2025〕51号）”等文件编号时，不能据此判定已有未知版头；只有整段为结构化发文字号（可同段附签发人）时才作为版头检测信号。无已有版头且配置启用时，应在首个标题前插入托管版头，并保持标题及后续内容节点的原有顺序。
 20. 版头开关采用单一语义：开启时移除检测到的已有正文流版头并按当前配置重新生成；关闭时不新增、不替换，已有版头原样保留。后端必须强制执行该语义，不能依赖前端额外的“替换受管版头”开关。
 21. 触发场景：多行主标题后紧接“职务 + 姓名”的 `role_name` 时，姓名职务段应显式设置段前 1 行；后接正文或标题等主体内容时段后 1 行，不插入真实空段，且下一段不得再次叠加段前间距。后接头部日期 `date_line` 时段后保持 0，使职务姓名与日期相邻。
-22. 版头发文机关标志默认使用 32 pt 方正小标宋简体，标志段自身段前段后均为 0；标志上方用 3 个 `DCT-LetterheadSpacer` 固定行空段、下方用 2 个固定行空段。发文字号和每行签发人段前段后均为 0。红线前标准 4 mm 仍使用物理距离，红线后使用 2 行间距。
+22. 下行文版头按本地首页图解采用明确行距结构：发文机关标志上方生成 3 个固定 28 pt 空行；标志使用 32 pt 方正小标宋简体、红色、居中，必须在版心内单行完整显示；过长时仅允许在 55%～100% 范围内横向压缩，不得为了铺满版心自动放大字号，仍无法排入时明确失败。标志段固定行距必须等于实际标志字号，即默认 32 pt 字号对应 32 pt 固定行距，禁止套用 28 pt 正文行距；标志下方生成 2 个当前正文行距空行，随后紧接发文字号。上述空行、标志和下行文发文字号的段前、段后、文本之前、文本之后及首行缩进均显式为 0；空行自身固定行距和标志承载文字所需行距不属于“段前/段后”。红线前 4 mm、红线至首个标题为当前正文行距 × 2 等已有明确距离继续保留，首个标题不得再叠加段前间距。除这些版头元素外，不改页面参数、正文或其他未提及格式。
 23. 版头仅在首页首个标题前插入正文流段落，不创建专用节，也不得重设页面尺寸、页边距或文档网格；这些参数始终复用全局页面设置。版头生成晚于通用西文字体后处理，因此生成后必须补做同一轮数字/拉丁字体扫描，并显式保持中文 `eastAsia` 字体与 `ascii/hAnsi=Times New Roman`。
 24. 附件正文页的 `attachment_title` 默认段前、段后各 1 行；间距写在 `DCT-AttachmentTitle` 及段落直接格式中，不插入真实空段，也不得再通过“标题后留白”逻辑给后续 `attachment_body` 叠加一行。
-25. 版头机关列表只禁止删除最后一个机关；联合发文从两个机关删至一个时，前端必须自动切回单一机关并将剩余机关设为主办机关，同时清理被删机关的签发人。添加第二个机关时必须同步切换为联合发文，避免提交与机关数量冲突的配置。两个及以上机关均应显示有效的上下移动按钮；机关跨越首位时必须同步将新的第一位设为主办机关，保证前端顺序与后端“主办机关优先”归一化结果一致。
+25. 当前产品界面只启用单机关发文：Web 配置只提交一个主办机关，WPS“添加版头”表单只接受一行机关标志。Core 保留联合发文数据能力以兼容历史配置，但自动识别或 WPS 检查发现多机关源版头时必须明确返回不支持，不能把第一机关当成完整版头后覆盖原文。
 26. 触发场景：文尾日期、附件说明、附件项和附件正文页被 Word 手动换行粘在同一物理段落时，只要前两条可见行包含成文日期且后续出现附件边界，就必须拆成独立结构行；安全标点规范化不得把 `1.测试`、`附件：2.材料` 等结构编号中的句点改为句号，否则会阻断标题和附件识别。编号后紧邻的重复句点如 `4..标题` 应安全折叠为 `4.标题`。修改后至少运行 `tests/test_punctuation_engine.py`、`tests/test_signature_detection.py` 和 `tests/test_body_order_export.py`。
 27. 触发场景：独立成行的 `A：B` 键值段落（责任单位、联系人、联系电话等）统一使用三号、固定 28 磅、段前段后 0；`A：` 加粗、`B` 不加粗。单行使用首行缩进 2 字符；多条键值内容通过手动换行保存在同一段落时，使用等效的 2 字符段落左缩进，使每条可见行都对齐，不能让第二条及后续行顶格。
 28. 触发场景：导入包的 `word/_rels/document.xml.rels` 含 `Target="../NULL"` 时，必须用 XML 解析器按 `Target` 属性删除关系，不能用只匹配无前缀 `<Relationship>` 的正则；序列化后的关系节点常带 `ns0:` 等命名空间前缀。修改后运行 `tests/test_importer_broken_relationships.py` 和 DOCX 完整性测试。
@@ -154,6 +154,8 @@ pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m ruff check src tests scr
 45. 触发场景：职务后任意四字纯汉字短语不能仅凭前标题、后日期、后称呼、居中或 Word 标题样式单项证据认作姓名。裸姓名 fallback 也必须统一调用 `is_person_name_suffix()` 和 `person_name_shape_strength()`，不得直接用宽泛正则确认。普通四字姓名属于弱形状，必须同时具备前标题、后日期/称呼和居中；弱裸姓名自身若已有 `title/title_cont` 类型或 Title、Subtitle、Heading 样式，则保留在标题/正文裁决中，不得写入 `front_metadata role_name`。复姓、间隔点、占位符及 2—3 字姓名属于强形状，沿用既有前后结构锚点。紧凑“职务+姓名”存在多种切分时优先采用强姓名形状，文档形状后缀不得成为姓名，不得加入具体姓名或业务短语黑名单。修改后运行 `tests/test_recognition_decoder.py tests/test_processing_flags.py`。
 46. 触发场景：`时间11:00 标签：内容`、`版本1:2 标签：内容`等带文字前缀的数字时间/比例后仍有语义标签时，统一冒号分析必须返回原文中的 `separator_index`、`label_start_index`和`label_end_index`；渲染只加粗真实标签及语义冒号，数字表达及其文字前缀保持普通字重。修改后运行 `tests/test_colon_structure.py tests/test_engine_inline_effects.py`。
 47. 触发场景：最终识别为一至四级标题的独立标题以中文句号结尾，且句号后没有正文时，非 strict 导出必须删除该句末句号；“标题。正文”仍按既有标题正文边界处理，不得因本规则误删分界句号或正文。修改后运行 `tests/test_engine_heading_spacing.py`。
+48. 版头实现与视觉验收以上位标准 GB/T 9704—2012 为准，并以广州工商学院办公室转载的《国家机关政府部门公文格式标准（2023年新版）》及“正式公文（下行文）首页版式”图作为本地操作参考。图中的机关名称、年份、字号示例和 Word 操作步骤不得作为固定业务数据或覆盖上位标准；本项目按已确认产品规则将图示顶部空白落地为 3 个固定 28 pt 空行。下行文首页至少核验：A4 页面及上 37 mm、下 35 mm、左 28 mm、右 26 mm；机关标志在版心内单行居中且不得因固定大字号换行；标志下方 2 个正文行距后紧接发文字号；发文字号居中、首行缩进 0；其下 4 mm 为与版心等宽的红色直线；标题位于红线下空二行且多行按词意完整的梯形或菱形排列；标题下空一行接主送机关，首页必须出现正文。项目扩展的五角星分隔线允许由用户显式选择，但不得宣称为严格国标直线。修改版头布局后运行 `tests/test_letterhead_engine.py tests/test_structured_layout_quality.py`，并同时渲染首页检查机关标志单行、红线宽度和各垂直间距。
+49. 触发场景：WPS 可能正常显示五角星版头分隔线的两侧 VML 直线，但忽略填充的 `v:polyline` 中央星形。中央五角星必须使用闭合的 `v:shape` 路径并显式设置红色填充和轮廓，不得回退为 `v:polyline`；修改后运行 `tests/test_letterhead_engine.py apps/wps/tests/test_add_letterhead.py`，并在真实 WPS 中检查中央五角星可见。
 
 ## 可移动服务器部署
 
@@ -286,3 +288,11 @@ pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m ruff check src tests scr
 1. 启动 `apps/wps/main.py`、`wpsjs debug` 或 WPS Control Server 前，记录本轮进程 PID 和监听端口；验证结束或任务停止时，必须关闭本轮创建的 Python、Node、PowerShell、cmd 进程树并删除生成的 `apps/wps/runtime/runtime-config.js`。
 2. 收尾后检查本轮端口不再监听，且不存在命令行指向当前仓库 `apps/wps` 的残留启动器。不得默认终止用户开始前已有的 WPS 进程；只有用户明确要求关闭时才处理。
 3. WPS 加载项注册只保留当前项目 `docxtool-wps-app`；清理重复项前先备份 `publish.xml` 和 `authaddin.json` 到 `local_recycle/`，不得删除项目源码或 WPS 系统加载项。
+
+## 最终语义与布局策略边界
+
+1. Recognition 是段落 `type_id` 的最终裁决者；Normalization 只能规范化已确认文本、编号 meta 和尾部顺序，不得通过同级标题或其他启发式改型。修改后运行 `tests/test_recognition_decoder.py tests/test_normalization_pipeline.py`。
+2. `DocumentData.recognition_structure` 只在 Normalization 与一致性同步后构建，必须反映最终段落顺序和类型；不得长期保存 normalization 前结构作为最终结构。
+3. `LayoutPolicy` 只在 `document/analysis/layout_policy.py` 推断。只有真实附件分页后的附件区域同时存在至少两行稳定重复人工列，才可设为 `PRESERVE_LAYOUT`；普通附件正文和键值正文保持 `NORMALIZE`，表格、图片、题注与版头对象使用 `PRESERVE_OBJECT`。
+4. `PRESERVE_LAYOUT` 必须从分段前到导出守恒 Tab、连续空格、全角空格、NBSP、可见字符和物理来源顺序；Engine 可以统一字体、字号、行距和附件样式，但不得重新识别、折叠或改写人工列。结构段排版失败必须抛 `ExportError`，不得静默降级为正文。修改后运行 `tests/test_layout_policy.py tests/test_engine_heading_spacing.py tests/test_document_structure.py`。
+5. 触发场景：明确二级序号（可见`（一）`或原生模板`（%1）`）后接“非空短标题 + 语义冒号 + 非空正文”时，统一识别为一个`heading2`物理段；冒号及以前使用二级标题配置，冒号后空格和正文使用正文配置。规则只依赖结构，不维护标签白名单；数字时间/比例冒号不是分界，无编号键值段沿用原语义。`structural/smart`与`normalize`应用段内格式，`strict`不新增run改写；拆分跨界run时必须保留图片、域和关系节点。修改后运行`tests/test_colon_structure.py tests/test_recognition_decoder.py tests/test_engine_inline_effects.py tests/test_engine_heading_spacing.py tests/test_native_numbering.py tests/test_sdk.py`。

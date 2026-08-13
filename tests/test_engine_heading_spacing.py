@@ -53,14 +53,100 @@ class EngineHeadingSpacingTest(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def _export(self, paragraphs, *, processing_strategy="normalize"):
+    def _export(
+        self,
+        paragraphs,
+        *,
+        processing_strategy="normalize",
+        strict_preservation=False,
+    ):
         doc_data = DocumentData(
             paragraphs=paragraphs,
             filepath="input.docx",
             processing_strategy=processing_strategy,
+            strict_preservation=strict_preservation,
         )
         export_doc(doc_data, _rules(), PageSettings(), self.out)
         return Document(self.out)
+
+    def test_numbered_heading2_colon_inline_body_formats_editable_modes_only(self):
+        def paragraph():
+            return ParagraphData(
+                text="工作安排： 正文内容",
+                type_id="heading2",
+                original_text="（一）工作安排： 正文内容",
+                features=ParagraphFeatures(),
+                meta={
+                    "numbered_heading2_colon_inline_body": True,
+                    "numbering": "（一）",
+                },
+            )
+
+        for strategy in ("structural", "normalize"):
+            doc = self._export([paragraph()], processing_strategy=strategy)
+            output = doc.paragraphs[0]
+            self.assertEqual(len(doc.paragraphs), 1)
+            self.assertEqual(output.text, "（一）工作安排： 正文内容")
+            colon_position = output.text.index("：")
+            cursor = 0
+            for run in output.runs:
+                if not run.text:
+                    continue
+                cursor += len(run.text)
+                expected_font = (
+                    "楷体_GB2312"
+                    if cursor <= colon_position + 1
+                    else "仿宋_GB2312"
+                )
+                self.assertEqual(_body_font(run), expected_font)
+
+        strict_paragraph = ParagraphData(
+            text="（一）工作安排： 正文内容",
+            type_id="heading2",
+            original_text="（一）工作安排： 正文内容",
+            features=ParagraphFeatures(),
+            meta={"numbered_heading2_colon_inline_body": True},
+        )
+        strict = self._export(
+            [strict_paragraph],
+            processing_strategy="strict",
+            strict_preservation=True,
+        )
+        self.assertEqual(strict.paragraphs[0].text, "（一）工作安排： 正文内容")
+        self.assertEqual(
+            [run.text for run in strict.paragraphs[0].runs if run.text],
+            ["（一）工作安排： 正文内容"],
+        )
+
+    def test_numbered_heading2_colon_skips_competing_inline_effects(self):
+        paragraph = ParagraphData(
+            text="工作安排： 正文内容",
+            type_id="heading2",
+            original_text="（一）工作安排： 正文内容",
+            features=ParagraphFeatures(),
+            meta={
+                "numbered_heading2_colon_inline_body": True,
+                "numbering": "（一）",
+                "numbered_bold": True,
+                "colon_bold": True,
+                "inline_lead_bold": True,
+                "report_first_sentence_bold": True,
+            },
+        )
+
+        with patch.object(engine_core, "_apply_special_bold") as special, \
+                patch.object(engine_core, "_apply_colon_bold") as colon, \
+                patch.object(engine_core, "_apply_key_value_line_format") as key_value, \
+                patch.object(engine_core, "_apply_inline_lead_bold") as lead, \
+                patch.object(engine_core, "_apply_report_first_sentence") as report:
+            doc = self._export([paragraph], processing_strategy="structural")
+
+        self.assertEqual(doc.paragraphs[0].text, "（一）工作安排： 正文内容")
+        special.assert_not_called()
+        colon.assert_not_called()
+        key_value.assert_not_called()
+        lead.assert_not_called()
+        report.assert_not_called()
 
     def test_heading1_period_splits_one_complete_body_paragraph(self):
         doc = self._export([
@@ -122,6 +208,24 @@ class EngineHeadingSpacingTest(unittest.TestCase):
             with self.assertRaisesRegex(ExportError, "正文未完整保留"):
                 self._export(paragraphs)
 
+    def test_structural_render_failure_is_not_downgraded_to_body(self):
+        paragraph = ParagraphData(
+            text="一级标题",
+            type_id="heading1",
+            original_text="一、一级标题",
+            features=ParagraphFeatures(),
+        )
+        with patch.object(
+            engine_core,
+            "_resolve_rule",
+            side_effect=RuntimeError("injected structural render failure"),
+        ):
+            with self.assertRaisesRegex(
+                ExportError,
+                "结构段落排版失败: type=heading1 index=0",
+            ):
+                self._export([paragraph])
+
     def test_terminal_body_uses_widow_control_without_changing_earlier_body(self):
         doc = self._export([
             ParagraphData("第一段正文内容。", "body", "第一段正文内容。", ParagraphFeatures()),
@@ -165,6 +269,28 @@ class EngineHeadingSpacingTest(unittest.TestCase):
         ], processing_strategy="structural")
 
         self.assertEqual(doc.paragraphs[0].text, source)
+
+    def test_heading2_period_body_keeps_one_paragraph_with_body_font(self):
+        source = "（一）会议安排。 后续正文内容完整说明有关工作要求。"
+        doc = self._export([
+            ParagraphData(
+                text=source,
+                type_id="heading2",
+                original_text=source,
+                features=ParagraphFeatures(),
+                meta={"numbered_heading2_period_inline_body": True},
+            )
+        ], processing_strategy="structural")
+
+        self.assertEqual(len(doc.paragraphs), 1)
+        paragraph = doc.paragraphs[0]
+        self.assertEqual(paragraph.text, source)
+        self.assertEqual(
+            [run.text for run in paragraph.runs if run.text],
+            ["（一）会议安排。", " 后续正文内容完整说明有关工作要求。"],
+        )
+        self.assertEqual(_body_font(paragraph.runs[0]), "楷体_GB2312")
+        self.assertEqual(_body_font(paragraph.runs[1]), "仿宋_GB2312")
 
     def test_head_area_inserts_blank_line_before_body_or_heading1(self):
         cases = [

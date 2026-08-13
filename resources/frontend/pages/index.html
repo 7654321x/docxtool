@@ -296,7 +296,7 @@ h1{font-size:clamp(38px,5.4vw,64px);letter-spacing:0;line-height:1.08;margin-bot
 .agency-list,.signer-list{display:grid;gap:8px}.agency-row{display:grid;grid-template-columns:minmax(180px,1.4fr) minmax(140px,1fr) 110px auto;gap:8px;align-items:end}
 .row-actions{display:flex;gap:5px}.icon-btn{width:34px;height:34px;border-radius:8px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.07);color:#fff;font-size:15px;display:grid;place-items:center}.icon-btn:hover{border-color:rgba(246,200,95,.45);color:#ffe7a4}.icon-btn:disabled{opacity:.3;cursor:not-allowed;border-color:rgba(255,255,255,.1);color:var(--muted2)}
 .letterhead-add{margin-top:9px}.signer-group{padding:10px 0;border-bottom:1px solid rgba(255,255,255,.07)}.signer-group:last-child{border-bottom:0}.signer-group-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}.signer-group-head strong{font-size:12px}.signer-row{display:grid;grid-template-columns:minmax(180px,1fr) 100px 34px;gap:8px;margin-bottom:7px}
-.letterhead-preview-wrap{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:16px;align-items:start}.letterhead-preview{aspect-ratio:210/297;background:#fff;color:#111;padding:28px 24px 22px;box-shadow:0 10px 30px rgba(0,0,0,.25);overflow:hidden}.preview-mark{text-align:center;color:#e60012;font-family:"方正小标宋简体","SimSun",serif;font-size:22px;line-height:1.35;white-space:pre-line}.preview-meta{margin-top:28px}.preview-meta.upward{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:end}.preview-number{text-align:center;font-family:"FangSong","仿宋",serif;font-size:11px}.preview-meta.upward .preview-number{text-align:left}.preview-signers{font-family:"FangSong","仿宋",serif;font-size:10px;line-height:1.7;text-align:right;white-space:pre-line;padding-right:1em}.preview-separator{border-bottom:2px solid #f00;margin-top:8px}.preview-title{text-align:center;font-family:"SimSun",serif;font-size:15px;margin-top:28px;font-weight:700}
+.letterhead-preview-wrap{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:16px;align-items:start}.letterhead-preview{aspect-ratio:210/297;background:#fff;color:#111;padding:28px 24px 22px;box-shadow:0 10px 30px rgba(0,0,0,.25);overflow:hidden}.preview-mark{text-align:center;color:#e60012;font-family:"方正小标宋简体","SimSun",serif;font-size:22px;line-height:1.35;white-space:pre-line}.preview-meta{margin-top:28px}.preview-meta.upward{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:end}.preview-number{text-align:center;font-family:"FangSong","仿宋",serif;font-size:11px}.preview-meta.upward .preview-number{text-align:left}.preview-signers{font-family:"FangSong","仿宋",serif;font-size:10px;line-height:1.7;text-align:right;white-space:pre-line;padding-right:1em}.preview-separator{border-bottom:2px solid #f00;margin-top:8px;color:#f00;text-align:center;font-size:11px;line-height:7px}.preview-separator.star{border-image:linear-gradient(to right,#f00 0 44%,transparent 44% 56%,#f00 56% 100%) 1}.preview-title{text-align:center;font-family:"SimSun",serif;font-size:15px;margin-top:28px;font-weight:700}
 @media(max-width:900px){.letterhead-basic,.agency-row{grid-template-columns:1fr 1fr}.row-actions{grid-column:1/-1}.letterhead-preview-wrap{grid-template-columns:1fr}.letterhead-preview{max-width:300px}}
 @media(max-width:620px){.letterhead-basic,.agency-row,.signer-row{grid-template-columns:1fr}.row-actions{grid-column:auto}}
 
@@ -380,16 +380,17 @@ h1{font-size:clamp(38px,5.4vw,64px);letter-spacing:0;line-height:1.08;margin-bot
             <div class="letterhead-subsection">
               <h4>基本信息</h4>
               <div class="letterhead-basic">
-                <div class="field"><label>发文方式</label><select id="letterheadIssuanceMode" onchange="setIssuanceMode(this.value)"><option value="single">单一机关</option><option value="joint">联合发文</option></select></div>
+                <div class="field"><label>发文方式</label><select id="letterheadIssuanceMode" disabled><option value="single">单一机关</option></select></div>
                 <div class="field"><label>行文方向</label><select id="letterheadDirection" onchange="renderLetterhead()"><option value="downward">下行文</option><option value="parallel">平行文</option><option value="upward">上行文</option></select></div>
                 <div class="field"><label>标志形式</label><select id="letterheadMarkDisplayMode" onchange="renderLetterheadPreview()"><option value="agency_with_document">机关名称＋“文件”</option><option value="agency_only">仅机关名称</option></select></div>
+                <div class="field"><label>分割线</label><select id="letterheadSeparatorStyle" onchange="renderLetterheadPreview()"><option value="straight">直线型</option><option value="star">五角星型</option></select></div>
                 <div class="field" id="letterheadJointScopeWrap" hidden><label>联合展示范围</label><select id="letterheadJointScope" onchange="renderLetterheadPreview()"><option value="all_agencies">全部机关</option><option value="sponsor_only">仅主办机关</option></select></div>
               </div>
             </div>
             <div class="letterhead-subsection">
               <h4>机关列表</h4>
               <div class="agency-list" id="letterheadAgencies"></div>
-              <button type="button" class="btn btn-secondary btn-small letterhead-add" id="addAgencyBtn" onclick="addLetterheadAgency()">＋ 添加机关</button>
+              <p class="letterhead-note">当前版本仅支持单一机关发文。</p>
             </div>
             <div class="letterhead-subsection">
               <h4>发文字号</h4>
@@ -406,11 +407,11 @@ h1{font-size:clamp(38px,5.4vw,64px);letter-spacing:0;line-height:1.08;margin-bot
             </div>
             <div class="letterhead-subsection">
               <h4>已有版头</h4>
-              <p class="letterhead-note">开启后统一替换检测到的原版头；关闭时保持原版头不变。</p>
+              <p class="letterhead-note">机关与文号全部留空时，开启后自动读取并重建源文档版头；填写任一项后必须完整填写。关闭时保持原版头不变。</p>
             </div>
             <div class="letterhead-subsection letterhead-preview-wrap">
               <div><h4>A4 首页预览</h4><p class="letterhead-note">预览仅使用当前配置，不读取上传文件正文。</p></div>
-              <div class="letterhead-preview" id="letterheadPreview"><div class="preview-mark" id="previewLetterheadMark"></div><div class="preview-meta" id="previewLetterheadMeta"><div class="preview-number" id="previewDocumentNumber"></div><div class="preview-signers" id="previewSigners"></div></div><div class="preview-separator"></div><div class="preview-title">公文标题</div></div>
+              <div class="letterhead-preview" id="letterheadPreview"><div class="preview-mark" id="previewLetterheadMark"></div><div class="preview-meta" id="previewLetterheadMeta"><div class="preview-number" id="previewDocumentNumber"></div><div class="preview-signers" id="previewSigners"></div></div><div class="preview-separator" id="previewLetterheadSeparator"></div><div class="preview-title">公文标题</div></div>
             </div>
           </div>
         </section>
@@ -680,8 +681,8 @@ const CORE_FEATURE_DEFAULTS={
 const LETTERHEAD_DEFAULT={
   schema_version:1,enabled:false,document_direction:'downward',issuance_mode:'single',
   mark_display_mode:'agency_with_document',joint_mark_scope:'all_agencies',
-  agencies:[{id:'agency-1',name:'xxx市政府',short_name:'',role:'sponsor',order:1}],
-  document_number:{agency_code:'市委办',year:new Date().getFullYear(),sequence:1},signers:[],
+  agencies:[{id:'agency-1',name:'',short_name:'',role:'sponsor',order:1}],
+  document_number:{agency_code:'',year:null,sequence:null},signers:[],separator_style:'straight',
   existing_policy:'preserve_external',replace_managed:true,layout_version:1
 };
 const SIGNATURE_BLOCK_DEFAULT={mode:'without_seal'};
@@ -764,16 +765,18 @@ function normalizeLetterheadClient(value){
   const out={...clonePlain(LETTERHEAD_DEFAULT),...clonePlain(raw)};
   out.enabled=boolValue(raw.enabled,false);
   out.replace_managed=true;
+  out.issuance_mode='single';
+  out.separator_style=raw.separator_style==='star'?'star':'straight';
   const rawNumber=raw.document_number||{};
   out.document_number={
-    agency_code:String(rawNumber.agency_code||LETTERHEAD_DEFAULT.document_number.agency_code),
-    year:Number(rawNumber.year)||LETTERHEAD_DEFAULT.document_number.year,
-    sequence:Number(rawNumber.sequence)||LETTERHEAD_DEFAULT.document_number.sequence
+    agency_code:String(rawNumber.agency_code||''),
+    year:Number(rawNumber.year)||null,
+    sequence:Number(rawNumber.sequence)||null
   };
-  const incoming=Array.isArray(raw.agencies)&&raw.agencies.length?raw.agencies:LETTERHEAD_DEFAULT.agencies;
+  const incoming=Array.isArray(raw.agencies)&&raw.agencies.length?raw.agencies.slice(0,1):LETTERHEAD_DEFAULT.agencies;
   out.agencies=incoming.map((agency,index)=>({
-    id:String(agency?.id||`agency-${index+1}`),name:String(agency?.name||(index===0?LETTERHEAD_DEFAULT.agencies[0].name:'')),short_name:String(agency?.short_name||''),
-    role:agency?.role==='sponsor'?'sponsor':'joint',order:index+1
+    id:String(agency?.id||`agency-${index+1}`),name:String(agency?.name||''),short_name:String(agency?.short_name||''),
+    role:'sponsor',order:1
   }));
   let sponsor=out.agencies.findIndex(agency=>agency.role==='sponsor');
   if(sponsor<0)sponsor=0;
@@ -790,12 +793,10 @@ function letterheadElement(id){return document.getElementById(id)}
 function nextAgencyId(){letterheadAgencySerial+=1;return `agency-${letterheadAgencySerial}`}
 function nextSignerId(){letterheadSignerSerial+=1;return `signer-${letterheadSignerSerial}`}
 function setIssuanceMode(mode){
-  const select=letterheadElement('letterheadIssuanceMode');if(select)select.value=mode;
-  if(mode==='single'){
-    const sponsor=letterheadAgencies.find(agency=>agency.role==='sponsor')||letterheadAgencies[0]||{id:nextAgencyId(),name:'',short_name:''};
-    letterheadAgencies=[{...sponsor,role:'sponsor',order:1}];
-    letterheadSigners=letterheadSigners.filter(signer=>signer.agency_id===sponsor.id);
-  }
+  const select=letterheadElement('letterheadIssuanceMode');if(select)select.value='single';
+  const sponsor=letterheadAgencies.find(agency=>agency.role==='sponsor')||letterheadAgencies[0]||{id:nextAgencyId(),name:'',short_name:''};
+  letterheadAgencies=[{...sponsor,role:'sponsor',order:1}];
+  letterheadSigners=letterheadSigners.filter(signer=>signer.agency_id===sponsor.id);
   renderLetterhead();
 }
 function updateLetterheadAgency(id,field,value){
@@ -804,33 +805,16 @@ function updateLetterheadAgency(id,field,value){
   if(field==='name'&&letterheadElement('letterheadDirection')?.value==='upward')renderLetterheadSigners();
 }
 function setLetterheadSponsor(id){
-  letterheadAgencies.forEach(agency=>agency.role=agency.id===id?'sponsor':'joint');
-  letterheadAgencies.sort((a,b)=>(a.role==='sponsor'?-1:b.role==='sponsor'?1:a.order-b.order));
-  letterheadAgencies.forEach((agency,index)=>agency.order=index+1);renderLetterhead();
+  setIssuanceMode('single');
 }
 function addLetterheadAgency(){
-  if(letterheadAgencies.length>=10)return;
-  const mode=letterheadElement('letterheadIssuanceMode');if(mode)mode.value='joint';
-  letterheadAgencies.push({id:nextAgencyId(),name:'',short_name:'',role:'joint',order:letterheadAgencies.length+1});renderLetterhead();
+  setIssuanceMode('single');
 }
 function removeLetterheadAgency(id){
-  if(letterheadAgencies.length<=1)return;
-  const removed=letterheadAgencies.find(item=>item.id===id);letterheadAgencies=letterheadAgencies.filter(item=>item.id!==id);
-  letterheadSigners=letterheadSigners.filter(signer=>signer.agency_id!==id);
-  if(letterheadAgencies.length===1){
-    letterheadAgencies[0].role='sponsor';
-    const mode=letterheadElement('letterheadIssuanceMode');if(mode)mode.value='single';
-  }else if(removed?.role==='sponsor'&&letterheadAgencies[0])letterheadAgencies[0].role='sponsor';
-  letterheadAgencies.forEach((agency,index)=>agency.order=index+1);renderLetterhead();
+  setIssuanceMode('single');
 }
 function moveLetterheadAgency(id,delta){
-  const index=letterheadAgencies.findIndex(item=>item.id===id);const target=index+delta;
-  if(index<0||target<0||target>=letterheadAgencies.length)return;
-  [letterheadAgencies[index],letterheadAgencies[target]]=[letterheadAgencies[target],letterheadAgencies[index]];
-  if(index===0||target===0){
-    letterheadAgencies.forEach((agency,agencyIndex)=>agency.role=agencyIndex===0?'sponsor':'joint');
-  }
-  letterheadAgencies.forEach((agency,order)=>agency.order=order+1);renderLetterhead();
+  setIssuanceMode('single');
 }
 function renderAgencyMoveActions(agency,index,joint){
   if(!joint||letterheadAgencies.length<2)return '';
@@ -851,7 +835,7 @@ function removeLetterheadSigner(id){
 }
 function renderLetterheadAgencies(){
   const body=letterheadElement('letterheadAgencies');if(!body)return;
-  const joint=letterheadElement('letterheadIssuanceMode')?.value==='joint';
+  const joint=false;
   body.innerHTML=letterheadAgencies.map((agency,index)=>`<div class="agency-row" data-agency-id="${escapeHtml(agency.id)}"><div class="field"><label>机关名称</label><input maxlength="80" value="${escapeHtml(agency.name)}" oninput="updateLetterheadAgency('${escapeHtml(agency.id)}','name',this.value)"></div><div class="field"><label>规范化简称（可选）</label><input maxlength="80" value="${escapeHtml(agency.short_name)}" oninput="updateLetterheadAgency('${escapeHtml(agency.id)}','short_name',this.value)"></div><div class="field"><label>机关角色</label><select onchange="if(this.value==='sponsor')setLetterheadSponsor('${escapeHtml(agency.id)}');else this.value='${agency.role}'" ${!joint?'disabled':''}><option value="sponsor" ${agency.role==='sponsor'?'selected':''}>主办机关</option><option value="joint" ${agency.role==='joint'?'selected':''}>联合机关</option></select></div><div class="row-actions">${renderAgencyMoveActions(agency,index,joint)}<button type="button" class="icon-btn" title="删除" onclick="removeLetterheadAgency('${escapeHtml(agency.id)}')" ${letterheadAgencies.length<=1?'disabled':''}>×</button></div></div>`).join('');
 }
 function renderLetterheadSigners(){
@@ -867,7 +851,7 @@ function ensureUpwardSigners(){
 function renderLetterhead(){
   const enabled=!!letterheadElement('letterheadEnabled')?.checked;
   if(letterheadElement('letterheadFields'))letterheadElement('letterheadFields').hidden=!enabled;
-  const joint=letterheadElement('letterheadIssuanceMode')?.value==='joint';
+  const joint=false;
   if(letterheadElement('letterheadJointScopeWrap'))letterheadElement('letterheadJointScopeWrap').hidden=!joint;
   if(letterheadElement('addAgencyBtn'))letterheadElement('addAgencyBtn').hidden=!joint;
   const upward=letterheadElement('letterheadDirection')?.value==='upward';
@@ -877,7 +861,7 @@ function renderLetterhead(){
 }
 function renderLetterheadPreview(){
   const mark=letterheadElement('previewLetterheadMark');if(!mark)return;
-  const joint=letterheadElement('letterheadIssuanceMode')?.value==='joint';
+  const joint=false;
   const sponsorOnly=joint&&letterheadElement('letterheadJointScope')?.value==='sponsor_only';
   let agencies=sponsorOnly?letterheadAgencies.slice(0,1):letterheadAgencies;
   const withDocument=letterheadElement('letterheadMarkDisplayMode')?.value!=='agency_only';
@@ -887,6 +871,7 @@ function renderLetterheadPreview(){
   const code=letterheadElement('letterheadAgencyCode')?.value||'机关代字';const year=letterheadElement('letterheadYear')?.value||'年份';const sequence=letterheadElement('letterheadSequence')?.value||'顺序号';
   const number=`${code}〔${year}〕${sequence}号`;letterheadElement('letterheadNumberPreview').value=number;
   const numberNode=letterheadElement('previewDocumentNumber');numberNode.textContent=number;
+  const separatorNode=letterheadElement('previewLetterheadSeparator');if(separatorNode){const star=letterheadElement('letterheadSeparatorStyle')?.value==='star';separatorNode.textContent=star?'★':'';separatorNode.classList.toggle('star',star)}
   const signerNode=letterheadElement('previewSigners');const upward=letterheadElement('letterheadDirection')?.value==='upward';
   const signerLabels=letterheadSigners.filter(item=>item.name).map(item=>`${item.label||'签发人'}：${item.name}`);const signerRows=[];
   for(let index=0;index<signerLabels.length;index+=2)signerRows.push(signerLabels.slice(index,index+2).join('　　'));
@@ -896,11 +881,11 @@ function collectLetterheadConfig(){
   const numberValue=id=>{const value=Number(letterheadElement(id)?.value);return Number.isInteger(value)&&value>0?value:null};
   return {
     schema_version:1,enabled:!!letterheadElement('letterheadEnabled')?.checked,
-    document_direction:letterheadElement('letterheadDirection')?.value||'downward',issuance_mode:letterheadElement('letterheadIssuanceMode')?.value||'single',
+    document_direction:letterheadElement('letterheadDirection')?.value||'downward',issuance_mode:'single',
     mark_display_mode:letterheadElement('letterheadMarkDisplayMode')?.value||'agency_with_document',joint_mark_scope:letterheadElement('letterheadJointScope')?.value||'all_agencies',
     agencies:letterheadAgencies.map((agency,index)=>({...agency,name:agency.name.trim(),short_name:agency.short_name.trim(),order:index+1})),
     document_number:{agency_code:(letterheadElement('letterheadAgencyCode')?.value||'').trim(),year:numberValue('letterheadYear'),sequence:numberValue('letterheadSequence')},
-    signers:letterheadSigners.map(signer=>({...signer,name:signer.name.trim(),label:(signer.label||'签发人').trim()})),existing_policy:'preserve_external',
+    signers:letterheadSigners.filter(signer=>signer.name.trim()).map(signer=>({...signer,name:signer.name.trim(),label:(signer.label||'签发人').trim()})),separator_style:letterheadElement('letterheadSeparatorStyle')?.value||'straight',existing_policy:'preserve_external',
     replace_managed:true,layout_version:1
   };
 }
@@ -909,7 +894,7 @@ function applyLetterheadConfig(value){
   letterheadAgencySerial=Math.max(1,...letterheadAgencies.map(item=>Number(String(item.id).match(/(\d+)$/)?.[1])||0));letterheadSignerSerial=Math.max(0,...letterheadSigners.map(item=>Number(String(item.id).match(/(\d+)$/)?.[1])||0));
   const set=(id,value)=>{const element=letterheadElement(id);if(element)element.value=value??''};
   if(letterheadElement('letterheadEnabled'))letterheadElement('letterheadEnabled').checked=config.enabled;
-  set('letterheadIssuanceMode',config.issuance_mode);set('letterheadDirection',config.document_direction);set('letterheadMarkDisplayMode',config.mark_display_mode);set('letterheadJointScope',config.joint_mark_scope);
+  set('letterheadIssuanceMode','single');set('letterheadDirection',config.document_direction);set('letterheadMarkDisplayMode',config.mark_display_mode);set('letterheadJointScope',config.joint_mark_scope);set('letterheadSeparatorStyle',config.separator_style||'straight');
   set('letterheadAgencyCode',config.document_number.agency_code);set('letterheadYear',config.document_number.year);set('letterheadSequence',config.document_number.sequence);renderLetterhead();
 }
 function updateNumberingType(row){

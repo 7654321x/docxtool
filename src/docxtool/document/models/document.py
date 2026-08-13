@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List
+from typing import Dict, FrozenSet, List, Optional
 
 from docxtool.document.models.paragraph import ParagraphData
 
@@ -18,6 +18,14 @@ class BodyBlock:
 
     kind: str
     value: object
+
+
+@dataclass(frozen=True)
+class FormatScope:
+    """记录一次仅改写指定源物理段落的内部排版范围。"""
+
+    mode: str
+    source_physical_paragraph_indexes: FrozenSet[int]
 
 
 @dataclass
@@ -43,9 +51,12 @@ class DocumentData:
     recognition_mode: str = "authoritative"
     normalization_changes: list = field(default_factory=list)
     recognition_diagnostics: dict = field(default_factory=dict)
+    recognition_structure: object = None
     native_numbering_definitions: Dict[int, tuple[object, object]] = field(
         default_factory=dict
     )
+    source_body_blocks: list = field(default_factory=list)
+    format_scope: Optional[FormatScope] = None
 
 
 @dataclass(frozen=True)

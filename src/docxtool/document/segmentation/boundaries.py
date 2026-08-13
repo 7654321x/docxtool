@@ -59,6 +59,33 @@ def heading_has_inline_body(text: str) -> bool:
     return period_pos >= 0 and len((text or "")[period_pos + 1:].strip()) >= 5
 
 
+def _is_heading2_inline_body(
+    text: str,
+    features: Optional[ParagraphFeatures],
+    *,
+    detect_numbering_prefix_func: Callable[[str], str],
+) -> bool:
+    """Return whether one physical paragraph is an explicit heading-2 plus body."""
+    if not heading_has_inline_body(text):
+        return False
+    prefix = detect_numbering_prefix_func(text)
+    if re.fullmatch(r"[（(][一二三四五六七八九十百]+[）)]", prefix or ""):
+        return True
+    source_prefix = str(getattr(features, "numbering_prefix", "") or "")
+    if source_prefix == "@style_heading2":
+        return True
+    native = getattr(features, "native_numbering", None)
+    if native is None:
+        return False
+    template = re.sub(r"\s+", "", str(getattr(native, "lvl_text", "") or ""))
+    placeholder = f"%{int(getattr(native, 'ilvl', 0)) + 1}"
+    return bool(
+        str(getattr(native, "num_fmt", "") or "")
+        in {"chineseCounting", "chineseCountingThousand", "ideographTraditional"}
+        and re.fullmatch(rf"[（(]{re.escape(placeholder)}[）)]", template)
+    )
+
+
 def segment_boundary_candidates(
     source: str,
     start: int,
@@ -92,7 +119,11 @@ def segment_boundary_candidates(
                 evidence=("INLINE_ADDRESSING_COLON", "VISIBLE_BODY_AFTER_COLON"),
             ))
     period_index = text.find("。")
-    if period_index >= 0:
+    if period_index >= 0 and not _is_heading2_inline_body(
+        text,
+        features,
+        detect_numbering_prefix_func=detect_numbering_prefix_func,
+    ):
         boundary = start + period_index + 1
         body_start, body_end = trim_source_span(source, boundary, end)
         left = source[start:boundary]

@@ -98,6 +98,7 @@ src/docxtool/document/
 ├─ analysis/
 │  ├─ __init__.py                 # 跨层只读结构分析入口
 │  ├─ document_structure.py       # 文档级标题、正文、尾部结构只读统计
+│  ├─ layout_policy.py            # 根据最终结构和物理事实唯一分配布局修改策略
 │  └─ letterhead.py               # 首页正文流已有版头的只读检测
 └─ importing/
    ├─ __init__.py                 # DOCX 物理导入层入口
@@ -382,6 +383,8 @@ apps/wps/
 ├─ host-runtime.js                # WPS Host 主线程、长请求命令和文档操作
 ├─ taskpane.html / taskpane.js    # 侧边栏界面、账号状态和命令提交
 ├─ control/                       # 本机 Control、HostBridge、识别、排版和事务
+│  ├─ add_letterhead.py          # 独立版头表单校验、检查和临时 DOCX 生成
+│  └─ document_transaction.py    # 排版/版头的提交、重开确认、完成和回滚事务
 ├─ js/ / images/                  # Ribbon bootstrap 脚本和图标资源
 ├─ scripts/build-exe.ps1          # 注入 HTTPS Origin、构建并在仓库外验证 EXE
 └─ scripts/verify.ps1             # WPS 源码门禁
@@ -542,6 +545,7 @@ tests/
 ├─ test_engine_typography.py       # 字体、数字和上标处理
 ├─ test_letterhead_config.py       # 版头配置校验
 ├─ test_letterhead_engine.py       # 版头检测、生成和开关语义
+├─ test_layout_policy.py           # 最终结构布局策略、附件人工列与空白守恒
 ├─ test_numbering_engine.py        # 编号文本辅助
 ├─ test_page_number_engine.py      # 页码域和奇偶页页脚
 ├─ test_processing_flags.py        # strict/structural/normalize 和功能开关

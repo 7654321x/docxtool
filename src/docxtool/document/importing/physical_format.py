@@ -64,6 +64,8 @@ def apply_physical_format_features(paragraph, features: Any) -> None:
     features.source_run_spans = tuple(source_runs)
     apply_segment_format_features(features, features, 0, len(features.source_physical_text))
 
+    features.page_break_before = bool(paragraph.paragraph_format.page_break_before)
+
     try:
         if paragraph.alignment is not None:
             features.alignment = str(paragraph.alignment).split(".")[-1].lower()

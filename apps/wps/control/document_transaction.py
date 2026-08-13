@@ -18,6 +18,7 @@ import threading
 from typing import Dict, Optional
 import uuid
 
+from .add_letterhead import LetterheadOperationResult, add_letterhead_to_document
 from .format_current_document import FormatResult, format_current_document
 from .logging_adapter import file_identity, log_event
 
@@ -37,7 +38,7 @@ class FormatOperation:
     temporary_path: Path
     backup_path: Path
     temporary_sha256: Optional[str] = None
-    format_result: Optional[FormatResult] = None
+    format_result: Optional[FormatResult | LetterheadOperationResult] = None
     request_id: str = ""
     command: str = "apply"
     state: str = "prepared"
@@ -87,6 +88,7 @@ class DocumentTransactionManager:
         payload = {
             "version": 2,
             "operation_id": operation.operation_id,
+            "command": operation.command,
             "state": operation.state,
             "transaction_mode": operation.transaction_mode,
             "source_path": str(operation.source_path),
@@ -124,6 +126,14 @@ class DocumentTransactionManager:
         operation_id = str(payload.get("operation_id", ""))
         state = str(payload.get("state", ""))
         transaction_mode = str(payload.get("transaction_mode", "replace"))
+        command = str(payload.get("command", "apply"))
+        if command not in {
+            "preview",
+            "apply",
+            "inspect_letterhead",
+            "add_letterhead",
+        }:
+            raise ValueError("invalid command")
         if len(operation_id) != 32 or any(char not in "0123456789abcdef" for char in operation_id):
             raise ValueError("invalid operation id")
         source = Path(str(payload.get("source_path", ""))).expanduser().resolve()
@@ -600,7 +610,12 @@ class DocumentTransactionManager:
     def reserve_upgrade(
         self, source_path: str, *, command: str, request_id: str = ""
     ) -> FormatOperation:
-        if command not in {"preview", "apply"}:
+        if command not in {
+            "preview",
+            "apply",
+            "inspect_letterhead",
+            "add_letterhead",
+        }:
             raise DocumentTransactionError("WPS_TRANSACTION_COMMAND_INVALID")
         source = Path(source_path).expanduser().resolve()
         if source.suffix.lower() not in {".doc", ".wps"} or not source.is_file():
@@ -694,10 +709,12 @@ class DocumentTransactionManager:
         format_config: Optional[dict] = None,
         *,
         request_id: str = "",
+        host_snapshot: Optional[dict] = None,
+        selected_host_paragraph_indexes: Optional[list[int]] = None,
     ) -> FormatOperation:
         operation = self.get(operation_id, request_id)
         operation.request_id = request_id or operation.request_id
-        if operation.command != "apply":
+        if operation.command not in {"apply", "add_letterhead"}:
             raise DocumentTransactionError("WPS_TRANSACTION_COMMAND_MISMATCH")
         if not operation.is_upgrade or operation.state != "conversion_pending":
             raise DocumentTransactionError("WPS_TRANSACTION_INVALID_STATE")
@@ -727,14 +744,31 @@ class DocumentTransactionManager:
             },
         )
         try:
-            result = format_current_document(
-                str(operation.conversion_path),
-                str(operation.temporary_path),
-                operation_id=operation_id,
-                log_dir=self.log_dir,
-                format_config=format_config,
-                request_id=operation.request_id,
-            )
+            scope_arguments = {}
+            if selected_host_paragraph_indexes is not None:
+                scope_arguments = {
+                    "host_snapshot": host_snapshot,
+                    "selected_host_paragraph_indexes": selected_host_paragraph_indexes,
+                }
+            if operation.command == "add_letterhead":
+                result = add_letterhead_to_document(
+                    str(operation.conversion_path),
+                    str(operation.temporary_path),
+                    format_config,
+                    operation_id=operation_id,
+                    log_dir=self.log_dir,
+                    request_id=operation.request_id,
+                )
+            else:
+                result = format_current_document(
+                    str(operation.conversion_path),
+                    str(operation.temporary_path),
+                    operation_id=operation_id,
+                    log_dir=self.log_dir,
+                    format_config=format_config,
+                    request_id=operation.request_id,
+                    **scope_arguments,
+                )
         except Exception as exc:
             operation.temporary_path.unlink(missing_ok=True)
             log_event(
@@ -858,7 +892,15 @@ class DocumentTransactionManager:
         )
         return operation
 
-    def prepare(self, source_path: str, format_config: Optional[dict] = None, *, request_id: str = "") -> FormatOperation:
+    def prepare(
+        self,
+        source_path: str,
+        format_config: Optional[dict] = None,
+        *,
+        request_id: str = "",
+        host_snapshot: Optional[dict] = None,
+        selected_host_paragraph_indexes: Optional[list[int]] = None,
+    ) -> FormatOperation:
         source = Path(source_path).expanduser().resolve()
         if source.suffix.lower() != ".docx" or not source.is_file():
             log_event(
@@ -911,7 +953,21 @@ class DocumentTransactionManager:
             )
             log_event("INFO", "transaction", "prepare.start", "开始生成 WPS 排版临时文档", {"operation_id_short": operation_id[:12], "request_id": request_id, "file_id": file_identity(source)})
             try:
-                result = format_current_document(str(source), str(temporary), operation_id=operation_id, log_dir=self.log_dir, format_config=format_config, request_id=request_id)
+                scope_arguments = {}
+                if selected_host_paragraph_indexes is not None:
+                    scope_arguments = {
+                        "host_snapshot": host_snapshot,
+                        "selected_host_paragraph_indexes": selected_host_paragraph_indexes,
+                    }
+                result = format_current_document(
+                    str(source),
+                    str(temporary),
+                    operation_id=operation_id,
+                    log_dir=self.log_dir,
+                    format_config=format_config,
+                    request_id=request_id,
+                    **scope_arguments,
+                )
             except Exception as exc:
                 temporary.unlink(missing_ok=True)
                 log_event("ERROR", "transaction", "prepare.failed", "WPS 排版临时文档生成失败", {"operation_id_short": operation_id[:12], "request_id": request_id, "stage": "temporary_format", "file_id": file_identity(source), "error_code": _error_code(exc, "WPS_FORMAT_PREPARE_FAILED"), "error_type": type(exc).__name__})
@@ -954,6 +1010,67 @@ class DocumentTransactionManager:
                     raise
                 self._operations[operation_id] = operation
             log_event("INFO", "transaction", "prepare.completed", "WPS 排版临时文档已生成，等待宿主关闭原文档", {"operation_id_short": operation_id[:12], "request_id": request_id, "file_id": file_identity(source), "log_file": result.log_path.name})
+            return operation
+        finally:
+            self._release_prepare()
+
+    def prepare_letterhead(
+        self,
+        source_path: str,
+        letterhead_request: object,
+        *,
+        request_id: str = "",
+    ) -> FormatOperation:
+        source = Path(source_path).expanduser().resolve()
+        if source.suffix.lower() != ".docx" or not source.is_file():
+            raise DocumentTransactionError("INVALID_DOCX_INPUT")
+        self._claim_prepare(request_id)
+        operation_id = uuid.uuid4().hex
+        temporary = source.with_name(
+            f".{source.stem}.docxtool-{operation_id[:12]}.docx"
+        )
+        backup = source.with_name(
+            f".{source.stem}.docxtool-backup-{operation_id[:12]}.docx"
+        )
+        try:
+            if temporary.exists() or backup.exists():
+                raise DocumentTransactionError("WPS_TRANSACTION_PATH_COLLISION")
+            source_hash = sha256_file(source)
+            try:
+                result = add_letterhead_to_document(
+                    str(source),
+                    str(temporary),
+                    letterhead_request,
+                    operation_id=operation_id,
+                    log_dir=self.log_dir,
+                    request_id=request_id,
+                )
+            except Exception:
+                temporary.unlink(missing_ok=True)
+                raise
+            temporary_hash = sha256_file(temporary)
+            if sha256_file(source) != source_hash:
+                temporary.unlink(missing_ok=True)
+                raise DocumentTransactionError("DOCUMENT_CHANGED")
+            operation = FormatOperation(
+                operation_id=operation_id,
+                source_path=source,
+                target_path=source,
+                source_sha256=source_hash,
+                temporary_path=temporary,
+                backup_path=backup,
+                temporary_sha256=temporary_hash,
+                format_result=result,
+                request_id=request_id,
+                command="add_letterhead",
+            )
+            with self._lock:
+                try:
+                    self._write_journal(operation)
+                except DocumentTransactionError:
+                    temporary.unlink(missing_ok=True)
+                    raise
+                self._operations[operation_id] = operation
             return operation
         finally:
             self._release_prepare()

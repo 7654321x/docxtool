@@ -363,3 +363,104 @@ def test_colon_introduced_native_list_stays_body(tmp_path: Path) -> None:
     numbered = [item for item in data.paragraphs if item.features.native_numbering]
 
     assert [item.type_id for item in numbered] == ["body", "body"]
+
+
+def test_native_heading2_colon_inline_body_is_recognized_and_rebuilt_once(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "native-heading2-colon.docx"
+    preserved_output = tmp_path / "native-heading2-colon-preserved.docx"
+    output = tmp_path / "native-heading2-colon-output.docx"
+    document = Document()
+    _append_numbering_definition(
+        document,
+        num_id=66,
+        abstract_num_id=66,
+        levels=((0, "chineseCounting", "（%1）", 1),),
+    )
+    paragraph = document.add_paragraph("工作安排：具体内容")
+    _apply_numbering(paragraph, 66)
+    document.save(source)
+
+    preserved_rules, preserved_settings, preserved_features, preserved_data = _load(
+        source, False
+    )
+    assert preserved_data.paragraphs[0].type_id == "heading2"
+    assert preserved_data.paragraphs[0].meta[
+        "numbered_heading2_colon_inline_body"
+    ] is True
+    export_doc(
+        preserved_data,
+        preserved_rules,
+        preserved_settings,
+        str(preserved_output),
+        numbering_options=preserved_features["numbering"],
+    )
+    with zipfile.ZipFile(preserved_output) as archive:
+        preserved_xml = etree.fromstring(archive.read("word/document.xml"))
+    assert len(preserved_xml.findall(".//w:numPr", W_NS)) == 1
+    assert validate_docx_integrity(preserved_output).ok is True
+
+    rules, settings, features, data = _load(source, True)
+
+    recognized = data.paragraphs[0]
+    assert recognized.type_id == "heading2"
+    assert recognized.meta["numbered_heading2_colon_inline_body"] is True
+    assert "numbered-heading2-colon-inline-body" in recognized.meta[
+        "recognition_evidence"
+    ]
+
+    export_doc(
+        data, rules, settings, str(output), numbering_options=features["numbering"]
+    )
+
+    rendered = Document(output).paragraphs[0]
+    assert rendered.text == "（一）工作安排：具体内容"
+    colon_position = rendered.text.index("：")
+    cursor = 0
+    for run in rendered.runs:
+        if not run.text:
+            continue
+        cursor += len(run.text)
+        expected_font = rules[2].font if cursor <= colon_position + 1 else rules[5].font
+        assert run._r.rPr.rFonts.get(qn("w:eastAsia")) == expected_font
+    with zipfile.ZipFile(output) as archive:
+        document_xml = etree.fromstring(archive.read("word/document.xml"))
+    assert document_xml.findall(".//w:numPr", W_NS) == []
+    assert validate_docx_integrity(output).ok is True
+
+
+def test_native_heading2_period_body_stays_one_paragraph(tmp_path: Path) -> None:
+    source = tmp_path / "native-heading2-period.docx"
+    output = tmp_path / "native-heading2-period-output.docx"
+    document = Document()
+    _append_numbering_definition(
+        document,
+        num_id=67,
+        abstract_num_id=67,
+        levels=((0, "chineseCounting", "（%1）", 1),),
+    )
+    paragraph = document.add_paragraph(
+        "会议安排。后续正文内容完整说明有关工作要求。"
+    )
+    _apply_numbering(paragraph, 67)
+    document.save(source)
+    rules, settings, features, data = _load(source, False)
+
+    assert len(data.paragraphs) == 1
+    assert data.paragraphs[0].type_id == "heading2"
+    assert data.paragraphs[0].meta["numbered_heading2_period_inline_body"] is True
+    assert "numbered-heading2-period-inline-body" in data.paragraphs[0].meta[
+        "recognition_evidence"
+    ]
+
+    export_doc(
+        data, rules, settings, str(output), numbering_options=features["numbering"]
+    )
+    rendered = Document(output)
+    assert len(rendered.paragraphs) == 1
+    assert rendered.paragraphs[0].text == "会议安排。后续正文内容完整说明有关工作要求。"
+    with zipfile.ZipFile(output) as archive:
+        document_xml = etree.fromstring(archive.read("word/document.xml"))
+    assert len(document_xml.findall(".//w:numPr", W_NS)) == 1
+    assert validate_docx_integrity(output).ok is True

@@ -9,7 +9,15 @@ from typing import Any, Dict, Optional
 
 
 ALLOWED_COMMANDS = frozenset(
-    {"preview", "apply", "clear_preview", "health", "panel_ready"}
+    {
+        "preview",
+        "apply",
+        "clear_preview",
+        "health",
+        "panel_ready",
+        "inspect_letterhead",
+        "add_letterhead",
+    }
 )
 
 
@@ -112,6 +120,8 @@ class HostBridge:
         pane_instance_id: str,
         host_generation: int,
         authorization: Optional[Dict[str, Any]] = None,
+        format_scope: Optional[Dict[str, Any]] = None,
+        letterhead: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         request = self._required_text(
             request_id, "WPS_REQUEST_ID_MISSING", maximum=160
@@ -131,6 +141,34 @@ class HostBridge:
                 raise HostBridgeError("WPS_APPLY_AUTHORIZATION_MISMATCH")
             if not isinstance(authorization.get("config_version"), str) or not authorization["config_version"]:
                 raise HostBridgeError("WPS_APPLY_CONFIG_VERSION_REQUIRED")
+        resolved_format_scope = None
+        if format_scope is not None:
+            if command_name != "apply" or not isinstance(format_scope, dict):
+                raise HostBridgeError("WPS_FORMAT_SCOPE_INVALID")
+            mode = format_scope.get("mode")
+            page_spec = format_scope.get("page_spec")
+            if mode != "pre_format_pages" or not isinstance(page_spec, str):
+                raise HostBridgeError("WPS_FORMAT_SCOPE_INVALID")
+            page_spec = page_spec.strip()
+            if not page_spec or len(page_spec) > 160:
+                raise HostBridgeError("WPS_FORMAT_SCOPE_INVALID")
+            resolved_format_scope = {"mode": mode, "page_spec": page_spec}
+        resolved_letterhead = None
+        if command_name == "add_letterhead":
+            if not isinstance(letterhead, dict):
+                raise HostBridgeError("WPS_LETTERHEAD_FORM_INVALID")
+            allowed_fields = {
+                "mark_text",
+                "document_number",
+                "signer",
+                "separator_style",
+                "replace_existing",
+            }
+            if set(letterhead) - allowed_fields:
+                raise HostBridgeError("WPS_LETTERHEAD_FORM_INVALID")
+            resolved_letterhead = deepcopy(letterhead)
+        elif letterhead is not None:
+            raise HostBridgeError("WPS_LETTERHEAD_FORM_INVALID")
         with self._condition:
             self._require_open()
             self._require_generation(host_generation)
@@ -152,6 +190,10 @@ class HostBridge:
                     "request_id": request,
                     "config_version": authorization["config_version"],
                 }
+                if resolved_format_scope is not None:
+                    self._command["format_scope"] = resolved_format_scope
+            elif command_name == "add_letterhead":
+                self._command["letterhead"] = resolved_letterhead
             self._command_delivered = False
             self._state_revision += 1
             self._condition.notify_all()

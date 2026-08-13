@@ -52,6 +52,14 @@ _FRONT_TITLE_VISIBLE_LIMIT = 3
 _BODY_FIRST_HEADING_LOOKAHEAD = 4
 
 
+def _context_heading_level(item: ParagraphFeatures) -> int | None:
+    """Return explicit numbering level or the observed legacy heading level."""
+    if item.heading_shape_level is not None:
+        return item.heading_shape_level
+    match = re.fullmatch(r"heading([1-4])", str(item.legacy_type_id or ""))
+    return int(match.group(1)) if match else None
+
+
 def _document_type_title_suffix(item: ParagraphFeatures) -> bool:
     """Return whether a short front line ends with a bounded document type."""
     return bool(
@@ -337,16 +345,21 @@ def analyze_document_context(features: list[ParagraphFeatures]) -> DocumentConte
     heading_reasons: list[tuple[str, ...]] = [()] * count
     active_heading_stack: dict[int, int] = {}
     for position, item in enumerate(features):
-        level = item.heading_shape_level
+        level = _context_heading_level(item)
         if level is None:
             continue
         parent_scope = tuple(
             active_heading_stack.get(parent_level, -1) for parent_level in range(1, level)
         )
-        family_key = (level, parent_scope, item.native_numbering_family)
+        source_family = item.native_numbering_family
+        if item.heading_shape_level is None:
+            source_family = "legacy-heading"
+        family_key = (level, parent_scope, source_family)
         by_family.setdefault(family_key, []).append(position)
         next_item = features[position + 1] if position + 1 < count else None
-        if next_item and (_body_like(next_item) or next_item.heading_shape_level is not None):
+        if next_item and (
+            _body_like(next_item) or _context_heading_level(next_item) is not None
+        ):
             supported.setdefault(family_key, []).append(position)
         for reset_level in range(level, 5):
             active_heading_stack.pop(reset_level, None)
@@ -396,10 +409,10 @@ def analyze_document_context(features: list[ParagraphFeatures]) -> DocumentConte
             if position in family.supported_positions:
                 evidence.append("following-body-or-heading")
             next_item = features[position + 1] if position + 1 < count else None
+            next_level = _context_heading_level(next_item) if next_item else None
             if (
-                next_item
-                and next_item.heading_shape_level
-                and next_item.heading_shape_level > family.level
+                next_level is not None
+                and next_level > family.level
             ):
                 evidence.append("nested-heading-support")
             if body_start is not None and position >= body_start:

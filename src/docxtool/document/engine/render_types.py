@@ -57,6 +57,12 @@ BODY_FLOW_TYPES = frozenset({
     "sign_org",
     "sign_date",
 })
+STRUCTURE_SENSITIVE_TYPES = frozenset({
+    "title", "title_cont", "embedded_document_title",
+    "heading1", "heading1_report", "heading2", "heading3", "heading4",
+    "attachment_note", "attachment_note_item", "attachment_page_mark",
+    "attachment_title", "attachment_body", "sign_org", "sign_date",
+})
 
 
 def rule_index_for_type(type_id: str) -> int | None:
@@ -77,3 +83,8 @@ def is_head_gap_follow_type(type_id: str) -> bool:
 def is_body_flow_type(type_id: str) -> bool:
     """判断类型是否表示进入正文流；传入 type_id，返回布尔值。"""
     return type_id in BODY_FLOW_TYPES
+
+
+def is_structure_sensitive_type(type_id: str) -> bool:
+    """Return whether a render failure would corrupt established structure."""
+    return type_id in STRUCTURE_SENSITIVE_TYPES

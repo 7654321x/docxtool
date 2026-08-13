@@ -25,6 +25,17 @@ def enrich_legacy_type_metadata(
     """
     metadata = meta if meta is not None else {}
 
+    if (
+        type_id == "heading2"
+        and getattr(features, "numbered_heading2_colon_inline_body", False)
+    ):
+        metadata["numbered_heading2_colon_inline_body"] = True
+    if (
+        type_id == "heading2"
+        and getattr(features, "numbered_heading2_period_inline_body", False)
+    ):
+        metadata["numbered_heading2_period_inline_body"] = True
+
     if type_id in ("heading1", "heading2") and heading_has_inline_body_func(text):
         if not (type_id == "heading2" and ctx.doc_mode == "SCHEME"):
             metadata["heading_inline_body"] = True

@@ -77,12 +77,20 @@ class StructuralCandidateProvider:
                 hard=True,
                 section_hint=SectionKind.ATTACHMENT_BODY,
             ))
-        if context.previous_type in {ParagraphType.ATTACHMENT_TITLE, ParagraphType.ATTACHMENT_BODY} and features.compact_text:
+        if (
+            context.previous_type in {
+                ParagraphType.ATTACHMENT_TITLE,
+                ParagraphType.ATTACHMENT_BODY,
+            }
+            and features.compact_text
+            and not _ATTACHMENT_PAGE_MARK_RE.fullmatch(features.compact_text)
+        ):
             result.append(Candidate(
                 ParagraphType.ATTACHMENT_BODY,
-                0.94,
+                1.0,
                 self.name,
                 ("inside-attachment-body",),
+                hard=True,
                 section_hint=SectionKind.ATTACHMENT_BODY,
             ))
         signature_date_evidence = (
@@ -147,7 +155,10 @@ class StructuralCandidateProvider:
         ):
             result.append(Candidate(ParagraphType.RECIPIENT, 0.95, self.name, ("front-recipient",), hard=True, section_hint=SectionKind.RECIPIENT))
         if (
-            features.colon_explanatory_body
+            (
+                features.colon_explanatory_body
+                and not features.numbered_heading2_colon_inline_body
+            )
             or (
                 features.colon_body_label_candidate
                 and context.document_context is not None

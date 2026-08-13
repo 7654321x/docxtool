@@ -6,6 +6,7 @@ import time
 from typing import Tuple
 
 import pytest
+from docx import Document
 
 from apps.wps.control.host_bridge import HostBridge, HostBridgeError
 from apps.wps.control import document_transaction as transaction_module
@@ -102,6 +103,49 @@ def test_panel_ready_is_allowed_and_unknown_commands_remain_rejected():
         )
 
 
+def test_add_letterhead_command_carries_only_the_validated_form():
+    bridge, generation = _ready_bridge()
+    form = {
+        "mark_text": "测试机关文件",
+        "document_number": "测发〔2026〕1号",
+        "signer": "张三",
+        "separator_style": "star",
+        "replace_existing": True,
+    }
+    bridge.enqueue_command(
+        "request-letterhead",
+        "add_letterhead",
+        "pane-1",
+        generation,
+        letterhead=form,
+    )
+    delivered = bridge.wait_command(
+        "host-context-a", generation, timeout_seconds=0
+    )["command"]
+    assert delivered["letterhead"] == form
+
+    bridge.publish_state(
+        "host-context-a",
+        generation,
+        {
+            "host_ready": True,
+            "status": "PASS",
+            "active_request": {
+                "request_id": "request-letterhead",
+                "request_status": "PASS",
+            },
+        },
+    )
+    with pytest.raises(HostBridgeError, match="WPS_LETTERHEAD_FORM_INVALID"):
+        bridge.enqueue_command(
+            "request-invalid-letterhead",
+            "add_letterhead",
+            "pane-1",
+            generation,
+            letterhead={**form, "unexpected": "value"},
+        )
+
+
 def test_command_submission_wakes_only_one_host_waiter():
     bridge, generation = _ready_bridge()
     results = []
@@ -180,6 +224,32 @@ def test_apply_command_requires_matching_authorized_config():
         "request_id": "request-apply",
         "config_version": "config-1",
     }
+
+
+def test_invalid_format_scope_does_not_occupy_command_slot():
+    bridge, generation = _ready_bridge()
+    authorization = {
+        "request_id": "request-invalid-scope",
+        "config_version": "config-1",
+    }
+
+    with pytest.raises(HostBridgeError, match="WPS_FORMAT_SCOPE_INVALID"):
+        bridge.enqueue_command(
+            "request-invalid-scope",
+            "apply",
+            "pane-1",
+            generation,
+            authorization,
+            {"mode": "pre_format_pages", "page_spec": "   "},
+        )
+
+    queued = bridge.enqueue_command(
+        "request-next",
+        "health",
+        "pane-1",
+        generation,
+    )
+    assert queued["command_sequence"] == 1
 
 
 def test_wrong_host_context_and_generation_are_rejected():
@@ -534,6 +604,82 @@ def test_apply_pass_does_not_roll_back_prepared_transaction(tmp_path, monkeypatc
         operation_id, "request-passed"
     ).state == "prepared"
     application.transactions.rollback(operation_id, request_id="request-passed")
+
+
+def test_add_letterhead_fail_rolls_back_prepared_transaction_by_request_id(
+    tmp_path,
+):
+    source = tmp_path / "source.docx"
+    document = Document()
+    document.add_paragraph("公文标题")
+    document.save(source)
+    application = server_module.WpsControlApplication(tmp_path, "test-token")
+    registration = application.dispatch_bridge(
+        "/v1/bridge/host/register", {"host_context_id": "host-context-letterhead"}
+    )
+    generation = registration["host_generation"]
+    application.dispatch_bridge(
+        "/v1/bridge/state",
+        {
+            "host_context_id": "host-context-letterhead",
+            "host_generation": generation,
+            "state": {"host_ready": True, "status": "READY"},
+        },
+    )
+    letterhead = {
+        "mark_text": "测试机关文件",
+        "document_number": "测发〔2026〕1号",
+        "signer": "",
+        "separator_style": "straight",
+        "replace_existing": False,
+    }
+    application.dispatch_bridge(
+        "/v1/bridge/command",
+        {
+            "request_id": "request-letterhead-failed",
+            "command": "add_letterhead",
+            "pane_instance_id": "pane-1",
+            "host_generation": generation,
+            "letterhead": letterhead,
+        },
+    )
+    prepared = application.dispatch(
+        "/v1/letterhead/prepare",
+        {"source_path": str(source), "letterhead": letterhead},
+        request_id="request-letterhead-failed",
+    )
+
+    application.dispatch_bridge(
+        "/v1/bridge/state",
+        {
+            "host_context_id": "host-context-letterhead",
+            "host_generation": generation,
+            "state": {
+                "host_ready": True,
+                "status": "FAIL",
+                "active_request": {
+                    "request_id": "request-letterhead-failed",
+                    "command": "add_letterhead",
+                    "request_status": "FAIL",
+                    "error_code": "WPS_LETTERHEAD_RESPONSE_FAILED",
+                },
+            },
+        },
+    )
+
+    with pytest.raises(
+        transaction_module.DocumentTransactionError,
+        match="WPS_TRANSACTION_NOT_FOUND",
+    ):
+        application.transactions.get(
+            prepared["operation_id"], "request-letterhead-failed"
+        )
+    next_operation = application.transactions.prepare_letterhead(
+        str(source), letterhead, request_id="request-letterhead-next"
+    )
+    application.transactions.rollback(
+        next_operation.operation_id, request_id="request-letterhead-next"
+    )
 
 
 def test_apply_is_authorized_before_host_delivery_and_result_is_reported(tmp_path):

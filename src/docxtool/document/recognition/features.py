@@ -111,6 +111,8 @@ class ParagraphFeatures:
     colon_key_value_candidate: bool = False
     colon_body_label_candidate: bool = False
     colon_explanatory_body: bool = False
+    numbered_heading2_colon_inline_body: bool = False
+    numbered_heading2_period_inline_body: bool = False
     native_numbering_level: int | None = None
     native_numbering_ordinal: int | None = None
     native_numbering_family: str = ""
@@ -209,12 +211,27 @@ def extract_features(block: DocumentBlock, previous: DocumentBlock | None = None
     style = block.style_name or ""
     source_features = getattr(block.raw_reference, "features", None)
     native_numbering = getattr(source_features, "native_numbering", None)
+    source_numbering_prefix = str(
+        getattr(source_features, "numbering_prefix", "") or ""
+    )
     from .numbering import native_numbering_heading_level
 
     native_level = native_numbering_heading_level(native_numbering)
     heading_level = level
     if not (label and colon.meeting_label):
         kv_level = heading_level
+    numbered_heading2_colon_inline_body = bool(
+        heading_level == 2
+        and colon.label
+        and not colon.colon_at_end
+        and bool(colon.value.strip())
+    )
+    period_position = normalized.find("。")
+    numbered_heading2_period_inline_body = bool(
+        (heading_level == 2 or source_numbering_prefix == "@style_heading2")
+        and period_position >= 0
+        and len(normalized[period_position + 1:].strip()) >= 5
+    )
     return ParagraphFeatures(
         block.index, block.paragraph_index if block.paragraph_index is not None else -1,
         raw, normalized, compact, prefix, kv_level, content,
@@ -238,6 +255,8 @@ def extract_features(block: DocumentBlock, previous: DocumentBlock | None = None
         colon.standalone_addressing, colon.inline_addressing_body,
         colon.key_value_candidate, colon.body_label_candidate,
         colon.explanatory_body_candidate,
+        numbered_heading2_colon_inline_body,
+        numbered_heading2_period_inline_body,
         None,
         getattr(native_numbering, "ordinal", None),
         str(getattr(native_numbering, "family_id", "") or ""),

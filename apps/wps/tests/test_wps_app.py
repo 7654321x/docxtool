@@ -143,6 +143,24 @@ def _snapshot(raw_text: str, *, snapshot_id: str = "snap-wps") -> dict:
     }
 
 
+def _multi_paragraph_snapshot(texts: list[str]) -> dict:
+    snapshot = _snapshot(texts[0])
+    snapshot["paragraphs"] = [
+        {
+            "host_paragraph_id": f"main:{index:06d}",
+            "host_paragraph_index": index,
+            "story_id": "main",
+            "story_type": "main",
+            "story_paragraph_index": index,
+            "section_index": None,
+            "is_in_table": False,
+            "raw_text": text,
+        }
+        for index, text in enumerate(texts)
+    ]
+    return snapshot
+
+
 def test_transaction_commit_then_rollback_restores_original(tmp_path, monkeypatch):
     source = tmp_path / "sample.docx"
     source.write_bytes(b"original")
@@ -1124,7 +1142,13 @@ def test_preview_binding_sdk_failure_logs_exact_boundary(tmp_path, monkeypatch):
     monkeypatch.setattr(
         recognition_module,
         "bind_recognition_plan",
-        lambda _plan, _snapshot: (_ for _ in ()).throw(RuntimeError("binder failed")),
+        lambda _plan, _snapshot: (_ for _ in ()).throw(
+            recognition_module.DocxToolSdkError(
+                "binder failed",
+                code="INVALID_RECOGNITION_PLAN",
+                details={"path": "$.blocks[1].block_id", "reason": "duplicate_id"},
+            )
+        ),
     )
 
     with pytest.raises(RuntimeError, match="WPS_BINDING_SDK_FAILED"):
@@ -1136,6 +1160,9 @@ def test_preview_binding_sdk_failure_logs_exact_boundary(tmp_path, monkeypatch):
     ]
     assert events[-1][1]["request_id"] == "request-binding-fail"
     assert events[-1][1]["error_code"] == "WPS_BINDING_SDK_FAILED"
+    assert events[-1][1]["sdk_error_code"] == "INVALID_RECOGNITION_PLAN"
+    assert events[-1][1]["sdk_error_path"] == "$.blocks[1].block_id"
+    assert events[-1][1]["sdk_error_reason"] == "duplicate_id"
 
 
 @pytest.mark.parametrize(
@@ -1268,6 +1295,69 @@ def test_wps_one_click_format_rebuilds_heading_numbering_by_default(tmp_path):
         "1.第三层",
         "（1）第四层",
     ]
+
+
+def test_wps_page_scope_recognizes_only_selected_source_paragraphs(tmp_path):
+    source = tmp_path / "scoped-source.docx"
+    target = tmp_path / "scoped-output.docx"
+    document = Document()
+    document.sections[0].top_margin = 720000
+    first = document.add_paragraph("范围外首段")
+    first.style = document.styles["Caption"]
+    document.add_paragraph("一、范围内标题")
+    table = document.add_table(rows=1, cols=1)
+    table.cell(0, 0).text = "范围外表格"
+    last = document.add_paragraph("范围外末段")
+    last.style = document.styles["Quote"]
+    document.save(source)
+    source_top_margin = Document(source).sections[0].top_margin
+
+    result = format_module.format_current_document(
+        str(source),
+        str(target),
+        operation_id="operation-page-scope",
+        log_dir=tmp_path / "logs",
+        request_id="request-page-scope",
+        host_snapshot=_multi_paragraph_snapshot(
+            ["范围外首段", "一、范围内标题", "范围外表格\r\x07", "范围外末段"]
+        ),
+        selected_host_paragraph_indexes=[1],
+    )
+
+    output = Document(target)
+    assert result.paragraph_count == 1
+    assert result.heading_count == 1
+    assert [paragraph.text for paragraph in output.paragraphs] == [
+        "范围外首段",
+        "一、范围内标题",
+        "范围外末段",
+    ]
+    assert output.paragraphs[0].style.name == "Caption"
+    assert output.paragraphs[1].style.style_id == "DCT-Heading1"
+    assert output.paragraphs[2].style.name == "Quote"
+    assert output.tables[0].cell(0, 0).text == "范围外表格"
+    assert output.sections[0].top_margin == source_top_margin
+
+
+def test_wps_page_scope_rejects_unbound_nonempty_host_paragraph(tmp_path):
+    source = tmp_path / "scope-bind-source.docx"
+    target = tmp_path / "scope-bind-output.docx"
+    document = Document()
+    document.add_paragraph("源文档正文")
+    document.save(source)
+
+    with pytest.raises(ValueError, match="WPS_FORMAT_SCOPE_BIND_FAILED"):
+        format_module.format_current_document(
+            str(source),
+            str(target),
+            operation_id="operation-page-bind-failed",
+            log_dir=tmp_path / "logs",
+            request_id="request-page-bind-failed",
+            host_snapshot=_multi_paragraph_snapshot(["宿主新增正文"]),
+            selected_host_paragraph_indexes=[0],
+        )
+
+    assert not target.exists()
 
 
 def test_wps_one_click_rebuilds_native_heading_numbering_from_server_config(tmp_path):
@@ -1962,6 +2052,23 @@ def test_python_log_field_contract_rejects_sensitive_values():
     assert "private" not in fields
     assert "secret" not in fields
     assert "traceback" not in fields
+
+
+def test_python_log_field_contract_keeps_safe_sdk_validation_details():
+    fields = sanitize_wps_log_fields(
+        {
+            "sdk_error_code": "INVALID_RECOGNITION_PLAN",
+            "sdk_error_path": "$.blocks[1].block_id",
+            "sdk_error_reason": "duplicate_id",
+            "raw_text": "private body",
+        }
+    )
+
+    assert fields == {
+        "sdk_error_code": "INVALID_RECOGNITION_PLAN",
+        "sdk_error_path": "$.blocks[1].block_id",
+        "sdk_error_reason": "duplicate_id",
+    }
     assert "C:/private" not in logging_adapter._fields_text(
         {"path": "C:/private/document.docx"}
     )
@@ -2020,13 +2127,15 @@ def test_verify_files_requires_new_bootstrap_files(monkeypatch, tmp_path):
         "index.html",
         "main.js",
         "js/bootstrap-log.js",
-        "js/bootstrap-complete.js",
-        "js/ribbon.js",
-        "images/taskpane.svg",
-        "images/eye.svg",
+            "js/bootstrap-complete.js",
+            "js/ribbon.js",
+            "images/taskpane.svg",
+            "images/check.svg",
+            "images/eye.svg",
         "images/eye-off.svg",
-        "images/login-window.png",
-        "host-runtime.js",
+            "images/login-window.png",
+            "images/user.svg",
+            "host-runtime.js",
         "taskpane.html",
         "taskpane.js",
         "client-config.json",
@@ -2039,6 +2148,7 @@ def test_verify_files_requires_new_bootstrap_files(monkeypatch, tmp_path):
             "control/server.py",
             "control/host_bridge.py",
             "control/format_current_document.py",
+            "control/add_letterhead.py",
         "control/document_transaction.py",
         "control/logging_adapter.py",
         "control/recognize_document.py",
@@ -2072,7 +2182,7 @@ def test_taskpane_scrolls_content_without_moving_header():
     assert 'document.getElementById("error").textContent="错误代码：WPS_RUNTIME_CONFIG_LOAD_FAILED"' in source
     assert '<main id="content">' in source
     assert 'fetch("./runtime/config"' in source
-    assert 'script.src="./taskpane.js?v=11"' in source
+    assert 'script.src="./taskpane.js?v=13"' in source
 
 
 def test_start_handles_keyboard_interrupt_without_traceback(monkeypatch):

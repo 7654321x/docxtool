@@ -21,6 +21,7 @@ from docxtool.document.style_config import ConfigValidationError, validate_forma
 from docxtool.version import package_version
 
 from .document_transaction import DocumentTransactionError, DocumentTransactionManager
+from .add_letterhead import inspect_letterhead, normalize_letterhead_request
 from .host_bridge import HostBridge, HostBridgeError
 from .logging_adapter import configure_wps_logging, log_event, sanitize_wps_log_fields
 from .monitor import CommandMonitor
@@ -43,6 +44,8 @@ BUSINESS_ROUTES = frozenset(
         "/v1/format/commit",
         "/v1/format/finalize",
         "/v1/format/rollback",
+        "/v1/letterhead/inspect",
+        "/v1/letterhead/prepare",
     }
 )
 BRIDGE_ROUTES = frozenset(
@@ -126,6 +129,10 @@ def _request_failure_event(code: str) -> str:
         "WPS_APPLY_AUTHORIZATION_MISMATCH": "bridge.command.authorization_mismatch",
         "WPS_APPLY_CONFIG_VERSION_REQUIRED": "bridge.command.config_version_required",
         "WPS_APPLY_FORMAT_CONFIG_REQUIRED": "bridge.command.format_config_required",
+        "WPS_LETTERHEAD_FORM_INVALID": "letterhead.form.invalid",
+        "WPS_LETTERHEAD_MARK_REQUIRED": "letterhead.mark.required",
+        "WPS_LETTERHEAD_DOCUMENT_NUMBER_INVALID": "letterhead.document_number.invalid",
+        "WPS_LETTERHEAD_ALREADY_EXISTS": "letterhead.already_exists",
     }.get(code, "control.request.execution_failed")
 
 
@@ -302,9 +309,17 @@ class WpsControlApplication:
             if isinstance(candidate, dict) and candidate.get("request_status") in {"PASS", "FAIL"}:
                 completed = candidate
                 break
-        if completed is None or completed.get("command") != "apply":
+        if completed is None:
             return None
         request_id = str(completed.get("request_id", ""))
+        command = completed.get("command")
+        if (
+            completed["request_status"] == "FAIL"
+            and command in {"apply", "add_letterhead"}
+        ):
+            self.transactions.rollback_request(request_id)
+        if command != "apply":
+            return None
         pending = self._authorized_requests.get(request_id)
         if pending is None or self.account_runtime is None:
             return None
@@ -313,8 +328,6 @@ class WpsControlApplication:
             duration_ms = int((time.monotonic() - pending["started_at"]) * 1000)
         status = "success" if completed["request_status"] == "PASS" else "failed"
         error_code = "" if status == "success" else str(completed.get("error_code", "WPS_COMMAND_FAILED"))
-        if status == "failed":
-            self.transactions.rollback_request(request_id)
         self.account_runtime.report_format_result(
             request_id, status, duration_ms, error_code
         )
@@ -342,6 +355,22 @@ class WpsControlApplication:
             with self._authorization_lock:
                 result = self.host_bridge.register_host(body.get("host_context_id"))
                 displaced = result.get("displaced_command")
+                if isinstance(displaced, dict) and displaced.get("request_id"):
+                    displaced_id = str(displaced["request_id"])
+                    try:
+                        self.transactions.rollback_request(displaced_id)
+                    except Exception as exc:
+                        log_event(
+                            "ERROR",
+                            "transaction",
+                            "transaction.host_replaced.cleanup.failed",
+                            "Host 更换后残留文档事务清理失败",
+                            {
+                                "request_id": displaced_id,
+                                "error_code": _error_code(exc),
+                                "error_type": type(exc).__name__,
+                            },
+                        )
                 if (
                     isinstance(displaced, dict)
                     and displaced.get("command") == "apply"
@@ -416,6 +445,21 @@ class WpsControlApplication:
         if path == "/v1/bridge/command":
             command_name = body.get("command")
             authorization = None
+            letterhead_payload = None
+            if command_name == "add_letterhead":
+                normalized_letterhead = normalize_letterhead_request(
+                    body.get("letterhead")
+                )
+                letterhead_payload = {
+                    key: normalized_letterhead[key]
+                    for key in (
+                        "mark_text",
+                        "document_number",
+                        "signer",
+                        "separator_style",
+                        "replace_existing",
+                    )
+                }
             with self._authorization_lock:
                 self.host_bridge.ensure_command_available(body.get("host_generation"))
                 if command_name == "apply":
@@ -448,6 +492,12 @@ class WpsControlApplication:
                         body.get("pane_instance_id"),
                         body.get("host_generation"),
                         host_authorization,
+                        (
+                            body.get("format_scope")
+                            if isinstance(body.get("format_scope"), dict)
+                            else None
+                        ),
+                        letterhead_payload,
                     )
                 except HostBridgeError as exc:
                     if authorization is not None and self.account_runtime is not None:
@@ -541,6 +591,50 @@ class WpsControlApplication:
         body: Dict[str, Any],
         request_id: str = "",
     ) -> Dict[str, Any]:
+        if path == "/v1/letterhead/inspect":
+            result = inspect_letterhead(str(body.get("source_path", "")))
+            log_event(
+                "INFO",
+                "letterhead",
+                "letterhead.inspect.completed",
+                "当前文档版头检查完成",
+                {
+                    "request_id": request_id,
+                    "status": result["status"],
+                    "replaceable": result["replaceable"],
+                },
+            )
+            return result
+        if path == "/v1/letterhead/prepare":
+            started_at = time.monotonic()
+            try:
+                operation = self.transactions.prepare_letterhead(
+                    str(body.get("source_path", "")),
+                    body.get("letterhead"),
+                    request_id=request_id,
+                )
+            except Exception as exc:
+                log_event(
+                    "ERROR",
+                    "letterhead",
+                    "letterhead.prepare.failed",
+                    "版头临时文档生成失败",
+                    {
+                        "request_id": request_id,
+                        "duration_ms": int((time.monotonic() - started_at) * 1000),
+                        "error_type": type(exc).__name__,
+                        "error_code": _error_code(exc),
+                    },
+                )
+                raise
+            result = operation.format_result
+            if result is None:
+                raise DocumentTransactionError("WPS_TRANSACTION_INVALID_STATE")
+            return {
+                "operation_id": operation.operation_id,
+                "state": operation.state,
+                "action": result.action,
+            }
         if path == "/v1/recognize":
             started_at = time.monotonic()
             log_event(
@@ -663,13 +757,25 @@ class WpsControlApplication:
             operation_id = str(body.get("operation_id", ""))
             log_event("INFO", "control", "format.upgrade.prepare.request.start", "开始处理旧格式升级排版请求", {"request_id": request_id, "stage": "format_upgrade_prepare", "operation_id_short": operation_id[:12]})
             try:
-                format_config = self._require_apply_operation(
-                    request_id, operation_id
-                )
+                existing = self.transactions.get(operation_id, request_id)
+                if existing.command == "apply":
+                    format_config = self._require_apply_operation(
+                        request_id, operation_id
+                    )
+                elif existing.command == "add_letterhead":
+                    format_config = body.get("letterhead")
+                else:
+                    raise DocumentTransactionError(
+                        "WPS_TRANSACTION_COMMAND_MISMATCH"
+                    )
                 operation = self.transactions.prepare_upgrade(
                     operation_id,
                     format_config,
                     request_id=request_id,
+                    host_snapshot=body.get("host_snapshot"),
+                    selected_host_paragraph_indexes=body.get(
+                        "selected_host_paragraph_indexes"
+                    ),
                 )
             except Exception as exc:
                 log_event("ERROR", "control", "format.upgrade.prepare.request.failed", "旧格式升级排版请求失败", {"request_id": request_id, "stage": "format_upgrade_prepare", "operation_id_short": operation_id[:12], "duration_ms": int((time.monotonic() - started_at) * 1000), "error_type": type(exc).__name__, "error_code": _error_code(exc)})
@@ -678,18 +784,28 @@ class WpsControlApplication:
             if result is None:
                 raise DocumentTransactionError("WPS_TRANSACTION_INVALID_STATE")
             log_event("INFO", "control", "format.upgrade.prepare.request.completed", "旧格式升级排版请求完成", {"request_id": request_id, "stage": "format_upgrade_prepare", "operation_id_short": operation.operation_id[:12], "log_file": result.log_path.name, "duration_ms": int((time.monotonic() - started_at) * 1000)})
-            return {
+            response = {
                 "operation_id": operation.operation_id,
                 "state": operation.state,
-                "document_mode": result.document_mode,
-                "paragraph_count": result.paragraph_count,
-                "heading_count": result.heading_count,
-                "body_count": result.body_count,
-                "compatibility_warnings": _safe_warnings(
-                    result.export_stats.get("compatibility_warnings", [])
-                ),
                 "log_file": result.log_path.name,
             }
+            if existing.command == "add_letterhead":
+                response["action"] = result.action
+            else:
+                response.update(
+                    {
+                        "document_mode": result.document_mode,
+                        "paragraph_count": result.paragraph_count,
+                        "heading_count": result.heading_count,
+                        "body_count": result.body_count,
+                        "compatibility_warnings": _safe_warnings(
+                            result.export_stats.get(
+                                "compatibility_warnings", []
+                            )
+                        ),
+                    }
+                )
+            return response
         if path == "/v1/format/upgrade/prepare-converted":
             started_at = time.monotonic()
             operation_id = str(body.get("operation_id", ""))
@@ -752,6 +868,10 @@ class WpsControlApplication:
                     str(body.get("source_path", "")),
                     format_config,
                     request_id=request_id,
+                    host_snapshot=body.get("host_snapshot"),
+                    selected_host_paragraph_indexes=body.get(
+                        "selected_host_paragraph_indexes"
+                    ),
                 )
                 try:
                     self._bind_apply_operation(request_id, operation.operation_id)

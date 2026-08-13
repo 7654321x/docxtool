@@ -13,6 +13,7 @@ ISSUANCE_MODES = {"single", "joint"}
 MARK_DISPLAY_MODES = {"agency_with_document", "agency_only"}
 JOINT_MARK_SCOPES = {"all_agencies", "sponsor_only"}
 EXISTING_POLICIES = {"preserve_external"}
+SEPARATOR_STYLES = {"straight", "star"}
 
 MAX_AGENCIES = 10
 MAX_AGENCY_NAME = 80
@@ -42,6 +43,8 @@ def default_letterhead_config() -> dict:
         ],
         "document_number": {"agency_code": "", "year": None, "sequence": None},
         "signers": [],
+        "separator_style": "straight",
+        "auto_recognize": False,
         "existing_policy": "preserve_external",
         "replace_managed": False,
         "layout_version": 1,
@@ -141,6 +144,11 @@ def normalize_letterhead_config(value) -> dict:
     replace_managed = _strict_bool(
         "letterhead.replace_managed", raw.get("replace_managed", False)
     )
+    separator_style = _enum(
+        "letterhead.separator_style",
+        raw.get("separator_style", "straight"),
+        SEPARATOR_STYLES,
+    )
     layout_version = _strict_int(
         "letterhead.layout_version", raw.get("layout_version", 1), 1, 1
     )
@@ -165,7 +173,6 @@ def normalize_letterhead_config(value) -> dict:
             f"letterhead.agencies[{index}].name",
             item.get("name", ""),
             MAX_AGENCY_NAME,
-            required=enabled,
         )
         short_name = _text(
             f"letterhead.agencies[{index}].short_name",
@@ -212,7 +219,6 @@ def normalize_letterhead_config(value) -> dict:
         "letterhead.document_number.agency_code",
         number.get("agency_code", ""),
         MAX_AGENCY_CODE,
-        required=enabled,
     )
     if any(char in agency_code for char in "〔〕第"):
         _error("letterhead.document_number.agency_code", "不得包含六角括号或“第”字")
@@ -222,10 +228,6 @@ def normalize_letterhead_config(value) -> dict:
         year = _strict_int("letterhead.document_number.year", year, 1900, 2100)
     if sequence is not None:
         sequence = _strict_int("letterhead.document_number.sequence", sequence, 1, 999999)
-    if enabled and year is None:
-        _error("letterhead.document_number.year", "启用版头时不能为空")
-    if enabled and sequence is None:
-        _error("letterhead.document_number.sequence", "启用版头时不能为空")
     total_characters += len(agency_code)
 
     signer_items = _list("letterhead.signers", raw.get("signers", []))
@@ -287,7 +289,25 @@ def normalize_letterhead_config(value) -> dict:
 
     agency_order = {item["id"]: item["order"] for item in agencies}
     signers.sort(key=lambda item: (agency_order.get(item["agency_id"], MAX_AGENCIES + 1), item["order"]))
-    if enabled and direction == "upward":
+    required_values_present = bool(
+        any(agency["name"] for agency in agencies)
+        or agency_code
+        or year is not None
+        or sequence is not None
+        or signers
+    )
+    auto_recognize = bool(enabled and not required_values_present)
+    if enabled and not auto_recognize:
+        for index, agency in enumerate(agencies):
+            if not agency["name"]:
+                _error(f"letterhead.agencies[{index}].name", "不能为空")
+        if not agency_code:
+            _error("letterhead.document_number.agency_code", "不能为空")
+        if year is None:
+            _error("letterhead.document_number.year", "启用版头时不能为空")
+        if sequence is None:
+            _error("letterhead.document_number.sequence", "启用版头时不能为空")
+    if enabled and direction == "upward" and not auto_recognize:
         required_agencies = agencies if issuance_mode == "joint" else agencies[:1]
         missing = [agency["id"] for agency in required_agencies if not signer_counts.get(agency["id"])]
         if missing:
@@ -310,6 +330,8 @@ def normalize_letterhead_config(value) -> dict:
             "sequence": sequence,
         },
         "signers": signers,
+        "separator_style": separator_style,
+        "auto_recognize": auto_recognize,
         "existing_policy": existing_policy,
         "replace_managed": replace_managed,
         "layout_version": layout_version,

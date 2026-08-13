@@ -30,6 +30,8 @@ from docxtool.document.engine.inline_effects import (
     apply_colon_bold as _apply_colon_bold,
     apply_glossary_item as _apply_glossary_item,
     apply_inline_lead_bold as _apply_inline_lead_bold,
+    apply_numbered_heading2_colon_format as _apply_numbered_heading2_colon_format,
+    apply_numbered_heading2_period_format as _apply_numbered_heading2_period_format,
     apply_key_value_line_format as _apply_key_value_line_format,
     apply_report_first_sentence as _apply_report_first_sentence,
     apply_responsibility_line as _apply_responsibility_line,
@@ -72,6 +74,7 @@ from docxtool.document.engine.render_types import (
     is_body_flow_type,
     is_head_gap_follow_type,
     is_head_type_requiring_gap,
+    is_structure_sensitive_type,
 )
 from docxtool.document.engine.inline import (
     segment_writer as _base_segment_writer,

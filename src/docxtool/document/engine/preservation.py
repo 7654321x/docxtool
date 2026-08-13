@@ -207,6 +207,33 @@ class ReferencedStyleCopier:
             p_style.set(qn("w:val"), target_id)
             p_pr.insert(0, p_style)
 
+    def preserve_paragraph_default_style(self, paragraph_element, source_styles_element) -> None:
+        """为没有显式样式的透传正文绑定隔离后的源默认段落样式。"""
+
+        p_pr = paragraph_element.find(qn("w:pPr"))
+        if p_pr is not None and p_pr.find(qn("w:pStyle")) is not None:
+            return
+        default_style = next(
+            (
+                style
+                for style in source_styles_element.findall(qn("w:style"))
+                if style.get(qn("w:type")) == "paragraph"
+                and style.get(qn("w:default")) in {"1", "true", "on"}
+            ),
+            None,
+        )
+        if default_style is None or not default_style.get(qn("w:styleId")):
+            raise ExportError("源文档缺少默认段落样式，无法保留正文格式")
+        target_id = self._copy_style(
+            source_styles_element, default_style.get(qn("w:styleId"))
+        )
+        if p_pr is None:
+            p_pr = OxmlElement("w:pPr")
+            paragraph_element.insert(0, p_pr)
+        p_style = OxmlElement("w:pStyle")
+        p_style.set(qn("w:val"), target_id)
+        p_pr.insert(0, p_style)
+
     def _copy_style(self, source_styles_element, source_id: str) -> str:
         """复制单个样式及依赖。
 
@@ -447,6 +474,9 @@ def copy_preserved_paragraph(doc, source_para, part_copier, style_copier=None):
     remap_element_relationships(p_element, source_para.part, doc.part, part_copier)
     if style_copier is not None:
         style_copier.remap_element_styles(p_element, source_para.part.styles.element)
+        style_copier.preserve_paragraph_default_style(
+            p_element, source_para.part.styles.element
+        )
     append_body_element(doc, p_element)
     return p_element
 

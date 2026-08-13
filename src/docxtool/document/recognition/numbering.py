@@ -191,18 +191,32 @@ def _native_body_list_positions(features: list[Any]) -> set[int]:
 
 
 def _native_heading_eligible(features: Any) -> bool:
+    native_template_level = features.native_numbering_template_level
+    colon_inline_heading2 = bool(
+        native_template_level == 2
+        and features.colon_label
+        and not features.colon_at_end
+        and bool(features.colon_value and features.colon_value.strip())
+    )
+    period_position = features.normalized_text.find("。")
+    period_inline_heading2 = bool(
+        native_template_level == 2
+        and period_position >= 0
+        and len(features.normalized_text[period_position + 1:].strip()) >= 5
+    )
+    inline_heading2 = colon_inline_heading2 or period_inline_heading2
     return bool(
         features.native_numbering_present
         and features.native_numbering_family
         and features.native_numbering_ilvl is not None
-        and features.text_length <= 40
-        and not features.ends_with_sentence_punctuation
+        and (inline_heading2 or features.text_length <= 40)
+        and (inline_heading2 or not features.ends_with_sentence_punctuation)
         and not features.date_match
         and not features.attachment_note_match
         and not features.recipient_match
-        and not features.key_value_label
+        and (inline_heading2 or not features.key_value_label)
         and not features.colon_at_end
-        and not features.colon_explanatory_body
+        and (inline_heading2 or not features.colon_explanatory_body)
         and not re.fullmatch(
             r"附件[0-9一二三四五六七八九十百千]*",
             features.compact_text,
@@ -245,6 +259,17 @@ def _with_native_heading_level(features: Any, level: int, source: str) -> Any:
         heading_semantic_score=max(features.heading_semantic_score, 0.8),
         native_numbering_level=level,
         native_numbering_level_source=source,
+        numbered_heading2_colon_inline_body=(
+            level == 2
+            and bool(features.colon_label)
+            and not features.colon_at_end
+            and bool(features.colon_value and features.colon_value.strip())
+        ),
+        numbered_heading2_period_inline_body=(
+            level == 2
+            and "。" in features.normalized_text
+            and len(features.normalized_text.split("。", 1)[1].strip()) >= 5
+        ),
     )
 
 

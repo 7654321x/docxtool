@@ -6,7 +6,7 @@
   const config = globalObject.DocxToolWpsConfig || {};
   const TASKPANE_KEY = "docxtool_wps_taskpane_id_v1";
   const TASKPANE_VERSION_KEY = "docxtool_wps_taskpane_version_v1";
-  const TASKPANE_PAGE_VERSION = "10";
+  const TASKPANE_PAGE_VERSION = "12";
   const PREVIEW_KEY_PREFIX = "docxtool_wps_preview_v2:";
   const PREVIEW_BATCH_SIZE = 5;
   const TASKPANE_HOST_PROBE_DELAYS_MS = [0, 100, 500, 1000];
@@ -51,7 +51,9 @@
     "pane_dock_position_before", "pane_dock_position_requested", "pane_dock_position_after",
     "pane_dock_position_effective", "pane_width_before", "pane_width_requested",
     "pane_width_after", "pane_width_effective", "pane_visible_before", "pane_visible_requested",
-    "pane_visible_after", "pane_visible_effective", "stored_pane_id_present"
+    "pane_visible_after", "pane_visible_effective", "stored_pane_id_present",
+    "scope_mode", "selected_count", "page_count", "separator_style",
+    "signer_present"
   ]);
 
   const roleNames = {
@@ -440,6 +442,30 @@
     }
     if (errorCode === "WPS_LEGACY_UPGRADE_TARGET_EXISTS") {
       return "同目录已存在同名 DOCX，未覆盖任何文件。";
+    }
+    if (errorCode === "WPS_FORMAT_PAGE_SPEC_INVALID") {
+      return "请输入有效页码范围。";
+    }
+    if (errorCode === "WPS_FORMAT_PAGE_OUT_OF_RANGE") {
+      return "页码超出当前文档范围。";
+    }
+    if (errorCode === "WPS_FORMAT_PAGE_API_UNAVAILABLE") {
+      return "当前 WPS 版本不支持按页码排版。";
+    }
+    if (errorCode === "WPS_LETTERHEAD_ALREADY_EXISTS") {
+      return "当前文档已存在版头，请确认后再替换。";
+    }
+    if (errorCode === "WPS_LETTERHEAD_EXISTING_AMBIGUOUS") {
+      return "无法确定现有版头边界，未修改文档。";
+    }
+    if (errorCode === "WPS_LETTERHEAD_MARK_TOO_LONG") {
+      return "发文机关标志过长，无法在版心内排下。";
+    }
+    if (errorCode === "WPS_LETTERHEAD_JOINT_SOURCE_UNSUPPORTED") {
+      return "当前只支持单机关发文版头，未修改文档。";
+    }
+    if (errorCode.startsWith("WPS_LETTERHEAD_")) {
+      return "版头添加失败。";
     }
     return `失败：${errorCode}`;
   }
@@ -842,6 +868,85 @@
       text_contract_version: "host-text-v1",
       offset_encoding: "utf16_code_unit",
       paragraphs
+    };
+  }
+
+  function parsePageSpec(value) {
+    const text = String(value || "").trim();
+    if (!text || !/^\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*$/.test(text)) {
+      throw new Error("WPS_FORMAT_PAGE_SPEC_INVALID");
+    }
+    const pages = new Set();
+    text.split(",").forEach((part) => {
+      const bounds = part.split("-").map(Number);
+      const start = bounds[0];
+      const end = bounds.length === 2 ? bounds[1] : start;
+      if (!Number.isInteger(start) || !Number.isInteger(end) || start < 1 || end < start) {
+        throw new Error("WPS_FORMAT_PAGE_SPEC_INVALID");
+      }
+      for (let page = start; page <= end; page += 1) pages.add(page);
+    });
+    return Array.from(pages).sort((left, right) => left - right);
+  }
+
+  async function resolvePreFormatPageScope(formatScope, requestContext) {
+    if (!formatScope) return null;
+    if (formatScope.mode !== "pre_format_pages") throw new Error("WPS_FORMAT_SCOPE_INVALID");
+    const document = activeDocument();
+    const enumeration = app && app.Enum;
+    if (!enumeration || typeof document.GoTo !== "function" || typeof document.ComputeStatistics !== "function"
+        || !document.Paragraphs || typeof document.Paragraphs.Item !== "function") {
+      throw new Error("WPS_FORMAT_PAGE_API_UNAVAILABLE");
+    }
+    const goToPage = Number(enumeration.wdGoToPage);
+    const goToAbsolute = Number(enumeration.wdGoToAbsolute);
+    const statisticPages = Number(enumeration.wdStatisticPages);
+    if (![goToPage, goToAbsolute, statisticPages].every(Number.isFinite)) {
+      throw new Error("WPS_FORMAT_PAGE_API_UNAVAILABLE");
+    }
+    const pages = parsePageSpec(formatScope.page_spec);
+    const pageCount = Number(document.ComputeStatistics(statisticPages, false));
+    if (!Number.isInteger(pageCount) || pageCount < 1) throw new Error("WPS_FORMAT_PAGE_API_UNAVAILABLE");
+    if (pages.some((page) => page > pageCount)) throw new Error("WPS_FORMAT_PAGE_OUT_OF_RANGE");
+    const paragraphCount = Number(document.Paragraphs.Count || 0);
+    let documentEnd = 0;
+    for (let index = 0; index < paragraphCount; index += 1) {
+      documentEnd = Math.max(
+        documentEnd,
+        Number(document.Paragraphs.Item(index + 1).Range.End || 0)
+      );
+    }
+    const intervals = pages.map((page) => {
+      const start = Number(document.GoTo(goToPage, goToAbsolute, page).Start);
+      const end = page < pageCount
+        ? Number(document.GoTo(goToPage, goToAbsolute, page + 1).Start)
+        : documentEnd;
+      if (!Number.isInteger(start) || !Number.isInteger(end) || end <= start) {
+        throw new Error("WPS_FORMAT_PAGE_API_UNAVAILABLE");
+      }
+      return [start, end];
+    });
+    const selectedHostParagraphIndexes = [];
+    for (let index = 0; index < paragraphCount; index += 1) {
+      const range = document.Paragraphs.Item(index + 1).Range;
+      const start = Number(range.Start);
+      const end = Number(range.End);
+      if (!Number.isInteger(start) || !Number.isInteger(end)) {
+        throw new Error("WPS_FORMAT_PAGE_API_UNAVAILABLE");
+      }
+      if (intervals.some(([pageStart, pageEnd]) => end > pageStart && start < pageEnd)) {
+        selectedHostParagraphIndexes.push(index);
+      }
+    }
+    if (!selectedHostParagraphIndexes.length) throw new Error("WPS_FORMAT_PAGE_OUT_OF_RANGE");
+    const hostSnapshot = await buildHostSnapshot(requestContext, false);
+    log("INFO", "format.scope.resolved", "排版前页码内容范围已固定", {
+      ...contextDetails(requestContext), scope_mode: "pre_format_pages",
+      selected_count: selectedHostParagraphIndexes.length, page_count: pages.length
+    });
+    return {
+      host_snapshot: hostSnapshot,
+      selected_host_paragraph_indexes: selectedHostParagraphIndexes
     };
   }
 
@@ -1805,6 +1910,151 @@
     return Array.isArray(prepared.compatibility_warnings) ? prepared.compatibility_warnings.length : 0;
   }
 
+  async function runAddLetterhead(requestContext, documentContext) {
+    const document = activeDocument();
+    const sourcePath = documentContext.sourcePath;
+    const targetPath = documentContext.targetPath;
+    const legacyUpgrade = documentContext.pendingUpgrade;
+    let operationId = documentContext.operationId;
+    let committed = false;
+    let bridgeDocument = documentContext.bridgeDocument;
+    let bridgePath = documentContext.bridgePath;
+    let stage = "inspect";
+    writeState({
+      status: "RUNNING", stage: "letterhead_inspect",
+      message: "正在检查当前文档版头…", error_code: ""
+    });
+    try {
+      const inspected = await api(
+        "/v1/letterhead/inspect",
+        { source_path: documentContext.path },
+        undefined,
+        requestContext
+      );
+      if (inspected.exists && !requestContext.letterhead.replace_existing) {
+        throw new Error("WPS_LETTERHEAD_ALREADY_EXISTS");
+      }
+      if (inspected.exists && !inspected.replaceable) {
+        throw new Error("WPS_LETTERHEAD_EXISTING_AMBIGUOUS");
+      }
+      stage = "prepare";
+      writeState({
+        status: "RUNNING", stage: "letterhead_prepare",
+        message: "正在生成版头…", error_code: ""
+      });
+      let prepared;
+      if (legacyUpgrade) {
+        prepared = await api(
+          "/v1/format/upgrade/prepare",
+          { operation_id: operationId, letterhead: requestContext.letterhead },
+          undefined,
+          requestContext
+        );
+      } else {
+        prepared = await api(
+          "/v1/letterhead/prepare",
+          { source_path: sourcePath, letterhead: requestContext.letterhead },
+          undefined,
+          requestContext
+        );
+        operationId = prepared.operation_id;
+        bridgeDocument = document;
+        bridgePath = formatBridgePath(sourcePath, operationId);
+        await saveFormatBridge(bridgeDocument, bridgePath, requestContext);
+      }
+      stage = "commit";
+      await api(
+        "/v1/format/commit",
+        { operation_id: operationId },
+        undefined,
+        requestContext
+      );
+      committed = true;
+      stage = "reopen";
+      try {
+        app.Documents.Open(targetPath);
+      } catch (_) {
+        throw new Error("WPS_DOCUMENT_OPEN_FAILED");
+      }
+      await waitForActiveDocument(targetPath, requestContext, "letterhead_reopen");
+      stage = "bridge_cleanup";
+      cleanupFormatBridge(bridgeDocument, bridgePath, requestContext);
+      bridgeDocument = null;
+      bridgePath = "";
+      stage = "finalize";
+      await api(
+        "/v1/format/finalize",
+        { operation_id: operationId },
+        undefined,
+        requestContext
+      );
+      operationId = "";
+      committed = false;
+      const documentIdentity = await currentDocumentPathHash();
+      writeState({
+        status: "PASS", stage: "letterhead_completed",
+        message: "版头添加成功。", error_code: "",
+        operation_id: "", document_identity: documentIdentity,
+        document_name: activeDocumentName()
+      });
+      log("INFO", "letterhead.add.completed", "版头添加成功", {
+        ...contextDetails(requestContext), command: "add_letterhead",
+        replaced: Boolean(inspected.exists),
+        separator_style: requestContext.letterhead.separator_style,
+        signer_present: Boolean(requestContext.letterhead.signer)
+      });
+    } catch (error) {
+      const code = stableErrorCode(error, "WPS_LETTERHEAD_ADD_FAILED");
+      log("ERROR", `letterhead.${stage}.failed`, "版头添加阶段失败", {
+        ...contextDetails(requestContext), command: "add_letterhead",
+        stage, error_code: code,
+        error_type: error && error.name ? error.name : "Error"
+      });
+      try {
+        await recoverFormat(
+          operationId, sourcePath, targetPath, committed,
+          bridgeDocument, bridgePath, requestContext
+        );
+      } catch (recoveryError) {
+        throw new Error(stableErrorCode(recoveryError, "WPS_FORMAT_RECOVERY_REQUIRED"));
+      }
+      throw new Error(code);
+    }
+  }
+
+  async function runInspectLetterhead(requestContext, documentContext) {
+    let result;
+    try {
+      result = await api(
+        "/v1/letterhead/inspect",
+        { source_path: documentContext.path },
+        undefined,
+        requestContext
+      );
+    } finally {
+      if (documentContext.pendingUpgrade) {
+        await recoverFormat(
+          documentContext.operationId,
+          documentContext.sourcePath,
+          documentContext.targetPath,
+          false,
+          documentContext.bridgeDocument,
+          documentContext.bridgePath,
+          requestContext
+        );
+      }
+    }
+    writeState({
+      status: "PASS", stage: "letterhead_inspected",
+      message: result.exists ? "已读取当前文档版头。" : "当前文档尚未检测到版头。",
+      error_code: "", letterhead_inspection: result
+    });
+    log("INFO", "letterhead.inspect.completed", "当前文档版头检查完成", {
+      ...contextDetails(requestContext), command: "inspect_letterhead",
+      status: result.status || "none", replaceable: result.replaceable === true
+    });
+  }
+
   function documentFormat(path) {
     const lower = String(path || "").toLowerCase();
     if (lower.endsWith(".docx")) return "docx";
@@ -1921,7 +2171,11 @@
         bridgeDocument,
         bridgePath
       };
-      if (command === "apply") return context;
+      if (
+        command === "apply"
+        || command === "inspect_letterhead"
+        || command === "add_letterhead"
+      ) return context;
 
       stage = "prepare_converted";
       log("INFO", "document.upgrade.publish.start", "开始发布升级后的 DOCX", {
@@ -2104,7 +2358,7 @@
         });
         prepared = await api(
           "/v1/format/upgrade/prepare",
-          { operation_id: operationId },
+          Object.assign({ operation_id: operationId }, documentContext.formatScope || {}),
           undefined,
           requestContext
         );
@@ -2126,7 +2380,7 @@
         log("INFO", "format.transaction.prepare.start", "开始准备排版事务", contextDetails(requestContext));
         prepared = await api(
           "/v1/format/prepare",
-          { source_path: sourcePath },
+          Object.assign({ source_path: sourcePath }, documentContext.formatScope || {}),
           undefined,
           requestContext
         );
@@ -2349,18 +2603,31 @@
     log("INFO", "host.command.start", "WPS 命令开始执行", Object.assign(contextDetails(requestContext), { command: name }));
     try {
       let documentContext = null;
-      if (name === "preview" || name === "apply") {
+      if (name === "preview" || name === "apply" || name === "inspect_letterhead" || name === "add_letterhead") {
         try {
+          const formatScope = name === "apply"
+            ? await resolvePreFormatPageScope(requestContext.format_scope, requestContext)
+            : null;
           documentContext = await ensureDocxForCommand(requestContext, name);
+          documentContext.formatScope = formatScope;
         } catch (error) {
           const errorCode = stableErrorCode(error, "WPS_DOCUMENT_PREFLIGHT_FAILED");
-          const eventPrefix = name === "apply" ? "format" : "preview";
+          const eventPrefix = name === "apply"
+            ? "format"
+            : (name === "inspect_letterhead" || name === "add_letterhead")
+              ? "letterhead"
+              : "preview";
+          const failureMessage = name === "apply"
+            ? "一键排版失败"
+            : (name === "inspect_letterhead" || name === "add_letterhead")
+              ? "版头操作失败"
+              : "预览排版失败";
           log("ERROR", `${eventPrefix}.preflight.failed`, "功能执行前文档准备失败", {
             ...contextDetails(requestContext), command: name,
             stage: "document_preflight", error_code: errorCode,
             error_type: error && error.name ? error.name : "Error"
           });
-          log("ERROR", `${eventPrefix}.failed`, name === "apply" ? "一键排版失败" : "预览排版失败", {
+          log("ERROR", `${eventPrefix}.failed`, failureMessage, {
             ...contextDetails(requestContext), command: name,
             stage: "document_preflight", error_code: errorCode
           });
@@ -2374,6 +2641,8 @@
       if (name === "panel_ready") await runPanelReady(requestContext);
       else if (name === "preview") await runPreview(requestContext, documentContext);
       else if (name === "apply") await runFormat(requestContext, documentContext);
+      else if (name === "inspect_letterhead") await runInspectLetterhead(requestContext, documentContext);
+      else if (name === "add_letterhead") await runAddLetterhead(requestContext, documentContext);
       else if (name === "clear_preview") await clearPreview(requestContext);
       else if (name === "health") await runHealth(requestContext);
       else {
@@ -2494,7 +2763,9 @@
     const requestContext = Object.freeze({
       request_id: command.request_id, command: command.command, source: "taskpane",
       document_name: activeDocumentName(),
-      config_version: authorization ? authorization.config_version : ""
+      config_version: authorization ? authorization.config_version : "",
+      format_scope: command.format_scope || null,
+      letterhead: command.letterhead || null
     });
     lastRequestId = command.request_id;
     writeState({ active_request: Object.assign({}, contextDetails(requestContext), {

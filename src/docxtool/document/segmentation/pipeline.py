@@ -117,7 +117,12 @@ def build_logical_lines(
         following_text = ""
         for following in raw_blocks[block_index + 1:]:
             if following[0] == "paragraph":
-                following_text = normalize_text_func(following[1].text).strip()
+                following_normalizer = (
+                    (lambda value: value)
+                    if following[2].layout_preservation_hint
+                    else normalize_text_func
+                )
+                following_text = following_normalizer(following[1].text).strip()
                 if following_text:
                     break
 
@@ -149,7 +154,11 @@ def build_logical_lines(
 
         for line_index, (start, end) in enumerate(spans):
             raw_fragment = source[start:end]
-            line = normalize_text_func(raw_fragment)
+            line = (
+                raw_fragment
+                if paragraph_features.layout_preservation_hint
+                else normalize_text_func(raw_fragment)
+            )
             if not line:
                 continue
             sub_features = build_segment_features(

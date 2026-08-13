@@ -90,6 +90,7 @@ class ParagraphFeatures:
     segment_count: int = 1
     is_in_table: bool = False
     contains_image: bool = False
+    page_break_before: bool = False
     is_new_line: bool = False
     first_run_font_name: str = ""
     first_run_font_size_pt: Optional[float] = None
@@ -102,6 +103,8 @@ class ParagraphFeatures:
     italic_char_ratio: float = 0.0
     explicitly_formatted_char_ratio: float = 0.0
     inline_lead_bold: bool = False
+    layout_preservation_hint: bool = False
+    layout_preservation_evidence: Tuple[str, ...] = ()
 
 
 @dataclass

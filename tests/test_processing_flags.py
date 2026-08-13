@@ -321,6 +321,15 @@ class ProcessingFlagsTest(unittest.TestCase):
                 [item["paragraph_index"] for item in diagnostics],
                 list(range(len(data.paragraphs))),
             )
+            structure = data.recognition_structure
+            self.assertEqual(
+                [
+                    data.paragraphs[item.source_index].type_id
+                    for item in structure.elements
+                    if item.source_index is not None
+                ],
+                [paragraph.type_id for paragraph in data.paragraphs],
+            )
 
     def test_smart_mode_recovers_speech_title_and_soft_line_body_from_heading_style(self):
         with tempfile.TemporaryDirectory() as tmp:

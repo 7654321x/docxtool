@@ -1,11 +1,14 @@
 import pytest
 from docx import Document
+from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
 from docxtool.document.engine.inline_effects import (
     apply_colon_bold,
     apply_inline_lead_bold,
     apply_key_value_line_format,
+    apply_numbered_heading2_colon_format,
+    apply_numbered_heading2_period_format,
     apply_responsibility_line,
     apply_special_bold,
     enforce_inline_heading2_format,
@@ -145,6 +148,90 @@ def test_inline_lead_bold_and_heading2_format_split_run_styles() -> None:
         ("（一）标题内容。", True),
         ("这里是正文", False),
     ]
+
+
+def test_numbered_heading2_colon_format_splits_fonts_without_splitting_paragraph() -> None:
+    doc = Document()
+    paragraph = doc.add_paragraph("（一）出席人员： 正文内容")
+    heading_rule = StyleRule.default_for_row(2)
+    body_rule = StyleRule.default_for_row(5)
+
+    apply_numbered_heading2_colon_format(paragraph, paragraph.text, heading_rule, body_rule)
+
+    assert len(doc.paragraphs) == 1
+    assert paragraph.text == "（一）出席人员： 正文内容"
+    assert [run.text for run in paragraph.runs] == ["（一）出席人员：", " 正文内容"]
+    heading_fonts = paragraph.runs[0]._r.rPr.rFonts
+    body_fonts = paragraph.runs[1]._r.rPr.rFonts
+    assert heading_fonts.get(qn("w:eastAsia")) == heading_rule.font
+    assert paragraph.runs[0].font.size.pt == heading_rule.font_size_pt
+    assert paragraph.runs[0].font.bold == heading_rule.bold
+    assert heading_fonts.get(qn("w:ascii")) == "Times New Roman"
+    assert body_fonts.get(qn("w:eastAsia")) == body_rule.font
+    assert paragraph.runs[1].font.size.pt == body_rule.font_size_pt
+    assert paragraph.runs[1].font.bold == body_rule.bold
+
+
+def test_numbered_heading2_colon_format_respects_unbold_heading_config() -> None:
+    doc = Document()
+    paragraph = doc.add_paragraph("（二）工作安排:具体内容")
+    heading_rule = StyleRule.default_for_row(2)
+    heading_rule.bold = False
+    body_rule = StyleRule.default_for_row(5)
+
+    apply_numbered_heading2_colon_format(
+        paragraph, paragraph.text, heading_rule, body_rule
+    )
+
+    assert [(run.text, run.font.bold) for run in paragraph.runs] == [
+        ("（二）工作安排:", False),
+        ("具体内容", body_rule.bold),
+    ]
+
+
+def test_numbered_heading2_colon_format_preserves_nontext_run_children() -> None:
+    doc = Document()
+    paragraph = doc.add_paragraph()
+    run = paragraph.add_run("（一）标题： 正文")
+    drawing = OxmlElement("w:drawing")
+    run._element.append(drawing)
+    heading_rule = StyleRule.default_for_row(2)
+    body_rule = StyleRule.default_for_row(5)
+
+    apply_numbered_heading2_colon_format(
+        paragraph, paragraph.text, heading_rule, body_rule
+    )
+
+    assert paragraph.text == "（一）标题： 正文"
+    assert len(paragraph._p.findall(".//" + qn("w:drawing"))) == 1
+    assert drawing.getparent().tag == qn("w:r")
+
+
+def test_numbered_heading2_period_format_applies_full_rules_in_one_paragraph() -> None:
+    doc = Document()
+    paragraph = doc.add_paragraph("（一）会议安排。 后续正文内容")
+    drawing = OxmlElement("w:drawing")
+    paragraph.runs[0]._element.append(drawing)
+    heading_rule = StyleRule.default_for_row(2)
+    body_rule = StyleRule.default_for_row(5)
+
+    apply_numbered_heading2_period_format(
+        paragraph, paragraph.text, heading_rule, body_rule
+    )
+
+    assert len(doc.paragraphs) == 1
+    assert paragraph.text == "（一）会议安排。 后续正文内容"
+    assert [run.text for run in paragraph.runs if run.text] == [
+        "（一）会议安排。",
+        " 后续正文内容",
+    ]
+    assert paragraph.runs[0]._r.rPr.rFonts.get(qn("w:eastAsia")) == heading_rule.font
+    assert paragraph.runs[0].font.size.pt == heading_rule.font_size_pt
+    assert paragraph.runs[0].font.bold == heading_rule.bold
+    assert paragraph.runs[1]._r.rPr.rFonts.get(qn("w:eastAsia")) == body_rule.font
+    assert paragraph.runs[1].font.size.pt == body_rule.font_size_pt
+    assert paragraph.runs[1].font.bold == body_rule.bold
+    assert len(paragraph._p.findall(".//" + qn("w:drawing"))) == 1
 
 
 def test_heading_period_handler_removes_only_standalone_heading_period() -> None:

@@ -24,7 +24,7 @@ def to_chinese_punctuation(text: str) -> str:
     """
     if not text:
         return text
-    text = re.sub(r"(?<=[\u4e00-\u9fff])[:：]\s*", "：", text)
+    text = re.sub(r"(?<=[\u4e00-\u9fff])[:：]", "：", text)
     text = re.sub(r"(?<=[\u4e00-\u9fff]),\s*", "，", text)
     text = re.sub(r"(?<=[\u4e00-\u9fff0-9]);\s*", "；", text)
     text = re.sub(r"(?<=[\u4e00-\u9fff])\?", "？", text)

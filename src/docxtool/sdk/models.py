@@ -399,13 +399,15 @@ class RecognitionBlock:
     canonical_fragment_text: Optional[str] = None
 
     def with_ids(self, plan_id: str) -> "RecognitionBlock":
-        physical_group_id = self.physical_group_id or stable_id(
-            "pg",
+        group_parts = (
             plan_id,
             self.physical_paragraph_index,
             self.physical_occurrence_index,
             self.physical_text_sha256,
         )
+        if self.physical_paragraph_index is None:
+            group_parts += (self.block_index,)
+        physical_group_id = self.physical_group_id or stable_id("pg", *group_parts)
         block_id = self.block_id or stable_id(
             "blk",
             plan_id,

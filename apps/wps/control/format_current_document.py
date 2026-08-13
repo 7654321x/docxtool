@@ -9,6 +9,8 @@ from typing import Any, Dict, Optional
 
 from docxtool.document.engine import export_doc
 from docxtool.document.importer import DocxImporter
+from docxtool.document.models import FormatScope
+from docxtool.sdk.binding import bind_physical_paragraphs
 from docxtool.document.style_config import load_rules_and_settings
 from docxtool.security import validate_docx_integrity
 
@@ -34,6 +36,8 @@ def format_current_document(
     log_dir: Path,
     format_config: Optional[dict] = None,
     request_id: str = "",
+    host_snapshot: Optional[dict] = None,
+    selected_host_paragraph_indexes: Optional[list[int]] = None,
 ) -> FormatResult:
     """Format one saved DOCX through DocxTool's authoritative production chain."""
     source = Path(source_path).expanduser().resolve()
@@ -65,6 +69,63 @@ def format_current_document(
             "开始调用 DocxTool 正式排版主链",
             {"operation_id_short": operation_id[:12], "request_id": request_id, "recognition_mode": "authoritative"},
         )
+        local_scope = selected_host_paragraph_indexes is not None
+        scope_resolver = None
+        if local_scope:
+            if not isinstance(host_snapshot, dict):
+                raise ValueError("WPS_FORMAT_SCOPE_SNAPSHOT_REQUIRED")
+            selected_host_indexes = frozenset(selected_host_paragraph_indexes)
+            if not selected_host_indexes or any(
+                isinstance(index, bool) or not isinstance(index, int) or index < 0
+                for index in selected_host_indexes
+            ):
+                raise ValueError("WPS_FORMAT_SCOPE_INVALID")
+            host_text = {
+                int(item["host_paragraph_index"]): str(item.get("raw_text", ""))
+                for item in host_snapshot.get("paragraphs", [])
+                if isinstance(item, dict)
+                and isinstance(item.get("host_paragraph_index"), int)
+                and item.get("story_type") == "main"
+                and item.get("is_in_table") is not True
+            }
+
+            def resolve_scope(source_paragraphs):
+                binding = bind_physical_paragraphs(source_paragraphs, host_snapshot)
+                source_indexes = {
+                    item.source_physical_paragraph_index
+                    for item in binding
+                    if item.host_paragraph_index in selected_host_indexes
+                    and item.status in {"matched_unique", "matched_review"}
+                }
+                mapped_host_indexes = {
+                    item.host_paragraph_index
+                    for item in binding
+                    if item.host_paragraph_index is not None
+                    and item.status in {"matched_unique", "matched_review"}
+                }
+                unresolved = {
+                    index
+                    for index in selected_host_indexes - mapped_host_indexes
+                    if host_text.get(index, "").strip()
+                }
+                if unresolved or not source_indexes:
+                    raise ValueError("WPS_FORMAT_SCOPE_BIND_FAILED")
+                log_event(
+                    "INFO",
+                    "format",
+                    "scope.bind.completed",
+                    "排版前页码范围已固定为源文档段落",
+                    {
+                        "operation_id_short": operation_id[:12],
+                        "request_id": request_id,
+                        "selected_count": len(source_indexes),
+                        "scope_mode": "pre_format_pages",
+                    },
+                )
+                return FormatScope("pre_format_pages", frozenset(source_indexes))
+
+            scope_resolver = resolve_scope
+
         stage_started = time.monotonic()
         log_event("INFO", "format", "config.load.start", "开始加载正式排版配置", {"operation_id_short": operation_id[:12], "request_id": request_id})
         try:
@@ -118,8 +179,27 @@ def format_current_document(
                 features=features,
                 strict_preservation=True,
                 recognition_mode="authoritative",
+                format_scope_resolver=scope_resolver,
             )
         except Exception as exc:
+            if str(exc) in {
+                "WPS_FORMAT_SCOPE_BIND_FAILED",
+                "WPS_FORMAT_SCOPE_INVALID",
+                "WPS_FORMAT_SCOPE_SNAPSHOT_REQUIRED",
+            }:
+                log_event(
+                    "ERROR",
+                    "format",
+                    "scope.bind.failed",
+                    "无法将指定页码绑定到源文档段落",
+                    {
+                        "operation_id_short": operation_id[:12],
+                        "request_id": request_id,
+                        "stage": "scope_bind",
+                        "error_code": str(exc),
+                    },
+                )
+                raise
             log_event("ERROR", "format", "import.failed", "DOCX 导入识别失败", {"operation_id_short": operation_id[:12], "request_id": request_id, "stage": "import", "error_type": type(exc).__name__, "error_code": "WPS_FORMAT_IMPORT_FAILED", "duration_ms": int((time.monotonic() - stage_started) * 1000)})
             raise RuntimeError("WPS_FORMAT_IMPORT_FAILED") from exc
         log_event("INFO", "format", "import.completed", "DOCX 导入识别完成", {"operation_id_short": operation_id[:12], "request_id": request_id, "stage": "import", "document_mode": document.doc_mode or "UNKNOWN", "paragraph_count": len(document.paragraphs), "duration_ms": int((time.monotonic() - stage_started) * 1000)})

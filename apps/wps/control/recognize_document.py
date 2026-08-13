@@ -14,7 +14,12 @@ import time
 from typing import Any, Dict, List, Mapping, Optional
 import uuid
 
-from docxtool.sdk import RecognitionPlan, bind_recognition_plan, recognize_docx
+from docxtool.sdk import (
+    DocxToolSdkError,
+    RecognitionPlan,
+    bind_recognition_plan,
+    recognize_docx,
+)
 
 from .logging_adapter import document_log_context, file_identity, log_event
 
@@ -23,6 +28,17 @@ from .logging_adapter import document_log_context, file_identity, log_event
 class RecognitionSession:
     plan: RecognitionPlan
     public_result: Dict[str, Any]
+
+
+def _sdk_error_log_fields(exc: Exception) -> Dict[str, Any]:
+    if not isinstance(exc, DocxToolSdkError):
+        return {}
+    details = exc.details
+    return {
+        "sdk_error_code": exc.code,
+        "sdk_error_path": str(details.get("path", "")),
+        "sdk_error_reason": str(details.get("reason", "")),
+    }
 
 
 def recognize_document(
@@ -160,6 +176,7 @@ def bind_preview(
                 "error_code": "WPS_BINDING_SDK_FAILED",
                 "error_type": type(exc).__name__,
                 "duration_ms": int((time.monotonic() - started_at) * 1000),
+                **_sdk_error_log_fields(exc),
             },
         )
         raise RuntimeError("WPS_BINDING_SDK_FAILED") from exc

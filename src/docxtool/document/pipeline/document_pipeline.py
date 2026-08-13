@@ -23,6 +23,8 @@ def run_document_pipeline(
     document_factory: Any,
     import_error_type: type[Exception],
     logger: Any,
+    format_scope: Any = None,
+    format_scope_resolver: Any = None,
 ) -> Any:
     """Run the existing importer sequence through injected compatibility hooks."""
 
@@ -51,17 +53,35 @@ def run_document_pipeline(
         import_error_type=import_error_type,
         cleanup_warning=logger.warning,
     )
+    if format_scope_resolver is not None:
+        if format_scope is not None:
+            raise ValueError("format_scope 与 format_scope_resolver 不能同时使用")
+        format_scope = format_scope_resolver(
+            tuple((index, paragraph.text) for index, paragraph in enumerate(doc.paragraphs))
+        )
     data = compatibility.DocumentData(
         filepath=original_filepath,
         strict_preservation=strict_preservation,
         processing_strategy=processing_strategy,
         recognition_mode=recognition_mode,
+        format_scope=format_scope,
     )
-    source_visible_texts = [paragraph.text for paragraph in doc.paragraphs if paragraph.text]
+    source_visible_texts = [
+        paragraph.text
+        for index, paragraph in enumerate(doc.paragraphs)
+        if paragraph.text
+        and (
+            format_scope is None
+            or index in format_scope.source_physical_paragraph_indexes
+        )
+    ]
 
-    from docxtool.document.analysis.letterhead import detect_letterhead
+    from docxtool.document.analysis.letterhead import (
+        detect_letterhead,
+        with_letterhead_fields,
+    )
 
-    data.letterhead_detection = detect_letterhead(doc)
+    data.letterhead_detection = with_letterhead_fields(doc, detect_letterhead(doc))
     protected_letterhead_indexes = set(data.letterhead_detection.protected_body_indexes)
     raw_blocks = compatibility._read_body_blocks(
         doc,
@@ -70,6 +90,11 @@ def run_document_pipeline(
         protected_letterhead_indexes=protected_letterhead_indexes,
         extract_features_func=compatibility.extract_features,
     )
+    from docxtool.document.analysis.layout_policy import (
+        assign_pre_normalization_layout_hints,
+    )
+
+    assign_pre_normalization_layout_hints(raw_blocks)
     flat_lines = compatibility._build_logical_lines(
         raw_blocks,
         strict_preservation=strict_preservation,
@@ -202,7 +227,6 @@ def run_document_pipeline(
             importer._reorder_attachment_note_before_signature
         ),
         assign_numbering_func=importer._assign_numbering,
-        merge_siblings_func=importer._merge_siblings,
         record_applied_normalization_changes_func=(
             importer._record_applied_normalization_changes
         ),
@@ -210,6 +234,16 @@ def run_document_pipeline(
         strip_auto_numbering_func=importer._strip_auto_numbering,
         sync_recognition_consistency_func=compatibility._sync_recognition_consistency,
     )
+    from docxtool.document.analysis.document_structure import analyze_document_structure
+    from docxtool.document.analysis.layout_policy import (
+        assign_layout_policies,
+        validate_layout_preservation,
+    )
+
+    data.recognition_structure = analyze_document_structure(data)
+    assign_layout_policies(data, data.recognition_structure)
+    validate_layout_preservation(data)
+    data.recognition_diagnostics["structure_tree"] = "built"
     logger.info(
         "[导入] file_sha256=%s paragraphs=%s tables=%s strategy=%s recognition=%s",
         hashlib.sha256(str(original_filepath).encode("utf-8")).hexdigest()[:12],

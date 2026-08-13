@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from docxtool.document.engine.letterhead import LetterheadResult
+
 
 def _sync_from_core(module) -> None:
     for name, value in vars(module).items():
@@ -36,6 +38,7 @@ def finalize_export(
     section_part_copier = context.section_part_copier
     page_rule = context.page_rule
     inline_heading_body_pairs = context.inline_heading_body_pairs
+    local_scope = getattr(doc_data, "format_scope", None) is not None
 
     # 后处理：上标统一
     for para in doc.paragraphs:
@@ -51,7 +54,8 @@ def finalize_export(
 
     # 版头只负责首页正文流，不得覆盖整篇文档的页面设置。
     page_settings = settings
-    apply_page_settings(doc, page_settings, doc_data.doc_mode)
+    if not local_scope:
+        apply_page_settings(doc, page_settings, doc_data.doc_mode)
     _preserve_even_and_odd_headers_setting(doc, doc_data)
 
     # Structural-preservation mode may split a previously fused leading
@@ -71,13 +75,18 @@ def finalize_export(
             letterhead_detection.status,
             (),
             letterhead_detection.details,
+            letterhead_detection.fields,
         )
-    letterhead_result = apply_letterhead(
-        doc,
-        letterhead_options,
-        detection=apply_detection,
-        rules=rules,
-        settings=page_settings,
+    letterhead_result = (
+        LetterheadResult("preserved", apply_detection.status)
+        if local_scope
+        else apply_letterhead(
+            doc,
+            letterhead_options,
+            detection=apply_detection,
+            rules=rules,
+            settings=page_settings,
+        )
     )
     # 版头在全局西文字体后处理之后生成，因此需要补做同一轮扫描。
     for element in letterhead_result.protected_elements:
@@ -94,7 +103,7 @@ def finalize_export(
             sectPr,
             section_relationship_parts,
             section_part_copier,
-            page_settings,
+            None if local_scope else page_settings,
             doc_data.doc_mode,
         )
 
@@ -103,13 +112,17 @@ def finalize_export(
         getattr(doc_data, "body_sectPr", None),
         section_relationship_parts,
         section_part_copier,
-        page_settings,
+        None if local_scope else page_settings,
         doc_data.doc_mode,
     )
 
-    stats["signature_blocks_adjusted"] = apply_signature_block(doc, signature_block_options)
+    stats["signature_blocks_adjusted"] = (
+        0 if local_scope else apply_signature_block(doc, signature_block_options)
+    )
 
-    if page_number_options is not None:
+    if local_scope:
+        pass
+    elif page_number_options is not None:
         if _feature_enabled(page_number_options, True):
             page_options = dict(_feature_options(page_number_options))
             page_options.setdefault("font_name", page_rule.font)
@@ -134,7 +147,7 @@ def finalize_export(
 
     if _feature_enabled(table_format_options, False):
         logger.info("[表格] 当前阶段仅原样复制，已忽略表格格式化配置")
-    if _feature_enabled(cleanup_options, False):
+    if not local_scope and _feature_enabled(cleanup_options, False):
         cleanup_styles(doc, _feature_options(cleanup_options), protected_paragraph_elements)
 
     # 页面行数诊断

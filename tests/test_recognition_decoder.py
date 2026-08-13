@@ -63,7 +63,7 @@ def test_dispatch_number_vetoes_title_continuation():
     assert data.paragraphs[1].meta["recognition_provider"].startswith("structural:")
 
 
-def test_numbered_meeting_label_is_metadata_not_heading():
+def test_numbered_meeting_label_is_heading_with_inline_body():
     data = _document(
         _paragraph("2026年第一次党委会会议纪要", "title", 0),
         _paragraph("（一）缺席：无", "heading2", 1),
@@ -72,7 +72,53 @@ def test_numbered_meeting_label_is_metadata_not_heading():
     apply_recognition(data)
 
     assert data.doc_mode == "MEETING_MINUTES"
-    assert data.paragraphs[1].type_id == "meeting_meta"
+    assert data.paragraphs[1].type_id == "heading2"
+    assert data.paragraphs[1].meta["numbered_heading2_colon_inline_body"] is True
+
+
+@pytest.mark.parametrize(
+    "text",
+    (
+        "（一）出席人员：正文内容",
+        "（二）工作安排：具体内容",
+        "（三）会议时间：11:00",
+        "（四）比例说明：1:2，具体要求如下",
+        "（五）英文冒号:正文内容",
+    ),
+)
+def test_numbered_heading2_colon_inline_body_is_shape_based(text):
+    paragraph = _paragraph(text, "body", 0)
+    data = _document(paragraph)
+
+    apply_recognition(data)
+
+    assert paragraph.type_id == "heading2"
+    assert paragraph.meta["numbered_heading2_colon_inline_body"] is True
+    assert "numbered-heading2-colon-inline-body" in paragraph.meta[
+        "recognition_evidence"
+    ]
+
+
+def test_numbered_heading2_colon_requires_nonempty_body():
+    paragraph = _paragraph("（一）标题：", "body", 0)
+    data = _document(paragraph)
+
+    apply_recognition(data)
+
+    assert paragraph.meta.get("numbered_heading2_colon_inline_body") is not True
+
+
+def test_unnumbered_meeting_metadata_keeps_existing_type():
+    paragraph = _paragraph("出席：甲、乙", "body", 1)
+    data = _document(
+        _paragraph("2026年第一次党委会会议纪要", "title", 0),
+        paragraph,
+    )
+
+    apply_recognition(data)
+
+    assert paragraph.type_id == "meeting_meta"
+    assert paragraph.meta.get("numbered_heading2_colon_inline_body") is not True
 
 
 def test_embedded_document_title_after_signature_note():
@@ -166,7 +212,7 @@ def test_diagnostics_json_is_safe_and_configurable():
 
     assert "标题" not in serialized
     assert '"beam_width": 12' in serialized
-    assert data.recognition_diagnostics["structure_tree"] in {"built", "unavailable"}
+    assert "structure_tree" not in data.recognition_diagnostics
 
 
 def test_dispatch_has_multiple_candidates_before_hard_veto():
@@ -856,6 +902,32 @@ def test_numbered_heading_family_confirms_parallel_body_headings():
     assert "parallel-heading-family" in data.recognition_diagnostics["paragraphs"][2]["heading_context_evidence"]
 
 
+def test_uniform_legacy_heading_siblings_are_finalized_by_recognition() -> None:
+    data = _document(
+        _paragraph("一、父级标题", "heading1", 0),
+        _paragraph("第一项", "heading3", 1),
+        _paragraph("第二项", "heading3", 2),
+        _paragraph("正文内容完整结束。", "body", 3),
+    )
+
+    apply_recognition(data)
+
+    assert [paragraph.type_id for paragraph in data.paragraphs[:3]] == [
+        "heading1", "heading2", "heading2",
+    ]
+    diagnostics = data.recognition_diagnostics["paragraphs"]
+    assert [item["recognized_type"] for item in diagnostics[:3]] == [
+        "heading1", "heading2", "heading2",
+    ]
+    assert [item["final_type"] for item in diagnostics[:3]] == [
+        "heading1", "heading2", "heading2",
+    ]
+    assert all(
+        "uniform-heading-sibling-family" in item["evidence_summary"]
+        for item in diagnostics[1:3]
+    )
+
+
 def test_single_numbered_heading_is_applied_but_marked_for_review():
     data = _document(
         _paragraph("工作情况", "title", 0, alignment="CENTER"),
@@ -895,13 +967,13 @@ def test_wrong_legacy_and_docxtool_style_do_not_override_dispatch():
     assert paragraph.meta["legacy_type_id"]["value"] == "title"
 
 
-def test_wrong_heading_legacy_does_not_override_meeting_metadata():
+def test_wrong_heading_legacy_preserves_numbered_heading2_colon_structure():
     paragraph = _paragraph("（一）缺席：李四", "heading2", 1, style_name="DCT-Heading2", legacy_type_id="heading2")
     data = _document(_paragraph("党委会会议纪要", "title", 0), paragraph)
 
     apply_recognition(data)
 
-    assert paragraph.type_id == "meeting_meta"
+    assert paragraph.type_id == "heading2"
 
 
 def test_every_paragraph_type_has_explicit_render_mapping():
@@ -1199,7 +1271,7 @@ def test_key_value_and_source_variants_do_not_promote_numbering():
         if text.startswith("来源"):
             assert paragraph.type_id == "note"
         else:
-            assert paragraph.type_id == "meeting_meta"
+            assert paragraph.type_id == "heading2"
 
 
 def test_review_flags_and_safe_summary_do_not_change_final_types():

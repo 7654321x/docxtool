@@ -5,8 +5,8 @@ from __future__ import annotations
 import ctypes
 import sys
 
-from PySide2.QtCore import QObject, Qt, QThread, Signal
-from PySide2.QtGui import QIcon, QPixmap
+from PySide2.QtCore import QObject, QRectF, Qt, QThread, Signal
+from PySide2.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 from PySide2.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -17,6 +17,7 @@ from PySide2.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
@@ -36,35 +37,38 @@ from . import windows_startup
 
 LOGIN_STYLE = """
 QWidget { font-family: "Microsoft YaHei UI", "Microsoft YaHei"; }
-QDialog#LoginDialog { background: #EEF3F1; }
-QFrame#WindowTitleBar { background: #E7EFEC; border: none; }
-QLabel#WindowTitleIcon { background: transparent; border: none; }
-QLabel#WindowTitleLabel { color: #3E4945; font-size: 13px; font-weight: 600; }
-QPushButton#WindowControlButton, QPushButton#WindowCloseButton { min-width: 44px; max-width: 44px; min-height: 42px; max-height: 42px; border: none; border-radius: 0; background: transparent; color: #59645F; font-size: 18px; font-weight: 400; padding: 0; }
-QPushButton#WindowControlButton:hover { background: #D8E2DE; color: #202624; }
-QPushButton#WindowCloseButton:hover { background: #D9655B; color: white; }
-QFrame#BrandHeader { background: #E7EFEC; border: none; }
+QDialog#LoginDialog { background: #EEF4F1; }
+QFrame#BrandHeader { background: #E8F0ED; border: none; }
 QLabel#Logo { background: transparent; border: none; }
-QLabel#BrandName { color: #202624; font-size: 24px; font-weight: 700; }
-QFrame#LoginCard { background: #FFFFFF; border: none; border-radius: 16px; }
-QLabel#PageTitle { color: #202624; font-size: 25px; font-weight: 700; }
-QLabel#PageHint { color: #7A8581; font-size: 13px; }
-QLabel#FieldLabel { color: #4F5A56; font-size: 13px; font-weight: 600; }
-QLineEdit { min-height: 42px; border: 1px solid #DCE3E0; border-radius: 8px; padding: 0 14px; background: #FFFFFF; color: #202624; font-size: 14px; selection-background-color: #71827C; }
-QLineEdit:hover { border-color: #C4CFCA; }
-QLineEdit:focus { border-color: #778A83; }
-QLineEdit:disabled { background: #F4F6F5; color: #8C9692; }
-QCheckBox { color: #59645F; font-size: 13px; spacing: 7px; }
-QCheckBox::indicator { width: 17px; height: 17px; }
-QLabel#StatusLabel { color: #7A8581; font-size: 12px; }
-QLabel#StatusLabel[error="true"] { color: #C63C32; }
-QPushButton#PrimaryButton { min-height: 46px; border: none; border-radius: 8px; background: #2D3431; color: white; font-size: 15px; font-weight: 600; }
+QLabel#BrandName { color: #252B29; font-size: 28px; font-weight: 700; }
+QScrollArea#AuthScroll { background: transparent; border: none; }
+QScrollArea#AuthScroll > QWidget > QWidget { background: transparent; }
+QScrollBar:vertical { width: 8px; margin: 4px 1px; background: transparent; }
+QScrollBar::handle:vertical { min-height: 28px; border-radius: 3px; background: #C7D2CE; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+QFrame#AuthCard { background: #FFFFFF; border: 1px solid #E8ECEA; border-radius: 17px; }
+QLabel#PageTitle { color: #252B29; font-size: 28px; font-weight: 700; }
+QLabel#PageSubtitle { color: #808885; font-size: 14px; }
+QLabel#FieldLabel { color: #3C4441; font-size: 14px; font-weight: 600; }
+QLineEdit#AuthInput { min-height: 46px; max-height: 46px; border: 1px solid #D8E0DD; border-radius: 8px; padding: 0 14px; background: #FFFFFF; color: #252B29; font-size: 15px; selection-background-color: #789389; }
+QLineEdit#AuthInput:hover { border-color: #BDC9C5; }
+QLineEdit#AuthInput:focus { border-color: #789389; }
+QLineEdit#AuthInput:disabled { background: #F4F6F5; color: #8C9692; }
+QCheckBox#PreferenceCheck { color: #525A57; font-size: 14px; spacing: 8px; }
+QCheckBox#PreferenceCheck::indicator { width: 18px; height: 18px; border: 1px solid #BFC9C5; border-radius: 4px; background: #FFFFFF; }
+QCheckBox#PreferenceCheck::indicator:hover { border-color: #789389; }
+QCheckBox#PreferenceCheck::indicator:checked { border-color: #226B5B; background: #226B5B; image: url(%CHECK_ICON%); }
+QCheckBox#PreferenceCheck::indicator:disabled { border-color: #D7DDDA; background: #F0F2F1; }
+QLabel#ErrorLabel { min-height: 20px; max-height: 36px; color: #7A8581; font-size: 13px; }
+QLabel#ErrorLabel[error="true"] { color: #B65353; }
+QPushButton#PrimaryButton { min-height: 48px; max-height: 48px; border: none; border-radius: 8px; background: #2D3331; color: #FFFFFF; font-size: 16px; font-weight: 600; }
 QPushButton#PrimaryButton:hover { background: #39413E; }
-QPushButton#PrimaryButton:pressed { background: #202624; }
-QPushButton#PrimaryButton:disabled { background: #9CA4A1; color: #E9EBEA; }
-QPushButton#SwitchButton { border: none; background: transparent; color: #32786C; font-size: 13px; font-weight: 600; padding: 4px; }
-QPushButton#SwitchButton:hover { color: #255F56; }
-QLabel#SwitchPrompt { color: #8A9490; font-size: 12px; }
+QPushButton#PrimaryButton:pressed { background: #242927; }
+QPushButton#PrimaryButton:disabled { background: #ADB5B2; color: #F4F5F4; }
+QFrame#FooterSeparator { min-height: 1px; max-height: 1px; background: #EDF0EF; border: none; }
+QPushButton#FooterLink { border: none; background: transparent; color: #26715F; font-size: 14px; font-weight: 600; padding: 4px; }
+QPushButton#FooterLink:hover { color: #1D5E50; text-decoration: underline; }
+QLabel#FooterPrompt { color: #8A918F; font-size: 14px; }
 """
 
 
@@ -172,68 +176,24 @@ class AuthenticationWorker(QObject):
             self.finished.emit()
 
 
-class WindowTitleBar(QFrame):
-    def __init__(self, window: QDialog, title: str, *, allow_minimize: bool) -> None:
-        super().__init__(window)
-        self._window = window
-        self._drag_offset = None
-        self.setObjectName("WindowTitleBar")
-        self.setFixedHeight(42)
+class BrandHeader(QFrame):
+    """Static Qt5 brand header with optional low-cost decorative arcs."""
 
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(14, 0, 0, 0)
-        layout.setSpacing(8)
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setObjectName("BrandHeader")
+        self.setFixedHeight(128)
 
-        self.icon_label = QLabel()
-        self.icon_label.setObjectName("WindowTitleIcon")
-        self.icon_label.setFixedSize(24, 25)
-        self.icon_label.setPixmap(_login_icon_pixmap(24))
-        self.icon_label.setAlignment(Qt.AlignCenter)
-        self.icon_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        layout.addWidget(self.icon_label)
-
-        self.title_label = QLabel(title)
-        self.title_label.setObjectName("WindowTitleLabel")
-        self.title_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        layout.addWidget(self.title_label)
-        layout.addStretch()
-
-        self.minimize_button = None
-        if allow_minimize:
-            self.minimize_button = QPushButton("−")
-            self.minimize_button.setObjectName("WindowControlButton")
-            self.minimize_button.setToolTip("最小化")
-            self.minimize_button.setAccessibleName("最小化窗口")
-            self.minimize_button.clicked.connect(window.showMinimized)
-            layout.addWidget(self.minimize_button)
-
-        self.close_button = QPushButton("×")
-        self.close_button.setObjectName("WindowCloseButton")
-        self.close_button.setToolTip("关闭")
-        self.close_button.setAccessibleName("关闭窗口")
-        self.close_button.clicked.connect(window.reject)
-        layout.addWidget(self.close_button)
-
-    def mousePressEvent(self, event) -> None:
-        if event.button() == Qt.LeftButton:
-            self._drag_offset = event.globalPos() - self._window.frameGeometry().topLeft()
-            event.accept()
-            return
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event) -> None:
-        if self._drag_offset is not None and event.buttons() & Qt.LeftButton:
-            self._window.move(event.globalPos() - self._drag_offset)
-            event.accept()
-            return
-        super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event) -> None:
-        if event.button() == Qt.LeftButton:
-            self._drag_offset = None
-            event.accept()
-            return
-        super().mouseReleaseEvent(event)
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setBrush(Qt.NoBrush)
+        for offset, alpha in ((0, 24), (18, 18), (36, 13)):
+            painter.setPen(QPen(QColor(90, 130, 115, alpha), 1.0))
+            arc = QRectF(self.width() * 0.57 + offset, 12 + offset / 3, 250, 150)
+            painter.drawArc(arc, 18 * 16, 150 * 16)
+        painter.end()
 
 
 class LoginDialog(QDialog):
@@ -264,12 +224,11 @@ class LoginDialog(QDialog):
         self.setObjectName("LoginDialog")
         self.setWindowTitle("DocxTool WPS")
         self.setWindowIcon(login_window_icon())
-        self.setWindowFlags(
-            Qt.Window | Qt.FramelessWindowHint | Qt.WindowMinimizeButtonHint
-        )
-        self.setMinimumWidth(480)
-        self.resize(500, 580)
-        self.setStyleSheet(LOGIN_STYLE)
+        self.setWindowFlags(Qt.Window | Qt.WindowMinimizeButtonHint | Qt.WindowCloseButtonHint)
+        self.setMinimumWidth(500)
+        self.setMaximumWidth(540)
+        self.resize(520, 650)
+        self.setStyleSheet(_login_style())
         self._build_ui()
         self.username_input.setText(initial_username)
         self.password_input.setText(initial_password)
@@ -289,63 +248,63 @@ class LoginDialog(QDialog):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        self.title_bar = WindowTitleBar(
-            self,
-            "DocxTool WPS",
-            allow_minimize=True,
-        )
-        root.addWidget(self.title_bar)
-
-        header = QFrame()
-        header.setObjectName("BrandHeader")
-        header.setFixedHeight(82)
+        header = BrandHeader()
         header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(42, 17, 42, 17)
+        header_layout.setContentsMargins(52, 32, 42, 28)
+        header_layout.setSpacing(0)
         logo = QLabel()
         logo.setObjectName("Logo")
         logo.setAlignment(Qt.AlignCenter)
-        logo.setFixedSize(48, 48)
-        logo.setPixmap(_login_icon_pixmap(48))
-        header_layout.addWidget(logo, 0, Qt.AlignTop)
+        logo.setFixedSize(52, 52)
+        logo.setPixmap(_login_icon_pixmap(52))
+        header_layout.addWidget(logo, 0, Qt.AlignVCenter)
         brand_name = QLabel("DocxTool")
         brand_name.setObjectName("BrandName")
-        header_layout.addSpacing(14)
+        header_layout.addSpacing(19)
         header_layout.addWidget(brand_name, 0, Qt.AlignVCenter)
         header_layout.addStretch()
         root.addWidget(header)
 
+        self.auth_scroll = QScrollArea()
+        self.auth_scroll.setObjectName("AuthScroll")
+        self.auth_scroll.setWidgetResizable(True)
+        self.auth_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.auth_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         outer = QWidget()
         outer_layout = QVBoxLayout(outer)
-        outer_layout.setContentsMargins(28, 0, 28, 14)
-        card = QFrame()
-        card.setObjectName("LoginCard")
-        card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(34, 18, 34, 14)
+        outer_layout.setContentsMargins(30, 0, 30, 20)
+        self.card = QFrame()
+        self.card.setObjectName("AuthCard")
+        card_layout = QVBoxLayout(self.card)
+        card_layout.setContentsMargins(34, 30, 34, 26)
         card_layout.setSpacing(0)
 
         self.title_label = QLabel()
         self.title_label.setObjectName("PageTitle")
         self.hint_label = QLabel()
-        self.hint_label.setObjectName("PageHint")
+        self.hint_label.setObjectName("PageSubtitle")
         card_layout.addWidget(self.title_label)
-        card_layout.addSpacing(5)
+        card_layout.addSpacing(7)
         card_layout.addWidget(self.hint_label)
-        card_layout.addSpacing(12)
+        card_layout.addSpacing(25)
 
-        card_layout.addWidget(self._field_label("账号"))
-        card_layout.addSpacing(6)
-        self.username_input = QLineEdit()
-        self.username_input.setPlaceholderText("请输入账号")
-        self.username_input.setAccessibleName("账号")
-        card_layout.addWidget(self.username_input)
-        card_layout.addSpacing(8)
+        self.username_group, self.username_input = self._field_group(
+            "账号",
+            "请输入账号",
+        )
+        self.username_icon_action = self.username_input.addAction(
+            QIcon(str(_resource_path("images/user.svg"))),
+            QLineEdit.TrailingPosition,
+        )
+        self.username_icon_action.setText("账号")
+        card_layout.addWidget(self.username_group)
+        card_layout.addSpacing(17)
 
-        card_layout.addWidget(self._field_label("密码"))
-        card_layout.addSpacing(6)
-        self.password_input = QLineEdit()
-        self.password_input.setPlaceholderText("请输入密码")
-        self.password_input.setEchoMode(QLineEdit.Password)
-        self.password_input.setAccessibleName("密码")
+        self.password_group, self.password_input = self._field_group(
+            "密码",
+            "请输入密码",
+            password=True,
+        )
         self.password_input.returnPressed.connect(self._submit)
         self.visibility_action = self.password_input.addAction(
             QIcon(str(_resource_path("images/eye.svg"))),
@@ -355,64 +314,83 @@ class LoginDialog(QDialog):
         self.visibility_action.setToolTip("显示密码")
         self.visibility_action.setText("显示密码")
         self.visibility_action.triggered.connect(self._toggle_password)
-        card_layout.addWidget(self.password_input)
+        card_layout.addWidget(self.password_group)
 
-        self.confirmation_label = self._field_label("确认密码")
-        self.confirmation_input = QLineEdit()
-        self.confirmation_input.setPlaceholderText("请再次输入密码")
-        self.confirmation_input.setEchoMode(QLineEdit.Password)
-        self.confirmation_input.setAccessibleName("确认密码")
+        self.confirmation_group, self.confirmation_input = self._field_group(
+            "确认密码",
+            "请再次输入密码",
+            password=True,
+        )
         self.confirmation_input.returnPressed.connect(self._submit)
-        card_layout.addSpacing(8)
-        card_layout.addWidget(self.confirmation_label)
-        card_layout.addSpacing(6)
-        card_layout.addWidget(self.confirmation_input)
+        self.confirmation_visibility_action = self.confirmation_input.addAction(
+            QIcon(str(_resource_path("images/eye.svg"))),
+            QLineEdit.TrailingPosition,
+        )
+        self.confirmation_visibility_action.setCheckable(True)
+        self.confirmation_visibility_action.setToolTip("显示密码")
+        self.confirmation_visibility_action.setText("显示密码")
+        self.confirmation_visibility_action.triggered.connect(self._toggle_password)
+        self.confirmation_spacer = QWidget()
+        self.confirmation_spacer.setFixedHeight(17)
+        card_layout.addWidget(self.confirmation_spacer)
+        card_layout.addWidget(self.confirmation_group)
 
         preference_row = QHBoxLayout()
-        preference_row.setContentsMargins(0, 10, 0, 0)
+        preference_row.setContentsMargins(0, 20, 0, 0)
+        preference_row.setSpacing(0)
         self.remember_checkbox = QCheckBox("记住密码")
         self.auto_checkbox = QCheckBox("自动登录")
+        self.remember_checkbox.setObjectName("PreferenceCheck")
+        self.auto_checkbox.setObjectName("PreferenceCheck")
         self.remember_checkbox.toggled.connect(self._remember_changed)
         self.auto_checkbox.toggled.connect(self._auto_changed)
         preference_row.addWidget(self.remember_checkbox)
-        preference_row.addSpacing(18)
+        preference_row.addSpacing(28)
         preference_row.addWidget(self.auto_checkbox)
         preference_row.addStretch()
         card_layout.addLayout(preference_row)
 
         self.startup_checkbox = QCheckBox("随 Windows 登录启动 DocxTool WPS")
-        card_layout.addSpacing(8)
+        self.startup_checkbox.setObjectName("PreferenceCheck")
+        card_layout.addSpacing(11)
         card_layout.addWidget(self.startup_checkbox)
 
         self.status_label = QLabel()
-        self.status_label.setObjectName("StatusLabel")
+        self.status_label.setObjectName("ErrorLabel")
         self.status_label.setWordWrap(True)
-        self.status_label.setMinimumHeight(28)
-        card_layout.addSpacing(5)
+        card_layout.addSpacing(13)
         card_layout.addWidget(self.status_label)
 
         self.primary_button = QPushButton()
         self.primary_button.setObjectName("PrimaryButton")
         self.primary_button.setDefault(True)
         self.primary_button.clicked.connect(self._submit)
-        card_layout.addSpacing(5)
+        card_layout.addSpacing(7)
         card_layout.addWidget(self.primary_button)
 
+        footer_separator = QFrame()
+        footer_separator.setObjectName("FooterSeparator")
+        card_layout.addSpacing(23)
+        card_layout.addWidget(footer_separator)
+
         switch_row = QHBoxLayout()
-        switch_row.setContentsMargins(0, 8, 0, 0)
+        switch_row.setContentsMargins(0, 15, 0, 0)
+        switch_row.setSpacing(4)
         switch_row.addStretch()
         self.switch_prompt = QLabel()
-        self.switch_prompt.setObjectName("SwitchPrompt")
+        self.switch_prompt.setObjectName("FooterPrompt")
         self.switch_button = QPushButton()
-        self.switch_button.setObjectName("SwitchButton")
+        self.switch_button.setObjectName("FooterLink")
         self.switch_button.clicked.connect(self._switch_mode)
         switch_row.addWidget(self.switch_prompt)
         switch_row.addWidget(self.switch_button)
         switch_row.addStretch()
         card_layout.addLayout(switch_row)
 
-        outer_layout.addWidget(card)
-        root.addWidget(outer)
+        outer_layout.addWidget(self.card)
+        outer_layout.addStretch()
+        self.auth_scroll.setWidget(outer)
+        root.addWidget(self.auth_scroll)
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
 
         self.setTabOrder(self.username_input, self.password_input)
@@ -421,24 +399,56 @@ class LoginDialog(QDialog):
         self.setTabOrder(self.auto_checkbox, self.primary_button)
 
     @staticmethod
-    def _field_label(text: str) -> QLabel:
+    def _field_group(
+        text: str,
+        placeholder: str,
+        *,
+        password: bool = False,
+    ) -> tuple:
+        group = QWidget()
+        layout = QVBoxLayout(group)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(7)
         label = QLabel(text)
         label.setObjectName("FieldLabel")
-        return label
+        field = QLineEdit()
+        field.setObjectName("AuthInput")
+        field.setPlaceholderText(placeholder)
+        field.setAccessibleName(text)
+        if password:
+            field.setEchoMode(QLineEdit.Password)
+        layout.addWidget(label)
+        layout.addWidget(field)
+        return group, field
 
     def _update_mode(self) -> None:
         registering = self._mode == "register"
-        self.title_label.setText("创建账号" if registering else "账号登录")
+        self.title_label.setText("注册账号" if registering else "账号登录")
         self.hint_label.setText(
-            "创建账号后将直接进入你的工作台。"
+            "创建你的账号，开始使用 DocxTool WPS。"
             if registering
             else "欢迎回来，继续进入你的工作台。"
         )
-        self.confirmation_label.setVisible(registering)
-        self.confirmation_input.setVisible(registering)
+        self.confirmation_spacer.setVisible(registering)
+        self.confirmation_group.setVisible(registering)
         self.primary_button.setText("注册并登录" if registering else "登录")
         self.switch_prompt.setText("已有账号？" if registering else "还没有账号？")
-        self.switch_button.setText("返回登录" if registering else "注册账号")
+        self.switch_button.setText("去登录" if registering else "注册账号")
+        self._resize_for_mode()
+
+    def _resize_for_mode(self) -> None:
+        self.card.layout().activate()
+        self.layout().activate()
+        application = QApplication.instance()
+        available_height = 800
+        if application is not None and application.primaryScreen() is not None:
+            available_height = application.primaryScreen().availableGeometry().height()
+        preferred = 780 if self._mode == "register" else 690
+        target_height = min(preferred, max(560, available_height - 40))
+        center = self.frameGeometry().center()
+        self.resize(520, target_height)
+        if self.isVisible():
+            self.move(center.x() - self.width() // 2, center.y() - self.height() // 2)
 
     def _switch_mode(self) -> None:
         if self._submitting:
@@ -452,18 +462,22 @@ class LoginDialog(QDialog):
             else ""
         )
         self._update_mode()
-        self.adjustSize()
 
     def _toggle_password(self, visible: bool) -> None:
         mode = QLineEdit.Normal if visible else QLineEdit.Password
         self.password_input.setEchoMode(mode)
         self.confirmation_input.setEchoMode(mode)
-        self.visibility_action.setIcon(
-            QIcon(str(_resource_path("images/eye-off.svg" if visible else "images/eye.svg")))
+        icon = QIcon(
+            str(_resource_path("images/eye-off.svg" if visible else "images/eye.svg"))
         )
         tooltip = "隐藏密码" if visible else "显示密码"
-        self.visibility_action.setToolTip(tooltip)
-        self.visibility_action.setText(tooltip)
+        for action in (self.visibility_action, self.confirmation_visibility_action):
+            action.blockSignals(True)
+            action.setChecked(visible)
+            action.setIcon(icon)
+            action.setToolTip(tooltip)
+            action.setText(tooltip)
+            action.blockSignals(False)
         log_event(
             "INFO",
             "login",
@@ -482,7 +496,6 @@ class LoginDialog(QDialog):
 
     def _set_status(self, message: str, *, error: bool = False) -> None:
         self.status_label.setText(message)
-        self.status_label.setVisible(bool(message))
         self.status_label.setProperty("error", error)
         self.status_label.style().unpolish(self.status_label)
         self.status_label.style().polish(self.status_label)
@@ -500,6 +513,7 @@ class LoginDialog(QDialog):
         ):
             widget.setEnabled(not busy)
         self.visibility_action.setEnabled(not busy)
+        self.confirmation_visibility_action.setEnabled(not busy)
         self.primary_button.setEnabled(not busy)
         if busy:
             self.primary_button.setText("注册中…" if self._mode == "register" else "正在登录…")
@@ -636,37 +650,35 @@ class PreferencesDialog(QDialog):
         self.setWindowTitle("DocxTool WPS 登录设置")
         self.setWindowIcon(login_window_icon())
         self.setObjectName("LoginDialog")
-        self.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint)
-        self.setMinimumWidth(430)
-        self.setStyleSheet(LOGIN_STYLE)
+        self.setWindowFlags(Qt.Dialog | Qt.WindowTitleHint | Qt.WindowCloseButtonHint)
+        self.setMinimumWidth(450)
+        self.setStyleSheet(_login_style())
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
+        root.setContentsMargins(28, 26, 28, 28)
         root.setSpacing(0)
-        self.title_bar = WindowTitleBar(
-            self,
-            "DocxTool WPS 登录设置",
-            allow_minimize=False,
-        )
-        root.addWidget(self.title_bar)
-        content = QWidget()
-        layout = QVBoxLayout(content)
-        layout.setContentsMargins(32, 24, 32, 28)
-        root.addWidget(content)
+        card = QFrame()
+        card.setObjectName("AuthCard")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(30, 28, 30, 28)
+        root.addWidget(card)
         title = QLabel("登录与启动设置")
         title.setObjectName("PageTitle")
         layout.addWidget(title)
-        layout.addSpacing(6)
+        layout.addSpacing(7)
         hint = QLabel(f"当前账号：{account['username']}")
-        hint.setObjectName("PageHint")
+        hint.setObjectName("PageSubtitle")
         layout.addWidget(hint)
         layout.addSpacing(20)
         self.remember_checkbox = QCheckBox("记住密码")
+        self.remember_checkbox.setObjectName("PreferenceCheck")
         self.remember_checkbox.setChecked(bool(account.get("remember_password")))
         if not account.get("password"):
             self.remember_checkbox.setEnabled(False)
         self.auto_checkbox = QCheckBox("自动登录")
+        self.auto_checkbox.setObjectName("PreferenceCheck")
         self.auto_checkbox.setChecked(bool(account.get("auto_login")))
         self.startup_checkbox = QCheckBox("随 Windows 登录启动 DocxTool WPS")
+        self.startup_checkbox.setObjectName("PreferenceCheck")
         self.startup_checkbox.setChecked(startup_enabled)
         self.remember_checkbox.toggled.connect(self._remember_changed)
         self.auto_checkbox.toggled.connect(self._auto_changed)
@@ -681,7 +693,7 @@ class PreferencesDialog(QDialog):
             if account.get("password")
             else "如需重新记住密码，请先退出当前账号并重新登录。"
         )
-        self.status_label.setObjectName("StatusLabel")
+        self.status_label.setObjectName("ErrorLabel")
         self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
         layout.addSpacing(12)
@@ -732,6 +744,13 @@ def _resource_path(relative: str):
     return root / relative
 
 
+def _login_style() -> str:
+    return LOGIN_STYLE.replace(
+        "%CHECK_ICON%",
+        str(_resource_path("images/check.svg")).replace("\\", "/"),
+    )
+
+
 def login_window_icon() -> QIcon:
     return QIcon(str(_resource_path("images/login-window.png")))
 
@@ -740,7 +759,11 @@ def _login_icon_pixmap(size: int) -> QPixmap:
     pixmap = QPixmap(str(_resource_path("images/login-window.png")))
     if pixmap.isNull():
         raise RuntimeError("WPS_LOGIN_WINDOW_ICON_INVALID")
-    return pixmap.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+    # The shared icon includes a light safe area for native window chrome.
+    # Crop it only for the large in-page brand mark; system icons keep the
+    # complete asset through ``login_window_icon()``.
+    cropped = pixmap.copy(10, 12, 48, 48)
+    return cropped.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
 
 
 def configure_windows_application_identity() -> None:
@@ -792,8 +815,8 @@ def show_login_register_window(
         initial_message=initial_message,
     )
     screen = application.primaryScreen().availableGeometry()
-    target_height = min(dialog.sizeHint().height(), max(560, screen.height() - 32))
-    dialog.resize(500, target_height)
+    target_height = min(690, max(560, screen.height() - 40))
+    dialog.resize(520, target_height)
     dialog.move(
         screen.left() + max(0, (screen.width() - dialog.width()) // 2),
         screen.top() + max(0, (screen.height() - dialog.height()) // 2),

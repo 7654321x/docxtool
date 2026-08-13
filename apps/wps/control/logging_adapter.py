@@ -71,6 +71,7 @@ SAFE_WPS_LOG_FIELDS = frozenset(
         "root_scroll_top", "body_scroll_top", "content_scroll_top", "scheduled_delay_ms",
         "screen_avail_height", "screen_avail_left", "screen_avail_top", "screen_avail_width",
         "screen_height", "screen_width",
+        "sdk_error_code", "sdk_error_path", "sdk_error_reason",
         "start_utf16", "state", "state_revision", "status", "table_paragraph_count", "temporary_state",
         "state_wait_in_flight", "state_wait_stopped", "stored_pane_id_present", "timer_drift_ms", "token_present",
         "top_element_id", "top_element_tag", "total_duration_ms", "trigger", "type_id",
@@ -85,6 +86,8 @@ SAFE_WPS_LOG_FIELDS = frozenset(
         "preview_confirmed_count", "preview_eligible_count", "preview_review_count",
         "conversion_state", "inline_shape_count", "mismatch_count", "section_count",
         "shape_count", "source_format", "target_format", "target_state", "wpsjs_version",
+        "document_number_length", "mark_length", "replaceable", "separator_style",
+        "signer_present",
     }
 )
 

@@ -751,6 +751,8 @@ class DocxImporter:
         *,
         strict_preservation: bool = True,
         recognition_mode: str = "authoritative",
+        format_scope=None,
+        format_scope_resolver=None,
     ) -> DocumentData:
         """加载 .docx，识别段落类型，返回 DocumentData。"""
         try:
@@ -769,6 +771,8 @@ class DocxImporter:
             document_factory=DocxDocument,
             import_error_type=ImportError,
             logger=logger,
+            format_scope=format_scope,
+            format_scope_resolver=format_scope_resolver,
         )
 
     def _record_strict_normalization_suggestions(self, data: DocumentData) -> None:

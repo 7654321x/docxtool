@@ -256,6 +256,10 @@ def apply_recognition(
                     "final_type": final_type_id,
                 }
             )
+            if features.numbered_heading2_colon_inline_body and final_type_id == "heading2":
+                meta["numbered_heading2_colon_inline_body"] = True
+            if features.numbered_heading2_period_inline_body and final_type_id == "heading2":
+                meta["numbered_heading2_period_inline_body"] = True
             if mode != DocumentMode.REPORT:
                 meta.pop("report_first_sentence_bold", None)
             paragraph.meta = meta
@@ -403,14 +407,4 @@ def apply_recognition(
             ),
         }
     )
-    try:
-        from docxtool.document.analysis.document_structure import analyze_document_structure
-
-        setattr(data, "recognition_structure", analyze_document_structure(data))
-        report["structure_tree"] = "built"
-    except (ValueError, TypeError, AttributeError) as exc:
-        # Recognition must remain usable for malformed source packages; the
-        # validator records the failure instead of hiding it in a warning log.
-        report["structure_tree"] = "unavailable"
-        report["structure_error"] = type(exc).__name__
     setattr(data, "recognition_diagnostics", report)
