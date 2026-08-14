@@ -179,19 +179,42 @@ def test_dialog_prefills_account_password_and_preferences(qt_app):
         initial_password="Pass01",
         device_key="device-key-001",
         remember_password=True,
-        auto_login=True,
+        auto_login=False,
     )
 
     assert dialog.username_input.text() == "User01"
     assert dialog.password_input.text() == "Pass01"
     assert dialog.remember_checkbox.isChecked() is True
-    assert dialog.auto_checkbox.isChecked() is True
+    assert dialog.auto_checkbox.isChecked() is False
     assert dialog.startup_checkbox.isChecked() is False
     assert dialog.windowIcon().isNull() is False
     assert dialog.status_label.isVisible() is False
     assert dialog.password_input.width() == dialog.username_input.width()
     assert dialog.username_icon_action in dialog.username_input.actions()
     assert dialog.username_icon_action.icon().isNull() is False
+
+
+def test_auto_login_submits_through_the_visible_login_dialog(qt_app, monkeypatch):
+    scheduled = []
+    monkeypatch.setattr(
+        "apps.wps.login_window.QTimer.singleShot",
+        lambda delay, callback: scheduled.append((delay, callback)),
+    )
+    dialog = LoginDialog(
+        api=_Api(),
+        account_store=_Store(),
+        initial_username="User01",
+        initial_password="Pass01",
+        remember_password=True,
+        auto_login=True,
+    )
+    submitted = []
+    monkeypatch.setattr(dialog, "_submit", lambda: submitted.append(True))
+
+    assert [delay for delay, _callback in scheduled] == [2000]
+    scheduled[0][1]()
+
+    assert submitted == [True]
 
 
 def test_login_dialog_uses_native_title_bar_and_d_icon(qt_app):
@@ -254,6 +277,7 @@ def test_dialog_uses_shared_polished_component_contract(qt_app):
     assert dialog.remember_checkbox.objectName() == "PreferenceCheck"
     assert dialog.auto_checkbox.objectName() == "PreferenceCheck"
     assert dialog.startup_checkbox.objectName() == "PreferenceCheck"
+    assert dialog.startup_checkbox.text() == "开机自启"
     assert dialog.status_label.objectName() == "ErrorLabel"
     assert dialog.primary_button.objectName() == "PrimaryButton"
     assert dialog.switch_button.objectName() == "FooterLink"
@@ -396,6 +420,7 @@ def test_preferences_dialog_can_disable_auto_login(qt_app, monkeypatch):
         startup_enabled=False,
     )
     assert dialog.windowIcon().isNull() is False
+    assert dialog.startup_checkbox.text() == "开机自启"
     assert not dialog.windowFlags() & Qt.FramelessWindowHint
     assert dialog.windowFlags() & Qt.WindowTitleHint
     assert dialog.windowFlags() & Qt.WindowCloseButtonHint
@@ -432,3 +457,43 @@ def test_desktop_tray_uses_the_shared_d_icon(qt_app, monkeypatch):
     )
 
     assert controller._tray.icon().cacheKey() == expected_icon.cacheKey()
+    assert controller._startup_action.text() == "开机自启"
+
+
+def test_desktop_reports_existing_wps_service_without_killing_it(qt_app, monkeypatch):
+    messages = []
+    events = []
+    monkeypatch.setattr(
+        desktop_runtime.QMessageBox,
+        "critical",
+        lambda _parent, title, message: messages.append((title, message)),
+    )
+    monkeypatch.setattr(
+        desktop_runtime,
+        "log_event",
+        lambda _level, _component, event, _message, fields=None: events.append(
+            (event, fields or {})
+        ),
+    )
+
+    class Application:
+        def quit(self):
+            events.append(("quit", {}))
+
+    controller = desktop_runtime.DesktopController(
+        application=Application(),
+        account_runtime=object(),
+        start_service=lambda *_args, **_kwargs: None,
+        port=9527,
+    )
+
+    controller._handle_service_failure(RuntimeError("WPS_WEB_SERVER_PORT_IN_USE"))
+
+    assert messages == [
+        (
+            "DocxTool WPS",
+            "检测到已有 DocxTool WPS 本地服务正在运行。请从系统托盘退出旧服务后重新启动；"
+            "为保护当前任务，程序未自动结束它。",
+        )
+    ]
+    assert ("launcher.desktop.service.failed", {"error_code": "WPS_WEB_SERVER_PORT_IN_USE", "error_type": "RuntimeError"}) in events

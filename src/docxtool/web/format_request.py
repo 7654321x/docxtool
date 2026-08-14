@@ -7,7 +7,8 @@ import binascii
 import json
 from urllib.parse import unquote
 
-from docxtool.document.style_config import ConfigValidationError, validate_format_config
+from docxtool.document.configuration.validation import validate_format_config
+from docxtool.document.errors import ConfigValidationError
 
 
 class FormatConfigRequestError(ValueError):

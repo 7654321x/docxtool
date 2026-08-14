@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from docxtool.document.style_config import validate_format_config
+from docxtool.document.configuration.validation import validate_format_config
 from docxtool.paths import default_format_config_path
 from docxtool.version import package_version
 

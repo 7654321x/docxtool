@@ -177,6 +177,71 @@ def test_structural_styles_have_heading_outline_levels(tmp_path: Path) -> None:
         assert outline.get(qn("w:val")) == str(index)
 
 
+def test_wps_builtin_profile_assigns_gallery_styles_without_changing_special_styles(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "wps-gallery.docx"
+    rules = _rules()
+    rules[1].font = "黑体"
+    rules[1].font_size_pt = 18
+    rules[1].bold = True
+    rules[5].font = "宋体"
+    rules[5].font_size_pt = 14
+    data = DocumentData(
+        paragraphs=[
+            ParagraphData("主标题", "title", "主标题", ParagraphFeatures()),
+            ParagraphData("一级标题", "heading1", "一级标题", ParagraphFeatures()),
+            ParagraphData("二级标题", "heading2", "二级标题", ParagraphFeatures()),
+            ParagraphData("三级标题", "heading3", "三级标题", ParagraphFeatures()),
+            ParagraphData("四级标题", "heading4", "四级标题", ParagraphFeatures()),
+            ParagraphData("正文内容", "body", "正文内容", ParagraphFeatures()),
+            ParagraphData(
+                "附件：测试材料",
+                "attachment_note",
+                "附件：测试材料",
+                ParagraphFeatures(),
+            ),
+        ],
+        filepath="generated.docx",
+    )
+
+    export_doc(
+        data,
+        rules,
+        PageSettings(),
+        str(output),
+        page_number_enabled=False,
+        style_profile="wps_builtin",
+    )
+
+    document_root = _document_xml(output)
+    style_root = _styles_xml(output)
+    style_by_text = {
+        _text(paragraph): _pstyle(paragraph)
+        for paragraph in _paragraphs(document_root)
+        if _text(paragraph)
+    }
+    assert style_by_text == {
+        "主标题": "DCT-Title",
+        "一级标题": "Heading1",
+        "二级标题": "Heading2",
+        "三级标题": "Heading3",
+        "四级标题": "Heading4",
+        "正文内容": "Normal",
+        "附件：测试材料": "DCT-AttachmentNote",
+    }
+
+    normal = _style(style_root, "Normal")
+    assert normal.find("w:qFormat", NS) is not None
+    assert normal.find("w:rPr/w:rFonts", NS).get(qn("w:eastAsia")) == "宋体"
+    assert normal.find("w:rPr/w:sz", NS).get(qn("w:val")) == "28"
+    heading1 = _style(style_root, "Heading1")
+    assert heading1.find("w:qFormat", NS) is not None
+    assert heading1.find("w:rPr/w:rFonts", NS).get(qn("w:eastAsia")) == "黑体"
+    assert heading1.find("w:rPr/w:sz", NS).get(qn("w:val")) == "36"
+    assert heading1.find("w:rPr/w:b", NS).get(qn("w:val")) == "1"
+
+
 def test_page_margins_and_clean_footer_page_field(tmp_path: Path) -> None:
     output = tmp_path / "structured.docx"
     _export_sample(output)

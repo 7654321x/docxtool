@@ -13,7 +13,7 @@ from docx.text.paragraph import Paragraph
 from docxtool.document.analysis.letterhead import extract_letterhead_fields
 from docxtool.document.engine.letterhead import apply_letterhead, detect_letterhead
 from docxtool.document.engine.typography import apply_digit_latin_font
-from docxtool.document.style_config import PageSettings, StyleRule
+from docxtool.document.configuration.models import PageSettings, StyleRule
 from docxtool.security import validate_docx_integrity
 
 from .logging_adapter import document_log_context, log_event

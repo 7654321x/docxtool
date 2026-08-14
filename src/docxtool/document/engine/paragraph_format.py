@@ -15,7 +15,8 @@ from docx.oxml.ns import qn
 from docx.shared import Pt
 
 from docxtool.document.engine.typography import set_run_fonts
-from docxtool.document.style_config import StyleRule, logger
+from docxtool.document.configuration.models import StyleRule
+from docxtool.document.diagnostics.logging import logger
 
 
 def apply_right_indent(paragraph, characters: float = 2) -> None:

@@ -101,6 +101,8 @@
       "sequence": null
     },
     "signers": [],
+    "separator_style": "straight",
+    "auto_recognize": false,
     "existing_policy": "preserve_external",
     "replace_managed": false,
     "layout_version": 1

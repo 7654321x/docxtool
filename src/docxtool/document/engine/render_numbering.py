@@ -10,7 +10,8 @@ from __future__ import annotations
 from docx.shared import Pt
 
 from docxtool.document.engine.typography import set_run_fonts
-from docxtool.document.style_config import StyleRule, arabic_number, chinese_number, logger
+from docxtool.document.configuration.models import StyleRule, arabic_number, chinese_number
+from docxtool.document.diagnostics.logging import logger
 
 
 class NumberingCounter:

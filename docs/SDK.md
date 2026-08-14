@@ -313,5 +313,71 @@ SDK 只负责识别，不直接操作 WPS。未来 WPS 加载项应：
 5. 读回 Range.Text 并验证 preconditions；
 6. 验证通过后写入格式。
 
-详细协议见 [INTEGRATION_CONTRACT_V1.md](INTEGRATION_CONTRACT_V1.md)，宿主伪代码见
-[HOST_ADAPTER_GUIDE.md](HOST_ADAPTER_GUIDE.md)。
+详细 JSON 协议见 [INTEGRATION_CONTRACT_V1.md](INTEGRATION_CONTRACT_V1.md)。
+
+## 来源定位详细规则
+
+一个 DOCX 物理段落可以包含多个逻辑结构。导入器为每个物理段落建立不可变 `SourceTape`：
+
+- `raw_text`：物理段落原始可见文字；
+- `canonical_text`：按 `host-text-v1` 统一换行、空白和 NFKC 的比较视图；
+- raw 与 canonical 的 UTF-16 边界映射。
+
+逻辑拆分先计算 raw 范围，再生成识别文本。`raw_*_utf16`、`canonical_*_utf16` 和宿主 Range 属于不同坐标系，不能互换。定位必须同时验证物理段落哈希、同文本出现序号、片段序号、UTF-16 范围、片段哈希、顺序和不重叠。
+
+`source-locator-v2` 的稳定字段包括 raw/canonical 起止、`segment_index`、`segment_count`、定位状态、证据、警告和上下文哈希。旧 `range_start_utf16/range_end_utf16` 只作为 raw offset 兼容别名。
+
+定位失败使用稳定错误：
+
+- `SOURCE_RANGE_UNRESOLVED`；
+- `SOURCE_RANGE_OVERLAP`；
+- `SOURCE_TEXT_HASH_MISMATCH`；
+- `SOURCE_OCCURRENCE_AMBIGUOUS`。
+
+不得回退到裸物理段落序号、Selection 或全文首次匹配。正文默认脱敏；`include_text` 和 `include_raw_text` 只允许本机受控调用，禁止进入普通日志。
+
+## HostParagraphTextContract V1
+
+宿主 `raw_text` 只表示可见段落内容。`host-text-v1` 统一 CRLF、CR、LF 和垂直制表符，保留 Tab 与分页符，归一 NBSP、全角空格和 NFKC 字符。末尾 `U+0007` 表格单元格标记不进入 canonical 文本并产生警告。未知版本返回 `UNSUPPORTED_HOST_TEXT_CONTRACT`。
+
+全文绑定使用保序动态规划，每个 source 物理段落独立输出：
+
+- raw 完全一致：`confirmed + verify_host_range`；
+- canonical 一致但 raw 不同：`review + preview_only`；
+- 重复文本无法消歧、哈希不匹配或范围重叠：`unresolved + skip`。
+
+未定位片段不能令同组其他合法范围降级；`segment_index` 也不能作为 `blocks` 数组下标。
+
+## 通用宿主适配流程
+
+WPS、Office.js、VSTO/COM 或其他本地宿主统一执行：
+
+1. 保存当前文档的临时 DOCX 快照；
+2. 调用 SDK 生成 `RecognitionPlan`；
+3. 从 main story 非表格物理段落生成 `HostSnapshot`；
+4. 校验 plan 和 snapshot；
+5. 调用 `bind_recognition_plan()` 生成 `RecognitionBinding`；
+6. 只处理 `confirmed + verify_host_range`；
+7. 按 `host_paragraph_id` 重新读取当前段落；
+8. 校验物理文本和片段 preconditions；
+9. 将 raw UTF-16 span 转为真实宿主 Range；
+10. 读回 Range 文字并再次校验后写入格式。
+
+```text
+RecognitionPlan + HostSnapshot
+→ schema/semantic validation
+→ source-locator-v2 / host-text-v1 对齐
+→ RecognitionBinding
+→ confirmed: 宿主重读并写入
+→ review: 只预览
+→ unresolved: 跳过
+```
+
+宿主适配器负责快照导出、可见段落提取、稳定 paragraph ID、UTF-16 Range 转换、读回验证、格式写入、用户预览、撤销、备份和错误恢复。DocxTool SDK 不实现这些宿主 API。
+
+来源定位与宿主适配最小验证：
+
+```pwsh
+pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m pytest -q tests/test_sdk.py tests/test_sdk_binding.py tests/test_recognition_decoder.py tests/test_importer_heading_flow.py"
+pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m ruff check src tests scripts"
+```

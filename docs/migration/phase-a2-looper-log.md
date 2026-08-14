@@ -1,5 +1,7 @@
 # Phase A-2 Looper 日志
 
+状态：`completed`。本文只保留已执行微批次的脱敏历史记录。
+
 ## 启动状态
 
 - HEAD：`fe0667313ee43791f2846b8574a969b6d07bec8b`

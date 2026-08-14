@@ -11,7 +11,7 @@ from docxtool.document.engine import export_doc
 from docxtool.document.importer import DocxImporter
 from docxtool.document.models import FormatScope
 from docxtool.sdk.binding import bind_physical_paragraphs
-from docxtool.document.style_config import load_rules_and_settings
+from docxtool.document.configuration.validation import load_rules_and_settings
 from docxtool.security import validate_docx_integrity
 
 from .logging_adapter import document_log_context, log_event
@@ -163,6 +163,7 @@ def format_current_document(
                 "request_id": request_id,
                 "duration_ms": int((time.monotonic() - stage_started) * 1000),
                 "processing_strategy": processing["strategy"],
+                "style_profile": "wps_builtin",
                 "numbering_enabled": bool(features["numbering"]["enabled"]),
                 "punctuation_safe_enabled": bool(
                     features["punctuation"]["enabled"]
@@ -220,6 +221,7 @@ def format_current_document(
                 table_format_options=features.get("table_format"),
                 cleanup_options=features.get("cleanup"),
                 letterhead_options=features.get("letterhead"),
+                style_profile="wps_builtin",
             ) or {}
         except Exception as exc:
             log_event("ERROR", "format", "engine.export.failed", "DocxTool Engine 导出失败", {"operation_id_short": operation_id[:12], "request_id": request_id, "stage": "engine_export", "error_type": type(exc).__name__, "error_code": "WPS_FORMAT_EXPORT_FAILED", "duration_ms": int((time.monotonic() - stage_started) * 1000)})

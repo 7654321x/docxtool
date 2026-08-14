@@ -9,23 +9,39 @@ from __future__ import annotations
 from collections import OrderedDict
 from copy import deepcopy
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-import errno
 import json
 from pathlib import Path
 import threading
 import time
 from typing import Any, Dict, Optional
+from urllib.parse import parse_qs, urlsplit
 
 from docxtool.sdk import RecognitionPlan
-from docxtool.document.style_config import ConfigValidationError, validate_format_config
+from docxtool.document.configuration.validation import validate_format_config
+from docxtool.document.errors import ConfigValidationError
 from docxtool.version import package_version
 
 from .document_transaction import DocumentTransactionError, DocumentTransactionManager
 from .add_letterhead import inspect_letterhead, normalize_letterhead_request
 from .host_bridge import HostBridge, HostBridgeError
-from .logging_adapter import configure_wps_logging, log_event, sanitize_wps_log_fields
+from .logging_adapter import configure_wps_logging, log_event
 from .monitor import CommandMonitor
 from .recognize_document import bind_preview, recognize_document
+from .reader_routes import (
+    READER_GET_ROUTES,
+    READER_IMPORT_MAX_BYTES,
+    READER_POST_ROUTES,
+    dispatch_reader_get,
+    dispatch_reader_post,
+)
+from .transport.protocol import (
+    ControlClientDisconnected as _ControlClientDisconnected,
+    client_disconnected as _client_disconnected,
+    error_code as _error_code,
+    request_failure_event as _request_failure_event,
+    safe_log_details as _safe_log_details,
+    safe_warnings as _safe_warnings,
+)
 
 HOST = "127.0.0.1"
 DEFAULT_PORT = 0
@@ -62,93 +78,6 @@ BRIDGE_WAIT_ROUTES = frozenset(
 )
 
 
-def _error_code(error: Exception) -> str:
-    code = getattr(error, "code", "")
-    if isinstance(code, str) and code:
-        return code
-    text = str(error).strip()
-    if text and text.upper() == text and len(text) <= 100:
-        return text
-    return "WPS_CONTROL_ERROR"
-
-
-def _safe_warnings(value: Any) -> list[Any]:
-    if not isinstance(value, (list, tuple)):
-        return []
-    result: list[Any] = []
-    for item in value[:50]:
-        if isinstance(item, str):
-            result.append(item[:500])
-        elif isinstance(item, dict):
-            result.append(
-                {
-                    str(key)[:80]: raw
-                    for key, raw in item.items()
-                    if isinstance(raw, (str, int, float, bool)) or raw is None
-                }
-            )
-    return result
-
-
-def _safe_log_details(value: Any) -> Dict[str, Any]:
-    if not isinstance(value, dict):
-        return {}
-    return sanitize_wps_log_fields(value)
-
-
-def _request_failure_event(code: str) -> str:
-    return {
-        "WPS_CONTROL_UNAUTHORIZED": "control.auth.rejected",
-        "WPS_CONTROL_INVALID_CONTENT_LENGTH": "control.body.length_invalid",
-        "WPS_CONTROL_NEGATIVE_CONTENT_LENGTH": "control.body.length_negative",
-        "WPS_CONTROL_REQUEST_TOO_LARGE": "control.body.too_large",
-        "WPS_CONTROL_BODY_TRUNCATED": "control.body.truncated",
-        "WPS_CONTROL_JSON_INVALID": "control.body.json_invalid",
-        "WPS_CONTROL_JSON_OBJECT_REQUIRED": "control.body.object_required",
-        "WPS_CONTROL_ROUTE_NOT_FOUND": "control.route.not_found",
-        "WPS_COMMAND_BUSY": "control.command.busy",
-        "WPS_MONITOR_NOT_RUNNING": "control.monitor.unavailable",
-        "WPS_HOST_NOT_REGISTERED": "bridge.host.not_registered",
-        "WPS_HOST_NOT_READY": "bridge.host.not_ready",
-        "WPS_HOST_CONTEXT_MISMATCH": "bridge.host.context_mismatch",
-        "WPS_HOST_CONTEXT_REPLACED": "bridge.host.context_replaced",
-        "WPS_HOST_CONTEXT_REQUIRED": "bridge.host.context_required",
-        "WPS_HOST_GENERATION_MISMATCH": "bridge.host.generation_mismatch",
-        "WPS_HOST_GENERATION_INVALID": "bridge.host.generation_invalid",
-        "WPS_REQUEST_ID_MISSING": "bridge.command.request_id_missing",
-        "WPS_REQUEST_COMMAND_MISSING": "bridge.command.command_missing",
-        "WPS_REQUEST_COMMAND_INVALID": "bridge.command.invalid",
-        "WPS_PANE_INSTANCE_ID_MISSING": "bridge.command.pane_instance_missing",
-        "WPS_BRIDGE_STATE_OBJECT_REQUIRED": "bridge.state.object_required",
-        "WPS_BRIDGE_STATE_REVISION_INVALID": "bridge.state.revision_invalid",
-        "WPS_BRIDGE_CLOSED": "bridge.closed",
-        "WPS_BRIDGE_WAIT_TIMEOUT_INVALID": "bridge.wait.timeout_invalid",
-        "WPS_PUBLIC_ACCOUNT_REQUIRED": "public.account.required",
-        "WPS_PUBLIC_AUTHORIZATION_REJECTED": "public.authorization.rejected",
-        "WPS_APPLY_AUTHORIZATION_REQUIRED": "bridge.command.authorization_required",
-        "WPS_APPLY_AUTHORIZATION_MISMATCH": "bridge.command.authorization_mismatch",
-        "WPS_APPLY_CONFIG_VERSION_REQUIRED": "bridge.command.config_version_required",
-        "WPS_APPLY_FORMAT_CONFIG_REQUIRED": "bridge.command.format_config_required",
-        "WPS_LETTERHEAD_FORM_INVALID": "letterhead.form.invalid",
-        "WPS_LETTERHEAD_MARK_REQUIRED": "letterhead.mark.required",
-        "WPS_LETTERHEAD_DOCUMENT_NUMBER_INVALID": "letterhead.document_number.invalid",
-        "WPS_LETTERHEAD_ALREADY_EXISTS": "letterhead.already_exists",
-    }.get(code, "control.request.execution_failed")
-
-
-def _client_disconnected(error: OSError) -> bool:
-    """判断响应写入失败是否只是本机 HTTP 客户端已经离开。"""
-    return isinstance(
-        error, (ConnectionAbortedError, ConnectionResetError, BrokenPipeError)
-    ) or getattr(error, "winerror", None) in {10053, 10054} or getattr(
-        error, "errno", None
-    ) in {errno.EPIPE, errno.ECONNABORTED, errno.ECONNRESET}
-
-
-class _ControlClientDisconnected(Exception):
-    code = "WPS_CONTROL_CLIENT_DISCONNECTED"
-
-
 class WpsControlHttpServer(ThreadingHTTPServer):
     daemon_threads = True
 
@@ -176,13 +105,20 @@ class WpsControlHttpServer(ThreadingHTTPServer):
 
 
 class WpsControlApplication:
-    def __init__(self, app_root: Path, session_token: str, account_runtime=None) -> None:
+    def __init__(
+        self,
+        app_root: Path,
+        session_token: str,
+        account_runtime=None,
+        reader_service=None,
+    ) -> None:
         self.app_root = Path(app_root)
         self.session_token = session_token
         self.log_dir = configure_wps_logging(self.app_root)
         self.transactions = DocumentTransactionManager(self.log_dir)
         self.host_bridge = HostBridge()
         self.account_runtime = account_runtime
+        self._reader_service = reader_service
         self._authorization_lock = threading.RLock()
         self._authorized_requests: Dict[str, Dict[str, Any]] = {}
         self._plans: "OrderedDict[str, RecognitionPlan]" = OrderedDict()
@@ -220,6 +156,38 @@ class WpsControlApplication:
                 "error_code": "WPS_PUBLIC_ACCOUNT_REQUIRED",
             }
         return {"signed_in": True, **self.account_runtime.summary()}
+
+    def dispatch_reader_get(
+        self,
+        path: str,
+        query: Dict[str, str],
+    ) -> Dict[str, Any]:
+        return dispatch_reader_get(self._get_reader_service(), path, query)
+
+    def dispatch_reader_post(
+        self,
+        path: str,
+        body: Dict[str, Any],
+        *,
+        raw_import: Optional[bytes] = None,
+        import_filename: str = "",
+        request_id: str = "",
+    ) -> Dict[str, Any]:
+        return dispatch_reader_post(
+            self._get_reader_service(),
+            path,
+            body,
+            raw_import=raw_import,
+            import_filename=import_filename,
+            request_id=request_id,
+        )
+
+    def _get_reader_service(self):
+        if self._reader_service is None:
+            from apps.reader import ReaderService
+
+            self._reader_service = ReaderService()
+        return self._reader_service
 
     def _authorize_apply(self, request_id: str) -> Dict[str, Any]:
         if self.account_runtime is None:
@@ -964,9 +932,15 @@ def create_server(
     port: int = DEFAULT_PORT,
     *,
     account_runtime=None,
+    reader_service=None,
     allowed_origin: str = "",
 ) -> WpsControlHttpServer:
-    application = WpsControlApplication(app_root, session_token, account_runtime)
+    application = WpsControlApplication(
+        app_root,
+        session_token,
+        account_runtime,
+        reader_service=reader_service,
+    )
     monitor = CommandMonitor(application.dispatch)
 
     class Handler(BaseHTTPRequestHandler):
@@ -976,6 +950,23 @@ def create_server(
             origin = self.headers.get("Origin", "")
             return not origin or (bool(allowed_origin) and origin == allowed_origin)
 
+        def _route_path(self) -> str:
+            return urlsplit(self.path).path
+
+        def _safe_path(self) -> str:
+            return self._route_path()
+
+        def _query(self) -> Dict[str, str]:
+            return {
+                key: values[-1]
+                for key, values in parse_qs(
+                    urlsplit(self.path).query,
+                    keep_blank_values=True,
+                    strict_parsing=False,
+                ).items()
+                if values
+            }
+
         def _cors(self) -> None:
             origin = self.headers.get("Origin", "")
             if origin and origin == allowed_origin:
@@ -983,7 +974,7 @@ def create_server(
                 self.send_header("Vary", "Origin")
             self.send_header(
                 "Access-Control-Allow-Headers",
-                "Authorization, Content-Type, X-DocxTool-Request-Id",
+                "Authorization, Content-Type, X-DocxTool-Request-Id, X-DocxTool-Reader-Filename",
             )
             self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 
@@ -991,7 +982,7 @@ def create_server(
             log_event(
                 "WARNING", "control", "control.origin.rejected",
                 "Control Server 已拒绝非授权浏览器来源",
-                {"method": self.command, "path": self.path, "error_code": "WPS_CONTROL_ORIGIN_REJECTED"},
+                {"method": self.command, "path": self._safe_path(), "error_code": "WPS_CONTROL_ORIGIN_REJECTED"},
             )
             self._json(403, {"ok": False, "error_code": "WPS_CONTROL_ORIGIN_REJECTED"})
 
@@ -1016,7 +1007,7 @@ def create_server(
                         "control.client.disconnected",
                         "WPS 任务窗格连接已断开",
                         {
-                            "path": self.path,
+                            "path": self._safe_path(),
                             "http_status": status,
                             "error_code": "WPS_CONTROL_CLIENT_DISCONNECTED",
                             "error_type": type(exc).__name__,
@@ -1029,7 +1020,7 @@ def create_server(
                     "control.response.write_failed",
                     "WPS Control 响应写入失败",
                     {
-                        "path": self.path,
+                        "path": self._safe_path(),
                         "http_status": status,
                         "error_code": "WPS_CONTROL_RESPONSE_WRITE_FAILED",
                         "error_type": type(exc).__name__,
@@ -1067,18 +1058,36 @@ def create_server(
                 raise DocumentTransactionError("WPS_CONTROL_JSON_OBJECT_REQUIRED")
             return value
 
+        def _read_reader_import(self) -> bytes:
+            raw_length = self.headers.get("Content-Length", "0")
+            try:
+                length = int(raw_length)
+            except ValueError as exc:
+                raise DocumentTransactionError("WPS_CONTROL_INVALID_CONTENT_LENGTH") from exc
+            if length < 0:
+                raise DocumentTransactionError("WPS_CONTROL_NEGATIVE_CONTENT_LENGTH")
+            if length > READER_IMPORT_MAX_BYTES:
+                from apps.reader import ReaderError
+
+                raise ReaderError("READER_FILE_TOO_LARGE")
+            raw = self.rfile.read(length)
+            if len(raw) != length:
+                raise DocumentTransactionError("WPS_CONTROL_BODY_TRUNCATED")
+            return raw
+
         def do_OPTIONS(self) -> None:  # noqa: N802
             if not self._origin_allowed():
                 self._reject_origin()
                 return
-            is_quiet_route = self.path == "/v1/log" or self.path in BRIDGE_ROUTES
+            route_path = self._route_path()
+            is_quiet_route = route_path == "/v1/log" or route_path in BRIDGE_ROUTES
             if not is_quiet_route:
-                log_event("DEBUG", "control", "request.start", "WPS Control 预检请求开始", {"method": "OPTIONS", "path": self.path})
+                log_event("DEBUG", "control", "request.start", "WPS Control 预检请求开始", {"method": "OPTIONS", "path": route_path})
             self.send_response(204)
             self._cors()
             self.end_headers()
             if not is_quiet_route:
-                log_event("DEBUG", "control", "request.completed", "WPS Control 预检请求完成", {"method": "OPTIONS", "path": self.path, "http_status": 204})
+                log_event("DEBUG", "control", "request.completed", "WPS Control 预检请求完成", {"method": "OPTIONS", "path": route_path, "http_status": 204})
 
         def do_GET(self) -> None:  # noqa: N802
             try:
@@ -1087,23 +1096,49 @@ def create_server(
                     return
                 started_at = time.monotonic()
                 request_id = self._request_id()
-                log_event("INFO", "control", "request.start", "WPS Control 请求开始", {"method": "GET", "path": self.path, "request_id": request_id})
-                if self.path not in {"/v1/health", "/v1/account"}:
+                route_path = self._route_path()
+                log_event("INFO", "control", "request.start", "WPS Control 请求开始", {"method": "GET", "path": route_path, "request_id": request_id})
+                if route_path not in {"/v1/health", "/v1/account", *READER_GET_ROUTES}:
                     self._json(404, {"ok": False, "error_code": "WPS_CONTROL_ROUTE_NOT_FOUND"})
-                    log_event("ERROR", "control", "control.route.not_found", "WPS Control 路由不存在", {"method": "GET", "path": self.path, "request_id": request_id, "http_status": 404, "error_code": "WPS_CONTROL_ROUTE_NOT_FOUND"})
+                    log_event("ERROR", "control", "control.route.not_found", "WPS Control 路由不存在", {"method": "GET", "path": self._safe_path(), "request_id": request_id, "http_status": 404, "error_code": "WPS_CONTROL_ROUTE_NOT_FOUND"})
                     return
                 if not self._authorized():
                     self._json(401, {"ok": False, "error_code": "WPS_CONTROL_UNAUTHORIZED"})
-                    log_event("ERROR", "control", "control.auth.rejected", "WPS Control 请求鉴权失败", {"method": "GET", "path": self.path, "request_id": request_id, "http_status": 401, "error_code": "WPS_CONTROL_UNAUTHORIZED"})
+                    log_event("ERROR", "control", "control.auth.rejected", "WPS Control 请求鉴权失败", {"method": "GET", "path": self._safe_path(), "request_id": request_id, "http_status": 401, "error_code": "WPS_CONTROL_UNAUTHORIZED"})
                     return
-                data = application.health() if self.path == "/v1/health" else application.account_summary()
+                if route_path == "/v1/health":
+                    data = application.health()
+                elif route_path == "/v1/account":
+                    data = application.account_summary()
+                else:
+                    data = application.dispatch_reader_get(route_path, self._query())
                 self._json(200, {"ok": True, "data": data})
                 log_event(
                     "INFO", "control", "request.completed", "WPS Control 请求完成",
-                    {"method": "GET", "path": self.path, "request_id": request_id, "http_status": 200, "duration_ms": int((time.monotonic() - started_at) * 1000)},
+                    {"method": "GET", "path": route_path, "request_id": request_id, "http_status": 200, "duration_ms": int((time.monotonic() - started_at) * 1000)},
                 )
             except _ControlClientDisconnected:
                 return
+            except Exception as exc:
+                if getattr(self, "_response_write_failed", False):
+                    raise
+                code = _error_code(exc)
+                status = 404 if code == "WPS_CONTROL_ROUTE_NOT_FOUND" else 400
+                log_event(
+                    "ERROR",
+                    "control",
+                    _request_failure_event(code),
+                    "WPS Control 请求执行失败",
+                    {
+                        "method": "GET",
+                        "path": self._route_path(),
+                        "request_id": self._request_id(),
+                        "error_code": code,
+                        "error_type": type(exc).__name__,
+                        "http_status": status,
+                    },
+                )
+                self._json(status, {"ok": False, "error_code": code})
 
         def do_POST(self) -> None:  # noqa: N802
             if not self._origin_allowed():
@@ -1111,35 +1146,52 @@ def create_server(
                 return
             started_at = time.monotonic()
             request_id = self._request_id()
-            is_log_route = self.path == "/v1/log"
-            is_bridge_route = self.path in BRIDGE_ROUTES
+            route_path = self._route_path()
+            is_log_route = route_path == "/v1/log"
+            is_bridge_route = route_path in BRIDGE_ROUTES
+            is_reader_route = route_path in READER_POST_ROUTES
             is_quiet_route = is_log_route or is_bridge_route
             if not is_quiet_route:
-                log_event("INFO", "control", "request.start", "WPS Control 请求开始", {"method": "POST", "path": self.path, "request_id": request_id})
+                log_event("INFO", "control", "request.start", "WPS Control 请求开始", {"method": "POST", "path": self._safe_path(), "request_id": request_id})
             if not self._authorized():
-                self._json(401, {"ok": False, "error_code": "WPS_CONTROL_UNAUTHORIZED"})
+                try:
+                    self._json(401, {"ok": False, "error_code": "WPS_CONTROL_UNAUTHORIZED"})
+                except _ControlClientDisconnected:
+                    return
                 event = "log.ingest.failed" if is_log_route else "request.failed"
                 if not is_log_route:
                     event = "control.auth.rejected"
-                log_event("ERROR", "control", event, "WPS Control 请求鉴权失败", {"method": "POST", "path": self.path, "request_id": request_id, "http_status": 401, "error_code": "WPS_CONTROL_UNAUTHORIZED"})
+                log_event("ERROR", "control", event, "WPS Control 请求鉴权失败", {"method": "POST", "path": self._safe_path(), "request_id": request_id, "http_status": 401, "error_code": "WPS_CONTROL_UNAUTHORIZED"})
                 return
             try:
-                body = self._read_body()
+                body = {} if route_path == "/v1/reader/import" else self._read_body()
                 if is_log_route:
-                    data = application.dispatch(self.path, body, request_id=request_id)
+                    data = application.dispatch(route_path, body, request_id=request_id)
                 elif is_bridge_route:
                     data = application.dispatch_bridge(
-                        self.path, body, request_id=request_id
+                        route_path, body, request_id=request_id
                     )
-                elif self.path in BUSINESS_ROUTES:
-                    data = monitor.submit(self.path, body, request_id=request_id)
+                elif is_reader_route:
+                    data = application.dispatch_reader_post(
+                        route_path,
+                        body,
+                        raw_import=(
+                            self._read_reader_import()
+                            if route_path == "/v1/reader/import"
+                            else None
+                        ),
+                        import_filename=self.headers.get("X-DocxTool-Reader-Filename", ""),
+                        request_id=request_id,
+                    )
+                elif route_path in BUSINESS_ROUTES:
+                    data = monitor.submit(route_path, body, request_id=request_id)
                 else:
                     raise DocumentTransactionError("WPS_CONTROL_ROUTE_NOT_FOUND")
                 self._json(200, {"ok": True, "data": data})
                 if not is_quiet_route:
                     log_event(
                         "INFO", "control", "request.completed", "WPS Control 请求完成",
-                        {"method": "POST", "path": self.path, "request_id": request_id, "http_status": 200, "duration_ms": int((time.monotonic() - started_at) * 1000)},
+                        {"method": "POST", "path": self._safe_path(), "request_id": request_id, "http_status": 200, "duration_ms": int((time.monotonic() - started_at) * 1000)},
                     )
             except Exception as exc:
                 if isinstance(exc, _ControlClientDisconnected):
@@ -1154,7 +1206,7 @@ def create_server(
                     "log.ingest.failed" if is_log_route else _request_failure_event(code),
                     "WPS Control 请求执行失败",
                     {
-                        "method": "POST", "path": self.path, "request_id": request_id, "error_code": code,
+                        "method": "POST", "path": route_path, "request_id": request_id, "error_code": code,
                         "cause_event": code,
                         "error_type": type(exc).__name__, "http_status": status,
                         "duration_ms": int((time.monotonic() - started_at) * 1000),
@@ -1169,7 +1221,8 @@ def create_server(
                 return
 
         def log_message(self, format: str, *args: object) -> None:
-            if self.path == "/v1/log" or self.path in BRIDGE_ROUTES:
+            route_path = self._route_path()
+            if route_path == "/v1/log" or route_path in BRIDGE_ROUTES or route_path in READER_GET_ROUTES or route_path in READER_POST_ROUTES:
                 return
             log_event("DEBUG", "http", "access", format % args)
 

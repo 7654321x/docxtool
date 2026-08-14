@@ -1,5 +1,7 @@
 # Phase B-0 / B-0.1 / B-0.2 功能基线与收口报告
 
+本文是已完成 Phase B-0 系列的历史基线报告，不是当前产品需求、架构或回归规则来源。
+
 ## Looper 状态
 
 状态：`completed`。正式 2.9 clean wheel、四字姓名边界、带前缀数字冒号、
@@ -163,8 +165,7 @@ normalize 复核 0；strict 保留 14 项结构复核、2 项标题线索差异�
 - `.gitignore`
 - `AGENTS.md`
 - `docs/DOCX_REGRESSION_CHECKLIST.md`
-- `docs/GITHUB_UPLOAD_GUIDE.md`
-- `docs/UPLOAD_MANIFEST.md`
+- `docs/RELEASE.md`
 - `docs/migration/phase-b0-manifest.json`
 - `docs/migration/phase-b0-report.md`
 

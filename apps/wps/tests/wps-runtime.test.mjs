@@ -1779,6 +1779,15 @@ function makeElement(id) {
     value: "",
     children: [],
     listeners: new Map(),
+    classList: {
+      values: new Set(),
+      add(value) { this.values.add(value); },
+      remove(value) { this.values.delete(value); },
+      toggle(value, enabled) {
+        if (enabled) this.values.add(value);
+        else this.values.delete(value);
+      },
+    },
     addEventListener(name, callback) {
       this.listeners.set(name, callback);
     },
@@ -1786,6 +1795,10 @@ function makeElement(id) {
       return { ...this.rect };
     },
     replaceChildren(...children) { this.children = children; },
+    setAttribute(name, value) {
+      if (!this.attributes) this.attributes = new Map();
+      this.attributes.set(name, String(value));
+    },
     focus() {},
   };
 }
@@ -1828,6 +1841,7 @@ function makeTaskpaneHarness(initialState, {
   };
   const ids = [
     "preview", "apply", "add_letterhead", "clear_preview", "health",
+    "format_mode", "reader_mode", "format_mode_tab", "reader_mode_tab",
     "format_scope_mode", "format_page_spec",
     "letterhead_modal", "letterhead_mark", "letterhead_number", "letterhead_signer",
     "letterhead_separator", "letterhead_form_error", "letterhead_cancel", "letterhead_confirm",
@@ -1839,6 +1853,7 @@ function makeTaskpaneHarness(initialState, {
   elements.get("format_page_spec").value = "";
   elements.get("format_page_spec").focus = () => {};
   elements.get("letterhead_separator").value = "straight";
+  elements.get("reader_mode").hidden = true;
   elements.get("content").scrollTop = 80;
   const body = {
     scrollTop: 80,
@@ -1952,6 +1967,13 @@ function makeTaskpaneHarness(initialState, {
       return null;
     },
   });
+  const readerCalls = [];
+  const reader = {
+    initialize() { readerCalls.push("initialize"); },
+    async activate() { readerCalls.push("activate"); },
+    deactivate() { readerCalls.push("deactivate"); },
+    pauseAndSave() { readerCalls.push("pauseAndSave"); },
+  };
   const context = {
     Application: application,
     Date: HarnessDate,
@@ -2020,6 +2042,7 @@ function makeTaskpaneHarness(initialState, {
       controlBaseUrl: "http://127.0.0.1:9527",
       sessionToken: "test-token",
     } : {},
+    DocxToolReader: reader,
   };
   context.window = context;
   context.self = context;
@@ -2037,6 +2060,7 @@ function makeTaskpaneHarness(initialState, {
     context,
     events: () => logs.map((item) => item.event),
     logs,
+    readerCalls,
     document,
     dispatchDocumentEvent(name, event = {}) {
       (documentListeners.get(name) || []).forEach((callback) => callback(event));
@@ -2147,6 +2171,28 @@ test("TaskPane renders protocol statuses in Chinese", async () => {
   });
   await notReady.flushAsync();
   assert.equal(notReady.elements.get("status").textContent, "未就绪");
+});
+
+test("TaskPane switches format and reader modes without submitting reader commands to HostBridge", async () => {
+  const harness = makeTaskpaneHarness({ host_ready: true, status: "READY", updated_at: "1" });
+  await harness.flushAsync();
+
+  assert.deepEqual(harness.readerCalls, ["initialize"]);
+  assert.equal(harness.elements.get("format_mode").hidden, false);
+  assert.equal(harness.elements.get("reader_mode").hidden, true);
+  harness.click("reader_mode_tab");
+  await harness.flushAsync();
+  assert.equal(harness.elements.get("format_mode").hidden, true);
+  assert.equal(harness.elements.get("reader_mode").hidden, false);
+  assert.ok(harness.readerCalls.includes("activate"));
+  assert.equal(harness.commandRequests.length, 0);
+
+  harness.click("format_mode_tab");
+  await harness.flushAsync();
+  assert.equal(harness.elements.get("format_mode").hidden, false);
+  assert.equal(harness.elements.get("reader_mode").hidden, true);
+  assert.ok(harness.readerCalls.includes("deactivate"));
+  assert.equal(harness.commandRequests.length, 0);
 });
 
 test("TaskPane submits panel_ready once after READY and load_settled", async () => {
@@ -2655,6 +2701,27 @@ test("TaskPane summary separates confirmed, review, and unresolved preview items
   assert.match(harness.elements.get("summary").textContent, /未定位 1/);
 });
 
+test("TaskPane groups recognition rows into role counts with confirmation and review badges", async () => {
+  const harness = makeTaskpaneHarness({
+    host_ready: true,
+    status: "PASS",
+    updated_at: "1",
+    recognition: { document_mode: "NORMAL", block_count: 3, unresolved_count: 0 },
+    recognition_rows: [
+      { role_name: "一级标题", binding_status: "confirmed", review_level: "confirmed" },
+      { role_name: "一级标题", binding_status: "confirmed", review_level: "confirmed" },
+      { role_name: "附件", binding_status: "review", review_level: "review" },
+    ],
+  });
+  await harness.flushAsync();
+
+  assert.equal(harness.elements.get("rows").children.length, 2);
+  assert.match(harness.elements.get("rows").children[0].textContent, /一级标题 2 项 已确认/);
+  assert.match(harness.elements.get("rows").children[1].textContent, /附件 1 项 待复核 1 项/);
+  assert.match(harness.elements.get("rows").children[0].innerHTML, /recognition-pill/);
+  assert.match(harness.elements.get("rows").children[1].innerHTML, /recognition-review/);
+});
+
 test("TaskPane never exposes an internal type id when no Chinese role is supplied", async () => {
   const harness = makeTaskpaneHarness({
     host_ready: true,
@@ -2775,6 +2842,33 @@ test("TaskPane restores apply availability from the bridge account state", async
 
   assert.equal(harness.elements.get("apply").disabled, false);
   assert.equal(harness.elements.get("account").textContent, "User01");
+});
+
+test("TaskPane distinguishes a missing local account service from server offline", async () => {
+  const accountRequired = {
+    signed_in: false,
+    network_available: false,
+    apply_available: false,
+    pending_result_count: 0,
+    error_code: "WPS_PUBLIC_ACCOUNT_REQUIRED",
+  };
+  const harness = makeTaskpaneHarness(
+    { host_ready: true, status: "READY", updated_at: "1" },
+    { account: accountRequired },
+  );
+  await harness.flushAsync();
+
+  assert.equal(harness.elements.get("account").textContent, "本地账号服务未启动");
+  assert.equal(
+    harness.elements.get("message").textContent,
+    "请从登录窗口登录或注册后重新启动 DocxTool WPS。",
+  );
+  assert.equal(
+    harness.elements.get("error").textContent,
+    "错误代码：WPS_PUBLIC_ACCOUNT_REQUIRED",
+  );
+  assert.equal(harness.elements.get("apply").disabled, true);
+  assert.notEqual(harness.elements.get("message").textContent, "服务器无法连接。");
 });
 
 test("TaskPane logs bridge command failure before request summary", async () => {

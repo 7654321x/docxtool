@@ -20,14 +20,16 @@ Nginx 80
 
 ## 发布文件
 
-生产部署需要的项目文件以 `docs/UPLOAD_MANIFEST.md` 和 `scripts/publish_to_github.ps1` 为准。当前前端源入口和 Cloudflare Pages 部署文件统一位于：
+生产部署需要的项目文件以 `docs/RELEASE.md` 和 `scripts/publish_to_github.ps1` 为准。当前前端源入口和 Cloudflare Pages 部署文件统一位于：
 
 ```text
 resources/frontend/pages/index.html
 resources/frontend/pages/_worker.js
 ```
 
-重构前的根目录前端、旧构建产物、legacy 页面和旧 PyQt 桌面端文件已移除，不再部署。当前唯一前端发布目录是 `resources/frontend/pages/`。
+重构前的根目录前端、旧构建产物、legacy 页面和旧 PyQt5 桌面配置界面已移除，
+不再部署。WPS 插件源码和客户端构建规格仍属于独立交付范围；Web 的唯一前端
+发布目录是 `resources/frontend/pages/`。
 
 ## 安装依赖
 
@@ -194,7 +196,7 @@ server {
 
 ## WPS 客户端构建
 
-WPS 客户端与公网服务器分开交付。服务器继续通过根目录 `server.py` 启动；用户端运行控制台单文件 `DocxToolWps.exe`。生产构建必须把可直接访问 `/wps-api/v1/*` 的 HTTPS Origin 写入客户端：
+WPS 客户端与公网服务器分开交付。服务器继续通过根目录 `server.py` 启动；用户端运行无控制台 GUI 单文件 `DocxToolWps.exe`。生产构建必须把可直接访问 `/wps-api/v1/*` 的 HTTPS Origin 写入客户端：
 
 ```pwsh
 pwsh -NoProfile -File .\apps\wps\scripts\build-exe.ps1 -ServerOrigin https://wps.example.com

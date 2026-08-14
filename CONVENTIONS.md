@@ -1,50 +1,12 @@
-# 公文排版工具 — 开发约定
+# DocxTool 当前开发约定
 
-## 核心原则
+本文件保留为稳定入口，不再维护独立规则。当前约定按唯一职责分散维护：
 
-1. **引擎稳定性优先** — 通用渲染逻辑集中在 `src/docxtool/document/engine` 包内，新模式差异只在对应模式模块中处理
-2. **先验证再上线** — 每改完一轮，用 `005班子对照检查材料.docx` 跑一遍确认格式不退化
-3. **通用模式不动** — 加方案/报告功能时，原公文格式不能乱
+- 跨项目协作、安全、命令和文档规则：[`AGENTS.md`](AGENTS.md)
+- 公文格式标准：[`公文格式规范.md`](公文格式规范.md)
+- 公文识别与排版回归：[`docs/DOCX_REGRESSION_CHECKLIST.md`](docs/DOCX_REGRESSION_CHECKLIST.md)
+- WPS 宿主回归：[`docs/WPS_REGRESSION_CHECKLIST.md`](docs/WPS_REGRESSION_CHECKLIST.md)
+- WPS 局部架构：[`apps/wps/AGENTS.md`](apps/wps/AGENTS.md)
+- 当前架构：[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 
-## 代码架构
-
-当前排版核心位于 `src/docxtool/document/engine`：
-
-- `__init__.py`：入口，导出 `export_doc`
-- `core.py`：通用渲染引擎（段落、编号、页面、间距）
-- `normal.py`：通用公文样式重写
-
-如果以后重新引入报告或方案模式，应继续放在该包内，并补齐对应测试。
-
-## 模式差异速查
-
-| 特性 | 通用 | 报告 | 方案 |
-|------|:---:|:---:|:---:|
-| docGrid | ✅ | ✅ | ❌ 关闭 |
-| heading2 句号拆分 | ✅ | ✅ | ❌ 整段保留 |
-| heading2 独立无正文 | 楷体加粗 | 楷体加粗 | 仿宋正文 |
-| heading2 连续标题 | 楷体加粗 | 楷体加粗 | 楷体加粗 |
-| 联系人换行 | ❌ | ❌ | ✅ 悬挂缩进 |
-| 参会人员格式化 | ❌ | ❌ | ✅ 全角空格对齐 |
-
-## 关键边界条件
-
-- 附件页标记 → 编号重置，独立从"一、"开始
-- 附件标题判断：`附件 X` 后短句(<28字) + 无编号冒号 → `attachment_title`
-- 落款识别：严格 `YYYY年MM月DD日`，不随意放宽
-- 含图段落不参与分类，走 `__image__` 占位符原样复制
-- Word 多级列表误判：>25字含标点的长正文拒绝 heading2 分类
-- `_contact_wrap_pending` 等循环变量必须在循环体最前面初始化
-
-## 测试文档
-
-- `005班子对照检查材料.docx` — 通用公文（对照检查）
-- `四川民族学院党委学生工作部部长黄星一行莅园交流活动方案.docx` — 方案模式
-
-## 日志格式
-
-```
-[识别] #N type_id | "前28字" meta={...}
-[打分] "前28字" | scorer1:分数 → scorer2:分数 → 最终类型
-[排版] #N type_id | "前28字" | 字体=XXX | 字号=XXpt | 加粗=X | 对齐=X | 首行缩进=X字符 | 行距=28pt固定 | 对网=X
-```
+新增规则必须放入其唯一负责文档，不在本文件复制。日志必须遵守项目脱敏规则，不记录正文片段、完整路径、Token、Cookie、密钥或完整哈希。

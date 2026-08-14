@@ -90,7 +90,7 @@ class DesktopController(QObject):
         logout_action = menu.addAction("退出当前账号")
         logout_action.triggered.connect(self.logout)
         menu.addSeparator()
-        self._startup_action = menu.addAction("随 Windows 登录启动")
+        self._startup_action = menu.addAction("开机自启")
         self._startup_action.setCheckable(True)
         self._startup_action.setChecked(windows_startup.is_enabled())
         self._startup_action.toggled.connect(self._set_startup)
@@ -118,14 +118,28 @@ class DesktopController(QObject):
             self.service_failed.emit(exc)
 
     def _handle_service_failure(self, exc: BaseException) -> None:
+        error_code = str(exc)
+        if error_code not in {
+            "WPS_WEB_SERVER_PORT_IN_USE",
+            "WPS_WEB_SERVER_OLD_SERVICE_STOP_FAILED",
+        }:
+            error_code = "WPS_DESKTOP_SERVICE_FAILED"
+        message = (
+            "检测到已有 DocxTool WPS 本地服务正在运行。请从系统托盘退出旧服务后重新启动；"
+            "为保护当前任务，程序未自动结束它。"
+            if error_code == "WPS_WEB_SERVER_PORT_IN_USE"
+            else "旧 DocxTool WPS 本地服务自动停止失败，请从系统托盘退出旧服务后重新启动。"
+            if error_code == "WPS_WEB_SERVER_OLD_SERVICE_STOP_FAILED"
+            else "后台服务启动失败，请查看日志。"
+        )
         log_event(
             "ERROR",
             "launcher",
             "launcher.desktop.service.failed",
             "DocxTool WPS 后台服务异常退出",
-            {"error_code": "WPS_DESKTOP_SERVICE_FAILED", "error_type": type(exc).__name__},
+            {"error_code": error_code, "error_type": type(exc).__name__},
         )
-        QMessageBox.critical(None, "DocxTool WPS", "后台服务启动失败，请查看日志。")
+        QMessageBox.critical(None, "DocxTool WPS", message)
         self._application.quit()
 
     def _tray_activated(self, reason) -> None:

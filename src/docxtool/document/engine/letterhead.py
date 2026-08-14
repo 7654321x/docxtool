@@ -28,7 +28,7 @@ from docxtool.document.analysis.letterhead import (
 )
 from docxtool.document.engine.style_catalog import ensure_letterhead_styles
 from docxtool.document.letterhead_config import normalize_letterhead_config
-from docxtool.document.style_config import PageSettings, StyleRule
+from docxtool.document.configuration.models import PageSettings, StyleRule
 
 
 _LETTERHEAD_STYLE_NAMES = {

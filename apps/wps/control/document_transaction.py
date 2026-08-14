@@ -8,8 +8,6 @@ local journal lets a restarted Control Server recover an interrupted replace.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -18,47 +16,10 @@ import threading
 from typing import Dict, Optional
 import uuid
 
-from .add_letterhead import LetterheadOperationResult, add_letterhead_to_document
-from .format_current_document import FormatResult, format_current_document
+from .add_letterhead import add_letterhead_to_document
+from .format_current_document import format_current_document
 from .logging_adapter import file_identity, log_event
-
-
-class DocumentTransactionError(RuntimeError):
-    def __init__(self, code: str) -> None:
-        self.code = code
-        super().__init__(code)
-
-
-@dataclass
-class FormatOperation:
-    operation_id: str
-    source_path: Path
-    target_path: Path
-    source_sha256: str
-    temporary_path: Path
-    backup_path: Path
-    temporary_sha256: Optional[str] = None
-    format_result: Optional[FormatResult | LetterheadOperationResult] = None
-    request_id: str = ""
-    command: str = "apply"
-    state: str = "prepared"
-    transaction_mode: str = "replace"
-    conversion_path: Optional[Path] = None
-    conversion_sha256: Optional[str] = None
-    backup_sha256: Optional[str] = None
-    formatted_source_sha256: Optional[str] = None
-
-    @property
-    def is_upgrade(self) -> bool:
-        return self.transaction_mode == "legacy_upgrade"
-
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+from .transactions.models import DocumentTransactionError, FormatOperation, sha256_file
 
 
 def _error_code(error: Exception, default: str) -> str:

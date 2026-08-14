@@ -1,5 +1,15 @@
 # Changelog
 
+## 5.4 - 2026-08-14
+
+- Consolidated project documentation to eleven current root files, moved WPS UI designs into `docs/design`, folded architecture, SDK binding, release, validation, and recognition gates into their owned documents, and removed obsolete login, outbox, version, EXE, and duplicate-document descriptions without changing runtime behavior.
+- Added a fully local TXT Reader domain under `apps/reader`, with UTF-8/UTF-8 BOM/GB18030 import, chapter indexing, per-book progress, local settings, and SQLite metadata that never stores complete book text.
+- Added WPS Reader TaskPane mode with raw TXT loopback import, bounded content blocks, chapter/block navigation, elapsed-time `requestAnimationFrame` scrolling, focused keyboard shortcuts, style controls, and internal collapse/reveal.
+- Kept Reader outside the public account, formatting authorization, HostBridge, CommandMonitor, Core, Recognition, Normalization, and Engine chains while reusing existing loopback credential and Origin protection.
+- Added Reader privacy, architecture, transaction-consistency, WPS adapter, TaskPane mode, and playback regression coverage; updated frozen-package resources and GitHub publish allowlists.
+- Split document configuration, diagnostics, and shared errors into owned modules while keeping `style_config.py` as a compatibility facade; retired the old PyQt5 configuration UI without changing the PySide2 WPS client.
+- Removed the SDK model/validator import-time cycle through a lazy validation boundary and extracted pure WPS transaction and Control transport helpers; public schemas, JSON fields, and compatibility imports remain unchanged.
+
 ## 5.3 - 2026-08-13
 
 - Added a WPS “添加版头” flow that directly generates or transactionally replaces a single-agency letterhead in the current document without recognition, one-click formatting, or public authorization.

@@ -11,7 +11,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
-from docxtool.document.style_config import ExportError
+from docxtool.document.errors import ExportError
 
 
 _SIGNATURE_STYLE_ID = "DCT-Signature"

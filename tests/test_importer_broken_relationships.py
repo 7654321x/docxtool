@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import builtins
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -15,6 +16,25 @@ from docxtool.document.style_config import StyleRule
 
 def _rules() -> list[StyleRule]:
     return [StyleRule.default_for_row(index) for index in range(10)]
+
+
+def test_missing_python_docx_is_wrapped_without_shadowing_builtin_import_error(
+    monkeypatch,
+) -> None:
+    original_import = builtins.__import__
+
+    def blocked_import(name, *args, **kwargs):
+        if name == "docx":
+            raise builtins.ImportError("python-docx unavailable")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", blocked_import)
+
+    with pytest.raises(importer_module.ImportError) as raised:
+        DocxImporter().load("missing.docx", _rules())
+
+    assert "请安装 python-docx" in str(raised.value)
+    assert isinstance(raised.value.__cause__, builtins.ImportError)
 
 
 def test_importer_removes_namespaced_null_relationship(tmp_path: Path) -> None:

@@ -295,10 +295,9 @@ class SignatureDetectionTest(unittest.TestCase):
         )
 
         self.assertEqual(
-            [(item.type_id, item.text) for item in data.paragraphs[-6:]],
+            [(item.type_id, item.text) for item in data.paragraphs[-5:]],
             [
-                ("heading2", "（五）压实工作责任。"),
-                ("body", "这里是正文内容这里是正文内容这里是正文内容。"),
+                ("heading2", "（五）压实工作责任。这里是正文内容这里是正文内容这里是正文内容。"),
                 ("attachment_note", "附件：1.基本情况"),
                 ("attachment_note_item", "2.具体情况"),
                 ("sign_org", "某区工作办公室"),
@@ -309,7 +308,7 @@ class SignatureDetectionTest(unittest.TestCase):
         output_visible = re.sub(
             r"\s+",
             "",
-            "".join(item.original_text or item.text for item in data.paragraphs[-6:]),
+            "".join(item.original_text or item.text for item in data.paragraphs[-5:]),
         )
         self.assertEqual(Counter(output_visible), Counter(source_visible))
 
@@ -335,10 +334,9 @@ class SignatureDetectionTest(unittest.TestCase):
         )
 
         self.assertEqual(
-            [(item.type_id, item.text) for item in data.paragraphs[-5:]],
+            [(item.type_id, item.text) for item in data.paragraphs[-4:]],
             [
-                ("heading2", "（五）压实工作责任。"),
-                ("body", "这里是正文内容这里是正文内容这里是正文内容。"),
+                ("heading2", "（五）压实工作责任。这里是正文内容这里是正文内容这里是正文内容。"),
                 ("attachment_note", "附件：1.基本情况"),
                 ("sign_org", "某区工作办公室"),
                 ("sign_date", "2025年10月15日"),

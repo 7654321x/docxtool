@@ -6,7 +6,7 @@ import re
 from dataclasses import replace
 from typing import Any, Callable, Optional, Tuple
 
-from docxtool.document.style_config import NB_FIXED, NB_SUFFIXES
+from docxtool.document.configuration.models import NB_FIXED, NB_SUFFIXES
 from docxtool.document.recognition.document_mode import starts_report_heading
 
 HEADING_PATTERNS = (

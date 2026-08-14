@@ -15,7 +15,13 @@ from docx.oxml.ns import qn
 from docx.enum.text import WD_LINE_SPACING
 from docx.shared import Pt
 
-from docxtool.document.style_config import ExportError, PageSettings, logger
+from docxtool.document.configuration.models import PageSettings
+from docxtool.document.engine.paragraph_styles import (
+    STYLE_PROFILE_WPS_BUILTIN,
+    normalize_style_profile,
+)
+from docxtool.document.diagnostics.logging import logger
+from docxtool.document.errors import ExportError
 
 
 def sectPr_with_preserved_header_footer_refs(sectPr, doc_part, source_parts, part_copier):
@@ -228,12 +234,19 @@ def write_doc_grid(section, settings: PageSettings, doc_mode: str = "") -> bool:
     return True
 
 
-def apply_page_settings(doc, settings: PageSettings, doc_mode: str = "") -> None:
+def apply_page_settings(
+    doc,
+    settings: PageSettings,
+    doc_mode: str = "",
+    *,
+    style_profile: str = "docxtool",
+) -> None:
     """设置输出文档全局页面、字体默认值和兼容网格。
 
     传入目标 Document、页面设置和文档模式；返回 None，直接写入
     documentDefaults、Normal 样式、各节 sectPr 和 settings 兼容项。
     """
+    resolved_style_profile = normalize_style_profile(style_profile)
     styles_element = doc.styles._element
     docDefaults = styles_element.find(qn("w:docDefaults"))
     if docDefaults is None:
@@ -272,17 +285,19 @@ def apply_page_settings(doc, settings: PageSettings, doc_mode: str = "") -> None
     szCs.set(qn("w:val"), "32")
     rPrDef.append(szCs)
 
-    style = doc.styles["Normal"]
-    style.font.size = Pt(16)
-    style.font.name = "Times New Roman"
-    rPr = style.element.get_or_add_rPr()
-    for old in rPr.findall(qn("w:rFonts")):
-        rPr.remove(old)
-    rFonts = OxmlElement("w:rFonts")
-    rFonts.set(qn("w:eastAsia"), "仿宋_GB2312")
-    rFonts.set(qn("w:ascii"), "Times New Roman")
-    rFonts.set(qn("w:hAnsi"), "Times New Roman")
-    rPr.insert(0, rFonts)
+    style = None
+    if resolved_style_profile != STYLE_PROFILE_WPS_BUILTIN:
+        style = doc.styles["Normal"]
+        style.font.size = Pt(16)
+        style.font.name = "Times New Roman"
+        rPr = style.element.get_or_add_rPr()
+        for old in rPr.findall(qn("w:rFonts")):
+            rPr.remove(old)
+        rFonts = OxmlElement("w:rFonts")
+        rFonts.set(qn("w:eastAsia"), "仿宋_GB2312")
+        rFonts.set(qn("w:ascii"), "Times New Roman")
+        rFonts.set(qn("w:hAnsi"), "Times New Roman")
+        rPr.insert(0, rFonts)
 
     for section in doc.sections:
         set_sectPr_page_layout(section._sectPr, settings, doc_mode)
@@ -314,16 +329,17 @@ def apply_page_settings(doc, settings: PageSettings, doc_mode: str = "") -> None
         el.set(qn("w:val"), val)
         compat.append(el)
 
-    style.paragraph_format.space_before = Pt(0)
-    style.paragraph_format.space_after = Pt(0)
-    style.paragraph_format.line_spacing = Pt(settings.line_spacing_value)
-    style.paragraph_format.line_spacing_rule = WD_LINE_SPACING.EXACTLY
-    style_pPr = style.element.get_or_add_pPr()
-    for old in style_pPr.findall(qn("w:contextualSpacing")):
-        style_pPr.remove(old)
-    ctxSpc = OxmlElement("w:contextualSpacing")
-    ctxSpc.set(qn("w:val"), "0")
-    style_pPr.append(ctxSpc)
+    if style is not None:
+        style.paragraph_format.space_before = Pt(0)
+        style.paragraph_format.space_after = Pt(0)
+        style.paragraph_format.line_spacing = Pt(settings.line_spacing_value)
+        style.paragraph_format.line_spacing_rule = WD_LINE_SPACING.EXACTLY
+        style_pPr = style.element.get_or_add_pPr()
+        for old in style_pPr.findall(qn("w:contextualSpacing")):
+            style_pPr.remove(old)
+        ctxSpc = OxmlElement("w:contextualSpacing")
+        ctxSpc.set(qn("w:val"), "0")
+        style_pPr.append(ctxSpc)
 
 
 def copy_paragraph_sectPr(para, sectPr, source_parts=None, part_copier=None,

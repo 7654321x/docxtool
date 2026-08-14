@@ -55,7 +55,12 @@ def finalize_export(
     # 版头只负责首页正文流，不得覆盖整篇文档的页面设置。
     page_settings = settings
     if not local_scope:
-        apply_page_settings(doc, page_settings, doc_data.doc_mode)
+        apply_page_settings(
+            doc,
+            page_settings,
+            doc_data.doc_mode,
+            style_profile=context.style_profile,
+        )
     _preserve_even_and_odd_headers_setting(doc, doc_data)
 
     # Structural-preservation mode may split a previously fused leading
@@ -162,10 +167,19 @@ def finalize_export(
     invariant_stats = _enforce_body_paragraph_invariants(
         doc,
         protected_paragraph_elements | context.native_numbering_elements,
+        style_profile=context.style_profile,
     )
     stats.update(invariant_stats)
     for heading_para, body_para, expected_body_text in inline_heading_body_pairs:
-        _verify_inline_heading_body_pair(heading_para, body_para, expected_body_text)
+        _verify_inline_heading_body_pair(
+            heading_para,
+            body_para,
+            expected_body_text,
+            expected_body_style_id=_style_id_for_type(
+                "body",
+                context.style_profile,
+            ),
+        )
     stats["inline_heading_body_verified"] = len(inline_heading_body_pairs)
     stats["style_fallback_count"] = stats["fallback_count"]
     if invariant_stats["fallback_count"] or invariant_stats["numpr_removed"]:

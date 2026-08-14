@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Dict, Iterable, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Dict, Iterable, Mapping, Sequence
 
 try:  # Python 3.9+
     from importlib.resources import files
@@ -37,21 +37,37 @@ from .errors import (
     InvalidRecognitionPlanError,
     InvalidRequestError,
 )
-from .manifest import get_sdk_manifest
-from .models import (
-    HostSnapshot,
-    HostSnapshotSummary,
-    RecognitionBinding,
-    RecognitionPlan,
-    RecognitionRequest,
-    ValidationIssue,
-    ValidationReport,
-    _host_snapshot_from_dict_unchecked,
-    _recognition_binding_from_dict_unchecked,
-    _recognition_plan_from_dict_unchecked,
-    _recognition_request_from_dict_unchecked,
-    stable_id,
-)
+
+if TYPE_CHECKING:
+    from .models import (
+        HostSnapshot,
+        HostSnapshotSummary,
+        RecognitionBinding,
+        RecognitionPlan,
+        RecognitionRequest,
+        ValidationIssue,
+        ValidationReport,
+    )
+
+
+def _models_module():
+    """Load protocol models only when a validator actually needs them.
+
+    The dataclasses own the unchecked representation; this module owns schema
+    and semantic validation.  Keeping the model import behind this boundary
+    removes the import-time ``models -> validation -> manifest -> models``
+    cycle while preserving the public ``Model.from_dict`` validation contract.
+    """
+    import importlib
+
+    return importlib.import_module("docxtool.sdk.models")
+
+
+def _sdk_manifest():
+    """Resolve the manifest facade lazily to keep validation one-way."""
+    import importlib
+
+    return importlib.import_module("docxtool.sdk.manifest").get_sdk_manifest()
 
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 _SENSITIVE_PATH_TOKENS = {
@@ -104,7 +120,7 @@ def _issue(
     severity: str,
     details: Mapping[str, Any] | None = None,
 ) -> ValidationIssue:
-    return ValidationIssue(
+    return _models_module().ValidationIssue(
         code=code,
         path=path or "$",
         severity=severity,
@@ -279,7 +295,11 @@ def _schema_policy_issues(value: Any, schema_name: str, code: str, *, strict: bo
 def _report(errors: Iterable[ValidationIssue], warnings: Iterable[ValidationIssue] = ()) -> ValidationReport:
     error_tuple = tuple(errors)
     warning_tuple = tuple(warnings)
-    return ValidationReport(valid=not error_tuple, errors=error_tuple, warnings=warning_tuple)
+    return _models_module().ValidationReport(
+        valid=not error_tuple,
+        errors=error_tuple,
+        warnings=warning_tuple,
+    )
 
 
 def _raise_if_invalid(report: ValidationReport, error_cls: type[DocxToolSdkError]) -> None:
@@ -344,7 +364,7 @@ def _expected_plan_id(payload: Mapping[str, Any]) -> str:
     producer = payload.get("producer") if isinstance(payload.get("producer"), Mapping) else {}
     contracts = payload.get("contracts") if isinstance(payload.get("contracts"), Mapping) else {}
     recognition = payload.get("recognition") if isinstance(payload.get("recognition"), Mapping) else {}
-    return stable_id(
+    return _models_module().stable_id(
         "plan",
         source.get("sha256"),
         payload.get("integration_contract_version"),
@@ -370,14 +390,14 @@ def _expected_physical_group_id(plan_id: str, block: Mapping[str, Any]) -> str:
     )
     if locator.get("physical_paragraph_index") is None:
         group_parts += (block.get("block_index"),)
-    return stable_id("pg", *group_parts)
+    return _models_module().stable_id("pg", *group_parts)
 
 
 def _expected_block_id(plan_id: str, block: Mapping[str, Any], physical_group_id: str) -> str:
     locator = block.get("source_locator") if isinstance(block.get("source_locator"), Mapping) else {}
     segment = block.get("segment") if isinstance(block.get("segment"), Mapping) else {}
     semantic = block.get("semantic") if isinstance(block.get("semantic"), Mapping) else {}
-    return stable_id(
+    return _models_module().stable_id(
         "blk",
         plan_id,
         physical_group_id,
@@ -431,7 +451,7 @@ def _expected_binding_id(payload: Mapping[str, Any]) -> str:
     contracts = payload.get("contracts") if isinstance(payload.get("contracts"), Mapping) else {}
     blocks = tuple(item for item in payload.get("blocks", ()) if isinstance(item, Mapping))
     physical = tuple(item for item in payload.get("physical_paragraphs", ()) if isinstance(item, Mapping))
-    return stable_id(
+    return _models_module().stable_id(
         "bind",
         payload.get("plan_id"),
         payload.get("snapshot_id"),
@@ -447,7 +467,7 @@ def _expected_binding_id(payload: Mapping[str, Any]) -> str:
 
 
 def validate_sdk_manifest(value: Mapping[str, Any] | None = None, *, strict: bool = False) -> ValidationReport:
-    payload = get_sdk_manifest().to_dict() if value is None else dict(value)
+    payload = _sdk_manifest().to_dict() if value is None else dict(value)
     errors = list(_schema_issues(payload, SDK_MANIFEST_SCHEMA_VERSION, "INVALID_RECOGNITION_REQUEST"))
     warnings: list[ValidationIssue] = []
     unknowns = _schema_policy_issues(payload, SDK_MANIFEST_SCHEMA_VERSION, "INVALID_RECOGNITION_REQUEST", strict=strict)
@@ -463,7 +483,13 @@ def validate_recognition_request(
     *,
     strict: bool = False,
 ) -> ValidationReport:
-    payload = value.to_dict() if isinstance(value, RecognitionRequest) else dict(value) if isinstance(value, Mapping) else value
+    payload = (
+        value.to_dict()
+        if isinstance(value, _models_module().RecognitionRequest)
+        else dict(value)
+        if isinstance(value, Mapping)
+        else value
+    )
     errors = list(_schema_issues(payload, RECOGNITION_REQUEST_SCHEMA_VERSION, "INVALID_RECOGNITION_REQUEST"))
     warnings: list[ValidationIssue] = []
     if isinstance(payload, Mapping):
@@ -493,7 +519,13 @@ def validate_sdk_error(value: Mapping[str, Any]) -> ValidationReport:
 
 
 def validate_validation_report(value: ValidationReport | Mapping[str, Any], *, strict: bool = False) -> ValidationReport:
-    payload = value.to_dict() if isinstance(value, ValidationReport) else dict(value) if isinstance(value, Mapping) else value
+    payload = (
+        value.to_dict()
+        if isinstance(value, _models_module().ValidationReport)
+        else dict(value)
+        if isinstance(value, Mapping)
+        else value
+    )
     errors = list(_schema_issues(payload, VALIDATION_REPORT_SCHEMA_VERSION, "INVALID_VALIDATION_REPORT"))
     warnings: list[ValidationIssue] = []
     if isinstance(payload, Mapping):
@@ -510,7 +542,13 @@ def validate_host_snapshot_summary(
     *,
     strict: bool = False,
 ) -> ValidationReport:
-    payload = value.to_dict() if isinstance(value, HostSnapshotSummary) else dict(value) if isinstance(value, Mapping) else value
+    payload = (
+        value.to_dict()
+        if isinstance(value, _models_module().HostSnapshotSummary)
+        else dict(value)
+        if isinstance(value, Mapping)
+        else value
+    )
     errors = list(_schema_issues(payload, HOST_SNAPSHOT_SUMMARY_SCHEMA_VERSION, "INVALID_HOST_SNAPSHOT_SUMMARY"))
     warnings: list[ValidationIssue] = []
     if isinstance(payload, Mapping):
@@ -532,7 +570,13 @@ def validate_recognition_plan(
     *,
     strict: bool = False,
 ) -> ValidationReport:
-    payload = value.to_dict() if isinstance(value, RecognitionPlan) else dict(value) if isinstance(value, Mapping) else value
+    payload = (
+        value.to_dict()
+        if isinstance(value, _models_module().RecognitionPlan)
+        else dict(value)
+        if isinstance(value, Mapping)
+        else value
+    )
     errors = list(_schema_issues(payload, RECOGNITION_PLAN_SCHEMA_VERSION, "INVALID_RECOGNITION_PLAN"))
     warnings: list[ValidationIssue] = []
     if isinstance(payload, Mapping):
@@ -690,7 +734,13 @@ def validate_host_snapshot(
     *,
     strict: bool = False,
 ) -> ValidationReport:
-    payload = value.to_dict() if isinstance(value, HostSnapshot) else dict(value) if isinstance(value, Mapping) else value
+    payload = (
+        value.to_dict()
+        if isinstance(value, _models_module().HostSnapshot)
+        else dict(value)
+        if isinstance(value, Mapping)
+        else value
+    )
     errors = list(_schema_issues(payload, HOST_SNAPSHOT_SCHEMA_VERSION, "INVALID_HOST_SNAPSHOT"))
     warnings: list[ValidationIssue] = []
     if isinstance(payload, Mapping):
@@ -745,7 +795,13 @@ def validate_recognition_binding(
     *,
     strict: bool = False,
 ) -> ValidationReport:
-    payload = value.to_dict() if isinstance(value, RecognitionBinding) else dict(value) if isinstance(value, Mapping) else value
+    payload = (
+        value.to_dict()
+        if isinstance(value, _models_module().RecognitionBinding)
+        else dict(value)
+        if isinstance(value, Mapping)
+        else value
+    )
     errors = list(_schema_issues(payload, RECOGNITION_BINDING_SCHEMA_VERSION, "INVALID_RECOGNITION_BINDING"))
     warnings: list[ValidationIssue] = []
     if isinstance(payload, Mapping):
@@ -1016,13 +1072,13 @@ def _semantic_binding_issues(payload: Mapping[str, Any]) -> tuple[ValidationIssu
 def recognition_request_from_dict(value: Mapping[str, Any], *, strict: bool = False) -> RecognitionRequest:
     report = validate_recognition_request(value, strict=strict)
     _raise_if_invalid(report, InvalidRequestError)
-    return _recognition_request_from_dict_unchecked(value, strict=strict)
+    return _models_module()._recognition_request_from_dict_unchecked(value, strict=strict)
 
 
 def recognition_plan_from_dict(value: Mapping[str, Any], *, strict: bool = False) -> RecognitionPlan:
     report = validate_recognition_plan(value, strict=strict)
     _raise_if_invalid(report, InvalidRecognitionPlanError)
-    return _recognition_plan_from_dict_unchecked(value, strict=strict)
+    return _models_module()._recognition_plan_from_dict_unchecked(value, strict=strict)
 
 
 def host_snapshot_from_dict(
@@ -1032,10 +1088,14 @@ def host_snapshot_from_dict(
 ) -> HostSnapshot:
     report = validate_host_snapshot(value, strict=strict)
     _raise_if_invalid(report, InvalidHostSnapshotError)
-    return _host_snapshot_from_dict_unchecked(value, strict=True, allow_legacy=False)
+    return _models_module()._host_snapshot_from_dict_unchecked(
+        value,
+        strict=True,
+        allow_legacy=False,
+    )
 
 
 def recognition_binding_from_dict(value: Mapping[str, Any], *, strict: bool = False) -> RecognitionBinding:
     report = validate_recognition_binding(value, strict=strict)
     _raise_if_invalid(report, InvalidRecognitionBindingError)
-    return _recognition_binding_from_dict_unchecked(value, strict=strict)
+    return _models_module()._recognition_binding_from_dict_unchecked(value, strict=strict)

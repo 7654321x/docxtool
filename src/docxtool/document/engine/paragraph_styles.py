@@ -10,7 +10,12 @@ from __future__ import annotations
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
-from docxtool.document.style_config import logger
+from docxtool.document.diagnostics.logging import logger
+
+
+STYLE_PROFILE_DOCXTOOL = "docxtool"
+STYLE_PROFILE_WPS_BUILTIN = "wps_builtin"
+_STYLE_PROFILES = {STYLE_PROFILE_DOCXTOOL, STYLE_PROFILE_WPS_BUILTIN}
 
 
 TYPE_TO_STYLE_ID: dict[str, str] = {
@@ -40,13 +45,57 @@ TYPE_TO_STYLE_ID: dict[str, str] = {
     "attachment_body": "DCT-AttachmentBody",
 }
 
+_WPS_BUILTIN_TYPE_TO_STYLE_ID: dict[str, str] = {
+    "meeting_meta": "Normal",
+    "heading1": "Heading1",
+    "heading1_report": "Heading1",
+    "heading2": "Heading2",
+    "title2": "Heading2",
+    "heading3": "Heading3",
+    "heading4": "Heading4",
+    "body": "Normal",
+}
 
-def style_id_for_type(type_id: str) -> str:
-    """映射段落类型到样式 ID；传入 type_id，返回 DCT 样式 ID。"""
+_WPS_REPLACED_DCT_STYLE_IDS = {
+    "DCT-Body",
+    "DCT-Heading1",
+    "DCT-Heading2",
+    "DCT-Heading3",
+    "DCT-Heading4",
+}
+
+
+def normalize_style_profile(style_profile: str | None) -> str:
+    """校验样式 profile；传入可选值，返回规范名称或立即失败。"""
+    resolved = str(style_profile or STYLE_PROFILE_DOCXTOOL).strip().lower()
+    if resolved not in _STYLE_PROFILES:
+        raise ValueError("WPS_STYLE_PROFILE_INVALID")
+    return resolved
+
+
+def style_id_for_type(
+    type_id: str,
+    style_profile: str = STYLE_PROFILE_DOCXTOOL,
+) -> str:
+    """映射段落类型到样式 ID；传入类型和 profile，返回最终样式 ID。"""
+    resolved_profile = normalize_style_profile(style_profile)
+    if resolved_profile == STYLE_PROFILE_WPS_BUILTIN:
+        style_id = _WPS_BUILTIN_TYPE_TO_STYLE_ID.get(type_id)
+        if style_id is not None:
+            return style_id
     style_id = TYPE_TO_STYLE_ID.get(type_id)
     if style_id is None:
-        logger.warning("[渲染] 未知段落类型 %r，显式使用正文样式", type_id)
-        return "DCT-Body"
+        fallback = (
+            "Normal"
+            if resolved_profile == STYLE_PROFILE_WPS_BUILTIN
+            else "DCT-Body"
+        )
+        logger.warning(
+            "[渲染] 未知段落类型 %r，显式使用正文样式 %s",
+            type_id,
+            fallback,
+        )
+        return fallback
     return style_id
 
 
@@ -89,8 +138,14 @@ def remove_paragraph_numbering(paragraph) -> bool:
     return True
 
 
-def enforce_body_paragraph_invariants(document, protected_elements=None) -> dict[str, int]:
+def enforce_body_paragraph_invariants(
+    document,
+    protected_elements=None,
+    *,
+    style_profile: str = STYLE_PROFILE_DOCXTOOL,
+) -> dict[str, int]:
     """修复输出正文段不变量；传入 Document 和保护元素集合，返回统计字典。"""
+    resolved_profile = normalize_style_profile(style_profile)
     fallback_count = 0
     numpr_removed = 0
     protected_elements = protected_elements or set()
@@ -102,11 +157,23 @@ def enforce_body_paragraph_invariants(document, protected_elements=None) -> dict
         if not paragraph.text.strip():
             continue
         style_id = paragraph_style_id(paragraph)
-        if style_id.startswith("DCT-"):
+        if _is_managed_style_id(style_id, resolved_profile):
             continue
-        set_paragraph_style_id(paragraph, "DCT-Body")
+        set_paragraph_style_id(
+            paragraph,
+            style_id_for_type("body", resolved_profile),
+        )
         fallback_count += 1
     return {"fallback_count": fallback_count, "numpr_removed": numpr_removed}
+
+
+def _is_managed_style_id(style_id: str, style_profile: str) -> bool:
+    """判断输出样式是否属于当前 profile；传入 ID 和 profile，返回布尔值。"""
+    if style_profile == STYLE_PROFILE_DOCXTOOL:
+        return style_id.startswith("DCT-")
+    if style_id in {"Normal", "Heading1", "Heading2", "Heading3", "Heading4"}:
+        return True
+    return style_id.startswith("DCT-") and style_id not in _WPS_REPLACED_DCT_STYLE_IDS
 
 
 def is_standalone_keep_heading(paragraph_data, next_paragraph_data, rendered_text: str) -> bool:

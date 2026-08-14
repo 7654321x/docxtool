@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 import unicodedata
 
-from docxtool.document.style_config import ConfigValidationError
+from docxtool.document.errors import ConfigValidationError
 
 
 DOCUMENT_DIRECTIONS = {"upward", "downward", "parallel"}

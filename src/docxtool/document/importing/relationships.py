@@ -7,7 +7,7 @@ import tempfile
 import zipfile
 from xml.etree import ElementTree as ET
 
-from docxtool.document.style_config import logger
+from docxtool.document.diagnostics.logging import logger
 
 
 def _remove_null_relationships(data: bytes) -> tuple[bytes, bool]:

@@ -8,7 +8,13 @@ from dataclasses import dataclass
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
-from docxtool.document.style_config import PageSettings, StyleRule
+from docxtool.document.configuration.models import PageSettings, StyleRule
+from docxtool.document.engine.paragraph_styles import (
+    STYLE_PROFILE_DOCXTOOL,
+    STYLE_PROFILE_WPS_BUILTIN,
+    normalize_style_profile,
+)
+from docxtool.document.errors import ExportError
 
 
 @dataclass(frozen=True)
@@ -51,6 +57,14 @@ _LETTERHEAD_STYLE_SPECS: tuple[_ParagraphStyleSpec, ...] = (
     _ParagraphStyleSpec("DCT-LetterheadSeparator", "Docxtool Letterhead Separator", 5, "左对齐", 0.0),
 )
 
+_WPS_BUILTIN_STYLE_SPECS: tuple[_ParagraphStyleSpec, ...] = (
+    _ParagraphStyleSpec("Normal", "Normal", 5, "两端对齐", 2.0),
+    _ParagraphStyleSpec("Heading1", "heading 1", 1, "左对齐", 2.0, False, 0),
+    _ParagraphStyleSpec("Heading2", "heading 2", 2, "左对齐", 2.0, False, 1),
+    _ParagraphStyleSpec("Heading3", "heading 3", 3, "左对齐", 2.0, False, 2),
+    _ParagraphStyleSpec("Heading4", "heading 4", 4, "左对齐", 2.0, False, 3),
+)
+
 _ALIGNMENT_TO_JC = {
     "左对齐": "left",
     "居中": "center",
@@ -63,6 +77,8 @@ def ensure_document_styles(
     document,
     rules: Sequence[StyleRule] | None,
     settings: PageSettings | None,
+    *,
+    style_profile: str = STYLE_PROFILE_DOCXTOOL,
 ) -> None:
     """Ensure stable structural paragraph styles exist in *document*.
 
@@ -71,6 +87,7 @@ def ensure_document_styles(
     or move run-level font logic out of the renderer.
     """
 
+    resolved_profile = normalize_style_profile(style_profile)
     resolved_rules = list(rules or [])
     resolved_settings = settings or PageSettings()
     styles_element = document.styles._element
@@ -78,6 +95,13 @@ def ensure_document_styles(
     for spec in _STYLE_SPECS:
         style = _get_or_create_style(styles_element, spec)
         _replace_ppr(style, _build_ppr(spec, _rule_at(resolved_rules, spec.rule_index), resolved_settings))
+
+    if resolved_profile == STYLE_PROFILE_WPS_BUILTIN:
+        for spec in _WPS_BUILTIN_STYLE_SPECS:
+            style = _required_builtin_style(styles_element, spec.style_id)
+            rule = _rule_at(resolved_rules, spec.rule_index)
+            _replace_ppr(style, _build_ppr(spec, rule, resolved_settings))
+            _replace_rpr(style, _rule_rpr(rule))
 
 
 def ensure_letterhead_styles(
@@ -116,6 +140,13 @@ def _get_or_create_style(styles_element, spec: _ParagraphStyleSpec):
     _ensure_child_value(style, "w:name", spec.name)
     _ensure_child_value(style, "w:basedOn", "Normal")
     return style
+
+
+def _required_builtin_style(styles_element, style_id: str):
+    for style in styles_element.findall(qn("w:style")):
+        if style.get(qn("w:styleId")) == style_id:
+            return style
+    raise ExportError(f"WPS_BUILTIN_STYLE_MISSING:{style_id}")
 
 
 def _ensure_child_value(parent, tag: str, value: str):
@@ -160,6 +191,29 @@ def _letterhead_rpr(style_id: str, rule: StyleRule):
         color = OxmlElement("w:color")
         color.set(qn("w:val"), "FF0000")
         rpr.append(color)
+    return rpr
+
+
+def _rule_rpr(rule: StyleRule):
+    rpr = OxmlElement("w:rPr")
+    fonts = OxmlElement("w:rFonts")
+    fonts.set(qn("w:eastAsia"), rule.font)
+    fonts.set(qn("w:ascii"), "Times New Roman")
+    fonts.set(qn("w:hAnsi"), "Times New Roman")
+    fonts.set(qn("w:cs"), "Times New Roman")
+    rpr.append(fonts)
+
+    half_points = str(int(round(rule.font_size_pt * 2)))
+    size = OxmlElement("w:sz")
+    size.set(qn("w:val"), half_points)
+    size_cs = OxmlElement("w:szCs")
+    size_cs.set(qn("w:val"), half_points)
+    rpr.extend((size, size_cs))
+
+    for tag in ("w:b", "w:bCs"):
+        bold = OxmlElement(tag)
+        bold.set(qn("w:val"), "1" if rule.bold else "0")
+        rpr.append(bold)
     return rpr
 
 

@@ -47,7 +47,7 @@ for filename in (
     "taskpane.js",
 ):
     datas.append((str(wps_root / filename), "."))
-for directory in ("js", "images"):
+for directory in ("js", "images", "reader"):
     for source in (wps_root / directory).rglob("*"):
         if source.is_file():
             destination = str(source.relative_to(wps_root).parent)
@@ -62,6 +62,14 @@ a = Analysis(
     hiddenimports=[
         "docxtool.resources",
         "docxtool.resources.schemas",
+        "apps.reader",
+        "apps.reader.models",
+        "apps.reader.paths",
+        "apps.reader.storage",
+        "apps.reader.import_text",
+        "apps.reader.parser",
+        "apps.reader.service",
+        "apps.wps.control.reader_routes",
     ],
     hookspath=[],
     hooksconfig={},

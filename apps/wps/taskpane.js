@@ -30,6 +30,7 @@
   let accountErrorCode = "";
   let lastAccountStatusKey = "";
   let lastResultSyncPending = "";
+  let activeMode = "format";
   const layoutDiagnosticsStartedAt = Date.now();
   const lifecycleEventCounts = Object.create(null);
   const REQUEST_ACK_TIMEOUT_MS = 5000;
@@ -359,7 +360,10 @@
     accountPendingResultCount = account.pending_result_count;
     accountNetworkAvailable = account.network_available === true;
     accountErrorCode = account.error_code || "";
-    node("account").textContent = account.signed_in
+    const accountServiceRequired = accountErrorCode === "WPS_PUBLIC_ACCOUNT_REQUIRED";
+    node("account").textContent = accountServiceRequired
+      ? "本地账号服务未启动"
+      : account.signed_in
       ? `${account.username || "当前账号"}${account.network_available ? "" : " · 服务器离线"}`
       : "未登录";
     if (!accountApplyAvailable) node("apply").disabled = true;
@@ -373,7 +377,10 @@
     ].join(":");
     if (statusKey === lastAccountStatusKey) return;
     lastAccountStatusKey = statusKey;
-    if (account.network_available === false && account.error_code) {
+    if (accountServiceRequired) {
+      node("message").textContent = "请从登录窗口登录或注册后重新启动 DocxTool WPS。";
+      node("error").textContent = displayError(account.error_code);
+    } else if (account.network_available === false && account.error_code) {
       node("message").textContent = "服务器无法连接。";
       node("error").textContent = displayError(account.error_code);
     }
@@ -388,6 +395,35 @@
   function setBusinessButtonsDisabled(disabled) {
     ["preview", "apply", "add_letterhead", "clear_preview", "health"].forEach((id) => { node(id).disabled = Boolean(disabled); });
     if (!disabled && !accountApplyAvailable) node("apply").disabled = true;
+  }
+
+  function readerApi() {
+    if (!window.DocxToolReader) throw new Error("WPS_READER_UI_UNAVAILABLE");
+    return window.DocxToolReader;
+  }
+
+  async function switchMode(mode) {
+    if (mode !== "format" && mode !== "reader") throw new Error("WPS_READER_MODE_INVALID");
+    if (mode === activeMode) return;
+    if (mode === "reader") {
+      node("format_mode").hidden = true;
+      node("reader_mode").hidden = false;
+      node("format_mode_tab").classList.remove("primary");
+      node("reader_mode_tab").classList.add("primary");
+      node("format_mode_tab").setAttribute("aria-selected", "false");
+      node("reader_mode_tab").setAttribute("aria-selected", "true");
+      await readerApi().activate();
+    } else {
+      readerApi().deactivate();
+      node("reader_mode").hidden = true;
+      node("format_mode").hidden = false;
+      node("reader_mode_tab").classList.remove("primary");
+      node("format_mode_tab").classList.add("primary");
+      node("reader_mode_tab").setAttribute("aria-selected", "false");
+      node("format_mode_tab").setAttribute("aria-selected", "true");
+    }
+    activeMode = mode;
+    log("INFO", "taskpane.mode.changed", "任务窗格功能模式已切换", { stage: mode });
   }
 
   function requestedFormatScope(commandName) {
@@ -599,6 +635,7 @@
 
   function closePanel() {
     log("INFO", "taskpane.close.start", "开始关闭任务窗格", { pane_instance_id: paneInstanceId });
+    if (window.DocxToolReader) window.DocxToolReader.pauseAndSave();
     try {
       const saved = storage().getItem(TASKPANE_KEY);
       if (!saved || !app || typeof app.GetTaskPane !== "function") return;
@@ -644,6 +681,53 @@
       MEETING_MINUTES: "会议纪要"
     };
     return modes[String(value || "").toUpperCase()] || "未知";
+  }
+
+  function escapeHtml(value) {
+    return String(value)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  function localIcon(name) {
+    return `<svg class="icon small" aria-hidden="true"><use href="./images/taskpane-icons.svg#${name}"></use></svg>`;
+  }
+
+  function renderRecognitionRows(rows) {
+    const groups = new Map();
+    rows.forEach((item) => {
+      const role = item.role_name || "未知";
+      const group = groups.get(role) || { role, count: 0, confirmed: 0, review: 0, unresolved: 0 };
+      group.count += 1;
+      if (item.binding_status === "confirmed") group.confirmed += 1;
+      if (item.binding_status === "review" || item.review_level === "review" || item.review_level === "critical_review") group.review += 1;
+      if (item.binding_status !== "confirmed" && item.binding_status !== "review") group.unresolved += 1;
+      groups.set(role, group);
+    });
+    if (!groups.size) {
+      const empty = document.createElement("div");
+      empty.className = "recognition-empty";
+      empty.textContent = "完成预览后显示识别结果。";
+      return [empty];
+    }
+    return [...groups.values()].map((group) => {
+      const row = document.createElement("div");
+      row.className = "row recognition-row";
+      const statusText = group.review
+        ? `待复核 ${group.review} 项`
+        : group.confirmed
+          ? "已确认"
+          : group.unresolved
+            ? "未定位"
+            : "待确认";
+      const text = `${group.role} ${group.count} 项 ${statusText}`;
+      row.textContent = text;
+      row.innerHTML = `<div class="recognition-row-main"><span class="recognition-role">${escapeHtml(group.role)}</span><span class="recognition-row-meta">${group.confirmed ? localIcon("check") : localIcon("warning")}<span class="recognition-pill">${group.count}</span>${group.review ? `<span class="recognition-review">待复核 ${group.review}</span>` : ""}</span></div>`;
+      return row;
+    });
   }
 
   function prepareTaskpaneRecovery(errorCode) {
@@ -854,14 +938,19 @@
     }
     node("status").textContent = displayStatus(currentStatus);
     const waitingForLatePanelReady = pendingRequestId === panelReadyRequestId && pendingAckTimedOut;
+    const accountServiceRequired = accountErrorCode === "WPS_PUBLIC_ACCOUNT_REQUIRED";
     node("message").textContent = waitingForLatePanelReady
       ? "WPS 尚未领取工作区重算请求，继续等待最终状态…"
+      : accountServiceRequired
+        ? "请从登录窗口登录或注册后重新启动 DocxTool WPS。"
       : !accountNetworkAvailable && accountErrorCode
         ? "服务器无法连接。"
         : state.message || "就绪";
     node("error").textContent = displayError(
       waitingForLatePanelReady
         ? "WPS_REQUEST_ACK_TIMEOUT"
+        : accountServiceRequired
+          ? accountErrorCode
         : !accountNetworkAvailable && accountErrorCode
           ? accountErrorCode
           : state.error_code || ""
@@ -885,20 +974,12 @@
     const recognition = state.recognition;
     if (!recognition) {
       node("summary").textContent = "尚未识别。";
-      node("rows").replaceChildren();
+      node("rows").replaceChildren(...renderRecognitionRows([]));
       return;
     }
     node("summary").textContent = `文档模式 ${displayDocumentMode(recognition.document_mode)}；识别 ${recognition.block_count || 0} 项；批注 ${state.preview_comment_count || 0}；确认 ${state.preview_confirmed_count || 0}；复核 ${state.preview_review_count || 0}；未定位 ${recognition.unresolved_count || 0}`;
     const rows = Array.isArray(state.recognition_rows) ? state.recognition_rows : [];
-    node("rows").replaceChildren(...rows.map((item) => {
-      const row = document.createElement("div");
-      row.className = "row";
-      const paragraph = Number.isInteger(item.paragraph_index) ? `段落 ${item.paragraph_index + 1}` : "结构项";
-      const confidence = Math.round(Number(item.confidence || 0) * 100);
-      const binding = item.binding_status === "confirmed" ? "已确认" : item.binding_status === "review" ? "需复核" : "未定位";
-      row.textContent = `${paragraph} · ${item.role_name || "未知"} · ${confidence}% · ${binding}${item.review_level === "review" || item.review_level === "critical_review" ? " · 识别建议复核" : ""}`;
-      return row;
-    }));
+    node("rows").replaceChildren(...renderRecognitionRows(rows));
   }
 
   function stopStateWait(error) {
@@ -1028,7 +1109,9 @@
     );
     void request(id).catch((error) => {
       const code = stableErrorCode(error, "WPS_TASKPANE_REQUEST_FAILED");
-      node("message").textContent = code === "WPS_PUBLIC_SERVER_UNAVAILABLE"
+      node("message").textContent = code === "WPS_PUBLIC_ACCOUNT_REQUIRED"
+        ? "请从登录窗口登录或注册后重新启动 DocxTool WPS。"
+        : code === "WPS_PUBLIC_SERVER_UNAVAILABLE"
         ? "服务器无法连接。"
         : code === "WPS_FORMAT_PAGE_SPEC_INVALID"
           ? "请输入有效页码范围。"
@@ -1065,17 +1148,26 @@
     pageInput.disabled = node("format_scope_mode").value !== "pre_format_pages";
     if (!pageInput.disabled) pageInput.focus();
   });
+  node("format_mode_tab").addEventListener("click", () => void switchMode("format").catch((error) => {
+    node("error").textContent = displayError(stableErrorCode(error, "WPS_READER_MODE_SWITCH_FAILED"));
+  }));
+  node("reader_mode_tab").addEventListener("click", () => void switchMode("reader").catch((error) => {
+    node("error").textContent = displayError(stableErrorCode(error, "WPS_READER_MODE_SWITCH_FAILED"));
+  }));
   node("close_panel").addEventListener("click", closePanel);
 
   try {
     resetViewport("initial");
     installLayoutDiagnostics();
     scheduleSettledViewportReset();
+    window.DocxToolTaskpaneLog = log;
+    readerApi().initialize();
     setBusinessButtonsDisabled(true);
     node("status").textContent = displayStatus("CONNECTING");
     node("message").textContent = "正在连接 WPS Host…";
     window.addEventListener("beforeunload", (event) => {
       logLifecycleEvent("beforeunload", event);
+      readerApi().pauseAndSave();
       stateWaitStopped = true;
     }, { once: true });
     window.addEventListener("unload", (event) => logLifecycleEvent("unload", event), { once: true });

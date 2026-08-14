@@ -7,7 +7,7 @@ from docxtool.document.importing import numbering as numbering_module
 from docxtool.document.importing import physical_format as physical_format_module
 from docxtool.document.models import ParagraphFeatures
 from docxtool.document.segmentation import source_locator as source_locator_module
-from docxtool.document.style_config import logger
+from docxtool.document.diagnostics.logging import logger
 
 
 def extract_paragraph_features(paragraph, index: int, *, detect_numbering_prefix_func) -> ParagraphFeatures:

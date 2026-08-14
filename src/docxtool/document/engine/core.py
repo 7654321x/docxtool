@@ -14,9 +14,9 @@ import copy
 import hashlib
 from typing import List
 
-from docxtool.document.style_config import (
-    StyleRule, PageSettings, logger, ExportError,
-)
+from docxtool.document.configuration.models import PageSettings, StyleRule
+from docxtool.document.diagnostics.logging import logger
+from docxtool.document.errors import ExportError
 from docxtool.document.models import DocumentData, ParagraphData
 from docxtool.document.engine.normal import resolve as _resolve_rule
 from docxtool.document.engine.cleanup import cleanup_styles
@@ -55,6 +55,7 @@ from docxtool.document.engine.paragraph_format import (
 from docxtool.document.engine.paragraph_styles import (
     enforce_body_paragraph_invariants as _enforce_body_paragraph_invariants,
     is_standalone_keep_heading as _is_standalone_keep_heading,
+    normalize_style_profile as _normalize_style_profile,
     set_keep_with_next as _set_keep_with_next,
     set_paragraph_style_id as _set_paragraph_style_id,
     style_id_for_type as _style_id_for_type,
@@ -160,7 +161,9 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
                signature_block_options: dict | None = None,
                table_format_options: dict | None = None,
                cleanup_options: dict | None = None,
-               letterhead_options: dict | None = None) -> dict:
+               letterhead_options: dict | None = None,
+               *,
+               style_profile: str = "docxtool") -> dict:
     """保留公开签名并把旧 core monkeypatch 命名空间注入真实导出主链。"""
     return _export_pipeline(
         doc_data,
@@ -175,5 +178,6 @@ def export_doc(doc_data: DocumentData, rules: List[StyleRule],
         table_format_options,
         cleanup_options,
         letterhead_options,
+        style_profile=style_profile,
         _compatibility_module=sys.modules[__name__],
     )

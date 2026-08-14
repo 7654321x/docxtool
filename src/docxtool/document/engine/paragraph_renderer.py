@@ -43,6 +43,7 @@ def render_document_items(
     inline_heading_body_pairs = context.inline_heading_body_pairs
     section_paragraphs = context.section_paragraphs
     letterhead_enabled = context.letterhead_enabled
+    style_profile = context.style_profile
 
     for i, pd in enumerate(render_items):
         if render_special_item(context, pd, compatibility_module=_compatibility_module):
@@ -145,7 +146,10 @@ def render_document_items(
                 _write_inline_tokens(para, inline_tokens)
             else:
                 para = doc.add_paragraph(text)
-            _set_paragraph_style_id(para, _style_id_for_type(pd.type_id))
+            _set_paragraph_style_id(
+                para,
+                _style_id_for_type(pd.type_id, style_profile),
+            )
             native_numbering = getattr(getattr(pd, "features", None), "native_numbering", None)
             preserve_native_numbering = bool(
                 native_numbering is not None
@@ -282,6 +286,7 @@ def render_document_items(
                 body_para = _apply_heading1_report_split(
                     para, full_text, resolved, body_rule, line_twips,
                     remove_heading_period=True,
+                    body_style_id=_style_id_for_type("body", style_profile),
                 )
                 if body_para is not None:
                     body_text = body_para.text
@@ -360,7 +365,14 @@ def render_document_items(
             ):
                 body_rule = rules[5] if len(rules) > 5 else StyleRule.default_for_row(5)
                 expected_body_text = pd.text.split("。", 1)[1].strip()
-                body_para = _apply_heading1_report_split(para, pd.text, resolved, body_rule, line_twips)
+                body_para = _apply_heading1_report_split(
+                    para,
+                    pd.text,
+                    resolved,
+                    body_rule,
+                    line_twips,
+                    body_style_id=_style_id_for_type("body", style_profile),
+                )
                 if body_para is not None:
                     inline_heading_body_pairs.append((para, body_para, expected_body_text))
                     stats["body"] += 1
@@ -413,6 +425,10 @@ def render_document_items(
                         para, para.text, resolved, body_rule
                     )
                 elif not strict_preservation and inline_heading2_period:
+                    _apply_numbered_heading2_period_format(
+                        para, para.text, resolved, body_rule
+                    )
+                elif not strict_preservation:
                     _apply_numbered_heading2_period_format(
                         para, para.text, resolved, body_rule
                     )

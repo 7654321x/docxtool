@@ -37,3 +37,23 @@ def test_core_export_facade_uses_one_context_in_pipeline_order(monkeypatch) -> N
         ("render", context, core),
         ("finalize", context, core),
     ]
+
+
+def test_core_export_facade_forwards_explicit_style_profile(monkeypatch) -> None:
+    received = {}
+
+    def fake_export(*args, **kwargs):
+        received.update(kwargs)
+        return {}
+
+    monkeypatch.setattr(core, "_export_pipeline", fake_export)
+
+    core.export_doc(
+        SimpleNamespace(filepath="fixture.docx", paragraphs=[], tables=[]),
+        [],
+        SimpleNamespace(),
+        "output.docx",
+        style_profile="wps_builtin",
+    )
+
+    assert received["style_profile"] == "wps_builtin"

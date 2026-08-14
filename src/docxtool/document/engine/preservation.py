@@ -17,7 +17,8 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.parts.hdrftr import FooterPart, HeaderPart
 
-from docxtool.document.style_config import ExportError, logger
+from docxtool.document.diagnostics.logging import logger
+from docxtool.document.errors import ExportError
 from docxtool.security.external_relationships import (
     external_relationship_policy,
     sanitized_external_target,

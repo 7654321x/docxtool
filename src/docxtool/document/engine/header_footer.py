@@ -11,7 +11,8 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Pt
 
-from docxtool.document.style_config import StyleRule, logger
+from docxtool.document.configuration.models import StyleRule
+from docxtool.document.diagnostics.logging import logger
 
 
 def apply_header_footer(doc, page_rule: StyleRule) -> None:

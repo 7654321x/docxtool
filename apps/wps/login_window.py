@@ -5,7 +5,7 @@ from __future__ import annotations
 import ctypes
 import sys
 
-from PySide2.QtCore import QObject, QRectF, Qt, QThread, Signal
+from PySide2.QtCore import QObject, QTimer, QRectF, Qt, QThread, Signal
 from PySide2.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 from PySide2.QtWidgets import (
     QApplication,
@@ -238,6 +238,8 @@ class LoginDialog(QDialog):
         self._set_status(initial_message)
         self._update_mode()
         self.username_input.setFocus()
+        if auto_login:
+            QTimer.singleShot(2000, self._submit_auto_login)
 
     @property
     def account_result(self) -> dict:
@@ -350,7 +352,7 @@ class LoginDialog(QDialog):
         preference_row.addStretch()
         card_layout.addLayout(preference_row)
 
-        self.startup_checkbox = QCheckBox("随 Windows 登录启动 DocxTool WPS")
+        self.startup_checkbox = QCheckBox("开机自启")
         self.startup_checkbox.setObjectName("PreferenceCheck")
         card_layout.addSpacing(11)
         card_layout.addWidget(self.startup_checkbox)
@@ -489,6 +491,17 @@ class LoginDialog(QDialog):
     def _auto_changed(self, checked: bool) -> None:
         if checked and not self.remember_checkbox.isChecked():
             self.remember_checkbox.setChecked(True)
+
+    def _submit_auto_login(self) -> None:
+        if self._mode != "login" or not self.auto_checkbox.isChecked() or self._result:
+            return
+        log_event(
+            "INFO",
+            "login",
+            "login.auto.window_submit",
+            "登录窗口已显示，自动登录按登录按钮流程提交",
+        )
+        self._submit()
 
     def _remember_changed(self, checked: bool) -> None:
         if not checked and self.auto_checkbox.isChecked():
@@ -677,7 +690,7 @@ class PreferencesDialog(QDialog):
         self.auto_checkbox = QCheckBox("自动登录")
         self.auto_checkbox.setObjectName("PreferenceCheck")
         self.auto_checkbox.setChecked(bool(account.get("auto_login")))
-        self.startup_checkbox = QCheckBox("随 Windows 登录启动 DocxTool WPS")
+        self.startup_checkbox = QCheckBox("开机自启")
         self.startup_checkbox.setObjectName("PreferenceCheck")
         self.startup_checkbox.setChecked(startup_enabled)
         self.remember_checkbox.toggled.connect(self._remember_changed)
@@ -689,7 +702,7 @@ class PreferencesDialog(QDialog):
         layout.addWidget(self.startup_checkbox)
         layout.addSpacing(20)
         self.status_label = QLabel(
-            "关闭自动登录后，下次启动会显示登录窗口。"
+            "自动登录只会在登录窗口显示后自动提交。"
             if account.get("password")
             else "如需重新记住密码，请先退出当前账号并重新登录。"
         )

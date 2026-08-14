@@ -18,6 +18,8 @@ def export_doc(doc_data, rules, settings, output_path,
                table_format_options=None,
                cleanup_options=None,
                letterhead_options=None,
+               *,
+               style_profile="docxtool",
                _compatibility_module=None):
     """Prepare, render, finalize, and return the unchanged export statistics."""
     if _compatibility_module is None:
@@ -35,6 +37,7 @@ def export_doc(doc_data, rules, settings, output_path,
         output_path,
         numbering_options,
         letterhead_options,
+        style_profile,
         compatibility_module=_compatibility_module,
     )
     render_document_items(

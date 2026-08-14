@@ -56,6 +56,29 @@ def test_apply_heading1_report_split_ignores_short_or_missing_body() -> None:
     assert [item.text for item in doc.paragraphs] == ["一、提高认识。短"]
 
 
+def test_apply_heading1_report_split_uses_requested_body_style() -> None:
+    doc = Document()
+    paragraph = doc.add_paragraph("一、提高认识。这里是完整正文")
+
+    body = apply_heading1_report_split(
+        paragraph,
+        paragraph.text,
+        StyleRule.default_for_row(1),
+        StyleRule.default_for_row(5),
+        560,
+        body_style_id="Normal",
+    )
+
+    assert body is not None
+    assert body.style.style_id == "Normal"
+    verify_inline_heading_body_pair(
+        paragraph,
+        body,
+        "这里是完整正文",
+        expected_body_style_id="Normal",
+    )
+
+
 def test_verify_inline_heading_body_pair_rejects_non_adjacent_or_changed_body() -> None:
     doc = Document()
     ensure_document_styles(doc, [StyleRule.default_for_row(i) for i in range(24)], PageSettings())

@@ -269,9 +269,29 @@ def split_structural_tail_after_numbered_heading(
     传入数据是源文本、已拆出的标题正文范围、下一物理段文本和结构回调。
     返回值是新的 source span 列表；正文自身仍保持为一个完整段。
     """
-    if len(heading_body_spans) != 2:
+    if len(heading_body_spans) < 2:
         return heading_body_spans
-    heading_span, body_span = heading_body_spans
+    heading_span, body_span = heading_body_spans[:2]
+    if heading_span[1] != body_span[0]:
+        result: list[Tuple[int, int]] = []
+        for start, end in heading_body_spans:
+            value = source[start:end]
+            date_suffix = (
+                find_sign_date_suffix_span_func(value)
+                if find_sign_date_suffix_span_func is not None
+                else None
+            )
+            if date_suffix is None:
+                result.append((start, end))
+                continue
+            date_start, date_end = date_suffix
+            org_start, org_end = trim_source_span(source, start, start + date_start)
+            if org_start < org_end and is_tail_signature_org_func(source[org_start:org_end]):
+                result.extend(((org_start, org_end), (start + date_start, start + date_end)))
+            else:
+                result.append((start, end))
+        return result
+
     body_start, body_end = body_span
     line_spans = source_line_spans(source)
     next_visible_line = next(

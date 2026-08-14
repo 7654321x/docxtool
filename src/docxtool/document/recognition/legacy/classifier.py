@@ -6,7 +6,7 @@ import hashlib
 from typing import Any, Callable, List, Tuple
 
 from docxtool.document.models import ParagraphFeatures
-from docxtool.document.style_config import StyleRule
+from docxtool.document.configuration.models import StyleRule
 
 
 def classify_legacy_paragraph(

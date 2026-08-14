@@ -129,6 +129,7 @@
 ## 九-A、附件分页与同行落款
 
 - [ ] 正文尾部同一可见行中的“短组织落款 + 日期后缀”必须拆成独立落款单位和日期，日期不得残留在正文软换行中。
+- [ ] 二级标题句号后同段正文不可为拆出尾部结构而拆成两个逻辑段；后续软换行中满足组织形态与日期后缀证据的落款、日期和附件仍应独立识别并在最终顺序中保留。
 - [ ] 已进入附件正文区后，每个独立“附件 N”都重新开启附件页；上一附件只有标题、没有正文时也不能吞掉下一附件标记。
 - [ ] 附件页标记后的短独立行可识别为附件标题；长文本或多行文本直接识别为附件正文。
 - [ ] 每个 `attachment_page_mark`只写入一次段前分页，连续附件不得同页，也不得因重复分页产生额外空页。
@@ -212,3 +213,31 @@ pwsh -NoProfile -Command ".\.venv\Scripts\python.exe scripts/batch_test_docx.py 
 - 不应仅因文件生成成功就说：“所有格式都没有问题。”
 - 模板仍存在真实 P1/P2 差异时，应明确说明差异数量和是否属于本轮目标。
 - 渲染器未运行时，应明确说“未执行视觉检查”，不能断言没有空白页或分页问题。
+
+## 十四、识别发布门禁
+
+发布前执行：
+
+```pwsh
+pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m pytest -rA --tb=short"
+pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m ruff check src tests scripts"
+pwsh -NoProfile -Command "node --test tests/worker-routing.test.mjs"
+pwsh -NoProfile -Command "node --test tests/frontend-format-config.test.mjs"
+pwsh -NoProfile -Command ".\.venv\Scripts\python.exe scripts/benchmark_recognition.py"
+```
+
+需要确认识别稳定性时，对脱敏样本重复执行：
+
+```pwsh
+pwsh -NoProfile -Command ".\.venv\Scripts\python.exe scripts/compare_recognition_runs.py <docx-or-directory> --repeat 3 --fail-on-type-drift"
+```
+
+以下任一项失败时停止发布：
+
+- Python、Ruff、Worker 或前端测试失败；
+- 重复识别出现类型、板块、模式或布局漂移；
+- 发文字号、会议元数据、附件或落款发生未审查变化；
+- DOCX 完整性、关系、表格、图片、页眉页脚或页面参数出现非预期变化；
+- 机械迁移快照存在未解释的物理块、逻辑段、locator、类型、package part 或 relationship 差异。
+
+机械迁移快照方法见 `docs/migration/codex-workflow.md`。回滚使用上一份已验证发布包或部署目录，不在生产机执行 `git reset --hard`、`git clean` 或强制 checkout。回滚后重新检查 `/health`、安全样本识别和下载完整性。

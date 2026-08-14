@@ -96,6 +96,13 @@ def build_logical_span_plan(
                 spans.append((start, end))
         preserve_inline_tokens = False
 
+    if has_structural_inline and split_soft_lines:
+        spans = split_structural_tail_after_numbered_heading_func(
+            source,
+            spans,
+            following_text,
+        )
+
     validate_source_span_partition_func(source, spans)
     return LogicalSpanPlan(
         spans=spans,

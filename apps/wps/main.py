@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 import argparse
+import errno
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
+import re
 import secrets
+import subprocess
 import sys
 import tempfile
 import threading
 import time
-from typing import Tuple
+from typing import List, Tuple
+from urllib.request import Request, urlopen
 from xml.etree import ElementTree
 
 FROZEN = bool(getattr(sys, "frozen", False))
@@ -27,13 +31,9 @@ if str(SRC_ROOT) not in sys.path:
 from apps.wps.control.logging_adapter import configure_wps_logging, log_event  # noqa: E402
 from apps.wps.control.server import DEFAULT_PORT, create_server  # noqa: E402
 from apps.wps import account_store  # noqa: E402
-from apps.wps.account_runtime import (  # noqa: E402
-    AccountRuntime,
-    account_from_response,
-    device_payload,
-)
+from apps.wps.account_runtime import AccountRuntime  # noqa: E402
 from apps.wps.login_window import show_login_register_window  # noqa: E402
-from apps.wps.public_api import PublicApiError, WpsPublicApi  # noqa: E402
+from apps.wps.public_api import WpsPublicApi  # noqa: E402
 from apps.wps import windows_startup  # noqa: E402
 
 RUNTIME_DIR = APP_ROOT / "runtime"
@@ -80,7 +80,8 @@ def verify_files() -> None:
         "package.json", "manifest.xml", "ribbon.xml", "index.html", "main.js",
         "js/bootstrap-log.js", "js/bootstrap-complete.js", "js/ribbon.js", "images/taskpane.svg", "host-runtime.js",
         "taskpane.html", "taskpane.js", "client-config.json",
-        "images/check.svg", "images/eye.svg", "images/eye-off.svg",
+        "reader/reader-client.js", "reader/reader-ui.js", "reader/reader.css",
+        "images/check.svg", "images/eye.svg", "images/eye-off.svg", "images/taskpane-icons.svg",
         "images/login-window.png", "images/user.svg",
     ]
     if not FROZEN:
@@ -89,6 +90,7 @@ def verify_files() -> None:
             "desktop_runtime.py", "windows_startup.py",
             "control/server.py", "control/host_bridge.py", "control/format_current_document.py",
             "control/add_letterhead.py",
+            "control/reader_routes.py",
             "control/document_transaction.py", "control/logging_adapter.py",
             "control/recognize_document.py", "control/monitor.py",
         ])
@@ -139,6 +141,145 @@ class _WpsStaticRequestHandler(SimpleHTTPRequestHandler):
         self.send_header("Pragma", "no-cache")
         self.send_header("Expires", "0")
         super().end_headers()
+
+
+class _WpsStaticHttpServer(ThreadingHTTPServer):
+    # 固定 3889 只能对应一个 WPS 会话，禁止新旧静态服务并存。
+    allow_reuse_address = False
+
+
+def _listening_pids(port: int) -> List[int]:
+    if sys.platform != "win32":
+        return []
+    try:
+        result = subprocess.run(
+            ["netstat", "-ano", "-p", "tcp"],
+            capture_output=True,
+            check=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            text=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    pattern = re.compile(
+        rf"^\s*TCP\s+127\.0\.0\.1:{port}\s+\S+\s+LISTENING\s+(\d+)\s*$",
+        re.IGNORECASE,
+    )
+    return [
+        int(match.group(1))
+        for line in result.stdout.splitlines()
+        if (match := pattern.match(line)) is not None
+    ]
+
+
+def _is_docxtool_static_service(port: int) -> bool:
+    try:
+        config_request = Request(
+            f"http://127.0.0.1:{port}/runtime/config",
+            headers={"Cache-Control": "no-cache"},
+        )
+        with urlopen(config_request, timeout=1) as response:
+            config = json.loads(response.read().decode("utf-8"))
+        control_url = config.get("controlBaseUrl")
+        token = config.get("sessionToken")
+        if (
+            not isinstance(control_url, str)
+            or not control_url.startswith("http://127.0.0.1:")
+            or not isinstance(token, str)
+            or not token
+        ):
+            return False
+        health_request = Request(
+            f"{control_url}/v1/health",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        with urlopen(health_request, timeout=1) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        return (
+            isinstance(payload, dict)
+            and payload.get("ok") is True
+            and isinstance(payload.get("data"), dict)
+            and payload["data"].get("service") == "docxtool-wps-control"
+        )
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+        return False
+
+
+def _stop_previous_docxtool_service(port: int) -> bool:
+    pids = sorted(set(_listening_pids(port)))
+    pids = [pid for pid in pids if pid != os.getpid()]
+    if not pids or not _is_docxtool_static_service(port):
+        return False
+    log_event(
+        "WARNING",
+        "launcher",
+        "launcher.web.previous_service.detected",
+        "检测到旧的 DocxTool WPS 本地服务，准备停止",
+        {"error_code": "WPS_WEB_SERVER_PREVIOUS_SERVICE"},
+    )
+    try:
+        result = subprocess.run(
+            ["taskkill", "/PID", str(pids[0]), "/T", "/F"],
+            capture_output=True,
+            check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            text=True,
+        )
+    except OSError as exc:
+        log_event(
+            "ERROR",
+            "launcher",
+            "launcher.web.previous_service.stop.failed",
+            "旧 DocxTool WPS 本地服务停止失败",
+            {
+                "error_code": "WPS_WEB_SERVER_OLD_SERVICE_STOP_FAILED",
+                "error_type": type(exc).__name__,
+            },
+        )
+        raise RuntimeError("WPS_WEB_SERVER_OLD_SERVICE_STOP_FAILED") from exc
+    if result.returncode != 0:
+        error = RuntimeError("WPS_WEB_SERVER_OLD_SERVICE_STOP_FAILED")
+        log_event(
+            "ERROR",
+            "launcher",
+            "launcher.web.previous_service.stop.failed",
+            "旧 DocxTool WPS 本地服务停止失败",
+            {
+                "error_code": "WPS_WEB_SERVER_OLD_SERVICE_STOP_FAILED",
+                "error_type": type(error).__name__,
+            },
+        )
+        raise error
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        if not _listening_pids(port):
+            log_event(
+                "INFO",
+                "launcher",
+                "launcher.web.previous_service.stop.completed",
+                "旧 DocxTool WPS 本地服务已停止",
+            )
+            return True
+        time.sleep(0.05)
+    error = RuntimeError("WPS_WEB_SERVER_OLD_SERVICE_STOP_FAILED")
+    log_event(
+        "ERROR",
+        "launcher",
+        "launcher.web.previous_service.stop.failed",
+        "旧 DocxTool WPS 本地服务停止后端口仍被占用",
+        {
+            "error_code": "WPS_WEB_SERVER_OLD_SERVICE_STOP_FAILED",
+            "error_type": type(error).__name__,
+        },
+    )
+    raise error
+
+
+def _is_address_in_use(error: OSError) -> bool:
+    return (
+        error.errno in {errno.EADDRINUSE, 10048}
+        or getattr(error, "winerror", None) == 10048
+    )
 
 
 def _publish_xml_path() -> Path:
@@ -225,21 +366,107 @@ def _publish_addin(web_port: int) -> None:
     )
 
 
+def _unpublish_addin() -> None:
+    """Remove only this app's WPS add-in registration."""
+    log_event(
+        "INFO", "launcher", "launcher.unpublish.start", "开始移除 WPS 加载项注册"
+    )
+    publish_path = _publish_xml_path()
+    if not publish_path.is_file():
+        log_event(
+            "INFO", "launcher", "launcher.unpublish.completed", "WPS 加载项注册无需移除",
+            {"removed_count": 0},
+        )
+        return
+    try:
+        tree = ElementTree.parse(publish_path)
+        root = tree.getroot()
+    except ElementTree.ParseError as exc:
+        log_event(
+            "ERROR", "launcher", "launcher.unpublish.parse.failed",
+            "WPS 加载项注册文件解析失败",
+            {"error_code": "WPS_UNPUBLISH_XML_INVALID", "error_type": type(exc).__name__},
+        )
+        raise RuntimeError("WPS_UNPUBLISH_XML_INVALID") from exc
+    if root.tag.rsplit("}", 1)[-1] != "jsplugins":
+        log_event(
+            "ERROR", "launcher", "launcher.unpublish.schema.failed",
+            "WPS 加载项注册文件根节点无效",
+            {"error_code": "WPS_UNPUBLISH_XML_SCHEMA_INVALID"},
+        )
+        raise RuntimeError("WPS_UNPUBLISH_XML_SCHEMA_INVALID")
+    matches = [
+        node
+        for node in list(root)
+        if node.tag.rsplit("}", 1)[-1] == "jspluginonline"
+        and node.get("name") == WPS_ADDIN_NAME
+    ]
+    if not matches:
+        log_event(
+            "INFO", "launcher", "launcher.unpublish.completed", "WPS 加载项注册无需移除",
+            {"removed_count": 0},
+        )
+        return
+    for node in matches:
+        root.remove(node)
+    temporary = publish_path.with_name(publish_path.name + ".tmp")
+    try:
+        tree.write(temporary, encoding="utf-8", xml_declaration=True)
+        temporary.replace(publish_path)
+    except OSError as exc:
+        log_event(
+            "ERROR", "launcher", "launcher.unpublish.write.failed",
+            "WPS 加载项注册文件写入失败",
+            {"error_code": "WPS_UNPUBLISH_WRITE_FAILED", "error_type": type(exc).__name__},
+        )
+        raise RuntimeError("WPS_UNPUBLISH_WRITE_FAILED") from exc
+    log_event(
+        "INFO", "launcher", "launcher.unpublish.completed", "WPS 加载项注册已移除",
+        {"removed_count": len(matches)},
+    )
+
+
 def _start_web_server(port: int) -> Tuple[ThreadingHTTPServer, int]:
     log_event(
         "INFO", "launcher", "launcher.web.create.start",
         "开始创建 WPS 插件网页服务", {"web_port": port},
     )
     try:
-        server = ThreadingHTTPServer(
+        server = _WpsStaticHttpServer(
             ("127.0.0.1", port), _WpsStaticRequestHandler
         )
     except OSError as exc:
+        if port == DEFAULT_WEB_PORT and _is_address_in_use(exc):
+            if _stop_previous_docxtool_service(port):
+                try:
+                    server = _WpsStaticHttpServer(
+                        ("127.0.0.1", port), _WpsStaticRequestHandler
+                    )
+                except OSError as retry_exc:
+                    exc = retry_exc
+                else:
+                    actual_port = int(server.server_address[1])
+                    log_event(
+                        "INFO",
+                        "launcher",
+                        "launcher.web.create.completed",
+                        "WPS 插件网页服务创建完成",
+                        {"web_port": actual_port},
+                    )
+                    return server, actual_port
+        error_code = (
+            "WPS_WEB_SERVER_PORT_IN_USE"
+            if port == DEFAULT_WEB_PORT
+            and _is_address_in_use(exc)
+            else "WPS_WEB_SERVER_CREATE_FAILED"
+        )
         log_event(
             "ERROR", "launcher", "launcher.web.create.failed",
             "WPS 插件网页服务创建失败",
-            {"web_port": port, "error_code": "WPS_WEB_SERVER_CREATE_FAILED", "error_type": type(exc).__name__},
+            {"web_port": port, "error_code": error_code, "error_type": type(exc).__name__},
         )
+        if error_code == "WPS_WEB_SERVER_PORT_IN_USE":
+            raise RuntimeError(error_code) from exc
         raise
     actual_port = int(server.server_address[1])
     log_event(
@@ -306,20 +533,22 @@ def control_only(port: int) -> None:
 
 
 def start(port: int, account_runtime=None, *, stop_event=None) -> None:
+    if account_runtime is None:
+        log_event(
+            "ERROR", "launcher", "launcher.account_runtime.required",
+            "WPS 插件服务必须绑定本地账号运行时",
+            {"error_code": "WPS_ACCOUNT_RUNTIME_REQUIRED"},
+        )
+        raise RuntimeError("WPS_ACCOUNT_RUNTIME_REQUIRED")
     verify_files()
     configure_wps_logging(CONTROL_RUNTIME_ROOT)
-    control_server, actual_port = (
-        _start_control(port)
-        if account_runtime is None
-        else _start_control(port, account_runtime)
-    )
+    control_server, actual_port = _start_control(port, account_runtime)
     web_server = None
     control_thread = None
     thread_started = False
     account_started = False
     try:
         web_server, actual_web_port = _start_web_server(DEFAULT_WEB_PORT)
-        _publish_addin(actual_web_port)
         control_thread = threading.Thread(
             target=control_server.serve_forever,
             kwargs={"poll_interval": 0.25},
@@ -333,14 +562,14 @@ def start(port: int, account_runtime=None, *, stop_event=None) -> None:
             log_event("ERROR", "launcher", "launcher.control.thread.failed", "WPS Control Server 线程启动失败", {"control_port": actual_port, "error_code": "WPS_CONTROL_THREAD_START_FAILED", "error_type": type(exc).__name__})
             raise
         log_event("INFO", "launcher", "launcher.control.thread.started", "WPS Control Server 线程已启动", {"control_port": actual_port})
+        account_runtime.start()
+        account_started = True
+        _publish_addin(actual_web_port)
         log_event(
             "INFO", "launcher", "launcher.session.start",
             "DocxTool WPS 后台服务已启动，请按需打开 WPS 文字",
             {"control_port": actual_port, "web_port": actual_web_port},
         )
-        if account_runtime is not None:
-            account_runtime.start()
-            account_started = True
         try:
             if stop_event is None:
                 web_server.serve_forever(poll_interval=0.25)
@@ -465,7 +694,7 @@ def start(port: int, account_runtime=None, *, stop_event=None) -> None:
 
 
 def resolve_startup_account(api, *, force_login: bool = False) -> dict:
-    """Resolve user-selected auto-login, otherwise show the authentication window."""
+    """Always show the authentication window before starting WPS services."""
     initial_message = ""
     try:
         account = account_store.load_account()
@@ -493,76 +722,16 @@ def resolve_startup_account(api, *, force_login: bool = False) -> dict:
         )
         account = {}
         initial_message = "检测到本地登录信息异常，请重新登录。"
-    if account.get("auto_login") and not force_login:
-        log_event("INFO", "login", "login.auto.start", "开始自动恢复 WPS 登录状态")
-        if int(account["session_expires_at"]) > int(time.time()):
-            log_event(
-                "INFO",
-                "login",
-                "login.auto.session_reused",
-                "自动登录已复用本机会话",
-            )
-            return account
-        log_event(
-            "INFO",
-            "login",
-            "login.auto.password_login.start",
-            "自动登录开始刷新 WPS 会话",
-        )
-        try:
-            response = api.login(
-                {
-                    "username": account["username"],
-                    "password": account["password"],
-                    "device": device_payload(account["device_key"]),
-                }
-            )
-            account = account_from_response(
-                response,
-                origin=api.origin,
-                username=account["username"],
-                password=account["password"],
-                device_key=account["device_key"],
-                remember_password=True,
-                auto_login=True,
-            )
-            account_store.save_account(account)
-        except PublicApiError as exc:
-            log_event(
-                "WARNING",
-                "login",
-                "login.auto.failed",
-                "自动登录失败，打开登录窗口",
-                {
-                    "error_code": exc.code,
-                    "error_type": type(exc).__name__,
-                    "network_available": not exc.network,
-                },
-            )
-            if exc.network:
-                log_event(
-                    "WARNING",
-                    "login",
-                    "login.auto.offline_existing_account",
-                    "公网暂时不可用，使用已有本地账号启动本地功能",
-                    {"error_code": exc.code, "network_available": False},
-                )
-                return account
-            initial_message = exc.message
-        else:
-            log_event(
-                "INFO",
-                "login",
-                "login.auto.password_login.completed",
-                "自动登录已刷新 WPS 会话",
-            )
-            return account
     log_event(
         "INFO",
         "launcher",
         "launcher.account.window.open",
-        "启动时打开登录注册窗口",
-        {"reason": "account_saved" if account else "account_missing"},
+        "启动时打开登录注册窗口，等待界面完成账号认证",
+        {
+            "reason": "force_login" if force_login else "startup",
+            "account_present": bool(account),
+            "auto_login_requested": bool(account.get("auto_login")),
+        },
     )
     return show_login_register_window(
         api=api,
@@ -591,6 +760,7 @@ def run_desktop(port: int, *, force_login: bool = False) -> int:
     instance = SingleInstance()
     if not instance.acquire():
         return 0
+    _unpublish_addin()
     api = WpsPublicApi()
     account = resolve_startup_account(
         api,
@@ -610,6 +780,7 @@ def run_desktop(port: int, *, force_login: bool = False) -> int:
     exit_code = application.exec_()
     controller.shutdown()
     if controller.restart_login_requested:
+        _unpublish_addin()
         instance.close()
         windows_startup.launch("--force-login")
     return exit_code

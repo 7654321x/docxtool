@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import builtins
 import sys
 from typing import List, Optional, Tuple
 
@@ -188,10 +189,13 @@ from docxtool.document.segmentation.soft_breaks import (
     is_structural_key_value_line as _seg_is_structural_key_value_line,
     should_split_structural_line_breaks as _seg_should_split_structural_line_breaks,
 )
-from docxtool.document.style_config import (
-    logger, ImportError,
-    StyleRule,
-)
+from docxtool.document.errors import DocumentImportError
+from docxtool.document.configuration.models import StyleRule
+from docxtool.document.diagnostics.logging import logger
+
+# 旧调用方仍从 importer.ImportError 捕获导入阶段异常；内部不再遮蔽
+# Python 内置的 builtins.ImportError。
+ImportError = DocumentImportError
 
 # The extracted document pipeline reads these names from this module so legacy
 # monkeypatch paths still intercept the real execution. Keep the registry
@@ -757,8 +761,10 @@ class DocxImporter:
         """加载 .docx，识别段落类型，返回 DocumentData。"""
         try:
             from docx import Document as DocxDocument
-        except ImportError:
-            raise ImportError("请安装 python-docx: pip install python-docx")
+        except builtins.ImportError as exc:
+            raise DocumentImportError(
+                "请安装 python-docx: pip install python-docx"
+            ) from exc
 
         return run_document_pipeline(
             filepath,
@@ -769,7 +775,7 @@ class DocxImporter:
             importer=self,
             compatibility=sys.modules[__name__],
             document_factory=DocxDocument,
-            import_error_type=ImportError,
+            import_error_type=DocumentImportError,
             logger=logger,
             format_scope=format_scope,
             format_scope_resolver=format_scope_resolver,

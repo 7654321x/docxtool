@@ -1,11 +1,13 @@
 # 迁移文档目录
 
+本目录保存已经完成的机械迁移和功能基线记录，不是当前架构或产品规则来源。当前架构见 `../ARCHITECTURE.md`，当前回归规则见对应 checklist。
+
 本目录只存放行为保持重构和代码职责迁移的规则、阶段清单和脱敏验证记录。它不用于记录一般业务缺陷、用户 DOCX 内容、构建产物或发布日志。
 
 ## 入口
 
 - [`codex-workflow.md`](codex-workflow.md)：所有机械迁移必须遵守的职责边界、门禁、快照比较和报告格式。
-- [`phase-a2-checklist.md`](phase-a2-checklist.md)：当前已登记的 Phase A-2 状态和验证结果。
+- [`phase-a2-checklist.md`](phase-a2-checklist.md)：已完成 Phase A-2 的状态和验证结果。
 - [`phase-a2-looper-log.md`](phase-a2-looper-log.md)：Phase A-2 连续微批次的脱敏执行记录和等价验证摘要。
 - [`phase-b0-report.md`](phase-b0-report.md)：Phase B-0 功能基线、边界修复、P1 根因聚类和验证结论。
 - [`phase-b0-manifest.json`](phase-b0-manifest.json)：2.2/2.6/2.7/current 的固定样本、配置、版本和制品哈希。

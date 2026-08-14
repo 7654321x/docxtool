@@ -49,7 +49,7 @@ pwsh -NoProfile -Command "node --test tests/frontend-format-config.test.mjs"
 pwsh -NoProfile -Command "node --test tests/worker-routing.test.mjs"
 ```
 
-如改动触及 DOCX 主链路，还必须遵守 `docs/DOCX_REGRESSION_CHECKLIST.md`：执行相应批量文档处理、结构审计、模板对齐和可用时的视觉抽查。发布前的完整流程以 `docs/RECOGNITION_RELEASE.md` 和 `scripts/publish_to_github.ps1 -Verify` 为准。
+如改动触及 DOCX 主链路，还必须遵守 `docs/DOCX_REGRESSION_CHECKLIST.md`：执行相应批量文档处理、结构审计、模板对齐、发布门禁和可用时的视觉抽查。GitHub 发布流程以 `docs/RELEASE.md` 和 `scripts/publish_to_github.ps1 -Verify` 为准。
 
 ## 快照比较方法
 

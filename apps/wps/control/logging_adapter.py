@@ -14,7 +14,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, Dict, Iterator, Optional
 
-from docxtool.document.style_config import (
+from docxtool.document.diagnostics.logging import (
     LOG_FORMAT,
     configure_logging,
     get_logger,
@@ -72,7 +72,7 @@ SAFE_WPS_LOG_FIELDS = frozenset(
         "screen_avail_height", "screen_avail_left", "screen_avail_top", "screen_avail_width",
         "screen_height", "screen_width",
         "sdk_error_code", "sdk_error_path", "sdk_error_reason",
-        "start_utf16", "state", "state_revision", "status", "table_paragraph_count", "temporary_state",
+        "start_utf16", "state", "state_revision", "status", "style_profile", "table_paragraph_count", "temporary_state",
         "state_wait_in_flight", "state_wait_stopped", "stored_pane_id_present", "timer_drift_ms", "token_present",
         "top_element_id", "top_element_tag", "total_duration_ms", "trigger", "type_id",
         "unresolved", "unresolved_count", "numbering_enabled",
@@ -83,6 +83,7 @@ SAFE_WPS_LOG_FIELDS = frozenset(
         "window_screen_left", "window_screen_top", "window_screen_x", "window_screen_y",
         "window_top_is_self", "user_id_short",
         "bridge_ready", "command_sequence",
+        "book_id_short", "chapter_count", "encoding", "size_bytes",
         "preview_confirmed_count", "preview_eligible_count", "preview_review_count",
         "conversion_state", "inline_shape_count", "mismatch_count", "section_count",
         "shape_count", "source_format", "target_format", "target_state", "wpsjs_version",

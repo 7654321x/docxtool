@@ -107,6 +107,8 @@ finalize 删除备份和 journal
 
 如果替换后重新打开或 finalize 失败，WPS 会先关闭已打开的新文件，再请求 Python rollback，随后重新打开恢复后的原文件。若进程在中途退出，下一次 Control Server 启动会读取 `runtime/transaction-state.json` 并恢复未完成事务；恢复无法安全完成时直接报 `WPS_TRANSACTION_RECOVERY_REQUIRED`，不会静默继续。
 
+WPS 一键排版在输出文档内使用内置快捷样式：正文为 `Normal`，一至四级标题分别为 `Heading1` 至 `Heading4`。这些是 OOXML 内部样式 ID，中文 WPS 顶部继续显示“正文、标题1、标题2、标题3、标题4”，不会新增英文快捷样式按钮。主标题、版头、落款、附件等特殊结构继续使用 DCT 样式；网页、SDK、CLI 和批处理入口也继续使用 DCT 样式。该行为只修改当前排版结果文档，不修改 WPS 全局模板；成功后结果保留，只有排版失败、取消或事务回滚时恢复原文档。详细设计见 [`../../docs/design/WPS_BUILTIN_STYLE_GALLERY_TECHNICAL_DESIGN.md`](../../docs/design/WPS_BUILTIN_STYLE_GALLERY_TECHNICAL_DESIGN.md)。
+
 任务窗格的“排版范围”可选择全文或指定排版前页码，页码支持 `3`、`3-5`、`3,5,8-10`。WPS 在排版开始前固定原始页边界和对应物理段落，跨页段落整体纳入；后续排版改变分页时不重新计算。完整 DOCX 仍由本机读取以保留范围外内容，但只有指定范围对应的源物理段进入逻辑拆分、识别、规范化和排版，范围外段落、表格、样式、原生编号和页面设置原样保留。局部排版不执行全局版头、页码、页面设置、全文清理或尾部重排。
 
 任务窗格的“添加版头”单独读取当前版头并填写发文机关标志、发文字号、可选签发人和分割线类型。确认后直接通过本机事务生成到当前文档，不执行全文识别、一键排版或公网授权；已有版头先中文确认替换，失败时恢复原文。当前只支持单机关发文；旧 `.doc/.wps` 打开表单时仅临时转换检查，真正添加时才生成同名 `.docx`。
@@ -143,9 +145,10 @@ pwsh -NoProfile -Command "python apps/wps/main.py verify"
 pwsh -NoProfile -Command "python apps/wps/main.py start"
 ```
 
-`start` 会为 Control Server 分配随机本机端口，插件网页服务固定使用 `127.0.0.1:3889`，生成短期 `runtime/runtime-config.js`，并更新当前项目的 WPS 加载项注册。固定网页来源避免 WPS 因端口变化反复询问信任；若 `3889` 已被占用，启动器会直接报告端口绑定失败，不回退到随机端口。插件网页响应禁止缓存，避免 WPS 跨会话继续加载旧版 Bootstrap、Host 或 TaskPane。它不会自动打开或关闭 WPS；服务就绪后按需打开 WPS 文字即可。运行结束后会删除包含 session token 的 runtime config。
+用户只能通过 EXE 或 `python apps/wps/main.py start` 进入登录/注册流程。`start` 会先完成登录或注册；没有可用本地账号、账号损坏后取消登录，或关闭登录窗口时，不启动本地服务并移除本项目的 WPS 加载项注册。登录成功后才会为 Control Server 分配随机本机端口，启动固定为 `127.0.0.1:3889` 的插件网页服务，生成短期 `runtime/runtime-config.js`，并更新当前项目的 WPS 加载项注册。不得直接调用内部 `start(0)` 发布插件：账号数据库存在不表示当前 Control Server 已绑定 `AccountRuntime`。固定网页来源避免 WPS 因端口变化反复询问信任；若 `3889` 已被占用，启动器会先验证该监听者确实是 DocxTool WPS 旧服务，确认后自动停止并重试，非 DocxTool 占用仍直接报错，不回退到随机端口。插件网页响应禁止缓存，避免 WPS 跨会话继续加载旧版 Bootstrap、Host 或 TaskPane。它不会自动打开或关闭 WPS；服务就绪后按需打开 WPS 文字即可。运行结束后会删除包含 session token 的 runtime config。
+若启动前 WPS 已经打开并缓存了旧任务窗格，自动停止旧 Python 服务也不能强行卸载当前 WPS 页面；请关闭 WPS 后重新打开。未登录期间不会重新发布本项目加载项。
 
-独立登录注册窗口使用 `PySide2 5.15.2.1 + Qt Widgets + QSS`，通过布局和 Qt 5 高 DPI 属性适配 Windows 7 SP1、8.1、10 和 11。默认每次启动都显示窗口；“记住密码”允许使用 Windows DPAPI 保存并回填密码，“自动登录”同时启用记住密码，并在下次启动时复用有效会话或执行一次静默登录。自动登录后可从系统托盘进入“登录与账号设置”，双击托盘或再次运行程序也会打开设置；按住 Shift 启动会强制显示登录窗口。取消记住密码会清除密码密文并关闭自动登录。“随 Windows 登录启动”是独立开关，写入当前用户启动项，不需要管理员权限。账号、会话和设备密钥继续保存在 `%LOCALAPPDATA%\DocxTool\wps\account.db`；一键排版每次执行前必须重新取得公网授权。
+独立登录注册窗口使用 `PySide2 5.15.2.1 + Qt Widgets + QSS`，通过布局和 Qt 5 高 DPI 属性适配 Windows 7 SP1、8.1、10 和 11。每次启动都先显示登录窗口；“记住密码”允许使用 Windows DPAPI 保存并回填密码，“自动登录”同时启用记住密码，但只表示窗口显示后自动触发一次与用户点击“登录”相同的提交流程，不会绕过窗口或在后台直接复用会话。自动登录失败时窗口保持打开，用户可以修改后手动登录；登录成功前不启动本地服务、不注册 WPS 加载项。登录成功后可从系统托盘进入“登录与账号设置”，双击托盘或再次运行程序也会打开设置。取消记住密码会清除密码密文并关闭自动登录。“开机自启”是独立开关，写入当前用户启动项，不需要管理员权限；开机启动后仍先显示登录窗口。账号、会话和设备密钥继续保存在 `%LOCALAPPDATA%\DocxTool\wps\account.db`；一键排版每次执行前必须重新取得公网授权。
 
 只测试 Python Control Server：
 
@@ -153,7 +156,7 @@ pwsh -NoProfile -Command "python apps/wps/main.py start"
 pwsh -NoProfile -Command "python apps/wps/main.py control"
 ```
 
-构建用户端控制台单文件 EXE：
+构建用户端无控制台 GUI 单文件 EXE：
 
 ```pwsh
 pwsh -NoProfile -File apps/wps/scripts/build-exe.ps1 -ServerOrigin https://wps.example.com

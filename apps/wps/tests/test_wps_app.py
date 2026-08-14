@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import http.client
 import json
 from logging.handlers import RotatingFileHandler
@@ -1260,6 +1261,52 @@ def test_format_pipeline_failure_logs_exact_stage(
     assert failure["error_code"] == expected_code
 
 
+def test_wps_one_click_passes_builtin_style_profile_to_engine(tmp_path, monkeypatch):
+    source = tmp_path / "source.docx"
+    target = tmp_path / "output.docx"
+    source.write_bytes(b"source")
+    captured = {}
+
+    class FakeImporter:
+        def load(self, *_args, **_kwargs):
+            return SimpleNamespace(
+                doc_mode="NORMAL",
+                paragraphs=[SimpleNamespace(type_id="body")],
+            )
+
+    def fake_export(*_args, **kwargs):
+        captured.update(kwargs)
+        target.write_bytes(b"output")
+        return {}
+
+    monkeypatch.setattr(
+        format_module,
+        "load_rules_and_settings",
+        lambda _config: (
+            {},
+            {},
+            {
+                "processing": {},
+                "numbering": {"enabled": False},
+                "punctuation": {"enabled": False},
+            },
+        ),
+    )
+    monkeypatch.setattr(format_module, "DocxImporter", FakeImporter)
+    monkeypatch.setattr(format_module, "export_doc", fake_export)
+    monkeypatch.setattr(format_module, "validate_docx_integrity", lambda _path: None)
+
+    format_module.format_current_document(
+        str(source),
+        str(target),
+        operation_id="operation-style-profile",
+        log_dir=tmp_path / "logs",
+        request_id="request-style-profile",
+    )
+
+    assert captured["style_profile"] == "wps_builtin"
+
+
 def test_wps_one_click_format_rebuilds_heading_numbering_by_default(tmp_path):
     source = tmp_path / "source.docx"
     target = tmp_path / "output.docx"
@@ -1287,7 +1334,7 @@ def test_wps_one_click_format_rebuilds_heading_numbering_by_default(tmp_path):
         paragraph.text
         for paragraph in Document(target).paragraphs
         if paragraph.style.style_id
-        in {"DCT-Heading1", "DCT-Heading2", "DCT-Heading3", "DCT-Heading4"}
+        in {"Heading1", "Heading2", "Heading3", "Heading4"}
     ]
     assert headings == [
         "一、第一部分",
@@ -1333,7 +1380,7 @@ def test_wps_page_scope_recognizes_only_selected_source_paragraphs(tmp_path):
         "范围外末段",
     ]
     assert output.paragraphs[0].style.name == "Caption"
-    assert output.paragraphs[1].style.style_id == "DCT-Heading1"
+    assert output.paragraphs[1].style.style_id == "Heading1"
     assert output.paragraphs[2].style.name == "Quote"
     assert output.tables[0].cell(0, 0).text == "范围外表格"
     assert output.sections[0].top_margin == source_top_margin
@@ -1385,7 +1432,7 @@ def test_wps_one_click_rebuilds_native_heading_numbering_from_server_config(tmp_
     heading = next(
         paragraph
         for paragraph in output.paragraphs
-        if paragraph.style.style_id == "DCT-Heading2"
+        if paragraph.style.style_id == "Heading2"
     )
     assert heading.text == "（一）自动编号二级标题"
     assert heading._p.get_or_add_pPr().find(qn("w:numPr")) is None
@@ -1423,7 +1470,7 @@ def test_wps_one_click_format_uses_safe_punctuation_by_default(tmp_path, monkeyp
     body_texts = [
         paragraph.text
         for paragraph in Document(target).paragraphs
-        if paragraph.style.style_id == "DCT-Body"
+        if paragraph.style.style_id == "Normal"
     ]
     assert captured["features"]["punctuation"]["enabled"] is True
     assert "请访问 https://example.com/a,b?x=1.2, 并说明：可以吗？" in body_texts
@@ -1453,6 +1500,12 @@ def test_wps_log_rejects_document_name_and_document_path():
         }
     )
     assert fields == {}
+
+
+def test_wps_log_accepts_style_profile_diagnostic():
+    assert sanitize_wps_log_fields({"style_profile": "wps_builtin"}) == {
+        "style_profile": "wps_builtin"
+    }
 
 
 def test_wps_log_accepts_taskpane_scroll_diagnostics():
@@ -2132,13 +2185,17 @@ def test_verify_files_requires_new_bootstrap_files(monkeypatch, tmp_path):
             "images/taskpane.svg",
             "images/check.svg",
             "images/eye.svg",
-        "images/eye-off.svg",
+            "images/eye-off.svg",
+            "images/taskpane-icons.svg",
             "images/login-window.png",
             "images/user.svg",
             "host-runtime.js",
         "taskpane.html",
         "taskpane.js",
         "client-config.json",
+        "reader/reader-client.js",
+        "reader/reader-ui.js",
+        "reader/reader.css",
         "account_store.py",
         "account_runtime.py",
         "public_api.py",
@@ -2149,6 +2206,7 @@ def test_verify_files_requires_new_bootstrap_files(monkeypatch, tmp_path):
             "control/host_bridge.py",
             "control/format_current_document.py",
             "control/add_letterhead.py",
+        "control/reader_routes.py",
         "control/document_transaction.py",
         "control/logging_adapter.py",
         "control/recognize_document.py",
@@ -2176,13 +2234,15 @@ def test_taskpane_scrolls_content_without_moving_header():
     assert '<header id="taskpane_header">' in source
     assert 'id="focus_document"' not in source
     assert "返回文档" not in source
-    assert '<div id="status" class="meta">连接中</div>' in source
+    assert '<div id="status" class="brand-status">连接中</div>' in source
     assert 'document.getElementById("status").textContent="错误"' in source
     assert 'document.getElementById("message").textContent="运行配置加载失败，请重新打开状态面板。"' in source
     assert 'document.getElementById("error").textContent="错误代码：WPS_RUNTIME_CONFIG_LOAD_FAILED"' in source
     assert '<main id="content">' in source
     assert 'fetch("./runtime/config"' in source
-    assert 'script.src="./taskpane.js?v=13"' in source
+    assert 'load("./reader/reader-client.js?v=1")' in source
+    assert 'load("./reader/reader-ui.js?v=2")' in source
+    assert 'load("./taskpane.js?v=15")' in source
 
 
 def test_start_handles_keyboard_interrupt_without_traceback(monkeypatch):
@@ -2218,10 +2278,17 @@ def test_start_handles_keyboard_interrupt_without_traceback(monkeypatch):
         def is_alive(self):
             return False
 
+    class FakeAccountRuntime:
+        def start(self):
+            events.append("account-start")
+
+        def stop(self):
+            events.append("account-stop")
+
     monkeypatch.setattr(wps_main, "verify_files", lambda: None)
     monkeypatch.setattr(wps_main, "configure_wps_logging", lambda _root: None)
     monkeypatch.setattr(
-        wps_main, "_start_control", lambda _port: (FakeControlServer(), 45678)
+        wps_main, "_start_control", lambda _port, _runtime: (FakeControlServer(), 45678)
     )
     monkeypatch.setattr(
         wps_main, "_start_web_server", lambda _port: (FakeWebServer(), 3889)
@@ -2233,13 +2300,41 @@ def test_start_handles_keyboard_interrupt_without_traceback(monkeypatch):
     monkeypatch.setattr(wps_main, "clear_runtime_config", lambda: events.append("clear"))
     monkeypatch.setattr(wps_main, "log_event", lambda _level, _component, event, _message, _fields=None: events.append(event))
 
-    wps_main.start(0)
+    wps_main.start(0, FakeAccountRuntime())
 
     assert "launcher.interrupt.received" in events
     assert ("publish", 3889) in events
+    assert events.index("account-start") < events.index(("publish", 3889))
     assert "web-close" in events
     assert "control-shutdown" in events
     assert events[-1] == "launcher.session.stop"
+
+
+def test_start_requires_account_runtime_before_any_service_side_effect(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(wps_main, "verify_files", lambda: calls.append("verify"))
+    monkeypatch.setattr(
+        wps_main, "configure_wps_logging", lambda _root: calls.append("logging")
+    )
+    monkeypatch.setattr(
+        wps_main, "_start_control", lambda *_args: calls.append("control")
+    )
+    monkeypatch.setattr(
+        wps_main, "_start_web_server", lambda *_args: calls.append("web")
+    )
+    monkeypatch.setattr(
+        wps_main, "_publish_addin", lambda *_args: calls.append("publish")
+    )
+    monkeypatch.setattr(
+        wps_main, "clear_runtime_config", lambda: calls.append("runtime-config")
+    )
+    monkeypatch.setattr(wps_main, "log_event", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(RuntimeError, match="WPS_ACCOUNT_RUNTIME_REQUIRED"):
+        wps_main.start(0)
+
+    assert calls == []
 
 
 @pytest.mark.parametrize(
@@ -2428,10 +2523,17 @@ def test_start_raises_first_cleanup_failure_and_continues(monkeypatch):
         def is_alive(self):
             return False
 
+    class FakeAccountRuntime:
+        def start(self):
+            return None
+
+        def stop(self):
+            return None
+
     monkeypatch.setattr(wps_main, "verify_files", lambda: None)
     monkeypatch.setattr(wps_main, "configure_wps_logging", lambda _root: None)
     monkeypatch.setattr(
-        wps_main, "_start_control", lambda _port: (FakeControlServer(), 45678)
+        wps_main, "_start_control", lambda _port, _runtime: (FakeControlServer(), 45678)
     )
     monkeypatch.setattr(
         wps_main, "_start_web_server", lambda _port: (FakeWebServer(), 3889)
@@ -2444,7 +2546,7 @@ def test_start_raises_first_cleanup_failure_and_continues(monkeypatch):
     monkeypatch.setattr(wps_main, "log_event", lambda *_args, **_kwargs: None)
 
     with pytest.raises(RuntimeError, match="WEB_CLOSE_FIRST"):
-        wps_main.start(0)
+        wps_main.start(0, FakeAccountRuntime())
 
     assert events == [
         "web-close",
@@ -2489,10 +2591,17 @@ def test_start_preserves_business_error_when_cleanup_also_fails(monkeypatch):
         def is_alive(self):
             return False
 
+    class FakeAccountRuntime:
+        def start(self):
+            return None
+
+        def stop(self):
+            return None
+
     monkeypatch.setattr(wps_main, "verify_files", lambda: None)
     monkeypatch.setattr(wps_main, "configure_wps_logging", lambda _root: None)
     monkeypatch.setattr(
-        wps_main, "_start_control", lambda _port: (FakeControlServer(), 45678)
+        wps_main, "_start_control", lambda _port, _runtime: (FakeControlServer(), 45678)
     )
     monkeypatch.setattr(
         wps_main, "_start_web_server", lambda _port: (FakeWebServer(), 3889)
@@ -2505,7 +2614,7 @@ def test_start_preserves_business_error_when_cleanup_also_fails(monkeypatch):
     monkeypatch.setattr(wps_main, "log_event", lambda *_args, **_kwargs: None)
 
     with pytest.raises(ValueError, match="BUSINESS_FAILED"):
-        wps_main.start(0)
+        wps_main.start(0, FakeAccountRuntime())
 
     assert events == [
         "web-close",
@@ -2567,6 +2676,49 @@ def test_wps_static_server_serves_plugin_without_launching_wps(tmp_path, monkeyp
 
 def test_wps_web_server_uses_stable_addin_origin():
     assert wps_main.DEFAULT_WEB_PORT == 3889
+    assert wps_main._WpsStaticHttpServer.allow_reuse_address is False
+
+
+def test_wps_web_server_reports_the_fixed_port_conflict(monkeypatch):
+    def address_in_use(*_args, **_kwargs):
+        raise OSError(errno.EADDRINUSE, "address already in use")
+
+    monkeypatch.setattr(wps_main, "_WpsStaticHttpServer", address_in_use)
+    monkeypatch.setattr(wps_main, "_stop_previous_docxtool_service", lambda _port: False)
+    monkeypatch.setattr(wps_main, "log_event", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(RuntimeError, match="WPS_WEB_SERVER_PORT_IN_USE") as exc_info:
+        wps_main._start_web_server(wps_main.DEFAULT_WEB_PORT)
+
+    assert isinstance(exc_info.value.__cause__, OSError)
+
+
+def test_wps_web_server_retries_after_stopping_verified_previous_service(monkeypatch):
+    attempts = []
+    stopped = []
+
+    class FakeServer:
+        server_address = ("127.0.0.1", 3889)
+
+    def create_server(*_args, **_kwargs):
+        attempts.append(True)
+        if len(attempts) == 1:
+            raise OSError(errno.EADDRINUSE, "address already in use")
+        return FakeServer()
+
+    monkeypatch.setattr(wps_main, "_WpsStaticHttpServer", create_server)
+    monkeypatch.setattr(
+        wps_main,
+        "_stop_previous_docxtool_service",
+        lambda port: stopped.append(port) or True,
+    )
+    monkeypatch.setattr(wps_main, "log_event", lambda *_args, **_kwargs: None)
+
+    _server, port = wps_main._start_web_server(wps_main.DEFAULT_WEB_PORT)
+
+    assert port == 3889
+    assert len(attempts) == 2
+    assert stopped == [3889]
 
 
 def test_publish_addin_updates_only_docxtool_entry(tmp_path, monkeypatch):
@@ -2597,6 +2749,47 @@ def test_publish_addin_updates_only_docxtool_entry(tmp_path, monkeypatch):
         "enable": "enable_dev",
         "install": "null",
     }
+
+
+def test_unpublish_addin_removes_only_docxtool_entries(tmp_path, monkeypatch):
+    publish_path = tmp_path / "publish.xml"
+    publish_path.write_text(
+        "<jsplugins>"
+        '<jspluginonline name="another-addin" type="wps" url="http://example.test/" />'
+        '<jspluginonline name="docxtool-wps-app" type="wps" url="http://127.0.0.1:3889/" />'
+        '<jspluginonline name="docxtool-wps-app" type="wps" url="http://127.0.0.1:3999/" />'
+        "</jsplugins>",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(wps_main, "_publish_xml_path", lambda: publish_path)
+    monkeypatch.setattr(wps_main, "log_event", lambda *_args, **_kwargs: None)
+
+    wps_main._unpublish_addin()
+
+    entries = list(ElementTree.parse(publish_path).getroot())
+    assert [node.get("name") for node in entries] == ["another-addin"]
+
+
+def test_unpublish_addin_reports_atomic_write_failure(tmp_path, monkeypatch):
+    publish_path = tmp_path / "publish.xml"
+    publish_path.write_text(
+        "<jsplugins>"
+        '<jspluginonline name="docxtool-wps-app" type="wps" url="http://127.0.0.1:3889/" />'
+        "</jsplugins>",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(wps_main, "_publish_xml_path", lambda: publish_path)
+    monkeypatch.setattr(wps_main, "log_event", lambda *_args, **_kwargs: None)
+
+    def fail_write(self, *_args, **_kwargs):
+        raise OSError("write failed")
+
+    monkeypatch.setattr(ElementTree.ElementTree, "write", fail_write)
+
+    with pytest.raises(RuntimeError, match="WPS_UNPUBLISH_WRITE_FAILED") as exc_info:
+        wps_main._unpublish_addin()
+
+    assert isinstance(exc_info.value.__cause__, OSError)
 
 
 def test_wps_request_context_and_preview_safety_contracts_are_present():
@@ -2783,7 +2976,12 @@ def test_wps_python_diagnostic_event_contract_is_present():
     root = Path(__file__).resolve().parents[1]
     sources = {
         "monitor": (root / "control" / "monitor.py").read_text(encoding="utf-8"),
-        "server": (root / "control" / "server.py").read_text(encoding="utf-8"),
+        "server": (
+            (root / "control" / "server.py").read_text(encoding="utf-8")
+            + (root / "control" / "transport" / "protocol.py").read_text(
+                encoding="utf-8"
+            )
+        ),
         "recognition": (root / "control" / "recognize_document.py").read_text(
             encoding="utf-8"
         ),
@@ -2898,6 +3096,9 @@ def test_wps_python_diagnostic_event_contract_is_present():
             "launcher.publish.schema.failed",
             "launcher.publish.write.failed",
             "launcher.web.create.failed",
+            "launcher.web.previous_service.detected",
+            "launcher.web.previous_service.stop.failed",
+            "launcher.web.previous_service.stop.completed",
             "launcher.web.serve.failed",
             "launcher.control.thread.failed",
             "launcher.account_runtime.stop.failed",
@@ -2953,10 +3154,16 @@ def test_main_action_defaults_and_routes(monkeypatch, argv, expected):
 def test_main_closing_login_window_stops_before_start(monkeypatch):
     application = type("Application", (), {})()
     instance = type("Instance", (), {"acquire": lambda self: True})()
+    calls = []
     monkeypatch.setattr("apps.wps.desktop_runtime.ensure_application", lambda: application)
     monkeypatch.setattr("apps.wps.desktop_runtime.SingleInstance", lambda: instance)
     monkeypatch.setattr("apps.wps.desktop_runtime.shift_pressed", lambda: False)
     monkeypatch.setattr(wps_main, "WpsPublicApi", lambda: "api")
+    monkeypatch.setattr(wps_main, "_unpublish_addin", lambda: calls.append("unpublish"))
+    monkeypatch.setattr(
+        "apps.wps.desktop_runtime.DesktopController",
+        lambda **_kwargs: pytest.fail("DesktopController must not be created"),
+    )
     monkeypatch.setattr(
         wps_main,
         "resolve_startup_account",
@@ -2964,3 +3171,114 @@ def test_main_closing_login_window_stops_before_start(monkeypatch):
     )
 
     assert wps_main.run_desktop(wps_main.DEFAULT_PORT) == 0
+    assert calls == ["unpublish"]
+
+
+def test_main_starts_services_only_after_login_returns_an_account(monkeypatch):
+    calls = []
+
+    class Signal:
+        def connect(self, callback):
+            calls.append(("connect", callback))
+
+    class Instance:
+        show_requested = Signal()
+
+        def acquire(self):
+            return True
+
+    class Application:
+        def exec_(self):
+            calls.append("exec")
+            return 0
+
+    class Controller:
+        restart_login_requested = False
+
+        def __init__(self, **kwargs):
+            calls.append(("controller", kwargs["account_runtime"].summary()["username"]))
+
+        def show_settings(self):
+            return None
+
+        def start(self):
+            calls.append("start")
+
+        def shutdown(self):
+            calls.append("shutdown")
+
+    monkeypatch.setattr("apps.wps.desktop_runtime.ensure_application", Application)
+    monkeypatch.setattr("apps.wps.desktop_runtime.SingleInstance", Instance)
+    monkeypatch.setattr("apps.wps.desktop_runtime.shift_pressed", lambda: False)
+    monkeypatch.setattr("apps.wps.desktop_runtime.DesktopController", Controller)
+    monkeypatch.setattr(wps_main, "WpsPublicApi", lambda: "api")
+    monkeypatch.setattr(
+        wps_main,
+        "resolve_startup_account",
+        lambda _api, force_login=False: {"username": "User01"},
+    )
+    monkeypatch.setattr(wps_main, "_unpublish_addin", lambda: calls.append("unpublish"))
+
+    assert wps_main.run_desktop(wps_main.DEFAULT_PORT) == 0
+    assert ("controller", "User01") in calls
+    assert "start" in calls
+    assert "shutdown" in calls
+    assert calls.count("unpublish") == 1
+
+
+def test_logout_stops_services_unpublishes_then_reopens_login(monkeypatch):
+    calls = []
+
+    class Signal:
+        def connect(self, _callback):
+            calls.append("connect")
+
+    class Instance:
+        show_requested = Signal()
+
+        def acquire(self):
+            return True
+
+        def close(self):
+            calls.append("instance-close")
+
+    class Application:
+        def exec_(self):
+            calls.append("exec")
+            return 0
+
+    class Controller:
+        restart_login_requested = True
+
+        def __init__(self, **_kwargs):
+            calls.append("controller")
+
+        def show_settings(self):
+            return None
+
+        def start(self):
+            calls.append("start")
+
+        def shutdown(self):
+            calls.append("shutdown")
+
+    monkeypatch.setattr("apps.wps.desktop_runtime.ensure_application", Application)
+    monkeypatch.setattr("apps.wps.desktop_runtime.SingleInstance", Instance)
+    monkeypatch.setattr("apps.wps.desktop_runtime.shift_pressed", lambda: False)
+    monkeypatch.setattr("apps.wps.desktop_runtime.DesktopController", Controller)
+    monkeypatch.setattr(wps_main, "WpsPublicApi", lambda: "api")
+    monkeypatch.setattr(
+        wps_main,
+        "resolve_startup_account",
+        lambda _api, force_login=False: {"username": "User01"},
+    )
+    monkeypatch.setattr(wps_main, "_unpublish_addin", lambda: calls.append("unpublish"))
+    monkeypatch.setattr(
+        wps_main.windows_startup, "launch", lambda argument: calls.append(("launch", argument))
+    )
+
+    assert wps_main.run_desktop(wps_main.DEFAULT_PORT) == 0
+    unpublish_positions = [index for index, value in enumerate(calls) if value == "unpublish"]
+    assert len(unpublish_positions) == 2
+    assert calls.index("shutdown") < unpublish_positions[1] < calls.index("instance-close")
+    assert ("launch", "--force-login") in calls

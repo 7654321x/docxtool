@@ -29,9 +29,14 @@ from docxtool.document.engine import export_doc
 from docxtool.application.process_document import process_uploaded_docx_task as _application_process_uploaded_docx_task
 from docxtool.security import DocxIntegrityError, validate_docx_integrity
 from docxtool.security.docx_validator import DocxValidationError, detect_docx_complexity, validate_docx_upload
-from docxtool.document.style_config import (
-    StyleRule, PageSettings, load_rules_and_settings, configure_logging, get_logger,
-    make_document_log_path, set_context_log_path, reset_context_log_path,
+from docxtool.document.configuration.models import PageSettings, StyleRule
+from docxtool.document.configuration.validation import load_rules_and_settings
+from docxtool.document.diagnostics.logging import (
+    configure_logging,
+    get_logger,
+    make_document_log_path,
+    reset_context_log_path,
+    set_context_log_path,
 )
 from docxtool.paths import project_path, runtime_dir
 from docxtool.storage.database import connect as _db_connect, default_database_path

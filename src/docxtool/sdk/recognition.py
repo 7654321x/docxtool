@@ -13,7 +13,7 @@ from docxtool.document.importer import DocxImporter, ParagraphData
 from docxtool.document.recognition.version import (
     RECOGNITION_ENGINE_VERSION,
 )
-from docxtool.document.style_config import load_rules_and_settings
+from docxtool.document.configuration.validation import load_rules_and_settings
 from docxtool.document.source_tape import (
     SOURCE_LOCATOR_VERSION,
     SourceTape,

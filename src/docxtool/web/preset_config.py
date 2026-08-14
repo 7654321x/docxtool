@@ -6,7 +6,7 @@ import json
 import re
 from typing import Any, Mapping
 
-from docxtool.document.style_config import load_rules_and_settings
+from docxtool.document.configuration.validation import load_rules_and_settings
 
 
 def normalize_template_name(name: str) -> str:

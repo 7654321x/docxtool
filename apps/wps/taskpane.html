@@ -3,30 +3,60 @@
 <head>
 <meta charset="utf-8">
 <title>DocxTool</title>
+<link rel="stylesheet" href="./reader/reader.css?v=2">
 <style>
-  html,body{height:100%;max-width:100%;overflow:hidden}body{display:flex;flex-direction:column;font:14px/1.55 system-ui;margin:0;color:#172033;background:#fff}
-  header{flex:0 0 auto;padding:10px 14px;border-bottom:1px solid #dce3ee;background:#fff}.toolbar{display:flex;justify-content:space-between;gap:8px;align-items:center}.toolbar-actions{white-space:nowrap}
-  main{flex:1 1 auto;min-height:0;overflow-y:auto;box-sizing:border-box;padding:12px 14px}.panel{border:1px solid #dce3ee;border-radius:8px;padding:12px;margin:10px 0}
-  button{padding:7px 10px;margin:3px;border:1px solid #cbd5e1;border-radius:5px;background:#fff}button.primary{background:#1769aa;color:#fff;border-color:#1769aa}
-  .scope{display:grid;grid-template-columns:88px 1fr;gap:8px;align-items:center;margin-bottom:8px}.scope select,.scope input{box-sizing:border-box;width:100%;height:34px;border:1px solid #cbd5e1;border-radius:5px;padding:5px 8px;background:#fff;color:#172033}.scope input:disabled{background:#f3f5f7;color:#8a94a3}
-  .meta{font-size:12px;color:#5c6676}.error{color:#b42318}.warning{color:#8a5a00}.rows{max-height:320px;overflow:auto}.row{padding:7px 0;border-top:1px solid #eef1f5;overflow-wrap:anywhere}
-  .modal-mask{position:fixed;inset:0;z-index:20;display:flex;align-items:center;justify-content:center;padding:14px;background:rgba(15,23,42,.4)}.modal-mask[hidden]{display:none}.modal-card{box-sizing:border-box;width:min(360px,100%);max-height:calc(100vh - 28px);overflow:auto;border-radius:10px;background:#fff;padding:16px;box-shadow:0 16px 42px rgba(15,23,42,.24)}.modal-card h2{margin:0 0 12px;font-size:17px}.form-field{display:block;margin:10px 0}.form-field span{display:block;margin-bottom:4px;color:#334155}.form-field input,.form-field select{box-sizing:border-box;width:100%;height:36px;border:1px solid #cbd5e1;border-radius:5px;padding:6px 9px;color:#172033;background:#fff}.modal-actions{display:flex;justify-content:flex-end;gap:6px;margin-top:14px}.modal-note{margin:5px 0 0;color:#64748b;font-size:12px}
+  html,body{height:100%;max-width:100%;overflow:hidden}
+  body{display:flex;flex-direction:column;width:100%;max-width:396px;font:14px/1.55 system-ui,-apple-system,"Microsoft YaHei",sans-serif;margin:0;color:#1c2b36;background:#edf3f0}
+  header{flex:0 0 auto;padding:15px 17px 12px;background:#f7faf8;border:0}
+  .toolbar{display:flex;justify-content:space-between;gap:8px;align-items:flex-start}.toolbar-actions{white-space:nowrap}
+  .brand-title{font-size:20px;line-height:1.15;font-weight:760;letter-spacing:-.4px}.brand-status{display:flex;align-items:center;gap:6px;margin-top:7px;color:#277b5c;font-weight:700}.brand-status::before{content:"";width:8px;height:8px;border-radius:50%;background:#41a968}.brand-account{margin-top:3px;color:#76818a;font-size:12px}
+  main{flex:1 1 auto;min-height:0;overflow-y:auto;box-sizing:border-box;padding:0 12px 14px}.panel{border:1px solid #e2e9e5;border-radius:13px;padding:12px;margin:9px 0;background:#fff;box-shadow:0 2px 8px rgba(38,71,57,.055)}
+  button{font:inherit;cursor:pointer;min-height:34px;padding:7px 10px;margin:3px;border:1px solid #cbd5d1;border-radius:8px;background:#fff;color:#24333d}button:hover{border-color:#4d9b7c;background:#f5faf7}button:active{transform:translateY(1px)}button:disabled{cursor:default;opacity:.5}button.primary{background:#247b63;color:#fff;border-color:#247b63}button.primary:hover{background:#1d6c55}.icon-button{display:grid;place-items:center;width:36px;height:36px;min-height:36px;padding:0;margin:0;border-radius:50%;background:#fff;border-color:#e0e8e3;color:#24333d;box-shadow:0 1px 5px rgba(38,71,57,.08)}
+  .panel-title,.section-heading{display:flex;align-items:center;gap:8px;margin:0 0 10px;font-weight:760;font-size:16px}.section-heading .icon{color:#2e7f69}.icon{width:20px;height:20px;display:inline-block;flex:none;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}.icon.small{width:16px;height:16px}
+  .mode-tabs{display:grid;grid-template-columns:1fr 1fr;gap:0;padding:0;overflow:hidden;background:#f5f7f6;border-color:#d6dfda}.mode-tabs button{display:flex;align-items:center;justify-content:center;gap:4px;margin:0;border:0;border-radius:9px;min-height:38px;background:transparent;font-size:16px}.mode-tabs button.primary{background:#247b63}
+  .scope{display:grid;grid-template-columns:74px 1fr;gap:8px;align-items:center;margin-bottom:8px}.scope select,.scope input{box-sizing:border-box;width:100%;height:34px;border:1px solid #cbd5d1;border-radius:8px;padding:5px 8px;background:#fff;color:#24333d}.scope input:disabled{background:#f3f6f4;color:#8a9690}
+  .format-actions{display:grid;grid-template-columns:1fr 1fr;gap:5px}.format-actions button{display:flex;align-items:center;justify-content:center;gap:3px;margin:0}.meta{font-size:12px;color:#718078}.error{color:#b42318}.warning{color:#996600}.rows{max-height:320px;overflow:auto}.row{padding:9px 0;border-top:1px solid #edf1ee;overflow-wrap:anywhere}.row:first-child{border-top:0}.recognition-meta{margin:-4px 0 8px}.recognition-row-main{display:flex;align-items:center;justify-content:space-between;gap:8px}.recognition-role{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.recognition-row-meta{display:flex;align-items:center;justify-content:flex-end;gap:6px;flex:none;color:#3a9b68}.recognition-pill{display:inline-flex;align-items:center;justify-content:center;min-width:27px;height:22px;padding:0 7px;border-radius:99px;background:#e1f2e8;color:#338b5d;font-weight:700}.recognition-review{display:inline-flex;align-items:center;height:22px;padding:0 7px;border-radius:99px;background:#fff3dc;color:#a36a00;font-size:11px}.recognition-empty{padding:18px 4px;color:#84928b;text-align:center;font-size:12px}.reader-subheading{margin:14px 0 5px;font-size:14px}.modal-mask{position:fixed;inset:0;z-index:20;display:flex;align-items:center;justify-content:center;padding:14px;background:rgba(18,39,31,.35)}.modal-mask[hidden]{display:none}.modal-card{box-sizing:border-box;width:min(360px,100%);max-height:calc(100vh - 28px);overflow:auto;border-radius:13px;background:#fff;padding:16px;box-shadow:0 14px 36px rgba(28,59,46,.2)}.modal-card h2{margin:0 0 12px;font-size:17px}.form-field{display:block;margin:10px 0}.form-field span{display:block;margin-bottom:4px;color:#33453d}.form-field input,.form-field select{box-sizing:border-box;width:100%;height:36px;border:1px solid #cbd5d1;border-radius:8px;padding:6px 9px;color:#24333d;background:#fff}.modal-actions{display:flex;justify-content:flex-end;gap:6px;margin-top:14px}.modal-note{margin:5px 0 0;color:#718078;font-size:12px}
+  @media(max-width:360px){header{padding-left:11px;padding-right:11px}.brand-title{font-size:18px}main{padding-left:8px;padding-right:8px}.panel{padding:10px;margin:7px 0}.panel-title,.section-heading{font-size:15px}}
 </style>
 </head>
 <body>
-<header id="taskpane_header"><div class="toolbar"><div><strong>DocxTool WPS</strong><div id="status" class="meta">连接中</div><div id="account" class="meta">正在读取账号…</div></div><div class="toolbar-actions"><button id="close_panel">关闭</button></div></div></header>
+<header id="taskpane_header"><div class="toolbar"><div><div class="brand-title">DocxTool WPS</div><div id="status" class="brand-status">连接中</div><div id="account" class="brand-account">正在读取账号…</div></div><div class="toolbar-actions"><button id="close_panel" class="icon-button" aria-label="关闭"><svg class="icon"><use href="./images/taskpane-icons.svg#close"></use></svg></button></div></div></header>
 <main id="content">
+  <div class="panel mode-tabs" role="tablist" aria-label="功能模式">
+    <button id="format_mode_tab" class="primary" role="tab" aria-selected="true"><svg class="icon small"><use href="./images/taskpane-icons.svg#format"></use></svg>排版</button>
+    <button id="reader_mode_tab" role="tab" aria-selected="false"><svg class="icon small"><use href="./images/taskpane-icons.svg#reader"></use></svg>阅读</button>
+  </div>
+  <section id="format_mode">
   <div class="panel">
+    <h2 class="section-heading"><svg class="icon"><use href="./images/taskpane-icons.svg#format"></use></svg>操作</h2>
     <div class="scope"><label for="format_scope_mode">排版范围</label><select id="format_scope_mode"><option value="whole">全文</option><option value="pre_format_pages">指定页码</option></select></div>
     <div class="scope"><label for="format_page_spec">原始页码</label><input id="format_page_spec" type="text" inputmode="numeric" placeholder="例如：3-5 或 3,5,8-10" disabled></div>
-    <button id="preview">预览排版</button>
-    <button id="apply" class="primary">一键排版</button>
-    <button id="add_letterhead">添加版头</button>
-    <button id="clear_preview">清除预览</button>
-    <button id="health">本机检测</button>
+    <div class="format-actions"><button id="apply" class="primary"><svg class="icon small"><use href="./images/taskpane-icons.svg#format"></use></svg> 一键排版</button><button id="preview"><svg class="icon small"><use href="./images/taskpane-icons.svg#reader"></use></svg> 预览排版</button><button id="clear_preview"><svg class="icon small"><use href="./images/taskpane-icons.svg#clear"></use></svg> 清除预览</button><button id="health"><svg class="icon small"><use href="./images/taskpane-icons.svg#check"></use></svg> 本机检测</button><button id="add_letterhead"><svg class="icon small"><use href="./images/taskpane-icons.svg#letterhead"></use></svg> 添加版头</button></div>
   </div>
-  <div class="panel"><strong>执行状态</strong><div id="message" class="meta">就绪</div><div id="error" class="error"></div><div id="warnings" class="warning"></div></div>
-  <div class="panel"><strong>识别结果</strong><div id="summary" class="meta">尚未识别。</div><div id="rows" class="rows"></div></div>
+  <div class="panel"><h2 class="section-heading"><svg class="icon"><use href="./images/taskpane-icons.svg#status"></use></svg>执行状态</h2><div id="message" class="meta">就绪</div><div id="error" class="error"></div><div id="warnings" class="warning"></div></div>
+  <div class="panel"><h2 class="section-heading"><svg class="icon"><use href="./images/taskpane-icons.svg#recognition"></use></svg>识别结果</h2><div id="summary" class="meta recognition-meta">尚未识别。</div><div id="rows" class="rows"></div></div>
+  </section>
+  <section id="reader_mode" hidden>
+    <div id="reader_panel" class="panel" hidden>
+      <h2 class="section-heading"><svg class="icon"><use href="./images/taskpane-icons.svg#reader"></use></svg>阅读工具</h2>
+      <div class="reader-toolbar">
+        <button id="reader_book_library" class="reader-tool-button"><svg class="icon small"><use href="./images/taskpane-icons.svg#library"></use></svg>书库</button>
+        <label class="reader-tool-button"><svg class="icon small"><use href="./images/taskpane-icons.svg#upload"></use></svg>导入<input id="reader_import" type="file" accept=".txt,text/plain"></label>
+        <button id="reader_stealth" class="reader-tool-button"><svg class="icon small"><use href="./images/taskpane-icons.svg#collapse"></use></svg>折叠</button>
+      </div>
+      <div id="reader_library" class="reader-popover" hidden><label class="reader-select-label" for="reader_book_select">当前书籍</label><select id="reader_book_select" aria-label="当前书籍"></select><button id="reader_delete" class="reader-delete-button"><svg class="icon small"><use href="./images/taskpane-icons.svg#trash"></use></svg>删除当前书籍</button></div>
+      <div class="reader-detail">
+        <div class="reader-text-card"><p id="reader_empty" class="reader-empty">请选择本地 TXT 文件导入阅读。</p><strong id="reader_chapter" class="reader-chapter"></strong><div id="reader_content" class="reader-content" tabindex="0" hidden></div></div>
+        <div class="reader-control-card"><div id="reader_controls" class="reader-navigation" hidden>
+          <button id="reader_previous_block" aria-label="上一段"><svg class="icon small"><use href="./images/taskpane-icons.svg#previous"></use></svg>上一段</button><button id="reader_play" class="primary"><svg id="reader_play_icon" class="icon small"><use href="./images/taskpane-icons.svg#play"></use></svg><span id="reader_play_label">播放</span></button><button id="reader_next_block" aria-label="下一段">下一段<svg class="icon small"><use href="./images/taskpane-icons.svg#next"></use></svg></button><button id="reader_previous_chapter"><svg class="icon small"><use href="./images/taskpane-icons.svg#previous-chapter"></use></svg>上一章</button><button id="reader_next_chapter">下一章<svg class="icon small"><use href="./images/taskpane-icons.svg#next-chapter"></use></svg></button>
+        </div><div class="reader-visual-controls"><div class="reader-slider-row"><span>速度</span><input id="reader_speed_visual" type="range" min="0" max="5" step="1" value="2" aria-label="阅读速度"><strong id="reader_speed_value">1.0×</strong></div><div class="reader-slider-row"><span>阅读进度</span><div class="reader-progress-track"><div id="reader_progress_fill" class="reader-progress-fill"></div></div><strong id="reader_progress_value">0%</strong></div></div></div>
+        <div class="reader-style-card"><h3 class="section-heading reader-subheading"><svg class="icon"><use href="./images/taskpane-icons.svg#theme"></use></svg>样式设置</h3><div class="reader-settings-buttons"><button id="reader_font_setting"><svg class="icon small"><use href="./images/taskpane-icons.svg#type"></use></svg><span id="reader_font_setting_label">字号</span></button><button id="reader_line_setting"><svg class="icon small"><use href="./images/taskpane-icons.svg#line-height"></use></svg><span id="reader_line_setting_label">行距</span></button><button id="reader_theme_setting"><svg class="icon small"><use href="./images/taskpane-icons.svg#theme"></use></svg><span id="reader_theme_setting_label">主题</span></button><button id="reader_opacity_setting"><svg class="icon small"><use href="./images/taskpane-icons.svg#opacity"></use></svg><span id="reader_opacity_setting_label">透明度</span></button></div><div id="reader_settings_popover" class="reader-settings-popover" hidden><div class="reader-setting-field"><label>字号<select id="reader_font_size"><option value="12">12</option><option value="14">14</option><option value="16">16</option><option value="18">18</option><option value="20">20</option><option value="24">24</option><option value="28">28</option></select></label><label>行距<select id="reader_line_height"><option value="1.4">1.4</option><option value="1.6">1.6</option><option value="1.8">1.8</option><option value="2">2.0</option></select></label><label>主题<select id="reader_theme"><option value="light">浅色</option><option value="soft_gray">柔和灰</option><option value="eye_care">护眼</option></select></label><label>透明度<select id="reader_opacity"><option value="1">100%</option><option value="0.85">85%</option><option value="0.7">70%</option><option value="0.55">55%</option></select></label><label class="reader-checkbox"><input id="reader_stealth_mode" type="checkbox">离开时折叠</label><select id="reader_speed" hidden aria-hidden="true"><option value="0.5">0.5×</option><option value="0.75">0.75×</option><option value="1">1.0×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2.0×</option></select></div></div></div>
+        </div>
+        <p id="reader_error" class="reader-error"></p>
+      </div>
+    </div>
+    <button id="reader_reveal" hidden><svg class="icon small"><use href="./images/taskpane-icons.svg#reader"></use></svg>阅读</button>
+  </section>
 </main>
 <div id="letterhead_modal" class="modal-mask" hidden>
   <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="letterhead_title">
@@ -46,9 +76,8 @@ fetch("./runtime/config", {cache:"no-store", credentials:"same-origin"}).then(fu
   return response.json();
 }).then(function(config){
   window.DocxToolWpsConfig=Object.freeze(config);
-  var script=document.createElement("script");
-  script.src="./taskpane.js?v=13";
-  document.body.appendChild(script);
+  function load(source){return new Promise(function(resolve,reject){var script=document.createElement("script");script.src=source;script.onload=resolve;script.onerror=reject;document.body.appendChild(script);});}
+  return load("./reader/reader-client.js?v=1").then(function(){return load("./reader/reader-ui.js?v=2");}).then(function(){return load("./taskpane.js?v=15");});
 }).catch(function(error){
   document.getElementById("status").textContent="错误";
   document.getElementById("message").textContent="运行配置加载失败，请重新打开状态面板。";

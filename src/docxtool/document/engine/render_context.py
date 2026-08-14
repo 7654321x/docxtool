@@ -37,6 +37,7 @@ class RenderContext:
     letterhead_detection: Any
     letterhead_enabled: bool
     preserve_input_letterhead: bool
+    style_profile: str
 
 
 def prepare_render_context(
@@ -46,11 +47,20 @@ def prepare_render_context(
     output_path: str,
     numbering_options,
     letterhead_options,
+    style_profile,
     *,
     compatibility_module,
 ) -> RenderContext:
+    resolved_style_profile = compatibility_module._normalize_style_profile(
+        style_profile
+    )
     doc = compatibility_module.Document()
-    compatibility_module.ensure_document_styles(doc, rules, settings)
+    compatibility_module.ensure_document_styles(
+        doc,
+        rules,
+        settings,
+        style_profile=resolved_style_profile,
+    )
     section_relationship_parts = getattr(doc_data, "section_relationship_parts", {}) or {}
     removed_external_relationships: list[dict] = []
     relationship_part_copier = compatibility_module._SectionRelationshipCopier(
@@ -170,4 +180,5 @@ def prepare_render_context(
         letterhead_detection=letterhead_detection,
         letterhead_enabled=letterhead_enabled,
         preserve_input_letterhead=not letterhead_enabled,
+        style_profile=resolved_style_profile,
     )

@@ -17,7 +17,7 @@ from docx.shared import Pt
 from docxtool.document.engine.inline import copy_run_style, segment_writer
 from docxtool.document.engine.typography import set_run_fonts
 from docxtool.document.recognition.colon import analyze_colon_structure, colon_bold_range
-from docxtool.document.style_config import NB_FIXED, NB_SUFFIXES
+from docxtool.document.configuration.models import NB_FIXED, NB_SUFFIXES
 
 
 INLINE_HEADING_BODY_MIN_CHARS = 5

@@ -1,5 +1,7 @@
 # Phase A-2 检查清单
 
+状态：`completed`。本文是已完成迁移的执行记录，不再作为当前待办或当前架构来源。
+
 ## 阶段范围
 
 Phase A-2 只抽取导入后规范化编排与物理读取职责，保持现有 importer 兼容入口、处理模式和可观察 DOCX 行为不变。它不进入 Phase B 的识别规则优化，也不修改渲染、WPS 或其他宿主代码。
@@ -21,7 +23,7 @@ Phase A-2 只抽取导入后规范化编排与物理读取职责，保持现有 
 - 加固 DOCX package 等价比较：覆盖全部 package part、内容类型和 `.rels`，验证内部 relationship target，并只对 core property 时间文本执行书面字段级规范化。
 - 新增物理读取与规范化编排的聚焦回归测试。
 
-## 当前待办项
+## 阶段边界
 
 - `document/importing/` 当前授权的物理读取职责已完成并通过模块门禁。
 - `document/segmentation` 已完成当前授权职责；执行模块门禁后停止，不进入 normalization 或 Phase B。

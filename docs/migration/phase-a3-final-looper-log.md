@@ -1,5 +1,7 @@
 # Phase A-3 Final Looper 日志
 
+状态：`completed`。本文只保留 Phase A-3 和 Phase A 最终门禁的脱敏历史记录。
+
 ## 职责
 
 本日志只记录 Phase A-3 剩余 Web 收口、Engine 评估或拆分，以及 Phase A 最终门禁。

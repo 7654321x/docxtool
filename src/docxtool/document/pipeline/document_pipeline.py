@@ -8,7 +8,7 @@ import re
 from typing import Any, List
 
 from docxtool.document.recognition.config import DEFAULT_CONFIG
-from docxtool.document.style_config import StyleRule
+from docxtool.document.configuration.models import StyleRule
 
 
 def run_document_pipeline(

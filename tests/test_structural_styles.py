@@ -4,10 +4,12 @@ import zipfile
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
+import pytest
 from docx import Document
 from docx.oxml.ns import qn
 
 from docxtool.document.engine.style_catalog import ensure_document_styles
+from docxtool.document.errors import ExportError
 from docxtool.document.style_config import PageSettings, StyleRule
 
 
@@ -158,3 +160,68 @@ def test_attachment_mark_and_title_keep_with_following_content(tmp_path: Path) -
         assert ppr.find("w:keepNext", NS) is not None
         assert ppr.find("w:keepLines", NS) is not None
         assert ppr.find("w:numPr", NS) is None
+
+
+def test_wps_builtin_profile_reuses_quick_styles_and_writes_rule_fonts(tmp_path: Path) -> None:
+    document = Document()
+    rules = [StyleRule.default_for_row(index) for index in range(24)]
+    rules[1].font = "黑体"
+    rules[1].font_size_pt = 18
+    rules[1].bold = True
+    rules[5].font = "仿宋_GB2312"
+    rules[5].font_size_pt = 16
+
+    ensure_document_styles(
+        document,
+        rules,
+        PageSettings(line_spacing_value=28.0),
+        style_profile="wps_builtin",
+    )
+    output = tmp_path / "wps-builtin-styles.docx"
+    document.save(output)
+    root = _styles_xml(output)
+
+    normal = _style(root, "Normal")
+    heading1 = _style(root, "Heading1")
+    for style in (normal, heading1, _style(root, "Heading2"), _style(root, "Heading3"), _style(root, "Heading4")):
+        assert style.find("w:qFormat", NS) is not None
+        assert style.find("w:pPr", NS) is not None
+        assert style.find("w:rPr", NS) is not None
+
+    assert normal.get(qn("w:default")) == "1"
+    assert normal.find("w:name", NS).get(qn("w:val")) == "Normal"
+    assert normal.find("w:rPr/w:rFonts", NS).get(qn("w:eastAsia")) == "仿宋_GB2312"
+    assert normal.find("w:rPr/w:sz", NS).get(qn("w:val")) == "32"
+
+    assert heading1.find("w:name", NS).get(qn("w:val")) == "heading 1"
+    assert heading1.find("w:uiPriority", NS) is not None
+    assert heading1.find("w:next", NS) is not None
+    assert heading1.find("w:link", NS) is not None
+    assert heading1.find("w:rPr/w:rFonts", NS).get(qn("w:eastAsia")) == "黑体"
+    assert heading1.find("w:rPr/w:sz", NS).get(qn("w:val")) == "36"
+    assert heading1.find("w:rPr/w:b", NS) is not None
+    assert heading1.find("w:pPr/w:outlineLvl", NS).get(qn("w:val")) == "0"
+    assert heading1.find("w:pPr/w:keepNext", NS) is None
+    assert heading1.find("w:pPr/w:keepLines", NS) is None
+
+    assert _style(root, "DCT-Title") is not None
+    assert _style(root, "DCT-AttachmentBody") is not None
+
+
+def test_wps_builtin_profile_requires_existing_builtin_quick_styles() -> None:
+    document = Document()
+    styles_element = document.styles._element
+    heading4 = next(
+        style
+        for style in styles_element.findall(qn("w:style"))
+        if style.get(qn("w:styleId")) == "Heading4"
+    )
+    styles_element.remove(heading4)
+
+    with pytest.raises(ExportError, match="WPS_BUILTIN_STYLE_MISSING:Heading4"):
+        ensure_document_styles(
+            document,
+            [StyleRule.default_for_row(index) for index in range(24)],
+            PageSettings(),
+            style_profile="wps_builtin",
+        )
