@@ -210,6 +210,7 @@ function makeHostHarness({
           get() { return paneState.visible; },
           set(value) {
             paneState.visible = Boolean(value);
+            if (paneState.visible) paneState.width = 325;
             taskpaneOperations.push(`visible:${String(Boolean(value))}`);
           },
         },
@@ -1286,8 +1287,8 @@ test("Panel action starts one Host bridge when OnAddinLoad was not observed", as
   assert.equal(harness.bridgeWaiterCount, 1);
   assert.equal(harness.taskpaneCreateCalls.length, 1);
   assert.equal(harness.taskpaneCreateCalls[0].length, 1);
-  assert.match(harness.taskpaneCreateCalls[0][0], /taskpane\.html\?v=12$/);
-  assert.equal(harness.values.get(TASKPANE_VERSION_KEY), "12");
+  assert.match(harness.taskpaneCreateCalls[0][0], /taskpane\.html\?v=19$/);
+  assert.equal(harness.values.get(TASKPANE_VERSION_KEY), "19");
   assert.ok(harness.events().includes("host.start.lazy.enter"));
   assert.ok(harness.events().includes("host.start.lazy.scheduled"));
 
@@ -1313,13 +1314,14 @@ test("Panel records TaskPane creation and reuse host properties", () => {
   assert.equal(created.details.pane_visible, false);
   assert.equal(created.details.pane_dock_position, 2);
   assert.equal(shown.details.pane_visible, true);
+  assert.equal(shown.details.pane_width, 325);
   assert.equal(shown.details.pane_visible_before, false);
   assert.equal(shown.details.pane_visible_after, true);
   assert.equal(shown.details.pane_visible_effective, true);
-  assert.equal(widthStarted.details.pane_width_before, 640);
-  assert.equal(widthStarted.details.pane_width_requested, 390);
-  assert.equal(width.details.pane_width, 390);
-  assert.equal(width.details.pane_width_after, 390);
+  assert.equal(widthStarted.details.pane_width_before, 325);
+  assert.equal(widthStarted.details.pane_width_requested, 633);
+  assert.equal(width.details.pane_width, 633);
+  assert.equal(width.details.pane_width_after, 633);
   assert.equal(width.details.pane_width_effective, true);
   assert.equal(rebuilt.details.pane_branch, "created");
   assert.equal(rebuilt.details.pane_expected_dock_position, 2);
@@ -1336,11 +1338,11 @@ test("Panel records TaskPane creation and reuse host properties", () => {
   const reused = harness.logs.filter((entry) => entry.event === "taskpane.reuse.completed").at(-1);
   assert.equal(reused.details.pane_branch, "reused");
   assert.equal(reused.details.pane_visible, true);
-  assert.equal(reused.details.pane_width, 390);
+  assert.equal(reused.details.pane_width, 633);
   assert.equal(reused.details.pane_dock_position, 2);
 });
 
-test("Panel configures native layout before show and returns focus to the document", () => {
+test("Panel applies the native width after show and returns focus to the document", () => {
   const harness = makeHostHarness();
   harness.runtime.start();
 
@@ -1348,12 +1350,12 @@ test("Panel configures native layout before show and returns focus to the docume
 
   assert.deepEqual(
     harness.taskpaneOperations.slice(0, 3),
-    ["dock:2", "width:390", "visible:true"],
+    ["dock:2", "visible:true", "width:633"],
   );
   assert.deepEqual(harness.activationCalls, ["document", "window"]);
   const events = harness.events();
-  assert.ok(events.indexOf("taskpane.dock_position.completed") < events.indexOf("taskpane.width.completed"));
-  assert.ok(events.indexOf("taskpane.width.completed") < events.indexOf("taskpane.show.completed"));
+  assert.ok(events.indexOf("taskpane.dock_position.completed") < events.indexOf("taskpane.show.completed"));
+  assert.ok(events.indexOf("taskpane.show.completed") < events.indexOf("taskpane.width.completed"));
   assert.ok(events.indexOf("taskpane.show.completed") < events.indexOf("taskpane.document_focus.completed"));
 });
 
@@ -1474,8 +1476,8 @@ test("Panel replaces a stale TaskPane page before showing it", () => {
 
   assert.equal(stalePane.Visible, false);
   assert.equal(harness.taskpaneCreateCalls.length, 2);
-  assert.match(harness.taskpaneCreateCalls[1][0], /taskpane\.html\?v=12$/);
-  assert.equal(harness.values.get(TASKPANE_VERSION_KEY), "12");
+  assert.match(harness.taskpaneCreateCalls[1][0], /taskpane\.html\?v=19$/);
+  assert.equal(harness.values.get(TASKPANE_VERSION_KEY), "19");
   assert.ok(harness.events().includes("taskpane.page_version.mismatch"));
 });
 
@@ -1758,9 +1760,9 @@ test("Host adds a letterhead to a legacy document and publishes one DOCX", async
 
 function makeElement(id) {
   const rect = id === "taskpane_header"
-    ? { top: 0, right: 390, bottom: 64, left: 0, width: 390, height: 64 }
+      ? { top: 0, right: 380, bottom: 64, left: 0, width: 380, height: 64 }
     : id === "content"
-      ? { top: 64, right: 390, bottom: 720, left: 0, width: 390, height: 656 }
+      ? { top: 64, right: 380, bottom: 720, left: 0, width: 380, height: 656 }
       : { top: 80, right: 200, bottom: 112, left: 0, width: 200, height: 32 };
   return {
     id,
@@ -1778,6 +1780,7 @@ function makeElement(id) {
     hidden: false,
     value: "",
     children: [],
+    dataset: {},
     listeners: new Map(),
     classList: {
       values: new Set(),
@@ -1795,6 +1798,22 @@ function makeElement(id) {
       return { ...this.rect };
     },
     replaceChildren(...children) { this.children = children; },
+    appendChild(child) { this.children.push(child); return child; },
+    append(...children) { this.children.push(...children.flat()); },
+    querySelector(selector) {
+      const field = String(selector).match(/^\[data-field="([^"]+)"\]$/);
+      const index = String(selector).match(/^\[data-index="([^"]+)"\]$/);
+      const matches = (item) => item && item.dataset && ((field && item.dataset.field === field[1]) || (index && item.dataset.index === index[1]));
+      const visit = (items) => {
+        for (const item of items || []) {
+          if (matches(item)) return item;
+          const nested = visit(item.children);
+          if (nested) return nested;
+        }
+        return null;
+      };
+      return matches(this) ? this : visit(this.children);
+    },
     setAttribute(name, value) {
       if (!this.attributes) this.attributes = new Map();
       this.attributes.set(name, String(value));
@@ -1840,8 +1859,14 @@ function makeTaskpaneHarness(initialState, {
     static now() { return currentNowMs; }
   };
   const ids = [
-    "preview", "apply", "add_letterhead", "clear_preview", "health",
+    "preview", "apply", "format_settings", "add_letterhead", "clear_preview", "health",
     "format_mode", "reader_mode", "format_mode_tab", "reader_mode_tab",
+    "format_main_panel", "format_settings_panel", "format_settings_close",
+    "format_settings_restore", "format_settings_save",
+    "format_style_settings",
+    "format_paper_size", "format_margin_top", "format_margin_bottom", "format_margin_left", "format_margin_right", "format_line_spacing",
+    "format_number_font", "format_number_size", "format_letter_font", "format_letter_size",
+    "format_page_font", "format_page_size", "format_page_style", "format_page_position",
     "format_scope_mode", "format_page_spec",
     "letterhead_modal", "letterhead_mark", "letterhead_number", "letterhead_signer",
     "letterhead_separator", "letterhead_form_error", "letterhead_cancel", "letterhead_confirm",
@@ -1854,12 +1879,13 @@ function makeTaskpaneHarness(initialState, {
   elements.get("format_page_spec").focus = () => {};
   elements.get("letterhead_separator").value = "straight";
   elements.get("reader_mode").hidden = true;
+  elements.get("format_settings_panel").hidden = true;
   elements.get("content").scrollTop = 80;
   const body = {
     scrollTop: 80,
-    clientWidth: 390,
+    clientWidth: 380,
     clientHeight: 720,
-    scrollWidth: 390,
+    scrollWidth: 380,
     scrollHeight: 720,
     tagName: "BODY",
     id: "",
@@ -1869,9 +1895,9 @@ function makeTaskpaneHarness(initialState, {
     visibilityState: "visible",
     documentElement: {
       scrollTop: 80,
-      clientWidth: 390,
+      clientWidth: 380,
       clientHeight: 720,
-      scrollWidth: 390,
+      scrollWidth: 380,
       scrollHeight: 720,
     },
     body,
@@ -1892,9 +1918,8 @@ function makeTaskpaneHarness(initialState, {
     hasFocus() {
       return true;
     },
-    createElement() {
-      return { className: "", textContent: "" };
-    },
+    createElement(tagName) { return makeElement(tagName); },
+    createTextNode(text) { const item = makeElement("TEXT"); item.textContent = String(text); return item; },
   };
   function response(data, { ok = true, status = 200 } = {}) {
     return {
@@ -1913,6 +1938,29 @@ function makeTaskpaneHarness(initialState, {
     bridgeCalls.push({ path, body, headers: options.headers || {} });
     if (path === invalidJsonPath) {
       return { ok: true, status: 200, json: async () => { throw new Error("INVALID_JSON"); } };
+    }
+    if (path === "/v1/format/default") {
+      return response({
+        ok: true,
+        data: {
+          config_version: "config-1",
+          format_config: {
+            styles: [
+              { name: "主标题", font: "方正小标宋简体", size: "二号", bold: false, pattern: "", indent: 0, align: "居中" },
+              { name: "一级标题", font: "黑体", size: "三号", bold: false, pattern: "{a}、", indent: 2, align: "左对齐" },
+              { name: "二级标题", font: "楷体_GB2312", size: "三号", bold: true, pattern: "（{b}）", indent: 2, align: "左对齐" },
+              { name: "三级标题", font: "仿宋_GB2312", size: "三号", bold: true, pattern: "{c}.", indent: 2, align: "左对齐" },
+              { name: "四级标题", font: "仿宋_GB2312", size: "三号", bold: false, pattern: "（{d}）", indent: 2, align: "左对齐" },
+              { name: "正文", font: "仿宋_GB2312", size: "三号", bold: false, pattern: "", indent: 2, align: "两端对齐" },
+              { name: "数字", font: "Times New Roman", bold: false },
+              { name: "字母", font: "Times New Roman", bold: false },
+              { name: "页码设置", font: "宋体", size: "四号", pattern: "— 1 —", align: "奇右|偶左" },
+            ],
+            page: { width_cm: 21, height_cm: 29.7, margin_top_cm: 3.7, margin_bottom_cm: 3.5, margin_left_cm: 2.8, margin_right_cm: 2.6, lines_per_page: 22, chars_per_line: 28, line_spacing_pt: 28, space_before_line: 0, space_after_line: 0, grid_alignment: "文字对齐字符网络" },
+            page_number: { enabled: true, style: "dash", position: "outside", font_name: "宋体", font_size_pt: 14, first_page: true, section_numbering: "continue", offset_from_text_mm: 7 },
+          },
+        },
+      });
     }
     if (path === "/v1/bridge/state/wait") {
       if (nextStateWaitFailure) {
@@ -2000,9 +2048,9 @@ function makeTaskpaneHarness(initialState, {
     },
     devicePixelRatio: 1,
     innerHeight: 720,
-    innerWidth: 390,
+    innerWidth: 380,
     outerHeight: 720,
-    outerWidth: 390,
+    outerWidth: 380,
     screenX: 80,
     screenY: 120,
     screenLeft: 80,
@@ -2019,7 +2067,7 @@ function makeTaskpaneHarness(initialState, {
     pageYOffset: 0,
     visualViewport: {
       height: 720,
-      width: 390,
+      width: 380,
       offsetTop: 0,
       pageTop: 0,
     },
@@ -2195,6 +2243,66 @@ test("TaskPane switches format and reader modes without submitting reader comman
   assert.equal(harness.commandRequests.length, 0);
 });
 
+test("TaskPane opens the four-section format settings view and saves the session config", async () => {
+  const harness = makeTaskpaneHarness({ host_ready: true, status: "READY", updated_at: "1" });
+  await harness.flushAsync();
+  harness.click("format_settings");
+  await harness.flushAsync();
+  assert.equal(harness.elements.get("format_settings_panel").hidden, false);
+  assert.equal(harness.elements.get("format_main_panel").hidden, true);
+  assert.equal(harness.elements.get("format_style_settings").children.length, 6);
+  harness.elements.get("format_margin_top").value = "4.0cm";
+  harness.click("format_settings_restore");
+  assert.equal(harness.elements.get("format_margin_top").value, "3.7cm");
+  harness.elements.get("format_margin_top").value = "4.0cm";
+  harness.elements.get("format_page_position").value = "center";
+  harness.click("format_settings_save");
+  assert.equal(harness.elements.get("format_settings_panel").hidden, true);
+  assert.equal(harness.elements.get("format_main_panel").hidden, false);
+  harness.click("preview");
+  await harness.flushAsync();
+  const preview = harness.commandRequests.find((item) => item.command === "preview");
+  assert.equal(preview.format_config.page.margin_top_cm, 4);
+  assert.equal(preview.format_config.page.lines_per_page, 22);
+  assert.equal(preview.format_config.page.grid_alignment, "文字对齐字符网络");
+  assert.equal(preview.format_config.page_number.position, "center");
+  assert.equal(preview.format_config.page_number.first_page, true);
+});
+
+test("TaskPane sends the same saved format config to Preview and Apply", async () => {
+  const makeSaved = async () => {
+    const harness = makeTaskpaneHarness({ host_ready: true, status: "READY", updated_at: "1" });
+    await harness.flushAsync();
+    harness.click("format_settings");
+    await harness.flushAsync();
+    harness.elements.get("format_margin_left").value = "3.2cm";
+    harness.click("format_settings_save");
+    await harness.flushAsync();
+    return harness;
+  };
+  const previewHarness = await makeSaved();
+  previewHarness.click("preview");
+  await previewHarness.flushAsync();
+  const applyHarness = await makeSaved();
+  applyHarness.click("apply");
+  await applyHarness.flushAsync();
+  const previewConfig = previewHarness.commandRequests.find((item) => item.command === "preview").format_config;
+  const applyConfig = applyHarness.commandRequests.find((item) => item.command === "apply").format_config;
+  assert.deepEqual(previewConfig, applyConfig);
+});
+
+test("TaskPane closes format settings without saving draft changes", async () => {
+  const harness = makeTaskpaneHarness({ host_ready: true, status: "READY", updated_at: "1" });
+  await harness.flushAsync();
+  harness.click("format_settings");
+  await harness.flushAsync();
+  harness.elements.get("format_margin_right").value = "4.0cm";
+  harness.click("format_settings_close");
+  harness.click("format_settings");
+  await harness.flushAsync();
+  assert.equal(harness.elements.get("format_margin_right").value, "2.6cm");
+});
+
 test("TaskPane submits panel_ready once after READY and load_settled", async () => {
   const harness = makeTaskpaneHarness({ host_ready: true, status: "READY", updated_at: "1" });
   await harness.flushAsync();
@@ -2262,7 +2370,7 @@ test("TaskPane records bounded first-load geometry, focus, and event-loop probes
   const initial = harness.logs.find(
     (item) => item.event === "taskpane.layout.snapshot" && item.details.stage === "initial",
   );
-  assert.equal(initial.details.inner_width, 390);
+  assert.equal(initial.details.inner_width, 380);
   assert.equal(initial.details.inner_height, 720);
   assert.equal(initial.details.header_top, 0);
   assert.equal(initial.details.header_height, 64);
@@ -2274,7 +2382,7 @@ test("TaskPane records bounded first-load geometry, focus, and event-loop probes
   assert.equal(initial.details.window_screen_y, 120);
   assert.equal(initial.details.screen_width, 1920);
   assert.equal(initial.details.screen_avail_height, 1040);
-  assert.equal(initial.details.physical_inner_width, 390);
+  assert.equal(initial.details.physical_inner_width, 380);
   assert.equal(initial.details.physical_header_height, 64);
   assert.equal(initial.details.window_top_is_self, true);
   assert.equal(initial.details.frame_element_present, false);

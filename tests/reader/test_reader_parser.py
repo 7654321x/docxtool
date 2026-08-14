@@ -24,3 +24,14 @@ def test_parser_keeps_unchaptered_text_as_one_neutral_full_text_block():
     assert [(chapter.title, chapter.start_offset, chapter.end_offset) for chapter in chapters] == [
         ("全文", 0, len(text))
     ]
+
+
+def test_parser_keeps_visible_leading_text_before_the_first_chapter():
+    text = "导语内容\n\n第一章 开始\n正文"
+
+    chapters = parse_chapters(text, "book")
+
+    assert [(chapter.title, chapter.start_offset, chapter.end_offset) for chapter in chapters] == [
+        ("前置内容", 0, text.index("第一章")),
+        ("第一章 开始", text.index("第一章"), len(text)),
+    ]

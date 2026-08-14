@@ -220,15 +220,20 @@ class ReaderStorage:
         return json.loads(row["value"]) if row is not None else None
 
     def set_setting(self, key: str, value: Any) -> None:
+        self.set_settings({key: value})
+
+    def set_settings(self, values: dict[str, Any]) -> None:
         try:
-            encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+            encoded_values = [
+                (key, json.dumps(value, ensure_ascii=False, separators=(",", ":")))
+                for key, value in values.items()
+            ]
             with self._connect() as conn:
-                conn.execute(
+                conn.executemany(
                     """
                     INSERT INTO settings (key,value) VALUES (?,?)
                     ON CONFLICT(key) DO UPDATE SET value=excluded.value
-                    """,
-                    (key, encoded),
+                    """, encoded_values
                 )
         except (TypeError, ValueError, sqlite3.Error) as exc:
             raise ReaderStorageError() from exc

@@ -122,6 +122,7 @@ class HostBridge:
         authorization: Optional[Dict[str, Any]] = None,
         format_scope: Optional[Dict[str, Any]] = None,
         letterhead: Optional[Dict[str, Any]] = None,
+        format_config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         request = self._required_text(
             request_id, "WPS_REQUEST_ID_MISSING", maximum=160
@@ -169,6 +170,11 @@ class HostBridge:
             resolved_letterhead = deepcopy(letterhead)
         elif letterhead is not None:
             raise HostBridgeError("WPS_LETTERHEAD_FORM_INVALID")
+        resolved_format_config = None
+        if format_config is not None:
+            if command_name not in {"preview", "apply"} or not isinstance(format_config, dict):
+                raise HostBridgeError("WPS_FORMAT_CONFIG_INVALID")
+            resolved_format_config = deepcopy(format_config)
         with self._condition:
             self._require_open()
             self._require_generation(host_generation)
@@ -194,6 +200,8 @@ class HostBridge:
                     self._command["format_scope"] = resolved_format_scope
             elif command_name == "add_letterhead":
                 self._command["letterhead"] = resolved_letterhead
+            if resolved_format_config is not None:
+                self._command["format_config"] = resolved_format_config
             self._command_delivered = False
             self._state_revision += 1
             self._condition.notify_all()

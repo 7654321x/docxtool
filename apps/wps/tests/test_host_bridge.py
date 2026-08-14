@@ -226,6 +226,52 @@ def test_apply_command_requires_matching_authorized_config():
     }
 
 
+def test_preview_and_apply_commands_carry_the_same_format_config():
+    format_config = {
+        "styles": [{"name": "正文", "font": "测试字体"}],
+        "page": {"margin_left_cm": 3.2},
+    }
+    preview_bridge, preview_generation = _ready_bridge()
+    preview_bridge.enqueue_command(
+        "request-preview-config",
+        "preview",
+        "pane-1",
+        preview_generation,
+        format_config=format_config,
+    )
+    preview = preview_bridge.wait_command(
+        "host-context-a", preview_generation, timeout_seconds=0
+    )["command"]
+
+    apply_bridge, apply_generation = _ready_bridge()
+    apply_bridge.enqueue_command(
+        "request-apply-config",
+        "apply",
+        "pane-1",
+        apply_generation,
+        {"request_id": "request-apply-config", "config_version": "config-1"},
+        format_config=format_config,
+    )
+    apply = apply_bridge.wait_command(
+        "host-context-a", apply_generation, timeout_seconds=0
+    )["command"]
+
+    assert preview["format_config"] == format_config
+    assert apply["format_config"] == format_config
+
+
+def test_format_config_is_rejected_for_unrelated_commands():
+    bridge, generation = _ready_bridge()
+    with pytest.raises(HostBridgeError, match="WPS_FORMAT_CONFIG_INVALID"):
+        bridge.enqueue_command(
+            "request-health-config",
+            "health",
+            "pane-1",
+            generation,
+            format_config={"page": {}},
+        )
+
+
 def test_invalid_format_scope_does_not_occupy_command_slot():
     bridge, generation = _ready_bridge()
     authorization = {
@@ -522,6 +568,40 @@ def _prepare_apply(application, request_id, source_path):
         request_id=request_id,
     )
     return generation, result["operation_id"]
+
+
+def test_apply_binds_taskpane_config_after_public_authorization(tmp_path):
+    account = _AccountRuntime()
+    application = server_module.WpsControlApplication(tmp_path, "test-token", account)
+    profile = application.default_format_config()["format_config"]
+    profile["page"]["margin_left_cm"] = 3.2
+    registration = application.dispatch_bridge(
+        "/v1/bridge/host/register", {"host_context_id": "host-context-a"}
+    )
+    generation = registration["host_generation"]
+    application.dispatch_bridge(
+        "/v1/bridge/state",
+        {
+            "host_context_id": "host-context-a",
+            "host_generation": generation,
+            "state": {"host_ready": True, "status": "READY"},
+        },
+    )
+    application.dispatch_bridge(
+        "/v1/bridge/command",
+        {
+            "request_id": "request-custom-config",
+            "command": "apply",
+            "pane_instance_id": "pane-1",
+            "host_generation": generation,
+            "format_config": profile,
+        },
+    )
+    assert application._authorized_requests["request-custom-config"]["format_config"] == profile
+    command = application.host_bridge.wait_command(
+        "host-context-a", generation, timeout_seconds=0
+    )["command"]
+    assert command["format_config"] == profile
 
 
 def test_apply_fail_rolls_back_prepared_transaction_by_request_id(

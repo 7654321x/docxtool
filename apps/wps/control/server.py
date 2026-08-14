@@ -20,6 +20,7 @@ from docxtool.sdk import RecognitionPlan
 from docxtool.document.configuration.validation import validate_format_config
 from docxtool.document.errors import ConfigValidationError
 from docxtool.version import package_version
+from docxtool.wps_server.format_config import load_active_format_profile
 
 from .document_transaction import DocumentTransactionError, DocumentTransactionManager
 from .add_letterhead import inspect_letterhead, normalize_letterhead_request
@@ -64,6 +65,7 @@ BUSINESS_ROUTES = frozenset(
         "/v1/letterhead/prepare",
     }
 )
+FORMAT_CONFIG_ROUTE = "/v1/format/default"
 BRIDGE_ROUTES = frozenset(
     {
         "/v1/bridge/host/register",
@@ -146,6 +148,14 @@ class WpsControlApplication:
             "host": HOST,
         }
 
+    def default_format_config(self) -> Dict[str, Any]:
+        """Return the validated repository default used by the WPS settings view."""
+        profile = load_active_format_profile()
+        return {
+            "config_version": str(profile["config_version"]),
+            "format_config": deepcopy(profile["format_config"]),
+        }
+
     def account_summary(self) -> Dict[str, Any]:
         if self.account_runtime is None:
             return {
@@ -189,7 +199,9 @@ class WpsControlApplication:
             self._reader_service = ReaderService()
         return self._reader_service
 
-    def _authorize_apply(self, request_id: str) -> Dict[str, Any]:
+    def _authorize_apply(
+        self, request_id: str, requested_format_config: Optional[dict] = None
+    ) -> Dict[str, Any]:
         if self.account_runtime is None:
             raise DocumentTransactionError("WPS_PUBLIC_ACCOUNT_REQUIRED")
         result = self.account_runtime.authorize_format(request_id)
@@ -198,8 +210,11 @@ class WpsControlApplication:
         config = result.get("format_config")
         if not isinstance(config, dict):
             raise DocumentTransactionError("WPS_APPLY_FORMAT_CONFIG_REQUIRED")
+        config_to_use = (
+            requested_format_config if isinstance(requested_format_config, dict) else config
+        )
         try:
-            validated = validate_format_config(config)
+            validated = validate_format_config(config_to_use)
         except ConfigValidationError as exc:
             log_event(
                 "ERROR",
@@ -431,7 +446,12 @@ class WpsControlApplication:
             with self._authorization_lock:
                 self.host_bridge.ensure_command_available(body.get("host_generation"))
                 if command_name == "apply":
-                    authorization = self._authorize_apply(str(body.get("request_id", "")))
+                    authorization = self._authorize_apply(
+                        str(body.get("request_id", "")),
+                        body.get("format_config")
+                        if isinstance(body.get("format_config"), dict)
+                        else None,
+                    )
                     log_event(
                         "INFO",
                         "public",
@@ -466,6 +486,11 @@ class WpsControlApplication:
                             else None
                         ),
                         letterhead_payload,
+                        (
+                            body.get("format_config")
+                            if isinstance(body.get("format_config"), dict)
+                            else None
+                        ),
                     )
                 except HostBridgeError as exc:
                     if authorization is not None and self.account_runtime is not None:
@@ -1098,7 +1123,7 @@ def create_server(
                 request_id = self._request_id()
                 route_path = self._route_path()
                 log_event("INFO", "control", "request.start", "WPS Control 请求开始", {"method": "GET", "path": route_path, "request_id": request_id})
-                if route_path not in {"/v1/health", "/v1/account", *READER_GET_ROUTES}:
+                if route_path not in {"/v1/health", "/v1/account", FORMAT_CONFIG_ROUTE, *READER_GET_ROUTES}:
                     self._json(404, {"ok": False, "error_code": "WPS_CONTROL_ROUTE_NOT_FOUND"})
                     log_event("ERROR", "control", "control.route.not_found", "WPS Control 路由不存在", {"method": "GET", "path": self._safe_path(), "request_id": request_id, "http_status": 404, "error_code": "WPS_CONTROL_ROUTE_NOT_FOUND"})
                     return
@@ -1110,6 +1135,8 @@ def create_server(
                     data = application.health()
                 elif route_path == "/v1/account":
                     data = application.account_summary()
+                elif route_path == FORMAT_CONFIG_ROUTE:
+                    data = application.default_format_config()
                 else:
                     data = application.dispatch_reader_get(route_path, self._query())
                 self._json(200, {"ok": True, "data": data})

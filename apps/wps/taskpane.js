@@ -31,6 +31,10 @@
   let lastAccountStatusKey = "";
   let lastResultSyncPending = "";
   let activeMode = "format";
+  let defaultFormatConfig = null;
+  let currentFormatConfig = null;
+  let settingsDraftBase = null;
+  let formatConfigVersion = "";
   const layoutDiagnosticsStartedAt = Date.now();
   const lifecycleEventCounts = Object.create(null);
   const REQUEST_ACK_TIMEOUT_MS = 5000;
@@ -38,27 +42,39 @@
   const LAYOUT_EVENT_LIMIT = 4;
   const LAYOUT_PROBE_DELAYS_MS = [100, 500, 1000];
   const SAFE_DETAIL_FIELDS = new Set([
-    "active_element_id", "active_element_tag", "actual_delay_ms", "apply_available", "body_client_height", "body_client_width",
+    "active_element_id", "active_element_tag", "actual_delay_ms", "apply_available", "at_end", "book_count", "body_client_height", "body_client_width",
     "body_scroll_height", "body_scroll_top", "body_scroll_width", "command", "content_bottom",
-    "content_client_height", "content_client_width", "content_height", "content_scroll_height",
+    "chapter_end_offset", "chapter_index", "content_client_height", "content_client_width", "content_end_offset", "content_height", "content_scroll_height",
     "content_scroll_top", "content_top", "current_status", "device_pixel_ratio", "document_client_height",
     "document_client_width", "document_has_focus", "document_ready_state",
-    "document_scroll_height", "document_scroll_width", "error_code", "error_type", "event_sequence", "header_bottom",
+    "direction", "document_scroll_height", "document_scroll_width", "end_offset", "error_code", "error_type", "event_sequence", "header_bottom",
     "header_clipped_top", "header_display", "header_height", "header_offset_top", "header_position",
     "header_top", "header_visibility", "host_ready", "inner_height", "inner_width", "layout_event_count",
     "outer_height", "outer_width", "page_persisted", "page_x_offset", "page_y_offset",
-    "pane_instance_id", "pending_present", "previous_status", "readback_present", "reason",
+    "pane_instance_id", "paragraph_count", "pending_present", "previous_status", "readback_present", "reason", "reader_client_height",
     "request_id", "request_status", "result_sync_error_code", "result_sync_status", "stage", "cause_event", "root_scroll_top", "bridge_ready",
     "command_sequence", "generation_changed", "host_generation",
-    "scheduled_delay_ms", "state_revision", "state_wait_in_flight", "state_wait_stopped", "timer_drift_ms",
+    "reader_scroll_height", "reader_scroll_top", "rendered_paragraph_count", "requested_start_offset", "scheduled_delay_ms", "start_offset", "state_revision", "state_wait_in_flight", "state_wait_stopped", "target_in_current_window", "target_offset", "text_chars", "timer_drift_ms", "navigation_mode", "overlap_px", "page_distance_px", "progress_offset", "progress_percent", "scroll_top_before", "scroll_top_after", "line_height_px", "speed", "previous_window_end_offset",
     "top_element_id", "top_element_tag", "trigger", "visibility_state", "visual_viewport_height",
     "visual_viewport_offset_top", "visual_viewport_page_top", "visual_viewport_width", "wait_timed_out",
     "frame_element_present", "header_offset_height", "header_opacity", "header_overflow",
     "header_transform", "header_z_index", "physical_header_height", "physical_inner_height",
     "network_available", "pending_result_count", "physical_inner_width", "screen_avail_height", "screen_avail_left", "screen_avail_top",
     "screen_avail_width", "screen_height", "screen_width", "window_screen_left",
-    "window_screen_top", "window_screen_x", "window_screen_y", "window_top_is_self"
+    "window_screen_top", "window_screen_x", "window_screen_y", "window_top_is_self", "book_id_short", "config_version", "style_count"
   ]);
+
+  const FORMAT_STYLE_NAMES = ["主标题", "一级标题", "二级标题", "三级标题", "四级标题", "正文"];
+  const FORMAT_FONTS = [
+    "方正小标宋简体", "方正大标宋简体", "黑体", "楷体_GB2312", "仿宋_GB2312", "仿宋",
+    "宋体", "新宋体", "华文中宋", "微软雅黑", "等线", "思源宋体", "思源黑体",
+    "Times New Roman", "Arial", "Calibri", "Cambria"
+  ];
+  const FORMAT_SIZES = ["初号", "小初", "一号", "小一", "二号", "小二", "三号", "小三", "四号", "小四", "五号", "小五", "六号", "小六"];
+  const FORMAT_SIZE_POINTS = { "初号": 42, "小初": 36, "一号": 26, "小一": 24, "二号": 22, "小二": 18, "三号": 16, "小三": 15, "四号": 14, "小四": 12, "五号": 10.5, "小五": 9, "六号": 7.5, "小六": 6.5 };
+  const FORMAT_PATTERNS = ["{a}、", "（{b}）", "{c}.", "（{d}）"];
+  const FORMAT_INDENTS = [0, 1, 1.5, 2, 2.5, 3];
+  const FORMAT_ALIGNMENTS = ["居中", "左对齐", "右对齐", "两端对齐"];
 
   function node(id) {
     const value = document.getElementById(id);
@@ -330,16 +346,17 @@
     return /^[A-Z][A-Z0-9_]{2,100}$/.test(value) ? value : fallback;
   }
 
-  async function bridgeApi(path, body, requestId) {
+  async function bridgeApi(path, body, requestId, method) {
     if (!config.controlBaseUrl || !config.sessionToken) throw new Error("WPS_CONTROL_NOT_CONFIGURED");
+    const requestMethod = method || "POST";
     const response = await fetch(`${config.controlBaseUrl}${path}`, {
-      method: "POST",
+      method: requestMethod,
       headers: {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${config.sessionToken}`,
         "X-DocxTool-Request-Id": requestId || ""
       },
-      body: JSON.stringify(body || {})
+      body: requestMethod === "GET" ? undefined : JSON.stringify(body || {})
     });
     let payload;
     try {
@@ -349,6 +366,222 @@
     }
     if (!response.ok || !payload.ok) throw new Error(payload.error_code || "WPS_BRIDGE_REQUEST_FAILED");
     return payload.data;
+  }
+
+  function copyJson(value) {
+    return value && typeof value === "object" ? JSON.parse(JSON.stringify(value)) : {};
+  }
+
+  function styleByName(configValue, name, index) {
+    const styles = Array.isArray(configValue && configValue.styles) ? configValue.styles : [];
+    return styles.find((item) => item && item.name === name) || styles[index] || {};
+  }
+
+  function setOptions(id, values, value, emptyLabel) {
+    const select = node(id);
+    const items = emptyLabel ? [{ value: "", label: emptyLabel }, ...values.map((item) => ({ value: item, label: item }))] : values.map((item) => ({ value: item, label: item }));
+    select.replaceChildren(...items.map((item) => {
+      const option = document.createElement("option");
+      option.value = String(item.value);
+      option.textContent = String(item.label);
+      return option;
+    }));
+    select.value = value === undefined || value === null ? "" : String(value);
+  }
+
+  function formatNumberType(pattern) {
+    const value = String(pattern || "");
+    if (!value) return "无样式";
+    if (value.includes("{a}") || value.includes("{b}")) return "中文数字";
+    if (value.includes("{c}") || value.includes("{d}")) return "阿拉伯数字";
+    return "自定义符号";
+  }
+
+  function numberOr(value, fallback) {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : fallback;
+  }
+
+  function renderFormatStyleSettings(configValue) {
+    const body = node("format_style_settings");
+    const styles = FORMAT_STYLE_NAMES.map((name, index) => {
+      const style = styleByName(configValue, name, index);
+      return { name, index, font: style.font || "", size: style.size || "", bold: style.bold === true, pattern: style.pattern || "", indent: numberOr(style.indent, 0), align: style.align || "左对齐" };
+    });
+    body.replaceChildren(...styles.map((style) => {
+      const card = document.createElement("div");
+      card.className = "settings-style-card";
+      card.dataset.index = String(style.index);
+      const title = document.createElement("div");
+      title.className = "settings-style-name";
+      title.textContent = style.name;
+      card.appendChild(title);
+      const grid = document.createElement("div");
+      grid.className = "settings-grid";
+      const addSelect = (label, field, values, value, emptyLabel) => {
+        const wrapper = document.createElement("div");
+        wrapper.className = "settings-field";
+        const labelNode = document.createElement("label");
+        labelNode.textContent = label;
+        const select = document.createElement("select");
+        select.dataset.field = field;
+        select.setAttribute("aria-label", `${style.name}${label}`);
+        const items = emptyLabel ? [{ value: "", label: emptyLabel }, ...values.map((item) => ({ value: item, label: item }))] : values.map((item) => ({ value: item, label: item }));
+        select.replaceChildren(...items.map((item) => {
+          const option = document.createElement("option");
+          option.value = String(item.value);
+          option.textContent = String(item.label);
+          return option;
+        }));
+        select.value = String(value);
+        wrapper.append(labelNode, select);
+        grid.appendChild(wrapper);
+      };
+      addSelect("字体", "font", FORMAT_FONTS, style.font);
+      addSelect("字号", "size", FORMAT_SIZES, style.size);
+      addSelect("编号 / 样式", "pattern", FORMAT_PATTERNS, style.pattern, "无样式");
+      addSelect("首行缩进", "indent", FORMAT_INDENTS.map((item) => String(item)), String(style.indent), "0");
+      addSelect("对齐方式", "align", FORMAT_ALIGNMENTS, style.align);
+      const boldWrapper = document.createElement("div");
+      boldWrapper.className = "settings-field";
+      const boldLabel = document.createElement("label");
+      boldLabel.textContent = "加粗";
+      const boldField = document.createElement("label");
+      boldField.className = "settings-check";
+      const bold = document.createElement("input");
+      bold.type = "checkbox";
+      bold.dataset.field = "bold";
+      bold.checked = style.bold;
+      boldField.append(bold, document.createTextNode("使用当前样式"));
+      boldWrapper.append(boldLabel, boldField);
+      grid.appendChild(boldWrapper);
+      const numberTypeWrapper = document.createElement("div");
+      numberTypeWrapper.className = "settings-field";
+      const numberTypeLabel = document.createElement("label");
+      numberTypeLabel.textContent = "编号类型";
+      const numberType = document.createElement("input");
+      numberType.readOnly = true;
+      numberType.value = formatNumberType(style.pattern);
+      numberType.className = "readonly-control";
+      numberType.setAttribute("aria-label", `${style.name}编号类型`);
+      numberTypeWrapper.append(numberTypeLabel, numberType);
+      grid.appendChild(numberTypeWrapper);
+      grid.querySelector('[data-field="pattern"]').addEventListener("change", (event) => {
+        numberType.value = formatNumberType(event.target.value);
+      });
+      card.appendChild(grid);
+      return card;
+    }));
+  }
+
+  function renderFormatSettingsForm(configValue) {
+    const page = configValue.page || {};
+    setOptions("format_paper_size", ["A4", "A3", "Letter"], page.width_cm === 29.7 ? "A3" : page.width_cm === 21.59 ? "Letter" : "A4");
+    const margins = ["2.0cm", "2.2cm", "2.4cm", "2.6cm", "2.8cm", "3.0cm", "3.2cm", "3.5cm", "3.7cm", "4.0cm"];
+    setOptions("format_margin_top", margins, `${numberOr(page.margin_top_cm, 3.7)}cm`);
+    setOptions("format_margin_bottom", margins, `${numberOr(page.margin_bottom_cm, 3.5)}cm`);
+    setOptions("format_margin_left", margins, `${numberOr(page.margin_left_cm, 2.8)}cm`);
+    setOptions("format_margin_right", margins, `${numberOr(page.margin_right_cm, 2.6)}cm`);
+    setOptions("format_line_spacing", Array.from({ length: 21 }, (_, index) => `${20 + index}磅`), `${numberOr(page.line_spacing_pt, 28)}磅`);
+    const numberStyle = styleByName(configValue, "数字", 6);
+    const letterStyle = styleByName(configValue, "字母", 7);
+    const pageStyle = styleByName(configValue, "页码设置", 8);
+    setOptions("format_number_font", FORMAT_FONTS, numberStyle.font || "Times New Roman");
+    setOptions("format_letter_font", FORMAT_FONTS, letterStyle.font || "Times New Roman");
+    setOptions("format_number_size", FORMAT_SIZES, numberStyle.size || "", "跟随段落");
+    setOptions("format_letter_size", FORMAT_SIZES, letterStyle.size || "", "跟随段落");
+    setOptions("format_page_font", FORMAT_FONTS, pageStyle.font || "宋体");
+    setOptions("format_page_size", FORMAT_SIZES, pageStyle.size || "四号");
+    node("format_page_style").value = ({ "— 1 —": "dash", "1": "plain", "第 1 页": "cn", "第 1 页 / 共 n 页": "cn_total" }[pageStyle.pattern] || "dash");
+    node("format_page_position").value = ({ "奇右|偶左": "outside", "奇右偶左": "outside", "居中": "center", "左对齐": "left", "右对齐": "right" }[pageStyle.align] || "outside");
+    renderFormatStyleSettings(configValue);
+  }
+
+  async function ensureFormatDefaults() {
+    if (defaultFormatConfig) return;
+    const result = await bridgeApi("/v1/format/default", null, "", "GET");
+    if (!result || typeof result.format_config !== "object") throw new Error("WPS_FORMAT_DEFAULT_CONFIG_INVALID");
+    defaultFormatConfig = copyJson(result.format_config);
+    formatConfigVersion = String(result.config_version || "");
+    currentFormatConfig = copyJson(defaultFormatConfig);
+  }
+
+  function collectCurrentFormatConfig() {
+    const next = copyJson(settingsDraftBase || currentFormatConfig || defaultFormatConfig);
+    if (!next || typeof next !== "object") throw new Error("WPS_FORMAT_CONFIG_INVALID");
+    if (!Array.isArray(next.styles)) next.styles = [];
+    const page = next.page && typeof next.page === "object" ? next.page : {};
+    const pageDimensions = { A4: [21, 29.7], A3: [29.7, 42], Letter: [21.59, 27.94] }[node("format_paper_size").value] || [21, 29.7];
+    page.width_cm = pageDimensions[0];
+    page.height_cm = pageDimensions[1];
+    page.margin_top_cm = numberOr(node("format_margin_top").value.replace("cm", ""), 3.7);
+    page.margin_bottom_cm = numberOr(node("format_margin_bottom").value.replace("cm", ""), 3.5);
+    page.margin_left_cm = numberOr(node("format_margin_left").value.replace("cm", ""), 2.8);
+    page.margin_right_cm = numberOr(node("format_margin_right").value.replace("cm", ""), 2.6);
+    page.line_spacing_pt = numberOr(node("format_line_spacing").value.replace("磅", ""), 28);
+    next.page = page;
+    FORMAT_STYLE_NAMES.forEach((name, index) => {
+      const card = node("format_style_settings").querySelector(`[data-index="${index}"]`);
+      const original = styleByName(next, name, index);
+      const updated = { ...original, name };
+      ["font", "size", "pattern", "align"].forEach((field) => { updated[field] = card.querySelector(`[data-field="${field}"]`).value; });
+      updated.bold = card.querySelector('[data-field="bold"]').checked;
+      updated.indent = numberOr(card.querySelector('[data-field="indent"]').value, 0);
+      if (index < next.styles.length) next.styles[index] = updated;
+      else next.styles.push(updated);
+    });
+    const updateNamed = (name, index, updates) => {
+      const current = styleByName(next, name, index);
+      const updated = { ...current, name, ...updates };
+      if (index < next.styles.length) next.styles[index] = updated;
+      else next.styles.push(updated);
+    };
+    const numberSize = node("format_number_size").value;
+    const letterSize = node("format_letter_size").value;
+    updateNamed("数字", 6, { font: node("format_number_font").value, ...(numberSize ? { size: numberSize } : {}) });
+    updateNamed("字母", 7, { font: node("format_letter_font").value, ...(letterSize ? { size: letterSize } : {}) });
+    if (!numberSize && next.styles[6]) delete next.styles[6].size;
+    if (!letterSize && next.styles[7]) delete next.styles[7].size;
+    const pageStyleValue = { dash: "— 1 —", plain: "1", cn: "第 1 页", cn_total: "第 1 页 / 共 n 页" }[node("format_page_style").value] || "— 1 —";
+    updateNamed("页码设置", 8, { font: node("format_page_font").value, size: node("format_page_size").value, pattern: pageStyleValue, align: ({ outside: "奇右|偶左", center: "居中", left: "左对齐", right: "右对齐" }[node("format_page_position").value] || "奇右|偶左") });
+    const pageNumber = next.page_number && typeof next.page_number === "object" ? next.page_number : {};
+    pageNumber.font_name = node("format_page_font").value;
+    pageNumber.font_size_pt = FORMAT_SIZE_POINTS[node("format_page_size").value];
+    pageNumber.style = node("format_page_style").value;
+    pageNumber.position = node("format_page_position").value;
+    next.page_number = pageNumber;
+    return next;
+  }
+
+  async function openFormatSettings() {
+    await ensureFormatDefaults();
+    settingsDraftBase = copyJson(currentFormatConfig);
+    renderFormatSettingsForm(settingsDraftBase);
+    node("format_main_panel").hidden = true;
+    node("format_settings_panel").hidden = false;
+    log("INFO", "wps.format_settings.opened", "WPS 格式设置已打开", { config_version: formatConfigVersion, style_count: 6 });
+  }
+
+  function closeFormatSettings() {
+    node("format_settings_panel").hidden = true;
+    node("format_main_panel").hidden = false;
+    settingsDraftBase = null;
+  }
+
+  function restoreFormatDefaults() {
+    if (!defaultFormatConfig) throw new Error("WPS_FORMAT_DEFAULT_CONFIG_UNAVAILABLE");
+    settingsDraftBase = copyJson(defaultFormatConfig);
+    renderFormatSettingsForm(settingsDraftBase);
+    log("INFO", "wps.format_settings.defaults_restored", "WPS 格式设置已恢复默认", { config_version: formatConfigVersion });
+  }
+
+  function saveFormatSettings() {
+    const next = collectCurrentFormatConfig();
+    if (!Array.isArray(next.styles) || next.styles.length < FORMAT_STYLE_NAMES.length || !next.page) throw new Error("WPS_FORMAT_CONFIG_INVALID");
+    currentFormatConfig = next;
+    settingsDraftBase = null;
+    closeFormatSettings();
+    log("INFO", "wps.format_settings.saved", "WPS 格式设置已保存", { config_version: formatConfigVersion, style_count: 6 });
   }
 
   function renderAccountStatus(account) {
@@ -393,7 +626,7 @@
   }
 
   function setBusinessButtonsDisabled(disabled) {
-    ["preview", "apply", "add_letterhead", "clear_preview", "health"].forEach((id) => { node(id).disabled = Boolean(disabled); });
+    ["preview", "apply", "format_settings", "add_letterhead", "clear_preview", "health"].forEach((id) => { node(id).disabled = Boolean(disabled); });
     if (!disabled && !accountApplyAvailable) node("apply").disabled = true;
   }
 
@@ -405,6 +638,7 @@
   async function switchMode(mode) {
     if (mode !== "format" && mode !== "reader") throw new Error("WPS_READER_MODE_INVALID");
     if (mode === activeMode) return;
+    if (!node("format_settings_panel").hidden) closeFormatSettings();
     if (mode === "reader") {
       node("format_mode").hidden = true;
       node("reader_mode").hidden = false;
@@ -457,6 +691,11 @@
       }));
       return;
     }
+    let formatConfig = null;
+    if (commandName === "preview" || commandName === "apply") {
+      await ensureFormatDefaults();
+      formatConfig = copyJson(currentFormatConfig);
+    }
     const requestId = requestedId || `pane-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
     log("INFO", "taskpane.request.prepare", "开始准备任务窗格请求", {
       request_id: requestId, command: commandName, pane_instance_id: paneInstanceId
@@ -492,6 +731,7 @@
         pane_instance_id: paneInstanceId,
         host_generation: hostGeneration,
         format_scope: formatScope,
+        format_config: formatConfig,
         letterhead: commandName === "add_letterhead" ? commandPayload : null
       }, requestId);
       log("INFO", "taskpane.bridge.command.submit.completed", "任务窗格命令已提交", {
@@ -1124,6 +1364,28 @@
     });
   }));
   node("add_letterhead").addEventListener("click", openLetterheadForm);
+  node("format_settings").addEventListener("click", () => {
+    void openFormatSettings().catch((error) => {
+      const code = stableErrorCode(error, "WPS_FORMAT_SETTINGS_OPEN_FAILED");
+      node("message").textContent = "格式设置暂时无法打开。";
+      node("error").textContent = displayError(code);
+      log("ERROR", "wps.format_settings.open.failed", "WPS 格式设置打开失败", { error_code: code, error_type: error && error.name ? error.name : "Error" });
+    });
+  });
+  node("format_settings_close").addEventListener("click", closeFormatSettings);
+  node("format_settings_restore").addEventListener("click", () => {
+    try { restoreFormatDefaults(); } catch (error) {
+      const code = stableErrorCode(error, "WPS_FORMAT_SETTINGS_DEFAULTS_FAILED");
+      node("error").textContent = displayError(code);
+    }
+  });
+  node("format_settings_save").addEventListener("click", () => {
+    try { saveFormatSettings(); } catch (error) {
+      const code = stableErrorCode(error, "WPS_FORMAT_SETTINGS_SAVE_FAILED");
+      node("error").textContent = displayError(code);
+      log("ERROR", "wps.format_settings.save.failed", "WPS 格式设置保存失败", { error_code: code, error_type: error && error.name ? error.name : "Error" });
+    }
+  });
   node("letterhead_cancel").addEventListener("click", closeLetterheadForm);
   node("letterhead_confirm").addEventListener("click", () => {
     node("letterhead_form_error").textContent = "";
@@ -1171,6 +1433,12 @@
       stateWaitStopped = true;
     }, { once: true });
     window.addEventListener("unload", (event) => logLifecycleEvent("unload", event), { once: true });
+    void ensureFormatDefaults().catch((error) => {
+      log("WARNING", "wps.format_settings.defaults.load.failed", "WPS 格式设置默认配置加载失败，将在打开设置时重试", {
+        error_code: stableErrorCode(error, "WPS_FORMAT_DEFAULT_CONFIG_LOAD_FAILED"),
+        error_type: error && error.name ? error.name : "Error"
+      });
+    });
     void waitForStateChanges();
   } catch (error) {
     stateWaitStopped = true;

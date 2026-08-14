@@ -22,3 +22,5 @@
 18. WPS 指定页码范围必须在保存、转换和 Engine 调用前按原始分页固定；范围外内容原样复制，不能改写全局页面设置、版头或尾部顺序。
 19. “添加版头”必须走独立文档事务，不调用 Recognition、一键排版或公网授权；当前界面只支持单机关。
 20. 默认只运行相关源码测试和 `apps/wps/scripts/verify.ps1`，不自动构建 EXE。真实 WPS 未验证时必须报告对应 `*_SMOKE = NOT_RUN`。
+21. 修改 TaskPane HTML、CSS 或 Reader/TaskPane 脚本后，必须同步递增静态资源查询版本；需要强制 WPS 放弃旧窗格时还必须递增 `TASKPANE_PAGE_VERSION`，并运行 `node --test apps/wps/tests/wps-runtime.test.mjs apps/wps/tests/reader-ui.test.mjs`。仅关闭再打开旧窗格不等于重新加载页面。
+22. WPS“格式设置”只显示段落样式、页面版式、字符设置和页码设置四类；`lines_per_page`、`chars_per_line`、`grid_alignment`、`space_before_line`、`space_after_line` 虽隐藏于界面仍必须保留。预览与一键排版必须使用同一份当前会话配置；修改后运行 WPS Node 聚焦测试、`python -m ruff check`、编译检查和 `git diff --check`。

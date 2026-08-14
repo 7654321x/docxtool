@@ -185,3 +185,38 @@ def test_reader_requests_do_not_log_full_book_identifier_or_query(monkeypatch, t
         assert "private-source.txt" not in logged
     finally:
         _close_server(server, thread)
+
+
+def test_reader_route_navigates_adjacent_paragraph_without_crossing_chapter(tmp_path):
+    server, thread = _running_server(tmp_path)
+    try:
+        status, payload = _request(
+            server,
+            "POST",
+            "/v1/reader/import",
+            body="第一章\n段1\n\n段2\n第二章\n段3".encode(),
+            headers={
+                "Content-Type": "text/plain",
+                "X-DocxTool-Reader-Filename": "book.txt",
+            },
+        )
+        assert status == 200
+        book_id = payload["data"]["book"]["id"]
+        status, state = _request(server, "GET", "/v1/reader/state")
+        assert status == 200
+        first_chapter = state["data"]["chapters"][0]
+
+        status, payload = _request(
+            server,
+            "POST",
+            "/v1/reader/navigate",
+            body=json.dumps({
+                "book_id": book_id,
+                "chapter_index": 0,
+                "text_offset": first_chapter["start_offset"],
+                "direction": 1,
+            }),
+        )
+        assert (status, payload["data"]["target_offset"]) == (200, first_chapter["start_offset"] + 4)
+    finally:
+        _close_server(server, thread)

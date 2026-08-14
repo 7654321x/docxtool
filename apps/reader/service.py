@@ -5,12 +5,14 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import time
+import bisect
+import logging
 from typing import Any, Mapping, Optional, Union
 from uuid import uuid4
 
 from .import_text import TextImportError, decode_text
 from .models import Book, Chapter, ImportResult, ReaderContent, ReaderProgress, ReaderSettings
-from .parser import normalize_newlines, parse_chapters
+from .parser import normalize_newlines, paragraph_starts, parse_chapters
 from .paths import ReaderPaths, reader_paths
 from .storage import ReaderStorage, ReaderStorageError
 
@@ -29,6 +31,7 @@ _SETTING_FIELDS = frozenset(
         "stealth_mode",
     }
 )
+_LOGGER = logging.getLogger("docx_tool.reader")
 
 
 class ReaderError(RuntimeError):
@@ -130,13 +133,33 @@ class ReaderService:
         except ReaderStorageError as exc:
             try:
                 os.replace(pending_delete, target)
-            except OSError:
-                pass
+            except OSError as rollback_exc:
+                error = ReaderError("READER_DELETE_ROLLBACK_FAILED")
+                error.primary_error = exc
+                error.rollback_error = rollback_exc
+                _LOGGER.error(
+                    "reader.book.delete.rollback_failed",
+                    extra={
+                        "event": "reader.book.delete.rollback_failed",
+                        "error_code": error.code,
+                        "error_type": type(rollback_exc).__name__,
+                        "book_id_short": book.id[:12],
+                    },
+                )
+                raise error from rollback_exc
             raise ReaderError(exc.code) from exc
         try:
             pending_delete.unlink()
         except OSError as exc:
-            raise ReaderError("READER_STORAGE_ERROR") from exc
+            _LOGGER.warning(
+                "reader.book.delete.cleanup_failed",
+                extra={
+                    "event": "reader.book.delete.cleanup_failed",
+                    "error_code": "READER_STORAGE_CLEANUP_FAILED",
+                    "error_type": type(exc).__name__,
+                    "book_id_short": book.id[:12],
+                },
+            )
         return self.get_book(settings.last_book_id) if settings.last_book_id != book.id else self._current_book()
 
     def _current_book(self) -> Optional[Book]:
@@ -163,12 +186,15 @@ class ReaderService:
         book = self.get_book(book_id)
         chapter = self.get_chapter(book_id, chapter_index)
         start = chapter.start_offset if start_offset is None else start_offset
-        if isinstance(start, bool) or not isinstance(start, int) or not chapter.start_offset <= start < chapter.end_offset:
+        if isinstance(start, bool) or not isinstance(start, int) or not chapter.start_offset <= start <= chapter.end_offset:
             raise ReaderError("READER_CONTENT_INVALID")
         try:
             text = (self.paths.books_dir / book.stored_filename).read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as exc:
             raise ReaderError("READER_CONTENT_NOT_FOUND") from exc
+        starts = paragraph_starts(text[chapter.start_offset : chapter.end_offset], chapter.start_offset)
+        if starts:
+            start = max((value for value in starts if value <= start), default=starts[0])
         end = min(start + limit, chapter.end_offset)
         return ReaderContent(
             book_id=book.id,
@@ -181,11 +207,46 @@ class ReaderService:
             text=text[start:end],
         )
 
+    def find_paragraph_target(
+        self,
+        book_id: str,
+        chapter_index: int,
+        text_offset: int,
+        direction: int,
+    ) -> Optional[int]:
+        """Return an adjacent non-empty logical line in the same chapter."""
+        chapter = self.get_chapter(book_id, chapter_index)
+        if isinstance(text_offset, bool) or not isinstance(text_offset, int):
+            raise ReaderError("READER_CONTENT_INVALID")
+        if not chapter.start_offset <= text_offset <= chapter.end_offset:
+            raise ReaderError("READER_CONTENT_INVALID")
+        if direction not in {-1, 1}:
+            raise ReaderError("READER_CONTENT_INVALID")
+        book = self.get_book(book_id)
+        try:
+            text = (self.paths.books_dir / book.stored_filename).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            raise ReaderError("READER_CONTENT_NOT_FOUND") from exc
+        starts = paragraph_starts(text[chapter.start_offset : chapter.end_offset], chapter.start_offset)
+        if not starts:
+            return None
+        current_index = bisect.bisect_right(starts, text_offset) - 1
+        target_index = current_index + direction
+        if target_index < 0 or target_index >= len(starts):
+            return None
+        return starts[target_index]
+
     def load_progress(self, book_id: str) -> ReaderProgress:
         book = self.get_book(book_id)
         current = self.storage.load_progress(book.id)
         if current is not None:
-            return current
+            return ReaderProgress(
+                book_id=current.book_id,
+                chapter_index=current.chapter_index,
+                text_offset=current.text_offset,
+                scroll_ratio=self._global_progress_ratio(book.id, current.text_offset),
+                updated_at=current.updated_at,
+            )
         chapter = self.get_chapter(book.id, 0)
         return ReaderProgress(book.id, chapter.chapter_index, chapter.start_offset, 0.0, 0)
 
@@ -210,7 +271,7 @@ class ReaderService:
             book_id=book_id,
             chapter_index=chapter_index,
             text_offset=text_offset,
-            scroll_ratio=ratio,
+            scroll_ratio=self._global_progress_ratio(book_id, text_offset),
             updated_at=int(time.time()),
         )
         try:
@@ -218,6 +279,13 @@ class ReaderService:
         except ReaderStorageError as exc:
             raise ReaderError(exc.code) from exc
         return progress
+
+    def _global_progress_ratio(self, book_id: str, text_offset: int) -> float:
+        chapters = self.list_chapters(book_id)
+        total_chars = chapters[-1].end_offset
+        if total_chars <= 0:
+            return 0.0
+        return max(0.0, min(1.0, text_offset / total_chars))
 
     def get_settings(self) -> ReaderSettings:
         values = {field: self.storage.get_setting(field) for field in _SETTING_FIELDS}
@@ -231,8 +299,7 @@ class ReaderService:
         merged.update(values)
         self._validate_settings(merged)
         try:
-            for key, value in values.items():
-                self.storage.set_setting(key, value)
+            self.storage.set_settings(dict(values))
         except ReaderStorageError as exc:
             raise ReaderError(exc.code) from exc
         return ReaderSettings(**merged)

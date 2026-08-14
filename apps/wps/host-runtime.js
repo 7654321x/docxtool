@@ -6,7 +6,8 @@
   const config = globalObject.DocxToolWpsConfig || {};
   const TASKPANE_KEY = "docxtool_wps_taskpane_id_v1";
   const TASKPANE_VERSION_KEY = "docxtool_wps_taskpane_version_v1";
-  const TASKPANE_PAGE_VERSION = "12";
+  const TASKPANE_PAGE_VERSION = "19";
+  const TASKPANE_DEFAULT_WIDTH = 633;
   const PREVIEW_KEY_PREFIX = "docxtool_wps_preview_v2:";
   const PREVIEW_BATCH_SIZE = 5;
   const TASKPANE_HOST_PROBE_DELAYS_MS = [0, 100, 500, 1000];
@@ -131,6 +132,36 @@
       pane_dock_position: Number.isFinite(dockPosition) ? dockPosition : -1,
       pane_expected_dock_position: taskpaneExpectedDockPosition()
     };
+  }
+
+  function applyTaskpaneDefaultWidth(pane, branch, requestContext) {
+    if (!(pane && "Width" in pane)) return;
+    try {
+      const before = taskpaneDetails(pane, branch);
+      log("INFO", "taskpane.width.write.start", "开始设置任务窗格目标宽度", {
+        ...contextDetails(requestContext), ...before,
+        pane_width_before: before.pane_width,
+        pane_width_requested: TASKPANE_DEFAULT_WIDTH
+      });
+      pane.Width = TASKPANE_DEFAULT_WIDTH;
+      const after = taskpaneDetails(pane, branch);
+      if (after.pane_width !== TASKPANE_DEFAULT_WIDTH) {
+        throw new Error("WPS_TASKPANE_WIDTH_READBACK_FAILED");
+      }
+      log("INFO", "taskpane.width.completed", "任务窗格显示后目标宽度已确认", {
+        ...contextDetails(requestContext), ...after,
+        pane_width_before: before.pane_width,
+        pane_width_requested: TASKPANE_DEFAULT_WIDTH,
+        pane_width_after: after.pane_width,
+        pane_width_effective: true
+      });
+    } catch (error) {
+      log("ERROR", "taskpane.width.failed", "WPS 任务窗格宽度设置失败", {
+        ...contextDetails(requestContext), error_code: "WPS_TASKPANE_WIDTH_FAILED",
+        error_type: error && error.name ? error.name : "Error"
+      });
+      throw new Error("WPS_TASKPANE_WIDTH_FAILED");
+    }
   }
 
   function taskpaneHostDetails(pane, branch, checkpoint, requestContext, extras) {
@@ -1457,6 +1488,7 @@
             pane_visible_requested: true
           });
           pane.Visible = true;
+          applyTaskpaneDefaultWidth(pane, "reused", requestContext);
           const after = taskpaneDetails(pane, "reused");
           log("INFO", "taskpane.reuse.show.completed", "已有任务窗格显示属性已写入", {
             ...contextDetails(requestContext), ...after,
@@ -1536,32 +1568,6 @@
         });
         throw new Error("WPS_TASKPANE_DOCK_POSITION_FAILED");
       }
-      if ("Width" in pane) {
-        try {
-          const requestedWidth = 390;
-          const before = taskpaneDetails(pane, "created");
-          log("INFO", "taskpane.width.write.start", "开始设置任务窗格目标宽度", {
-            ...contextDetails(requestContext), ...before,
-            pane_width_before: before.pane_width,
-            pane_width_requested: requestedWidth
-          });
-          pane.Width = requestedWidth;
-          const after = taskpaneDetails(pane, "created");
-          log("INFO", "taskpane.width.completed", "任务窗格宽度已在显示前设置完成", {
-            ...contextDetails(requestContext), ...after,
-            pane_width_before: before.pane_width,
-            pane_width_requested: requestedWidth,
-            pane_width_after: after.pane_width,
-            pane_width_effective: after.pane_width === requestedWidth
-          });
-        } catch (error) {
-          log("ERROR", "taskpane.width.failed", "WPS 任务窗格宽度设置失败", {
-            ...contextDetails(requestContext), error_code: "WPS_TASKPANE_WIDTH_FAILED",
-            error_type: error && error.name ? error.name : "Error"
-          });
-          throw new Error("WPS_TASKPANE_WIDTH_FAILED");
-        }
-      }
       try {
         const before = taskpaneDetails(pane, "created");
         log("INFO", "taskpane.show.start", "开始显示任务窗格", {
@@ -1586,6 +1592,7 @@
         });
         throw new Error("WPS_TASKPANE_SHOW_FAILED");
       }
+      applyTaskpaneDefaultWidth(pane, "created", requestContext);
       logUnexpectedTaskpaneDock(pane, "created", requestContext);
       activateDocumentAfterTaskpaneOpen(requestContext, "created");
       writeTaskpaneVersion(TASKPANE_PAGE_VERSION, requestContext);
@@ -1623,7 +1630,15 @@
     const recognitionStartedAt = Date.now();
     stage = "recognition";
     log("INFO", "preview.recognition.start", "开始请求文档识别", contextDetails(requestContext));
-    const recognition = await api("/v1/recognize", { source_path: sourcePath }, undefined, requestContext);
+    const recognition = await api(
+      "/v1/recognize",
+      {
+        source_path: sourcePath,
+        format_config: requestContext.format_config || undefined,
+      },
+      undefined,
+      requestContext,
+    );
     log("INFO", "preview.recognition.completed", "文档识别完成", {
       ...contextDetails(requestContext), plan_id_short: String(recognition.plan_id || "").slice(0, 12),
       block_count: recognition.block_count, review_count: recognition.review_count || 0,
@@ -2765,6 +2780,7 @@
       document_name: activeDocumentName(),
       config_version: authorization ? authorization.config_version : "",
       format_scope: command.format_scope || null,
+      format_config: command.format_config || null,
       letterhead: command.letterhead || null
     });
     lastRequestId = command.request_id;

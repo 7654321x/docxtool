@@ -2240,9 +2240,27 @@ def test_taskpane_scrolls_content_without_moving_header():
     assert 'document.getElementById("error").textContent="错误代码：WPS_RUNTIME_CONFIG_LOAD_FAILED"' in source
     assert '<main id="content">' in source
     assert 'fetch("./runtime/config"' in source
-    assert 'load("./reader/reader-client.js?v=1")' in source
-    assert 'load("./reader/reader-ui.js?v=2")' in source
-    assert 'load("./taskpane.js?v=15")' in source
+    assert 'load("./reader/reader-client.js?v=2")' in source
+    assert 'load("./reader/reader-ui.js?v=6")' in source
+    assert 'load("./taskpane.js?v=18")' in source
+
+
+def test_taskpane_format_settings_exposes_only_the_four_requested_sections():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "taskpane.html").read_text(encoding="utf-8")
+    script = (root / "taskpane.js").read_text(encoding="utf-8")
+    assert 'id="format_settings"' in source
+    assert 'id="format_settings_panel"' in source
+    for label in ("段落样式", "页面版式", "字符设置", "页码设置"):
+        assert label in source
+    for hidden_field in (
+        "lines_per_page", "chars_per_line", "grid_alignment",
+        "space_before_line", "space_after_line",
+    ):
+        assert hidden_field not in source
+    assert "ensureFormatDefaults" in script
+    assert "currentFormatConfig" in script
+    assert 'format_config: formatConfig' in script
 
 
 def test_start_handles_keyboard_interrupt_without_traceback(monkeypatch):

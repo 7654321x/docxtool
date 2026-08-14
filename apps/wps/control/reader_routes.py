@@ -20,6 +20,7 @@ READER_POST_ROUTES = frozenset(
         "/v1/reader/delete",
         "/v1/reader/progress",
         "/v1/reader/settings",
+        "/v1/reader/navigate",
     }
 )
 READER_IMPORT_MAX_BYTES = 64 * 1024 * 1024
@@ -122,6 +123,14 @@ def dispatch_reader_post(
         settings = service.save_settings(values)
         _log("INFO", "reader.settings.saved", "阅读设置已保存", request_id)
         return {"settings": asdict(settings)}
+    if path == "/v1/reader/navigate":
+        target = service.find_paragraph_target(
+            _required_body_text(body, "book_id", "READER_CONTENT_INVALID"),
+            _required_body_int(body, "chapter_index", "READER_CONTENT_INVALID"),
+            _required_body_int(body, "text_offset", "READER_CONTENT_INVALID"),
+            _required_body_int(body, "direction", "READER_CONTENT_INVALID"),
+        )
+        return {"target_offset": target}
     raise ReaderError("WPS_CONTROL_ROUTE_NOT_FOUND")
 
 

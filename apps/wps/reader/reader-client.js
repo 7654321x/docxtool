@@ -53,6 +53,11 @@
     deleteBook(bookId) { return call("/v1/reader/delete", json({ book_id: bookId })); },
     saveProgress(progress) { return call("/v1/reader/progress", json(progress)); },
     saveSettings(settings) { return call("/v1/reader/settings", json({ settings })); },
+    navigate(bookId, chapterIndex, textOffset, direction) {
+      return call("/v1/reader/navigate", json({
+        book_id: bookId, chapter_index: chapterIndex, text_offset: textOffset, direction,
+      }));
+    },
   });
 
   function json(value) {

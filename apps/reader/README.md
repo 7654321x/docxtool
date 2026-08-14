@@ -19,7 +19,7 @@ Runtime data is outside the repository:
 
 ## Boundaries
 
-The WPS adapter is `apps/wps/control/reader_routes.py`. It uses the existing loopback credential and Origin policy but does not use the HostBridge command slot or public account authorization. The Reader has no public service, cloud sync, or second HTTP listener.
+The WPS adapter is `apps/wps/control/reader_routes.py`. It uses the existing loopback credential and Origin policy but does not use the HostBridge command slot or public account authorization. The Reader has no public service, cloud sync, or second HTTP listener. Paragraph navigation uses the small local `POST /v1/reader/navigate` route and never crosses chapter boundaries.
 
 ## Verification
 
