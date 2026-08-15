@@ -5,11 +5,10 @@ param(
     [switch]$DryRun,
     [switch]$Quick,
     [switch]$Verify,
-    [string]$Repository = "https://github.com/7654321x/docxtool.git",
+    [string]$Repository = "git@github.com:7654321x/docxtool.git",
     [string]$Branch = "main",
     [string]$SourceRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path,
-    [string]$CommitMessage = "Sync project files",
-    [switch]$KeepTemp
+    [string]$CommitMessage = "Sync project files"
 )
 
 $ErrorActionPreference = "Stop"
@@ -31,58 +30,53 @@ function Invoke-Checked {
     }
 }
 
-function Copy-RequiredFile {
+function Assert-RequiredFiles {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$RelativePath,
+        [string]$Root,
         [Parameter(Mandatory = $true)]
-        [string]$Source,
-        [Parameter(Mandatory = $true)]
-        [string]$Destination
+        [string[]]$RelativePaths
     )
 
-    $from = Join-Path $Source $RelativePath
-    if (-not (Test-Path -LiteralPath $from -PathType Leaf)) {
-        throw "Required publish file is missing: $RelativePath"
+    foreach ($relative in $RelativePaths) {
+        if (-not (Test-Path -LiteralPath (Join-Path $Root $relative) -PathType Leaf)) {
+            throw "Required publish file is missing: $relative"
+        }
     }
-
-    $to = Join-Path $Destination $RelativePath
-    $parent = Split-Path -Parent $to
-    if ($parent) {
-        New-Item -ItemType Directory -Force -Path $parent | Out-Null
-    }
-    Copy-Item -LiteralPath $from -Destination $to -Force
 }
 
-function Clear-CloneWorktree {
+function Assert-CleanIndex {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$CloneRoot
+        [string]$Root
     )
 
-    $resolved = (Resolve-Path -LiteralPath $CloneRoot).Path
-    if (-not $resolved.StartsWith($env:TEMP, [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw "Refusing to clear a clone outside TEMP: $resolved"
+    Push-Location -LiteralPath $Root
+    try {
+        $staged = @(git diff --cached --name-status)
+        if ($LASTEXITCODE -ne 0) {
+            throw "Unable to inspect the local Git index."
+        }
+        if ($staged) {
+            throw "The local Git index already contains staged changes. Commit or unstage them before publishing."
+        }
     }
-
-    Get-ChildItem -LiteralPath $resolved -Force |
-        Where-Object { $_.Name -ne ".git" } |
-        ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force }
+    finally {
+        Pop-Location
+    }
 }
 
 function Assert-NoForbiddenFiles {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$CloneRoot
+        [string]$Root,
+        [Parameter(Mandatory = $true)]
+        [string[]]$RelativePaths
     )
 
-    $forbidden = Get-ChildItem -LiteralPath $CloneRoot -Force -Recurse -File |
-        Where-Object {
-            $relative = [System.IO.Path]::GetRelativePath($CloneRoot, $_.FullName).Replace("\", "/")
+    $forbidden = $RelativePaths | Where-Object {
+            $relative = $_.Replace("\", "/")
             if ($relative -match '^var/(data|logs|outputs|runtime)/\.gitkeep$') {
-                return $false
-            }
-            if ($relative -match '^\.git/') {
                 return $false
             }
             if ($relative -eq '.env.example') {
@@ -95,8 +89,7 @@ function Assert-NoForbiddenFiles {
         }
 
     if ($forbidden) {
-        $list = ($forbidden | ForEach-Object { [System.IO.Path]::GetRelativePath($CloneRoot, $_.FullName) }) -join "`n"
-        throw "Forbidden files found in publish clone:`n$list"
+        throw "Forbidden files found in publish allowlist:`n$($forbidden -join "`n")"
     }
 }
 
@@ -123,12 +116,18 @@ $requiredFiles = @(
     "apps/wps/control/recognize_document.py",
     "apps/wps/control/reader_routes.py",
     "apps/wps/control/server.py",
+    "apps/wps/control/transactions/__init__.py",
+    "apps/wps/control/transactions/models.py",
+    "apps/wps/control/transport/__init__.py",
+    "apps/wps/control/transport/protocol.py",
     "apps/wps/host-runtime.js",
+    "apps/wps/format_profile_store.py",
     "apps/wps/format-config.js",
     "apps/wps/format-settings.html",
     "apps/wps/format-settings.js",
     "apps/wps/format-settings.css",
     "apps/wps/images/taskpane.svg",
+    "apps/wps/images/taskpane-icons.svg",
     "apps/wps/images/check.svg",
     "apps/wps/images/eye.svg",
     "apps/wps/images/eye-off.svg",
@@ -164,6 +163,8 @@ $requiredFiles = @(
     "apps/wps/tests/test_login_window.py",
     "apps/wps/tests/test_windows_startup.py",
     "apps/wps/tests/test_reader_routes.py",
+    "apps/wps/tests/test_format_profile_store.py",
+    "apps/wps/tests/test_release_5_2_acceptance.py",
     "apps/wps/tests/reader-ui.test.mjs",
     "apps/wps/tests/format-settings.test.mjs",
     "apps/wps/tests/wps-runtime.test.mjs",
@@ -184,6 +185,8 @@ $requiredFiles = @(
     "docs/ARCHITECTURE.md",
     "docs/design/WPS_READER_UI_TECHNICAL_DESIGN.md",
     "docs/design/WPS_BUILTIN_STYLE_GALLERY_TECHNICAL_DESIGN.md",
+    "docs/design/GIT_BASELINE_RELEASE_WORKFLOW.md",
+    "docs/design/wps-format-settings.md",
     "docs/WPS_REGRESSION_CHECKLIST.md",
     "docs/API.md",
     "docs/SDK.md",
@@ -322,6 +325,12 @@ $requiredFiles = @(
     "src/docxtool/wps_server/validation.py",
     "src/docxtool/document/__init__.py",
     "src/docxtool/document/classifier.py",
+    "src/docxtool/document/configuration/__init__.py",
+    "src/docxtool/document/configuration/models.py",
+    "src/docxtool/document/configuration/validation.py",
+    "src/docxtool/document/diagnostics/__init__.py",
+    "src/docxtool/document/diagnostics/logging.py",
+    "src/docxtool/document/errors.py",
     "src/docxtool/document/importer.py",
     "src/docxtool/document/pipeline/__init__.py",
     "src/docxtool/document/pipeline/document_pipeline.py",
@@ -479,108 +488,127 @@ $testFiles = Get-ChildItem -LiteralPath (Join-Path $SourceRoot "tests") -File -R
     Where-Object { $_.Name -like "test_*.py" -or $_.Name -like "*.test.mjs" } |
     ForEach-Object { [System.IO.Path]::GetRelativePath($SourceRoot, $_.FullName).Replace("\", "/") }
 $publishFiles = @($requiredFiles + $testFiles | Sort-Object -Unique)
-$tempRoot = Join-Path $env:TEMP ("docxtool-publish-" + [guid]::NewGuid().ToString("N"))
 
+Write-Host "Source: $SourceRoot"
+Write-Host "Repository: $Repository"
+Write-Host "Branch: $Branch"
+$verificationMode = if ($Verify) { "full" } else { "quick" }
+Write-Host "Mode: $(if ($DryRun) { 'dry-run' } else { 'push' }) | Verification: $verificationMode"
+
+Push-Location -LiteralPath $SourceRoot
 try {
-    Write-Host "Source: $SourceRoot"
-    Write-Host "Repository: $Repository"
-    Write-Host "Branch: $Branch"
-    $verificationMode = if ($Verify) { "full" } else { "quick" }
-    Write-Host "Mode: $(if ($DryRun) { 'dry-run' } else { 'push' }) | Verification: $verificationMode"
+    $gitRoot = (git rev-parse --show-toplevel).Trim()
+    if ($LASTEXITCODE -ne 0) {
+        throw "SourceRoot is not a Git repository: $SourceRoot"
+    }
+    if (-not [System.IO.Path]::GetFullPath($gitRoot).Equals(
+        [System.IO.Path]::GetFullPath($SourceRoot),
+        [System.StringComparison]::OrdinalIgnoreCase
+    )) {
+        throw "SourceRoot must be the local Git repository root: $gitRoot"
+    }
 
-    Invoke-Checked git @("clone", "--branch", $Branch, "--single-branch", $Repository, $tempRoot)
-    Push-Location -LiteralPath $tempRoot
-    try {
-        $initialRemote = (git rev-parse "origin/$Branch").Trim()
+    $currentBranch = (git branch --show-current).Trim()
+    if ($currentBranch -ne $Branch) {
+        throw "Local branch mismatch: expected=$Branch actual=$currentBranch"
+    }
 
-        Clear-CloneWorktree -CloneRoot $tempRoot
-        foreach ($file in $publishFiles) {
-            Copy-RequiredFile -RelativePath $file -Source $SourceRoot -Destination $tempRoot
+    $pushUrl = (git remote get-url --push origin).Trim()
+    if ($LASTEXITCODE -ne 0 -or $pushUrl -notmatch '^git@github\.com:') {
+        throw "The origin push URL must use GitHub SSH before publishing: $pushUrl"
+    }
+    if ($Repository -notmatch '^git@github\.com:') {
+        throw "Repository must use a GitHub SSH URL: $Repository"
+    }
+
+    Assert-CleanIndex -Root $SourceRoot
+    Assert-RequiredFiles -Root $SourceRoot -RelativePaths $publishFiles
+    Assert-NoForbiddenFiles -Root $SourceRoot -RelativePaths $publishFiles
+
+    Invoke-Checked git @("fetch", "origin", $Branch)
+    $initialRemote = (git rev-parse "origin/$Branch").Trim()
+    $initialLocal = (git rev-parse HEAD).Trim()
+    if ($initialLocal -ne $initialRemote) {
+        throw "Local Git baseline mismatch: local=$initialLocal origin/$Branch=$initialRemote. Synchronize and review before publishing."
+    }
+
+    $sourceVenvPython = Join-Path $SourceRoot ".venv\Scripts\python.exe"
+    $scanPython = if (Test-Path -LiteralPath $sourceVenvPython -PathType Leaf) {
+        $sourceVenvPython
+    }
+    else {
+        (Get-Command python -ErrorAction Stop).Source
+    }
+    Invoke-Checked $scanPython @(
+        "scripts/check_public_metadata.py",
+        "docs/migration/phase-b0-manifest.json",
+        "docs/migration/phase-b0-report.md"
+    )
+
+    if ($Verify) {
+        if (-not $IsWindows) {
+            throw "Full -Verify requires Windows because the WPS release gate includes DPAPI and packaged EXE verification."
         }
+        $nodeTestFiles = $testFiles | Where-Object { $_ -like "*.test.mjs" }
 
-        Assert-NoForbiddenFiles -CloneRoot $tempRoot
+        Invoke-Checked $scanPython @("-m", "pytest")
+        Invoke-Checked $scanPython @("-m", "ruff", "check", "src", "tests", "scripts")
+        if ($nodeTestFiles) {
+            Invoke-Checked node (@("--test") + $nodeTestFiles)
+        }
+        Invoke-Checked pwsh @("-NoProfile", "-File", "apps/wps/scripts/verify.ps1")
+        Invoke-Checked pwsh @(
+            "-NoProfile", "-File", "apps/wps/scripts/build-exe.ps1",
+            "-ServerOrigin", "https://acceptance.invalid"
+        )
+    }
 
-        $sourceVenvPython = Join-Path $SourceRoot ".venv\Scripts\python.exe"
-        $scanPython = if (Test-Path -LiteralPath $sourceVenvPython -PathType Leaf) {
-            $sourceVenvPython
+    if ($DryRun) {
+        $statusArguments = @("status", "--short", "--") + $publishFiles
+        $publishStatus = & git @statusArguments
+        if ($LASTEXITCODE -ne 0) {
+            throw "Unable to inspect allowlisted publish changes."
+        }
+        if ($publishStatus) {
+            Write-Host "Allowlisted publish changes:"
+            $publishStatus | ForEach-Object { Write-Host $_ }
         }
         else {
-            (Get-Command python -ErrorAction Stop).Source
-        }
-        Invoke-Checked $scanPython @(
-            "scripts/check_public_metadata.py",
-            "docs/migration/phase-b0-manifest.json",
-            "docs/migration/phase-b0-report.md"
-        )
-
-        if ($Verify) {
-            if (-not $IsWindows) {
-                throw "Full -Verify requires Windows because the WPS release gate includes DPAPI and packaged EXE verification."
-            }
-            $testPython = if (Test-Path -LiteralPath $sourceVenvPython -PathType Leaf) {
-                $sourceVenvPython
-            }
-            else {
-                (Get-Command python -ErrorAction Stop).Source
-            }
-            $nodeTestFiles = $testFiles | Where-Object { $_ -like "*.test.mjs" }
-
-            Invoke-Checked $testPython @("-m", "pytest")
-            Invoke-Checked $testPython @("-m", "ruff", "check", "src", "tests", "scripts")
-            if ($nodeTestFiles) {
-                Invoke-Checked node (@("--test") + $nodeTestFiles)
-            }
-            Invoke-Checked pwsh @("-NoProfile", "-File", "apps/wps/scripts/verify.ps1")
-            Invoke-Checked pwsh @(
-                "-NoProfile", "-File", "apps/wps/scripts/build-exe.ps1",
-                "-ServerOrigin", "https://acceptance.invalid"
-            )
-        }
-
-        Invoke-Checked git @("add", "-A")
-        Invoke-Checked git @("diff", "--cached", "--check")
-
-        $staged = git diff --cached --name-status
-        if (-not $staged) {
             Write-Host "No publish changes detected."
-            return
         }
-
-        Write-Host "Staged publish changes:"
-        $staged | ForEach-Object { Write-Host $_ }
-
-        Invoke-Checked git @("fetch", "origin", $Branch)
-        $latestRemote = (git rev-parse "origin/$Branch").Trim()
-        if ($latestRemote -ne $initialRemote) {
-            throw "Remote $Branch changed after clone ($initialRemote -> $latestRemote). Stop and review before pushing."
-        }
-
-        if ($DryRun) {
-            Write-Host "Dry run complete. No commit was created and nothing was pushed."
-            return
-        }
-
-        Invoke-Checked git @("config", "user.name", "7654321x")
-        Invoke-Checked git @("config", "user.email", "7654321x@users.noreply.github.com")
-        Invoke-Checked git @("commit", "-m", $CommitMessage)
-        $localCommit = (git rev-parse HEAD).Trim()
-        Invoke-Checked git @("push", "origin", "HEAD:$Branch")
-        $remoteLine = (git ls-remote $Repository "refs/heads/$Branch").Trim()
-        $remoteCommit = ($remoteLine -split "\s+")[0]
-        if ($remoteCommit -ne $localCommit) {
-            throw "Push verification failed: local=$localCommit remote=$remoteCommit"
-        }
-        Write-Host "Pushed and verified: $Repository $Branch $localCommit"
+        Write-Host "Dry run complete. No commit was created and nothing was pushed."
+        return
     }
-    finally {
-        Pop-Location
+
+    $addArguments = @("add", "--") + $publishFiles
+    Invoke-Checked git $addArguments
+    Invoke-Checked git @("diff", "--cached", "--check")
+
+    $staged = @(git diff --cached --name-status)
+    if (-not $staged) {
+        Write-Host "No publish changes detected."
+        return
     }
+
+    Write-Host "Staged local publish changes:"
+    $staged | ForEach-Object { Write-Host $_ }
+
+    Invoke-Checked git @("fetch", "origin", $Branch)
+    $latestRemote = (git rev-parse "origin/$Branch").Trim()
+    if ($latestRemote -ne $initialRemote) {
+        throw "Remote $Branch changed after baseline verification ($initialRemote -> $latestRemote). Stop and review before pushing."
+    }
+
+    Invoke-Checked git @("commit", "-m", $CommitMessage)
+    $localCommit = (git rev-parse HEAD).Trim()
+    Invoke-Checked git @("push", "origin", "HEAD:$Branch")
+    $remoteLine = (git ls-remote $Repository "refs/heads/$Branch").Trim()
+    $remoteCommit = ($remoteLine -split "\s+")[0]
+    if ($remoteCommit -ne $localCommit) {
+        throw "Push verification failed: local=$localCommit remote=$remoteCommit"
+    }
+    Write-Host "Local commit pushed and verified: $Repository $Branch $localCommit"
 }
 finally {
-    if ($KeepTemp) {
-        Write-Host "Keeping temp clone: $tempRoot"
-    }
-    elseif (Test-Path -LiteralPath $tempRoot) {
-        Remove-Item -LiteralPath $tempRoot -Recurse -Force
-    }
+    Pop-Location
 }

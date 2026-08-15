@@ -1,5 +1,11 @@
 # Changelog
 
+## 5.4.2 - 2026-08-15
+
+- Repaired the local Git baseline and completed the tracked release set for document configuration, diagnostics, shared errors, WPS Control helpers, account-scoped format profiles, TaskPane icons, tests, and design documentation.
+- Changed GitHub publishing to create the allowlisted commit in the current local repository before pushing `main` through SSH, with local/remote baseline and remote commit verification.
+- Kept local Windows compatibility and trial executables outside the public repository.
+
 ## 5.4.1 - 2026-08-15
 
 - Added account-scoped local SQLite format profiles and a WPS format-settings dialog with named template creation, selection, editing, and deletion while preserving the immutable system default.

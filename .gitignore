@@ -93,5 +93,9 @@ Thumbs.db
 # Local recycle bin for untracked temporary artifacts; never publish its contents.
 /local_recycle/
 
+# Local Windows compatibility and trial executables; keep them on this machine only.
+/Win7兼容性测试/Win7RpdsDiagnostic.exe
+/试用版/DocxToolWpsTrial.exe
+
 # Nested standalone repository and nested Git metadata
 **/.git/

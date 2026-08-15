@@ -17,6 +17,8 @@ def test_documentation_ownership_entries_are_published_and_navigable() -> None:
         "docs/WPS_VALIDATION.md",
         "docs/design/WPS_READER_UI_TECHNICAL_DESIGN.md",
         "docs/design/WPS_BUILTIN_STYLE_GALLERY_TECHNICAL_DESIGN.md",
+        "docs/design/GIT_BASELINE_RELEASE_WORKFLOW.md",
+        "docs/design/wps-format-settings.md",
         "apps/reader/AGENTS.md",
     }
     navigation = (ROOT / "docs" / "README.md").read_text(encoding="utf-8")

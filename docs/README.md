@@ -21,7 +21,7 @@
 
 ## 子目录
 
-- [`design/`](design/)：WPS Reader UI、内置快捷样式和 WPS 格式设置等专题技术设计。
+- [`design/`](design/)：WPS Reader UI、内置快捷样式、WPS 格式设置和 Git 本地基线发布流程等专题技术设计。
 - [`examples/`](examples/)：脱敏 SDK 协议示例。
 - [`migration/`](migration/)：已完成机械迁移和基线记录，不是当前架构来源。
 
