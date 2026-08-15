@@ -47,6 +47,69 @@ def test_changed_verification_entry_is_published_and_has_explicit_output_contrac
     assert '"scripts/verify_changed.ps1"' in publish
 
 
+def test_changed_verification_routes_primary_python_and_frontend_domains() -> None:
+    """主要代码域必须映射到真实聚焦测试，前端资源不得误跑 Web 后端全集。"""
+    script = (ROOT / "scripts" / "verify_changed.ps1").read_text(encoding="utf-8")
+
+    expected_routes = {
+        "^src/docxtool/document/configuration/": "tests/test_config_driven_styles.py",
+        "^src/docxtool/document/pipeline/": "tests/test_processing_flags.py",
+        "^src/docxtool/sdk/": "tests/test_sdk_contract_v1.py",
+        "^src/docxtool/storage/": "tests/test_database_storage.py",
+        "^src/docxtool/security/": "tests/test_docx_integrity.py",
+        "resources/frontend/pages/index.html": "tests/frontend-format-config.test.mjs",
+        "resources/frontend/pages/_worker.js": "tests/worker-routing.test.mjs",
+    }
+    for route, target in expected_routes.items():
+        assert route in script
+        assert target in script
+
+    assert "ruff changed Python files" in script
+    assert "$ruffTargets" in script
+    assert "$leafName -like 'test_*.py'" in script
+
+
+def test_changed_verification_uses_split_recognition_and_wps_routes() -> None:
+    """Recognition 与 WPS Python 必须按职责使用拆分后的测试入口。"""
+    script = (ROOT / "scripts" / "verify_changed.ps1").read_text(encoding="utf-8")
+
+    for target in (
+        "tests/test_recognition_decoder_basic.py",
+        "tests/test_recognition_decoder_headings.py",
+        "tests/test_recognition_decoder_front_roles.py",
+        "apps/wps/tests/test_wps_transactions.py",
+        "apps/wps/tests/test_wps_control_format.py",
+        "apps/wps/tests/test_wps_diagnostics.py",
+        "apps/wps/tests/test_wps_launcher.py",
+    ):
+        assert target in script
+
+    assert "recognition front/role focused pytest targets" in script
+    assert "recognition heading/numbering focused pytest targets" in script
+    assert "recognition decoder-core focused pytest targets" in script
+    assert "WPS transaction focused pytest target" in script
+    assert "WPS control/format focused pytest target" in script
+
+
+def test_changed_verification_preserves_lightweight_defaults() -> None:
+    """默认验证不得升级为全量 pytest、WPS 完整门禁、EXE 或真实 WPS。"""
+    script = (ROOT / "scripts" / "verify_changed.ps1").read_text(encoding="utf-8")
+
+    for not_run in (
+        "full pytest suite",
+        "apps/wps/scripts/verify.ps1",
+        "EXE build",
+        "REAL_WPS_SMOKE",
+    ):
+        assert f'Add-Unique -List $notRun -Value "{not_run}"' in script
+
+    assert "git diff --name-only" in script
+    assert "git diff --cached --name-only" in script
+    assert "git ls-files --others --exclude-standard" in script
+    assert "if ($ListOnly) { return }" in script
+    assert 'Invoke-Checked $python @("-m", "pytest", "-q")' not in script
+
+
 def test_docs_root_keeps_only_current_main_documents() -> None:
     expected = {
         "API.md",

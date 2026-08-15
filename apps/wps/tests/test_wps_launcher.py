@@ -75,7 +75,8 @@ def test_taskpane_scrolls_content_without_moving_header():
     assert '<header id="taskpane_header">' in source
     assert 'id="focus_document"' not in source
     assert "返回文档" not in source
-    assert '<div id="status" class="brand-status">连接中</div>' in source
+    assert '<div class="brand-heading"><div class="brand-title">DocxTool WPS</div><div id="status" class="brand-status">连接中</div></div>' in source
+    assert 'id="account"' not in source
     assert 'document.getElementById("status").textContent="错误"' in source
     assert 'document.getElementById("message").textContent="运行配置加载失败，请重新打开状态面板。"' in source
     assert 'document.getElementById("error").textContent="错误代码：WPS_RUNTIME_CONFIG_LOAD_FAILED"' in source
@@ -84,7 +85,7 @@ def test_taskpane_scrolls_content_without_moving_header():
     assert 'load("./reader/reader-client.js?v=2")' in source
     assert 'load("./reader/reader-ui.js?v=7")' in source
     assert 'load("./format-config.js?v=2")' in source
-    assert 'load("./taskpane.js?v=21")' in source
+    assert 'load("./taskpane.js?v=22")' in source
 
 def test_taskpane_format_settings_opens_the_central_dialog():
     root = Path(__file__).resolve().parents[1]

@@ -763,7 +763,6 @@ test("TaskPane restores apply availability from the bridge account state", async
   });
   await harness.flushAsync();
   assert.equal(harness.elements.get("apply").disabled, true);
-  assert.equal(harness.elements.get("account").textContent, "User01 · 服务器离线");
   assert.equal(harness.elements.get("message").textContent, "服务器无法连接。");
   assert.equal(
     harness.elements.get("error").textContent,
@@ -781,7 +780,6 @@ test("TaskPane restores apply availability from the bridge account state", async
   await harness.flushAsync();
 
   assert.equal(harness.elements.get("apply").disabled, false);
-  assert.equal(harness.elements.get("account").textContent, "User01");
 });
 
 test("TaskPane distinguishes a missing local account service from server offline", async () => {
@@ -798,7 +796,6 @@ test("TaskPane distinguishes a missing local account service from server offline
   );
   await harness.flushAsync();
 
-  assert.equal(harness.elements.get("account").textContent, "本地账号服务未启动");
   assert.equal(
     harness.elements.get("message").textContent,
     "请从登录窗口登录或注册后重新启动 DocxTool WPS。",

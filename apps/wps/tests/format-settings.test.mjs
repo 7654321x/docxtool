@@ -32,7 +32,7 @@ function dialogConfig() {
       { name: "主标题", font: "方正小标宋简体", size: "二号", bold: false, pattern: "", indent: 0, align: "居中" },
       { name: "一级标题", font: "黑体", size: "三号", bold: false, pattern: "{a}、", indent: 2, align: "左对齐" },
       { name: "二级标题", font: "楷体_GB2312", size: "三号", bold: true, pattern: "（{b}）", indent: 2, align: "左对齐" },
-      { name: "三级标题", font: "仿宋_GB2312", size: "三号", bold: true, pattern: "{c}.", indent: 2, align: "左对齐" },
+      { name: "三级标题", font: "仿宋_GB2312", size: "三号", bold: false, pattern: "{c}.", indent: 2, align: "左对齐" },
       { name: "四级标题", font: "仿宋_GB2312", size: "三号", bold: false, pattern: "（{d}）", indent: 2, align: "左对齐" },
       { name: "正文", font: "仿宋_GB2312", size: "三号", bold: false, pattern: "", indent: 2, align: "两端对齐" },
       { name: "数字", font: "Times New Roman", bold: false },
@@ -253,6 +253,14 @@ test("format dialog adds a named template and saves the full current config", as
   assert.equal(created.body.format_config.page.lines_per_page, 22);
   assert.equal(created.body.format_config.page.grid_alignment, "文字对齐字符网络");
   assert.equal(harness.closed, true);
+});
+
+test("system default leaves the heading 3 bold control unchecked", async () => {
+  const harness = makeDialogHarness();
+  await harness.flush();
+
+  const heading3 = harness.elements.get("format_style_rows").querySelector('[data-index="3"]');
+  assert.equal(heading3.querySelector('[data-field="bold"]').checked, false);
 });
 
 test("format dialog deletes only a custom template and falls back to system default", async () => {

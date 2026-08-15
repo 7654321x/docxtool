@@ -490,11 +490,6 @@
     accountNetworkAvailable = account.network_available === true;
     accountErrorCode = account.error_code || "";
     const accountServiceRequired = accountErrorCode === "WPS_PUBLIC_ACCOUNT_REQUIRED";
-    node("account").textContent = accountServiceRequired
-      ? "本地账号服务未启动"
-      : account.signed_in
-      ? `${account.username || "当前账号"}${account.network_available ? "" : " · 服务器离线"}`
-      : "未登录";
     if (!accountApplyAvailable) node("apply").disabled = true;
     else if (currentState.host_ready === true && panelReadyCompleted && !pendingRequestId) node("apply").disabled = false;
     const statusKey = [

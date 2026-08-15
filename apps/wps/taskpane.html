@@ -8,8 +8,8 @@
   html,body{height:100%;max-width:100%;overflow:hidden}
   body{display:flex;flex-direction:column;width:100%;max-width:422px;font:14px/1.55 system-ui,-apple-system,"Microsoft YaHei",sans-serif;margin:0;color:#1c2b36;background:#edf3f0}
   header{flex:0 0 auto;padding:15px 17px 12px;background:#f7faf8;border:0}
-  .toolbar{display:flex;justify-content:space-between;gap:8px;align-items:flex-start}.toolbar-actions{white-space:nowrap}
-  .brand-title{font-size:20px;line-height:1.15;font-weight:760;letter-spacing:-.4px}.brand-status{display:flex;align-items:center;gap:6px;margin-top:7px;color:#277b5c;font-weight:700}.brand-status::before{content:"";width:8px;height:8px;border-radius:50%;background:#41a968}.brand-account{margin-top:3px;color:#76818a;font-size:12px}
+  .toolbar{display:flex;justify-content:space-between;gap:8px;align-items:center}.toolbar-actions{white-space:nowrap}.brand-heading{display:flex;align-items:baseline;gap:7px;min-width:0}
+  .brand-title{font-size:20px;line-height:1.15;font-weight:760;letter-spacing:-.4px}.brand-status{display:inline-flex;align-items:center;gap:4px;margin:0;color:#277b5c;font-size:12px;line-height:1.2;font-weight:700;white-space:nowrap}.brand-status::before{content:"";width:6px;height:6px;border-radius:50%;background:#41a968}
   main{flex:1 1 auto;min-height:0;overflow-y:auto;box-sizing:border-box;padding:0 12px 14px}.panel{border:1px solid #e2e9e5;border-radius:13px;padding:12px;margin:9px 0;background:#fff;box-shadow:0 2px 8px rgba(38,71,57,.055)}
   button{font:inherit;cursor:pointer;min-height:34px;padding:7px 10px;margin:3px;border:1px solid #cbd5d1;border-radius:8px;background:#fff;color:#24333d}button:hover{border-color:#4d9b7c;background:#f5faf7}button:active{transform:translateY(1px)}button:disabled{cursor:default;opacity:.5}button.primary{background:#247b63;color:#fff;border-color:#247b63}button.primary:hover{background:#1d6c55}.icon-button{display:grid;place-items:center;width:36px;height:36px;min-height:36px;padding:0;margin:0;border-radius:50%;background:#fff;border-color:#e0e8e3;color:#24333d;box-shadow:0 1px 5px rgba(38,71,57,.08)}
   .panel-title,.section-heading{display:flex;align-items:center;gap:8px;margin:0 0 10px;font-weight:760;font-size:16px}.section-heading .icon{color:#2e7f69}.icon{width:20px;height:20px;display:inline-block;flex:none;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}.icon.small{width:16px;height:16px}
@@ -20,7 +20,7 @@
 </style>
 </head>
 <body>
-<header id="taskpane_header"><div class="toolbar"><div><div class="brand-title">DocxTool WPS</div><div id="status" class="brand-status">连接中</div><div id="account" class="brand-account">正在读取账号…</div></div><div class="toolbar-actions"><button id="close_panel" class="icon-button" aria-label="关闭"><svg class="icon"><use href="./images/taskpane-icons.svg?v=2#close"></use></svg></button></div></div></header>
+<header id="taskpane_header"><div class="toolbar"><div class="brand-heading"><div class="brand-title">DocxTool WPS</div><div id="status" class="brand-status">连接中</div></div><div class="toolbar-actions"><button id="close_panel" class="icon-button" aria-label="关闭"><svg class="icon"><use href="./images/taskpane-icons.svg?v=2#close"></use></svg></button></div></div></header>
 <main id="content">
   <div class="panel mode-tabs" role="tablist" aria-label="功能模式">
     <button id="format_mode_tab" class="primary" role="tab" aria-selected="true"><svg class="icon small"><use href="./images/taskpane-icons.svg#format"></use></svg>排版</button>
@@ -80,7 +80,7 @@ fetch("./runtime/config", {cache:"no-store", credentials:"same-origin"}).then(fu
 }).then(function(config){
   window.DocxToolWpsConfig=Object.freeze(config);
   function load(source){return new Promise(function(resolve,reject){var script=document.createElement("script");script.src=source;script.onload=resolve;script.onerror=reject;document.body.appendChild(script);});}
-  return load("./format-config.js?v=2").then(function(){return load("./reader/reader-client.js?v=2");}).then(function(){return load("./reader/reader-ui.js?v=7");}).then(function(){return load("./taskpane.js?v=21");});
+  return load("./format-config.js?v=2").then(function(){return load("./reader/reader-client.js?v=2");}).then(function(){return load("./reader/reader-ui.js?v=7");}).then(function(){return load("./taskpane.js?v=22");});
 }).catch(function(error){
   document.getElementById("status").textContent="错误";
   document.getElementById("message").textContent="运行配置加载失败，请重新打开状态面板。";

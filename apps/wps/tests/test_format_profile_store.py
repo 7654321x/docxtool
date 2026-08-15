@@ -15,6 +15,13 @@ def _config() -> dict:
     return deepcopy(load_active_format_profile()["format_config"])
 
 
+def test_system_default_profile_keeps_heading3_not_bold():
+    styles = load_active_format_profile()["format_config"]["styles"]
+    heading3 = next(style for style in styles if style["name"] == "三级标题")
+
+    assert heading3["bold"] is False
+
+
 def test_profiles_are_isolated_by_account_and_restore_after_relogin(tmp_path):
     store = FormatProfileStore(tmp_path / "format_profiles.db")
     first = store.create("wusr_a", "机关模板", _config())

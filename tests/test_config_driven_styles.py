@@ -277,6 +277,9 @@ class ConfigDrivenStylesTest(unittest.TestCase):
         config_path = Path(__file__).resolve().parents[1] / "src/docxtool/resources/config/default-format.json"
         canonical = json.loads(config_path.read_text(encoding="utf-8"))
 
+        self.assertFalse(canonical["styles"][3]["bold"])
+        self.assertFalse(StyleRule.default_for_row(3).bold)
+
         for index, item in enumerate(canonical["styles"][:10]):
             self.assertEqual(rules[index].font, item["font"])
             if "size" in item:
