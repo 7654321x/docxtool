@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from docxtool.document.errors import ConfigValidationError
+from docxtool.paths import default_format_config_path
 from .models import (
     PageSettings,
     StyleRule,
@@ -74,19 +75,105 @@ def _scope_options(field_path: str, value) -> dict:
     }
 
 
-def _parse_core_feature_options(config_dict: dict) -> dict:
+def _parse_punctuation_options(
+    punctuation: dict,
+    legacy_punctuation_enabled: bool | None,
+    *,
+    explicit_canonical: bool,
+) -> dict:
+    """解析 punctuation 配置，执行 canonical-first 规则。
+
+    - canonical punctuation.enabled 显式出现时拥有最终优先级，启用后走
+      canonical 新标点引擎。
+    - canonical 完全没有出现时才允许读取 legacy features.punctuation_enabled。
+    - canonical 未显式时不写入 enabled 键，由下游 legacy 路径决定行为。
+    """
+    if explicit_canonical and "enabled" in punctuation:
+        return {
+            "enabled": _bool_field(
+                punctuation, "enabled", "punctuation.enabled", False
+            ),
+            "mode": _safe_mode(
+                "punctuation.mode",
+                punctuation.get("mode", "safe"),
+                {"off", "safe", "standard"},
+                "safe",
+            ),
+            "scope": _scope_options(
+                "punctuation.scope", punctuation.get("scope", {})
+            ),
+        }
+    result = {
+        "mode": _safe_mode(
+            "punctuation.mode",
+            punctuation.get("mode", "safe"),
+            {"off", "safe", "standard"},
+            "safe",
+        ),
+        "scope": _scope_options("punctuation.scope", punctuation.get("scope", {})),
+    }
+    if legacy_punctuation_enabled is not None:
+        result["enabled"] = legacy_punctuation_enabled
+    return result
+
+
+def load_default_format_config() -> dict:
+    """读取随包默认格式配置 JSON，作为默认 styles/page/feature 的 canonical 来源。"""
+    import json as _json
+
+    path = default_format_config_path()
+    try:
+        with open(str(path), "r", encoding="utf-8") as f:
+            data = _json.load(f)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def default_feature_options() -> dict:
+    """返回随包默认配置中的 canonical 功能开关默认值（不含 processing/letterhead）。"""
+    parsed = _parse_core_feature_options(
+        load_default_format_config(), explicit_canonical=False
+    )
+    return {
+        key: parsed[key]
+        for key in (
+            "punctuation",
+            "classification",
+            "numbering",
+            "page_number",
+            "signature_block",
+            "table_format",
+            "cleanup",
+        )
+    }
+
+
+def _parse_core_feature_options(config_dict: dict, *, explicit_canonical: bool = True) -> dict:
+    """解析配置中的功能开关。
+
+    explicit_canonical=False 时（默认配置来源），canonical 字段的值只作为
+    默认值存在，不视为调用方显式提供，legacy 兼容键仍可兜底。
+    """
     punctuation = _dict_field(config_dict, "punctuation")
     classification = _dict_field(config_dict, "classification")
     numbering = _dict_field(config_dict, "numbering")
     page_number = _dict_field(config_dict, "page_number")
     signature_block = _dict_field(config_dict, "signature_block")
     table_format = _dict_field(config_dict, "table_format")
+    if _safe_bool(table_format.get("enabled", False), False):
+        raise ConfigValidationError(
+            "table_format.enabled", "当前版本暂不支持表格格式化"
+        )
     cleanup = _dict_field(config_dict, "cleanup")
     processing = _dict_field(config_dict, "processing")
     raw_features = config_dict.get("features", {})
     legacy_page_number_enabled = None
     if isinstance(raw_features, dict) and "page_number_enabled" in raw_features:
         legacy_page_number_enabled = _safe_bool(raw_features.get("page_number_enabled"), True)
+    legacy_punctuation_enabled = None
+    if isinstance(raw_features, dict) and "punctuation_enabled" in raw_features:
+        legacy_punctuation_enabled = _safe_bool(raw_features.get("punctuation_enabled"), True)
     if "enabled" in page_number:
         page_number_enabled = _bool_field(page_number, "enabled", "page_number.enabled", True)
     elif legacy_page_number_enabled is not None:
@@ -118,11 +205,11 @@ def _parse_core_feature_options(config_dict: dict) -> dict:
         "processing": {
             "strategy": processing_strategy,
         },
-        "punctuation": {
-            "enabled": _safe_bool(punctuation.get("enabled", False), False),
-            "mode": _safe_mode("punctuation.mode", punctuation.get("mode", "safe"), {"off", "safe", "standard"}, "safe"),
-            "scope": _scope_options("punctuation.scope", punctuation.get("scope", {})),
-        },
+        "punctuation": _parse_punctuation_options(
+            punctuation,
+            legacy_punctuation_enabled,
+            explicit_canonical=explicit_canonical,
+        ),
         "classification": {
             "enabled": _safe_bool(classification.get("enabled", True), True),
             "minimum_auto_format_confidence": finite_float(
@@ -220,8 +307,11 @@ def load_rules_and_settings(config_dict: dict = None):
 
         features["letterhead"] = normalize_letterhead_config(config_dict.get("letterhead"))
     else:
-        features.update(_parse_core_feature_options({}))
-        from docxtool.document.letterhead_config import default_letterhead_config
+        default_config = load_default_format_config()
+        features.update(
+            _parse_core_feature_options(default_config, explicit_canonical=False)
+        )
+        from docxtool.document.letterhead_config import normalize_letterhead_config
 
-        features["letterhead"] = default_letterhead_config()
+        features["letterhead"] = normalize_letterhead_config(default_config.get("letterhead"))
     return rules, settings, features

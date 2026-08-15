@@ -85,11 +85,21 @@ def resolve_import_processing_options(
         else {}
     )
     numbering_enabled = feature_bool_func(numbering_options.get("enabled", False), False)
-    new_punctuation_enabled = feature_bool_func(
-        punctuation_options.get("enabled", False), False
-    )
+    # canonical-first punctuation：punctuation.enabled 显式出现时拥有最终
+    # 优先级；完全没有出现时才允许 legacy features.punctuation_enabled 兜底。
+    # 禁止 canonical OR legacy 合并判定。
+    canonical_punctuation = "enabled" in punctuation_options
+    if canonical_punctuation:
+        new_punctuation_enabled = feature_bool_func(
+            punctuation_options.get("enabled", False), False
+        )
+        punctuation_enabled = False
+    else:
+        new_punctuation_enabled = False
+        punctuation_enabled = feature_bool_func(
+            features.get("punctuation_enabled", True), True
+        )
     punctuation_mode = str(punctuation_options.get("mode", "safe") or "safe")
-    punctuation_enabled = feature_bool_func(features.get("punctuation_enabled", True), True)
     punctuation_requested = new_punctuation_enabled or punctuation_enabled
 
     def normalize_text(text: str) -> str:

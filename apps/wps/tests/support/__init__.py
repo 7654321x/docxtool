@@ -1,0 +1,1 @@
+"""Shared WPS test support."""

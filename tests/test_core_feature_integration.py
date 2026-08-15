@@ -41,8 +41,9 @@ def test_core_feature_options_default_to_safe_off_without_changing_legacy_featur
 
     assert features["punctuation_enabled"] is True
     assert features["page_number_enabled"] is True
+    # canonical punctuation.enabled 未显式出现时不写入 enabled 键，
+    # 由 legacy features.punctuation_enabled 兜底决定实际行为。
     assert features["punctuation"] == {
-        "enabled": False,
         "mode": "safe",
         "scope": {"body": True, "tables": False, "headers": False, "footers": False},
     }
@@ -135,6 +136,21 @@ def test_export_doc_applies_explicit_numbering_and_field_page_number_options(tmp
     assert "NUMPAGES" in footer_xml
     assert 'w:val="center"' in footer_xml
     assert abs(Document(output).sections[0].footer_distance.cm - 2.8) < 0.02
+
+
+
+def test_table_format_enabled_true_fails_fast() -> None:
+    """table_format.enabled=true 必须在配置校验边界拒绝。"""
+    with pytest.raises(ConfigValidationError, match="table_format.enabled"):
+        validate_format_config({"table_format": {"enabled": True}})
+    with pytest.raises(ConfigValidationError, match="当前版本暂不支持表格格式化"):
+        validate_format_config({"table_format": True})
+
+
+def test_table_format_enabled_false_is_accepted() -> None:
+    """table_format.enabled=false 保持接受，表格仍按原样复制。"""
+    validated = validate_format_config({"table_format": {"enabled": False}})
+    assert validated["table_format"]["enabled"] is False
 
 
 def test_explicit_page_number_disable_does_not_fall_back_to_legacy_flag(tmp_path: Path) -> None:

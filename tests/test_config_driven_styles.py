@@ -10,7 +10,13 @@ from docx.oxml.ns import qn
 from docxtool.document.engine import export_doc
 from docxtool.document.engine.core import TYPE_TO_RULE_INDEX
 from docxtool.document.importer import DocumentData, ParagraphData, ParagraphFeatures
-from docxtool.document.style_config import ConfigValidationError, PageSettings, StyleRule, logger
+from docxtool.document.style_config import (
+    ConfigValidationError,
+    PageSettings,
+    StyleRule,
+    load_rules_and_settings,
+    logger,
+)
 
 
 def _xml_attr(element, attr):
@@ -263,6 +269,74 @@ class ConfigDrivenStylesTest(unittest.TestCase):
         self.assertEqual(rules[0].font_size_pt, 16.0)
         self.assertEqual(rules[0].first_line_indent, 2.0)
         self.assertEqual(rules[0].spacing_before, 1.0)
+
+
+    def test_backend_defaults_match_default_format_json(self):
+        """load_rules_and_settings(None) 的 styles/page/canonical features 与随包 JSON 一致。"""
+        rules, settings, features = load_rules_and_settings(None)
+        config_path = Path(__file__).resolve().parents[1] / "src/docxtool/resources/config/default-format.json"
+        canonical = json.loads(config_path.read_text(encoding="utf-8"))
+
+        for index, item in enumerate(canonical["styles"][:10]):
+            self.assertEqual(rules[index].font, item["font"])
+            if "size" in item:
+                self.assertEqual(rules[index].font_size_label, item["size"])
+            self.assertEqual(rules[index].bold, item["bold"])
+            self.assertEqual(rules[index].numbering_pattern, item.get("pattern", ""))
+        page = canonical["page"]
+        self.assertEqual(settings.page_width_cm, page["width_cm"])
+        self.assertEqual(settings.margin_top_cm, page["margin_top_cm"])
+        self.assertEqual(settings.margin_bottom_cm, page["margin_bottom_cm"])
+        self.assertEqual(settings.line_spacing_value, page["line_spacing_pt"])
+        self.assertEqual(settings.lines_per_page, page["lines_per_page"])
+        self.assertEqual(settings.chars_per_line, page["chars_per_line"])
+
+        # canonical feature 默认值来自 JSON；punctuation 未显式时不写入
+        # enabled 键（canonical-first，由 legacy 兜底）。
+        self.assertNotIn("enabled", features["punctuation"])
+        self.assertEqual(features["punctuation"]["mode"], canonical["punctuation"]["mode"])
+        self.assertEqual(features["punctuation"]["scope"], canonical["punctuation"]["scope"])
+        self.assertEqual(features["classification"]["enabled"], canonical["classification"]["enabled"])
+        self.assertEqual(features["numbering"]["enabled"], canonical["numbering"]["enabled"])
+        self.assertEqual(features["page_number"]["enabled"], canonical["page_number"]["enabled"])
+        self.assertEqual(features["page_number"]["style"], canonical["page_number"]["style"])
+        self.assertEqual(features["page_number"]["font_name"], canonical["page_number"]["font_name"])
+        self.assertEqual(features["signature_block"]["mode"], canonical["signature_block"]["mode"])
+        self.assertEqual(features["table_format"]["enabled"], canonical["table_format"]["enabled"])
+        self.assertEqual(features["cleanup"]["enabled"], canonical["cleanup"]["enabled"])
+        self.assertEqual(features["cleanup"]["mode"], canonical["cleanup"]["mode"])
+
+    def test_frontend_core_feature_defaults_match_canonical_json(self):
+        """前端 CORE_FEATURE_DEFAULTS 默认 literal 与随包 JSON 保持一致，防止再次漂移。"""
+        frontend = (
+            Path(__file__).resolve().parents[1] / "resources/frontend/pages/index.html"
+        ).read_text(encoding="utf-8")
+        config_path = (
+            Path(__file__).resolve().parents[1]
+            / "src/docxtool/resources/config/default-format.json"
+        )
+        canonical = json.loads(config_path.read_text(encoding="utf-8"))
+
+        def _assert_literal(pattern):
+            self.assertRegex(frontend, pattern)
+
+        _assert_literal(r"punctuation:{enabled:false,mode:'safe',scope:")
+        _assert_literal(r"classification:{enabled:true,minimum_auto_format_confidence:0\.85}")
+        _assert_literal(r"numbering:{enabled:false,mode:'safe'}")
+        _assert_literal(r"page_number:{enabled:true,style:'dash'")
+        _assert_literal(r"table_format:{enabled:false,smart_alignment:false}")
+        _assert_literal(r"cleanup:{enabled:false,mode:'safe'}")
+
+        # 与 JSON 语义逐一对照
+        self.assertFalse(canonical["punctuation"]["enabled"])
+        self.assertEqual(canonical["punctuation"]["mode"], "safe")
+        self.assertFalse(canonical["numbering"]["enabled"])
+        self.assertTrue(canonical["page_number"]["enabled"])
+        self.assertEqual(canonical["page_number"]["style"], "dash")
+        self.assertFalse(canonical["table_format"]["enabled"])
+        self.assertFalse(canonical["cleanup"]["enabled"])
+        self.assertEqual(canonical["signature_block"]["mode"], "without_seal")
+        self.assertTrue(canonical["classification"]["enabled"])
 
 
 if __name__ == "__main__":

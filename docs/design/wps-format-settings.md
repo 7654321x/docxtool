@@ -139,7 +139,7 @@ WPS_FORMAT_PROFILE_MIGRATION_FAILED
 - UI：select 切换、添加草稿、自定义名称、重命名、删除确认、系统默认保护、脏草稿确认和取消不写入。
 - 链路：Preview 与 Apply 使用同一活动模板快照，公网授权、Recognition 和 Engine 行为不变。
 
-运行 WPS 模板存储和 Control 聚焦 Python 测试、`node --test apps/wps/tests/format-settings.test.mjs apps/wps/tests/wps-runtime.test.mjs`、Ruff、compileall、`git diff --check` 和 `apps/wps/scripts/verify.ps1`。不自动构建 EXE。真实 WPS 未执行时报告：
+运行 WPS 模板存储和 Control 聚焦 Python 测试、`node --test apps/wps/tests/run-node-tests.mjs`、Ruff、compileall、`git diff --check` 和 `apps/wps/scripts/verify.ps1`。不自动构建 EXE。真实 WPS 未执行时报告：
 
 ```text
 REAL_WPS_FORMAT_PROFILE_SMOKE = NOT_RUN

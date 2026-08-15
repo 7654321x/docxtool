@@ -101,7 +101,7 @@ def process_uploaded_docx_task(
     task_output_path: Callable[[str], str],
     ensure_path_within: Callable[[str, str], str],
     safe_file_identifier: Callable[[str], str],
-    safe_download_filename: Callable[[str], str],
+    safe_download_filename: Callable[[str, str | None], str],
     sanitize_error: Callable[[object], str],
     public_recognition_summary: Callable[[object], dict],
     validate_docx_integrity: Callable[[str], None],
@@ -168,7 +168,12 @@ def process_uploaded_docx_task(
         output_dir = ensure_path_within(output_root_dir, task_output_dir(task_id))
         os.makedirs(output_dir, exist_ok=True)
         output_path = ensure_path_within(output_dir, task_output_path(task_id))
-        download_name = safe_download_filename(orig_name)
+        output_suffix = (
+            format_config.get("output_suffix")
+            if isinstance(format_config, dict)
+            else None
+        )
+        download_name = safe_download_filename(orig_name, output_suffix)
         export_stats = _call_exporter_compat(
             export_doc_func,
             (doc_data, rules, settings, output_path),

@@ -55,3 +55,18 @@ def test_client_ip_helpers_validate_headers_and_secrets():
     assert is_ip("240e:398:41bb:c470:392d:4351:2b3f:b7c")
     assert compare_secret("same-secret", "same-secret")
     assert not compare_secret("same-secret", "other-secret")
+
+
+def test_client_ip_falls_back_to_ipv6_when_no_ipv4_exists():
+    """唯一 IPv6 来源（无 IPv4）时回退到合法 IPv6 地址。"""
+    headers = {"CF-Connecting-IP": "240e:398:41bb:c470:392d:4351:2b3f:b7c"}
+
+    resolved = client_ip(
+        headers,
+        ("::1", 12345),
+        trust_proxy_headers=True,
+        trusted_proxy_ips={"::1"},
+    )
+
+    assert resolved == "240e:398:41bb:c470:392d:4351:2b3f:b7c"
+    assert server._client_ip(headers, ("::1", 12345)) == resolved

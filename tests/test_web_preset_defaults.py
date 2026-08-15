@@ -89,9 +89,12 @@ def test_default_preset_config_falls_back_to_default_size() -> None:
 def test_core_feature_config_defaults_are_independent_dicts() -> None:
     first = core_feature_config_defaults()
     second = core_feature_config_defaults()
-    first["punctuation"]["enabled"] = True
+    first["punctuation"]["mode"] = "standard"
 
-    assert second["punctuation"]["enabled"] is False
+    assert second["punctuation"]["mode"] == "safe"
+    # canonical punctuation.enabled 未显式提供时不下发 enabled 键，
+    # 由 legacy features.punctuation_enabled 兜底决定实际行为。
+    assert "enabled" not in second["punctuation"]
 
 
 def test_seed_default_presets_inserts_once(tmp_path: Path) -> None:

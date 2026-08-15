@@ -32,13 +32,8 @@ try {
         if ($LASTEXITCODE) { throw "WPS_JAVASCRIPT_CHECK_FAILED: $javaScriptFile" }
     }
 
-    & node --test "apps/wps/tests/wps-runtime.test.mjs"
+    & node --test "apps/wps/tests/run-node-tests.mjs"
     if ($LASTEXITCODE) { throw "WPS_JAVASCRIPT_RUNTIME_TESTS_FAILED" }
-
-    if (Test-Path -LiteralPath "apps/wps/tests/format-settings.test.mjs") {
-        & node --test "apps/wps/tests/format-settings.test.mjs"
-        if ($LASTEXITCODE) { throw "WPS_FORMAT_SETTINGS_TESTS_FAILED" }
-    }
 
     if (-not (Test-Path -LiteralPath "apps/wps/index.html" -PathType Leaf)) {
         throw "WPS_ROOT_INDEX_MISSING"

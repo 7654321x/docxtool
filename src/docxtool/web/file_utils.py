@@ -57,13 +57,31 @@ def sanitize_filename(name: str) -> str:
     return cleaned[:120]
 
 
-def safe_download_filename(orig_name: str) -> str:
-    """传入原始上传名，返回排版结果默认下载文件名。"""
+def _sanitize_output_suffix(suffix: str) -> str:
+    """传入自定义下载后缀，返回可安全拼接进文件名的后缀文本。"""
+    cleaned = re.sub(r"[\x00-\x1f/\\:*?""<>|]+", "_", str(suffix or ""))
+    cleaned = cleaned.strip(" .")
+    if not cleaned:
+        return ""
+    if cleaned.lower().endswith(".docx"):
+        cleaned = cleaned[: -len(".docx")].rstrip(" ._")
+    return cleaned
+
+
+def safe_download_filename(orig_name: str, output_suffix: str | None = None) -> str:
+    """传入原始上传名和可选下载后缀，返回排版结果下载文件名。
+
+    output_suffix 缺失、null、空字符串或纯空白时使用历史默认后缀
+    ``_排版文件``；显式提供时追加在文件 stem 之后，最终固定为 .docx。
+    """
     safe = sanitize_filename(orig_name)
     stem, _ext = os.path.splitext(safe)
     if not stem:
         stem = "download"
-    return f"{stem}_排版文件.docx"
+    suffix = _sanitize_output_suffix(output_suffix or "")
+    if not suffix:
+        return f"{stem}_排版文件.docx"
+    return sanitize_filename(f"{stem}{suffix}.docx")
 
 
 def content_disposition_filename(filename: str) -> str:

@@ -90,6 +90,6 @@
 ```pwsh
 pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m pytest apps/wps/tests -q"
 pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m pytest tests/test_architecture_docs.py -q"
-pwsh -NoProfile -Command "node --test apps/wps/tests/wps-runtime.test.mjs"
+pwsh -NoProfile -Command "node --test apps/wps/tests/run-node-tests.mjs"
 pwsh -NoProfile -File .\apps\wps\scripts\verify.ps1
 ```

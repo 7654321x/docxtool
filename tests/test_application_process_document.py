@@ -72,7 +72,7 @@ class _Logger:
         self.errors.append(args)
 
 
-def _process_task(tmp_path: Path, **overrides):
+def _process_task(tmp_path: Path, *, format_config: dict | None = None, **overrides):
     """传入临时目录和覆盖依赖，执行应用层任务并返回结果、状态和日志对象。"""
     output_root = tmp_path / "outputs"
     log_dir = tmp_path / "logs"
@@ -108,7 +108,7 @@ def _process_task(tmp_path: Path, **overrides):
         "task_output_path": lambda task_id: str(output_root / task_id / "result.docx"),
         "ensure_path_within": lambda _base, path: path,
         "safe_file_identifier": lambda name: f"file:{name}",
-        "safe_download_filename": lambda name: f"排版_{name}",
+        "safe_download_filename": lambda name, output_suffix=None: f"排版_{name}{output_suffix or ''}",
         "sanitize_error": lambda value: f"sanitized:{value}",
         "public_recognition_summary": lambda _doc_data: {"review": 0},
         "validate_docx_integrity": lambda _path: None,
@@ -118,13 +118,14 @@ def _process_task(tmp_path: Path, **overrides):
         "localtime": lambda _fmt: "2026-08-02 10:00:00",
     }
     deps.update(overrides)
+    resolved_format_config = {"mode": "smart"} if format_config is None else format_config
     result = process_uploaded_docx_task(
         "task-12345678",
         str(tmp_path / "input.docx"),
         "input.docx",
         "127.0.0.1",
         "pytest",
-        {"mode": "smart"},
+        resolved_format_config,
         {"processing_strategy": "structural", "preset_name": "默认"},
         **deps,
     )
@@ -145,6 +146,22 @@ def test_process_uploaded_docx_task_returns_done_result(tmp_path: Path) -> None:
     assert state["export_calls"][0][4]["cleanup_options"] == {"enabled": True}
     assert state["reset_tokens"]
     assert logger.infos
+
+
+def test_process_uploaded_docx_task_uses_output_suffix_from_format_config(tmp_path: Path) -> None:
+    result, _state, _logger = _process_task(
+        tmp_path, format_config={"mode": "smart", "output_suffix": "_最终版"}
+    )
+
+    assert result["status"] == "done"
+    assert result["output_filename"] == "排版_input.docx_最终版"
+
+
+def test_process_uploaded_docx_task_defaults_output_suffix_when_missing(tmp_path: Path) -> None:
+    result, _state, _logger = _process_task(tmp_path)
+
+    assert result["status"] == "done"
+    assert result["output_filename"] == "排版_input.docx"
 
 
 def test_process_uploaded_docx_task_reports_integrity_failure(tmp_path: Path) -> None:

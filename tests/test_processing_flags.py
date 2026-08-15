@@ -16,9 +16,14 @@ from docxtool.document.importer import (
     InlineToken,
     ParagraphData,
     ParagraphFeatures,
+    _normalize_inline_tokens,
+    _normalize_quotes,
     _normalize_tail_structures,
+    _normalize_text,
+    _to_chinese_punctuation,
     strip_numbering,
 )
+from docxtool.document.pipeline.options import resolve_import_processing_options
 from docxtool.document.normalization import normalize_tail_structures, strip_numbering_prefix
 from docxtool.document.style_config import PageSettings, StyleRule, load_rules_and_settings
 
@@ -535,6 +540,151 @@ class ProcessingFlagsTest(unittest.TestCase):
             ]
             self.assertEqual(headings, ["一、第一部分", "二、存在的问题"])
 
+
+    # ── canonical-first punctuation 契约（5.4.3） ─────────────────────────
+
+    def _load_punctuation(self, text, features, *, strict_preservation=False):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "punctuation.docx"
+            doc = Document()
+            doc.add_paragraph(text)
+            doc.save(src)
+            data = DocxImporter().load(
+                str(src),
+                _rules(),
+                features=features,
+                strict_preservation=strict_preservation,
+            )
+            return data.paragraphs[0]
+
+    def _load_with_config(self, text, config, *, strict_preservation=False):
+        """通过 load_rules_and_settings 解析真实请求配置后再导入。"""
+        rules, _, features = load_rules_and_settings(config)
+        return self._load_punctuation(text, features, strict_preservation=strict_preservation)
+
+    def test_punctuation_canonical_false_only_disables_everything(self):
+        para = self._load_with_config(
+            "甲:乙,丙.", {"punctuation": {"enabled": False}}
+        )
+        self.assertEqual(para.text, "甲:乙,丙.")
+
+    def test_punctuation_canonical_true_only_uses_canonical_engine(self):
+        para = self._load_with_config(
+            "甲:乙,丙.", {"punctuation": {"enabled": True, "mode": "safe"}}
+        )
+        self.assertEqual(para.text, "甲：乙，丙。")
+
+    def test_punctuation_legacy_false_only_disables(self):
+        para = self._load_with_config(
+            "甲:乙,丙.", {"features": {"punctuation_enabled": False}}
+        )
+        self.assertEqual(para.text, "甲:乙,丙.")
+
+    def test_punctuation_legacy_true_only_uses_legacy_engine(self):
+        para = self._load_with_config(
+            "甲:乙,丙.", {"features": {"punctuation_enabled": True}}
+        )
+        self.assertEqual(para.text, "甲：乙，丙。")
+
+    def test_punctuation_canonical_false_overrides_legacy_true(self):
+        para = self._load_with_config(
+            "甲:乙,丙.",
+            {
+                "punctuation": {"enabled": False},
+                "features": {"punctuation_enabled": True},
+            },
+        )
+        self.assertEqual(para.text, "甲:乙,丙.")
+
+    def test_punctuation_canonical_true_overrides_legacy_false(self):
+        para = self._load_with_config(
+            "甲:乙,丙.",
+            {
+                "punctuation": {"enabled": True, "mode": "safe"},
+                "features": {"punctuation_enabled": False},
+            },
+        )
+        self.assertEqual(para.text, "甲：乙，丙。")
+
+    def test_punctuation_canonical_false_disables_in_structural_mode(self):
+        para = self._load_with_config(
+            "甲:乙,丙.",
+            {
+                "processing": {"strategy": "structural"},
+                "punctuation": {"enabled": False},
+            },
+        )
+        self.assertEqual(para.text, "甲:乙,丙.")
+
+    def test_punctuation_canonical_true_respected_in_structural_mode(self):
+        para = self._load_with_config(
+            "甲:乙,丙.",
+            {
+                "processing": {"strategy": "structural"},
+                "punctuation": {"enabled": True, "mode": "safe"},
+            },
+        )
+        self.assertEqual(para.text, "甲：乙，丙。")
+
+    def test_punctuation_never_applies_in_strict_preservation(self):
+        para = self._load_punctuation(
+            "甲:乙,丙.",
+            {"punctuation": {"enabled": True, "mode": "safe"}},
+            strict_preservation=True,
+        )
+        self.assertEqual(para.text, "甲:乙,丙.")
+
+    def _resolve_punctuation_options(self, features):
+        return resolve_import_processing_options(
+            features,
+            strict_preservation=False,
+            recognition_mode="authoritative",
+            feature_bool_func=lambda value, default: bool(value),
+            normalize_basic_text_func=_normalize_text,
+            normalize_quotes_func=_normalize_quotes,
+            to_chinese_punctuation_func=_to_chinese_punctuation,
+            normalize_inline_tokens_func=_normalize_inline_tokens,
+            inline_token_type=InlineToken,
+            import_error_type=ValueError,
+        )
+
+    def test_punctuation_token_normalization_respects_canonical_first(self):
+        tokens = [InlineToken("text", "甲:乙"), InlineToken("text", "丙.")]
+
+        canonical_off = self._resolve_punctuation_options(
+            {"punctuation": {"enabled": False}}
+        )
+        self.assertEqual(
+            [token.text for token in canonical_off.normalize_tokens(tokens)],
+            ["甲:乙", "丙."],
+        )
+
+        canonical_on = self._resolve_punctuation_options(
+            {"punctuation": {"enabled": True, "mode": "safe"}}
+        )
+        self.assertEqual(
+            [token.text for token in canonical_on.normalize_tokens(tokens)],
+            ["甲：乙", "丙。"],
+        )
+
+        legacy_on = self._resolve_punctuation_options(
+            {"punctuation_enabled": True}
+        )
+        self.assertEqual(
+            [token.text for token in legacy_on.normalize_tokens(tokens)],
+            ["甲：乙", "丙。"],
+        )
+
+        conflict = self._resolve_punctuation_options(
+            {
+                "punctuation": {"enabled": False},
+                "punctuation_enabled": True,
+            }
+        )
+        self.assertEqual(
+            [token.text for token in conflict.normalize_tokens(tokens)],
+            ["甲:乙", "丙."],
+        )
 
 if __name__ == "__main__":
     unittest.main()

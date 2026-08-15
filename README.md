@@ -121,7 +121,7 @@ binding = bind_recognition_plan(plan, {
 ```pwsh
 pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m pytest"
 pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m ruff check src tests scripts"
-pwsh -NoProfile -Command "node --test apps/wps/tests/wps-runtime.test.mjs"
+pwsh -NoProfile -Command "node --test apps/wps/tests/run-node-tests.mjs"
 pwsh -NoProfile -Command "node --test tests/frontend-format-config.test.mjs"
 pwsh -NoProfile -Command "node --test tests/worker-routing.test.mjs"
 ```

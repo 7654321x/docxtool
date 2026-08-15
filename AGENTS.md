@@ -10,7 +10,7 @@
 4. 不修改真实密钥、生产配置或用户私有数据。
 5. 不执行 `git commit` 或 `git push`，除非用户明确要求。
 6. 用户工作树已有修改属于用户内容，必须保留；不得使用破坏性恢复命令覆盖它们。
-7. 新增功能、跨模块行为变更或用户明确要求设计的任务，固定按“先技术设计、后实现”的顺序执行。设计必须写明目标、范围、接口、兼容性、测试与验收。
+7. 任务按 S/M/L 分级：S 级单文件小修复使用短计划和聚焦测试；M 级模块功能先写短设计；L 级识别、排版、账号、鉴权、协议、数据库、发布或架构变更必须先写正式技术设计，再修改源码。分级规则和模板见 `docs/design/CODEX_WORKFLOW_OPTIMIZATION.md`。
 
 ## 需求与错误边界
 
@@ -29,6 +29,23 @@ pwsh -NoProfile -Command "..."
 ```
 
 修改后按任务范围运行最小必要测试。跨模块、发布或用户明确要求完整验证时，再执行相应专项门禁。未运行真实 WPS 时不得声称真实宿主 PASS，必须明确标记 `NOT_RUN`。
+
+## 技能路由
+
+1. DOCX 识别、规范化和排版使用 `docxtool-recognition-layout`；普通 WPS UI、Reader、Agent 文档和发布任务不触发该技能。
+2. Codex 设置、技能和工作流问题使用 `openai-docs`；网页调研使用一个网络检索路由，避免同一问题重复搜索。
+3. GitHub 发布直接使用项目 Quick 发布流程；只有用户明确要求完整验收时才进入 `-Verify` 门禁。
+4. 复杂审阅、重构和方案评估才使用通用代码审阅准则；单文件小修复不加载无关技能。
+
+## 任务验证入口
+
+优先使用按改动范围选择检查的入口：
+
+```pwsh
+pwsh -NoProfile -File .\scripts\verify_changed.ps1
+```
+
+该入口输出 `SELECTED_CHECKS`、`SKIPPED_CHECKS` 和 `NOT_RUN`，不生成 EXE；完整 WPS 门禁仍由 `apps/wps/scripts/verify.ps1` 提供。
 
 ## 文档维护
 
@@ -64,6 +81,7 @@ pwsh -NoProfile -Command "..."
 3. 发布前阅读 `docs/RELEASE.md`，使用 `scripts/publish_to_github.ps1`，不得直接把整棵工作树推送到 GitHub。
 4. 发布必须先同步并核验本地分支基线，再在当前本地仓库按允许清单暂存并创建提交，最后通过 SSH 推送；禁止只在临时克隆中生成远端提交。
 5. 普通发布使用脚本默认流程；只有用户明确要求时才使用 `-Verify` 完整验收。版本以 `src/docxtool/version.py`、`pyproject.toml` 和 `CHANGELOG.md` 为准；当前文档基线为 5.4.3。
+6. 新增或移动正式源码、资源、测试和文档时，第一时间同步写入 `scripts/publish_to_github.ps1` 的允许清单；新增长期文档还必须立即登记到 `docs/README.md`，不得等到发布前再补。
 
 ## 重复问题处理
 
@@ -77,4 +95,11 @@ pwsh -NoProfile -Command "..."
 pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m pytest tests/test_architecture_docs.py -q"
 pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m ruff check src tests scripts"
 pwsh -NoProfile -Command "git diff --check"
+pwsh -NoProfile -File .\scripts\publish_to_github.ps1 -Quick -CommitMessage "说明本次修改"
+```
+
+只有用户明确要求完整验收时，才使用：
+
+```pwsh
+pwsh -NoProfile -File .\scripts\publish_to_github.ps1 -Verify -CommitMessage "说明本次修改"
 ```

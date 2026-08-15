@@ -28,41 +28,6 @@ jobs:
       - name: Run tests
         run: python -m pytest
 
-      - name: Check WPS JavaScript syntax
-        run: |
-          node --check apps/wps/main.js
-          node --check apps/wps/js/bootstrap-log.js
-          node --check apps/wps/js/bootstrap-complete.js
-          node --check apps/wps/js/ribbon.js
-          node --check apps/wps/host-runtime.js
-          node --check apps/wps/taskpane.js
-
-      - name: Run WPS JavaScript runtime tests
-        run: node --test apps/wps/tests/wps-runtime.test.mjs
-
-      - name: Validate WPS static configuration
-        run: |
-          python - <<'PY'
-          import json
-          import xml.etree.ElementTree as ET
-          from pathlib import Path
-
-          root = Path("apps/wps")
-          ET.parse(root / "manifest.xml")
-          ET.parse(root / "ribbon.xml")
-          json.loads((root / "package.json").read_text(encoding="utf-8"))
-          json.loads((root / "package-lock.json").read_text(encoding="utf-8"))
-          PY
-
-      - name: Run worker routing tests
-        run: node --test tests/worker-routing.test.mjs
-
-      - name: Run frontend format configuration tests
-        run: node --test tests/frontend-format-config.test.mjs
-
-      - name: Run recognition regression tests
-        run: python -m pytest tests/test_recognition_decoder.py
-
       - name: Run ruff
         run: python -m ruff check src tests scripts
 
@@ -167,6 +132,44 @@ jobs:
               str(report_path),
           ], check=True)
           PY
+
+  node-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check WPS JavaScript syntax
+        run: |
+          node --check apps/wps/main.js
+          node --check apps/wps/js/bootstrap-log.js
+          node --check apps/wps/js/bootstrap-complete.js
+          node --check apps/wps/js/ribbon.js
+          node --check apps/wps/host-runtime.js
+          node --check apps/wps/taskpane.js
+
+      - name: Run WPS Node regression tests
+        run: node --test apps/wps/tests/run-node-tests.mjs
+
+      - name: Validate WPS static configuration
+        run: |
+          python3 - <<'PY'
+          import json
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          root = Path("apps/wps")
+          ET.parse(root / "manifest.xml")
+          ET.parse(root / "ribbon.xml")
+          json.loads((root / "package.json").read_text(encoding="utf-8"))
+          json.loads((root / "package-lock.json").read_text(encoding="utf-8"))
+          PY
+
+      - name: Run worker routing tests
+        run: node --test tests/worker-routing.test.mjs
+
+      - name: Run frontend format configuration tests
+        run: node --test tests/frontend-format-config.test.mjs
 
   windows-startup:
     runs-on: windows-latest

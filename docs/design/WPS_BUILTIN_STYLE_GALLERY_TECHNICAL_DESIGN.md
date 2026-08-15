@@ -168,7 +168,7 @@ WPS_STYLE_GALLERY_SMOKE = NOT_RUN
 
 ```pwsh
 pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m pytest -q tests/test_engine_paragraph_styles.py tests/test_structural_styles.py tests/test_structured_layout_quality.py tests/test_engine_heading_body_split.py tests/test_engine_heading_spacing.py tests/test_processing_flags.py"
-pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m pytest -q apps/wps/tests/test_wps_app.py apps/wps/tests/test_host_bridge.py"
+pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m pytest -q apps/wps/tests/test_wps_control_format.py apps/wps/tests/test_host_bridge.py"
 pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m ruff check src tests apps/wps"
 pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m compileall -q src/docxtool apps/wps"
 pwsh -NoProfile -Command "git diff --check"

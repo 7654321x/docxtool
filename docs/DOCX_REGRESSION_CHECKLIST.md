@@ -163,9 +163,9 @@
 局部页码范围最小验证：
 
 ```pwsh
-pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m pytest -q apps/wps/tests/test_wps_app.py -k 'page_scope'"
+pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m pytest -q apps/wps/tests/test_wps_control_format.py -k 'page_scope'"
 pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m pytest -q apps/wps/tests/test_host_bridge.py -k 'format_scope'"
-pwsh -NoProfile -Command "node --test apps/wps/tests/wps-runtime.test.mjs"
+pwsh -NoProfile -Command "node --test apps/wps/tests/run-node-tests.mjs"
 ```
 
 ## 十一-A、最终语义与附件人工列布局
@@ -180,7 +180,7 @@ pwsh -NoProfile -Command "node --test apps/wps/tests/wps-runtime.test.mjs"
 最小验证：
 
 ```pwsh
-pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m pytest -q tests/test_layout_policy.py tests/test_normalization_pipeline.py tests/test_recognition_decoder.py tests/test_document_structure.py tests/test_engine_heading_spacing.py"
+pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m pytest -q tests/test_layout_policy.py tests/test_normalization_pipeline.py tests/test_recognition_decoder_basic.py tests/test_recognition_decoder_headings.py tests/test_recognition_decoder_front_roles.py tests/test_document_structure.py tests/test_engine_heading_spacing.py"
 ```
 
 ## 十二、每轮测试执行顺序

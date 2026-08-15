@@ -150,8 +150,7 @@ def finalize_export(
             },
         )
 
-    if _feature_enabled(table_format_options, False):
-        logger.info("[表格] 当前阶段仅原样复制，已忽略表格格式化配置")
+    # table_format.enabled=true 在配置校验边界已拒绝（当前版本不支持表格格式化）。
     if not local_scope and _feature_enabled(cleanup_options, False):
         cleanup_styles(doc, _feature_options(cleanup_options), protected_paragraph_elements)
 

@@ -19,6 +19,7 @@ def test_documentation_ownership_entries_are_published_and_navigable() -> None:
         "docs/design/WPS_BUILTIN_STYLE_GALLERY_TECHNICAL_DESIGN.md",
         "docs/design/GIT_BASELINE_RELEASE_WORKFLOW.md",
         "docs/design/wps-format-settings.md",
+        "docs/design/CODEX_WORKFLOW_OPTIMIZATION.md",
         "apps/reader/AGENTS.md",
     }
     navigation = (ROOT / "docs" / "README.md").read_text(encoding="utf-8")
@@ -31,6 +32,19 @@ def test_documentation_ownership_entries_are_published_and_navigable() -> None:
     assert "ARCHITECTURE.md" in navigation
     assert "RELEASE.md" in navigation
     assert "WPS_REGRESSION_CHECKLIST.md" in navigation
+    assert "CODEX_WORKFLOW_OPTIMIZATION.md" in navigation
+
+
+def test_changed_verification_entry_is_published_and_has_explicit_output_contract() -> None:
+    script = (ROOT / "scripts" / "verify_changed.ps1").read_text(encoding="utf-8")
+    publish = (ROOT / "scripts" / "publish_to_github.ps1").read_text(encoding="utf-8")
+
+    assert "SELECTED_CHECKS" in script
+    assert "SKIPPED_CHECKS" in script
+    assert "NOT_RUN" in script
+    assert "apps/wps/scripts/verify.ps1" in script
+    assert "EXE build" in script
+    assert '"scripts/verify_changed.ps1"' in publish
 
 
 def test_docs_root_keeps_only_current_main_documents() -> None:
@@ -222,3 +236,53 @@ def test_sdk_model_validation_boundary_has_no_module_import_cycle() -> None:
     }
     assert "models" not in direct_imports
     assert "manifest" not in direct_imports
+
+def test_api_docs_describe_config_contract_semantics() -> None:
+    """API.md 必须描述 canonical-first punctuation、table_format 与 output_suffix 契约。"""
+    api = (ROOT / "docs" / "API.md").read_text(encoding="utf-8")
+
+    # punctuation canonical-first 契约
+    assert "punctuation.enabled` 显式出现时（无论 `true` 或 `false`），以它为准" in api
+    assert "`punctuation.enabled` 完全没有出现时，才回退读取 `features.punctuation_enabled`" in api
+    assert "仅为兼容旧客户端" in api
+    assert "两者不是两个可同时生效的独立" in api
+    # table_format fail-fast 契约
+    assert "当前版本不支持表格格式化" in api
+    assert "显式传 `true` 时配置校验返回" in api
+    assert "表格始终按原样复制" in api
+    # output_suffix 契约
+    assert "`工作报告_最终版.docx`" in api
+    assert "历史默认后缀 `_排版文件`" in api
+    # grid_alignment canonical 字符串
+    assert '"grid_alignment": "文字对齐字符网络"' in api
+    assert "不是布尔值" in api
+
+def test_wps_node_tests_have_one_canonical_gate() -> None:
+    """WPS Node 测试必须只有一个正式入口，CI 与 verify.ps1 共用，缺失必失败。"""
+    runner = (ROOT / "apps/wps/tests/run-node-tests.mjs").read_text(encoding="utf-8")
+    for test_name in ("host-runtime.test.mjs", "taskpane-runtime.test.mjs", "reader-ui.test.mjs", "format-settings.test.mjs"):
+        assert f'import "./{test_name}"' in runner
+
+    verify = (ROOT / "apps/wps/scripts/verify.ps1").read_text(encoding="utf-8")
+    assert "node --test \"apps/wps/tests/run-node-tests.mjs\"" in verify
+    assert "Test-Path -LiteralPath \"apps/wps/tests/format-settings.test.mjs\"" not in verify
+    assert "wps-runtime.test.mjs" not in verify
+
+    ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    assert "node --test apps/wps/tests/run-node-tests.mjs" in ci
+    assert "reader-ui.test.mjs" not in ci.replace("run-node-tests.mjs", "")
+
+def test_ci_node_tests_are_outside_python_matrix_and_not_duplicated() -> None:
+    """Node 测试必须单独执行一次；recognition decoder 不得在同一 job 重复执行。"""
+    ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+
+    node_steps = ci.count("node --test ")
+    # WPS runner + worker-routing + frontend-format-config 各一次
+    assert node_steps == 3
+    assert ci.count("node --test apps/wps/tests/run-node-tests.mjs") == 1
+    assert ci.count("node --test tests/worker-routing.test.mjs") == 1
+    assert ci.count("node --test tests/frontend-format-config.test.mjs") == 1
+
+    # decoder 只由全量 pytest 收集，不允许单独重复步骤
+    assert "python -m pytest tests/test_recognition_decoder.py" not in ci
+    assert "run: python -m pytest" in ci

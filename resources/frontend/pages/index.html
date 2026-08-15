@@ -355,7 +355,7 @@ h1{font-size:clamp(38px,5.4vw,64px);letter-spacing:0;line-height:1.08;margin-bot
       <div class="field"><label>当前格式</label><select id="templateSelect" onchange="selectTemplate(this.value)"></select></div>
       <div class="field"><label>规则名称</label><input id="settingPresetName" value="党政机关公文格式"></div>
       <div class="field"><label>处理模式</label><select id="settingMode" disabled><option value="smart">智能处理（当前唯一模式）</option></select></div>
-      <div class="field"><label>输出后缀</label><input id="outputSuffix" value="_排版"></div>
+      <div class="field"><label>输出后缀</label><input id="outputSuffix" value="_排版文件"></div>
       <select id="configSource" style="display:none"><option value="builtin">内置默认</option><option value="custom">用户自定义</option><option value="database">数据库模板</option></select>
       <button class="btn btn-secondary" onclick="createTemplateFromCurrent()">＋ 添加模板</button>
       <button class="btn btn-ghost" onclick="saveCurrentTemplate()">保存模板</button>
@@ -906,7 +906,7 @@ function updateNumberingType(row){
 
 function initSettings(){
   document.getElementById('settingMode').value='smart';
-  document.getElementById('outputSuffix').value='_排版';
+  document.getElementById('outputSuffix').value='_排版文件';
   document.getElementById('pageNumberEnabled').checked=true;
   document.getElementById('signatureBlockMode').value=SIGNATURE_BLOCK_DEFAULT.mode;
   ['marginTop','marginBottom','marginLeft','marginRight'].forEach((id,i)=>fillSelect(id,margins,['3.7cm','3.5cm','2.8cm','2.6cm'][i]));
@@ -984,7 +984,7 @@ function collectConfig(){
       numbered_bold_enabled:checked('specialBold'),
       punctuation_enabled:checked('punctuationEnabled')
     },
-    punctuation:{enabled:checked('punctuationSafeEnabled'),mode:'safe',scope:{body:true,tables:false,headers:false,footers:false}},
+    punctuation:{enabled:checked('punctuationEnabled'),mode:checked('punctuationSafeEnabled')?'safe':'standard',scope:{body:true,tables:false,headers:false,footers:false}},
     classification:{enabled:true,minimum_auto_format_confidence:0.85},
     numbering:{enabled:checked('numberingEnabled'),mode:'safe'},
     page_number:{enabled:checked('pageNumberEnabled'),style:pageStyle,position:pagePosition,font_name:get('pageFont')||'宋体',font_size_pt:FONT_SIZE_POINTS[get('pageSize')]||14,bold:false,first_page:true,section_numbering:'continue',offset_from_text_mm:7},
@@ -992,7 +992,7 @@ function collectConfig(){
     table_format:{enabled:checked('tableFormatEnabled'),smart_alignment:false},
     cleanup:{enabled:checked('cleanupEnabled'),mode:'safe'},
     letterhead:collectLetterheadConfig(),
-    output_suffix:(get('outputSuffix')||'_排版').trim()||'_排版'
+    output_suffix:(get('outputSuffix')||'_排版文件').trim()||'_排版文件'
   });
 }
 function normalizeConfig(config,tpl){
@@ -1230,16 +1230,16 @@ function applyConfigToForm(config,keepTemplate=true){
   if(document.getElementById('pageNumberEnabled')&&pageEnabled!==undefined)document.getElementById('pageNumberEnabled').checked=!!pageEnabled;
   set('signatureBlockMode',(cfg.signature_block||SIGNATURE_BLOCK_DEFAULT).mode);
   const f=cfg.features||{};
-  const featureMap={punctuationEnabled:'punctuation',tableEnabled:'table_optimize',specialBold:'special_bold'};
+  const featureMap={tableEnabled:'table_optimize',specialBold:'special_bold'};
   Object.keys(featureMap).forEach(id=>{
     const key=featureMap[id];
-    const fallbackMap={table_optimize:'table',special_bold:'numbered_bold_enabled',punctuation:'punctuation_enabled',page_number:'page_number_enabled'};
+    const fallbackMap={table_optimize:'table',special_bold:'numbered_bold_enabled',page_number:'page_number_enabled'};
     const fallbackKey=fallbackMap[key]||key;
     const val=f[key]!==undefined?f[key]:f[fallbackKey];
     if(document.getElementById(id)&&val!==undefined)document.getElementById(id).checked=!!val;
   });
   const coreFeatureMap={
-    punctuationSafeEnabled:cfg.punctuation?.enabled,
+
     numberingEnabled:cfg.numbering?.enabled,
     tableFormatEnabled:cfg.table_format?.enabled,
     cleanupEnabled:cfg.cleanup?.enabled
@@ -1249,6 +1249,12 @@ function applyConfigToForm(config,keepTemplate=true){
     const val=coreFeatureMap[id];
     if(el&&val!==undefined)el.checked=!!val;
   });
+  const puncCfg=cfg.punctuation&&typeof cfg.punctuation==='object'?cfg.punctuation:{};
+  const hasCanonicalPunc=Object.prototype.hasOwnProperty.call(puncCfg,'enabled');
+  const puncEnabled=hasCanonicalPunc?puncCfg.enabled:f.punctuation_enabled;
+  if(document.getElementById('punctuationEnabled')&&puncEnabled!==undefined)document.getElementById('punctuationEnabled').checked=!!puncEnabled;
+  const puncSafe=hasCanonicalPunc?(!!puncCfg.enabled&&(puncCfg.mode||'safe')==='safe'):(puncCfg.enabled??true);
+  if(document.getElementById('punctuationSafeEnabled')&&puncSafe!==undefined)document.getElementById('punctuationSafeEnabled').checked=!!puncSafe;
   applyLetterheadConfig(cfg.letterhead);
 }
 async function createTemplateFromCurrent(){

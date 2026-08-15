@@ -183,7 +183,7 @@ assert.equal(defaultConfig.page_number.font_name, "宋体");
 assert.equal(defaultConfig.page_number.font_size_pt, 14);
 assert.equal(defaultConfig.page_number.bold, false);
 assert.equal(defaultConfig.signature_block.mode, "without_seal");
-assert.equal(defaultConfig.output_suffix, "_排版");
+assert.equal(defaultConfig.output_suffix, "_排版文件");
 assert.equal(defaultConfig.mode, "smart");
 assert.equal(defaultConfig.processing_mode, "smart");
 assert.equal(defaultConfig.styles.length, 10);

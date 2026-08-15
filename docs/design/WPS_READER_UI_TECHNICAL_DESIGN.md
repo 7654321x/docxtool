@@ -141,7 +141,7 @@ ratio = clamp(scrollTop / max(scrollHeight - clientHeight, 1), 0, 1)
 node --check apps/wps/reader/reader-ui.js
 node --check apps/wps/taskpane.js
 node --test apps/wps/tests/reader-ui.test.mjs
-node --test apps/wps/tests/wps-runtime.test.mjs
+node --test apps/wps/tests/run-node-tests.mjs
 python apps/wps/main.py verify
 git diff --check
 ```

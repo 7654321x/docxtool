@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Iterable
 
+from docxtool.document.configuration.validation import default_feature_options
+
 
 def default_preset_config(style_rules: Iterable, page_settings, default_rule_for_row: Callable) -> dict:
     """传入样式规则、页面设置和默认规则查找函数，返回默认公文模板配置字典。"""
@@ -42,44 +44,11 @@ def default_preset_config(style_rules: Iterable, page_settings, default_rule_for
 
 
 def core_feature_config_defaults() -> dict:
-    """无需传入数据，返回 Web 默认模板中的功能开关配置。"""
-    return {
-        "punctuation": {
-            "enabled": False,
-            "mode": "safe",
-            "scope": {"body": True, "tables": False, "headers": False, "footers": False},
-        },
-        "classification": {
-            "enabled": True,
-            "minimum_auto_format_confidence": 0.85,
-        },
-        "numbering": {
-            "enabled": False,
-            "mode": "safe",
-        },
-        "page_number": {
-            "enabled": True,
-            "style": "dash",
-            "position": "outside",
-            "font_name": "宋体",
-            "font_size_pt": 14,
-            "bold": False,
-            "first_page": True,
-            "section_numbering": "continue",
-            "offset_from_text_mm": 7,
-        },
-        "signature_block": {
-            "mode": "without_seal",
-        },
-        "table_format": {
-            "enabled": False,
-            "smart_alignment": False,
-        },
-        "cleanup": {
-            "enabled": False,
-            "mode": "safe",
-        },
-    }
+    """无需传入数据，返回 Web 默认模板中的功能开关配置。
+
+    默认值与随包 default-format.json 保持一致，不再维护第二套手写默认值。
+    """
+    return default_feature_options()
 
 
 def seed_default_presets(conn, config_factory: Callable[[], dict], now_func: Callable[[], str]) -> None:

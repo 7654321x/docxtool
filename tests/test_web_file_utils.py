@@ -40,3 +40,32 @@ def test_file_utils_match_app_facade() -> None:
     assert sanitize_filename(name) == server._sanitize_filename(name)
     assert safe_download_filename(name) == server._safe_download_filename(name)
     assert content_disposition_filename(name) == server._content_disposition_filename(name)
+
+def test_safe_download_filename_output_suffix_defaults() -> None:
+    """输出后缀缺失、空值或纯空白时保持历史默认 _排版文件。"""
+    assert safe_download_filename("工作报告.docx") == "工作报告_排版文件.docx"
+    assert safe_download_filename("工作报告.docx", "") == "工作报告_排版文件.docx"
+    assert safe_download_filename("工作报告.docx", None) == "工作报告_排版文件.docx"
+    assert safe_download_filename("工作报告.docx", "   ") == "工作报告_排版文件.docx"
+    assert safe_download_filename("工作报告.docx", ".") == "工作报告_排版文件.docx"
+
+
+def test_safe_download_filename_output_suffix_custom() -> None:
+    """显式输出后缀追加在文件 stem 之后，最终固定为 .docx。"""
+    assert safe_download_filename("工作报告.docx", "_最终版") == "工作报告_最终版.docx"
+    assert safe_download_filename("工作报告.docx", "（修订稿）") == "工作报告（修订稿）.docx"
+    assert safe_download_filename("工作报告.docx", "_排版") == "工作报告_排版.docx"
+
+
+def test_safe_download_filename_output_suffix_sanitized() -> None:
+    """输出后缀中的危险字符与目录穿越必须被安全处理。"""
+    assert safe_download_filename("a.docx", 'a<b:c>d*e?f|g\\h/i') == "aa_b_c_d_e_f_g_h_i.docx"
+    assert safe_download_filename("a.docx", "../evil") == "a_evil.docx"
+    assert safe_download_filename("a.docx", "..\\evil") == "a_evil.docx"
+    assert safe_download_filename("a.docx", "final.docx") == "afinal.docx"
+    assert safe_download_filename("a.docx", "x" * 300) == sanitize_filename("a" + "x" * 300 + ".docx")
+
+
+def test_safe_download_filename_output_suffix_stem_fallback() -> None:
+    """原文件名为空时使用 download 作为 stem，后缀仍然生效。"""
+    assert safe_download_filename("", "_最终版") == "download_最终版.docx"

@@ -378,6 +378,6 @@ RecognitionPlan + HostSnapshot
 来源定位与宿主适配最小验证：
 
 ```pwsh
-pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m pytest -q tests/test_sdk.py tests/test_sdk_binding.py tests/test_recognition_decoder.py tests/test_importer_heading_flow.py"
+pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m pytest -q tests/test_sdk.py tests/test_sdk_binding.py tests/test_recognition_decoder_basic.py tests/test_recognition_decoder_headings.py tests/test_recognition_decoder_front_roles.py tests/test_importer_heading_flow.py"
 pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m ruff check src tests scripts"
 ```

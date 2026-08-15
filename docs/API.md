@@ -197,6 +197,46 @@ PUT /api/upload
 
 `X-Format-Config` 用于把前端“排版设置”随本次上传传入后端，不新增接口、不改变请求体格式。后端只把它作为当前任务的临时配置使用，不会覆盖随包安装的 `src/docxtool/resources/config/default-format.json`。
 
+### 配置对象顶层键
+
+canonical 功能开关（缺省时使用随包 `default-format.json` 的默认值）：
+
+- `styles`：段落样式规则数组（字体、字号、加粗、编号样式、缩进、对齐）
+- `page`：页面版式（纸张、边距、行距、字符网格）
+- `punctuation`：标点规范化（`enabled`、`mode`：`safe`/`standard`/`off`、`scope`）
+- `classification`：段落分类开关（`enabled`、`minimum_auto_format_confidence`）
+- `numbering`：标题编号（`enabled`、`mode`）
+- `page_number`：页码（`enabled`、`style`、`position`、字体与字号）
+- `signature_block`：落款签章（`mode`：`preserve`/`without_seal`/`with_seal`）
+- `table_format`：表格格式化（当前版本仅支持 `enabled: false`，显式 `true` 会在配置校验阶段失败）
+- `cleanup`：样式清理（`enabled`、`mode`）
+- `letterhead`：版头（`schema_version: 1`）
+- `processing`：处理模式（`strategy`：`smart`/`structural`/`strict`/`normalize`）
+- `output_suffix`：下载文件名 stem 后缀，控制最终下载文件名
+
+### punctuation 优先级规则
+
+`punctuation.enabled` 是 canonical 标点开关，拥有最终优先级；`features.punctuation_enabled` 仅为兼容旧客户端而保留：
+
+- `punctuation.enabled` 显式出现时（无论 `true` 或 `false`），以它为准，`features.punctuation_enabled` 不再参与判定。
+- `punctuation.enabled` 完全没有出现时，才回退读取 `features.punctuation_enabled`（旧客户端仍可开关）。
+- 两者不是两个可同时生效的独立“标点功能开关”；启用 canonical 标点后走 `punctuation.mode` 指定的新标点引擎，仅 legacy 路径走旧引擎。
+
+### table_format 支持状态
+
+当前版本不支持表格格式化：`table_format.enabled` 只接受 `false`（缺省），显式传 `true` 时配置校验返回 `FORMAT_CONFIG_INVALID`，错误字段指向 `table_format.enabled`，原因说明“当前版本暂不支持表格格式化”。表格始终按原样复制。
+
+### output_suffix
+
+`output_suffix` 控制最终下载文件名的 stem 后缀（不包含扩展名）：
+
+- 原文件 `工作报告.docx` + `output_suffix: "_最终版"` → 下载文件名 `工作报告_最终版.docx`。
+- `output_suffix` 缺失、`null`、空字符串或纯空白时使用历史默认后缀 `_排版文件`（`工作报告_排版文件.docx`）。
+- 已保存模板中的显式 `output_suffix`（例如 `_排版`）会被原样尊重，不会被改写成默认值。
+- 后缀会经过与上传文件名相同的安全清洗：不允许目录穿越，Windows 非法字符被替换，最终固定为 `.docx`。
+
+### letterhead
+
 可选顶层 `letterhead` 使用 `schema_version: 1`。`enabled` 默认为 `false`；启用且机关、文号均为空时自动读取源文档的机关标志、发文字号、签发人和分割线并重建，部分填写时按完整手工配置校验。当前 Web 界面固定提交单机关；Core 为历史配置保留联合发文结构，但自动识别到联合源版头时明确停止。机关标志按版心自适应，`separator_style` 支持 `straight` 和 `star`，红线至首个标题为正文行距 × 2。
 
 WPS 任务窗格的 `/v1/letterhead/inspect`、`/v1/letterhead/prepare` 是本机回环 Control 路由，不属于公网 HTTP API。它们只用于“添加版头”的检查和事务准备，不改变公网请求、Token 或数据库协议。
@@ -229,15 +269,38 @@ WPS 任务窗格的 `/v1/letterhead/inspect`、`/v1/letterhead/prepare` 是本�
     "line_spacing_pt": 28,
     "space_before_line": 0,
     "space_after_line": 0,
-    "grid_alignment": true
+    "grid_alignment": "文字对齐字符网络"
   },
   "features": {
     "numbered_bold_enabled": true,
     "punctuation_enabled": true,
     "page_number_enabled": true
-  }
+  },
+  "punctuation": {
+    "enabled": true,
+    "mode": "safe",
+    "scope": {"body": true, "tables": false, "headers": false, "footers": false}
+  },
+  "numbering": {"enabled": false, "mode": "safe"},
+  "page_number": {
+    "enabled": true,
+    "style": "dash",
+    "position": "outside",
+    "font_name": "宋体",
+    "font_size_pt": 14,
+    "bold": false,
+    "first_page": true,
+    "section_numbering": "continue",
+    "offset_from_text_mm": 7
+  },
+  "table_format": {"enabled": false, "smart_alignment": false},
+  "cleanup": {"enabled": false, "mode": "safe"},
+  "signature_block": {"mode": "without_seal"},
+  "output_suffix": "_最终版"
 }
 ```
+
+> 说明：示例中 `features.punctuation_enabled` 与 `punctuation.enabled` 同时出现时，`punctuation.enabled` 优先；旧客户端可只传 `features.punctuation_enabled`。`grid_alignment` 的 canonical 值是字符串（例如 `"文字对齐字符网络"`），不是布尔值。
 
 限制：
 
