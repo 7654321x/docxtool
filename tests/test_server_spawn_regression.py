@@ -122,7 +122,6 @@ def test_main_runs_startup_cleanup_only_after_secret_validation(monkeypatch) -> 
     monkeypatch.setattr(server, "_recover_inflight_tasks_on_startup", lambda: calls.append("recover"))
     monkeypatch.setattr(server, "_ensure_workers_started", lambda: calls.append("workers"))
     monkeypatch.setattr(server, "ThreadingHTTPServer", FakeServer)
-    monkeypatch.setattr(server, "_startup_time_check_lines", lambda: [])
 
     server.main()
 

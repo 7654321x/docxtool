@@ -13,7 +13,7 @@ from docxtool.web.monitoring import (
 
 
 def test_monitoring_query_helpers_normalize_and_clamp_values() -> None:
-    """监控查询函数传入 parse_qs 风格数据后，应只返回分页字段。"""
+    """监控查询函数应归一化分页字段和可选任务筛选字段。"""
     values = {
         "recent_page": ["2"],
         "recent_size": ["999"],
@@ -29,6 +29,8 @@ def test_monitoring_query_helpers_normalize_and_clamp_values() -> None:
         "recent_size": 100,
         "ip_page": 1,
         "ip_size": 25,
+        "task_q": "",
+        "task_status": "",
     }
 
 

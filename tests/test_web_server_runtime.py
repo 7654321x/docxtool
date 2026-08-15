@@ -26,7 +26,7 @@ def test_run_http_service_help_returns_before_startup() -> None:
         handler_class=object,
         bind_address=lambda: ("127.0.0.1", 9527),
         startup_urls=lambda: {},
-        startup_time_check_lines=lambda: [],
+        public_urls=lambda: {},
         validate_secrets=lambda: calls.append("validate"),
         startup_cleanup=lambda: calls.append("cleanup"),
         init_database=lambda: calls.append("sql"),
@@ -36,6 +36,7 @@ def test_run_http_service_help_returns_before_startup() -> None:
         max_queue=8,
         max_size=10 * 1024 * 1024,
         rate_window=2,
+        production_mode=False,
         printer=calls.append,
     )
 
@@ -79,8 +80,14 @@ def test_run_http_service_starts_in_existing_order_and_closes_on_interrupt() -> 
             "tool": "http://127.0.0.1:9527",
             "admin_login": "http://127.0.0.1:9527/admin/login",
             "monitor": "http://127.0.0.1:9527/monitor",
+            "health": "http://127.0.0.1:9527/health",
+            "ready": "http://127.0.0.1:9527/ready",
         },
-        startup_time_check_lines=lambda: ["时间校验: 跳过"],
+        public_urls=lambda: {
+            "frontend": "https://docxtool.pages.dev",
+            "backend": "http://43.133.167.18:8080",
+            "admin_login": "http://43.133.167.18:8080/admin/login",
+        },
         validate_secrets=lambda: calls.append("validate"),
         startup_cleanup=lambda: calls.append("cleanup"),
         init_database=lambda: calls.append("sql"),
@@ -90,6 +97,7 @@ def test_run_http_service_starts_in_existing_order_and_closes_on_interrupt() -> 
         max_queue=8,
         max_size=10 * 1024 * 1024,
         rate_window=2,
+        production_mode=True,
         printer=lambda line: calls.append(f"print:{line}"),
     )
 
@@ -104,4 +112,9 @@ def test_run_http_service_starts_in_existing_order_and_closes_on_interrupt() -> 
     ]
     assert "serve_forever" in calls
     assert "server_close" in calls
-    assert "print:时间校验: 跳过" in calls
+    assert "print:前端网站:       https://docxtool.pages.dev" in calls
+    assert "print:后端网站:       http://43.133.167.18:8080" in calls
+    assert "print:管理后台:       http://43.133.167.18:8080/admin/login" in calls
+    assert "print:本地健康检查:   http://127.0.0.1:9527/health" in calls
+    assert "print:运行模式:       生产 | 监听: http://127.0.0.1:9527" in calls
+    assert not any("时间校验" in call for call in calls)

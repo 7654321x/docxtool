@@ -18,6 +18,19 @@ const ADMIN_EXACT_PATHS = new Set([
   "/presets",
 ]);
 const ADMIN_LOG_PREFIX = "/log/";
+const ADMIN_WORKSPACE_READ_PATHS = new Set([
+  "/admin",
+  "/admin/web",
+  "/admin/web/tasks",
+  "/admin/web/security",
+  "/admin/web/runtime",
+  "/admin/web/logs",
+  "/admin/wps",
+  "/admin/wps/users",
+  "/admin/wps/devices",
+  "/admin/wps/tasks",
+]);
+const WPS_ADMIN_RESOURCE_ID = /^[A-Za-z0-9._:-]{1,160}$/;
 
 function jsonError(code, error, status) {
   return new Response(JSON.stringify({ code, error }), {
@@ -49,7 +62,37 @@ function isApiPath(pathname) {
 }
 
 function isAdminProxyPath(pathname) {
-  return ADMIN_EXACT_PATHS.has(pathname) || pathname === ADMIN_LOG_PREFIX || pathname.startsWith(ADMIN_LOG_PREFIX);
+  return ADMIN_EXACT_PATHS.has(pathname)
+    || ADMIN_WORKSPACE_READ_PATHS.has(pathname)
+    || isWpsAdminUserDetailPath(pathname)
+    || isWpsAdminMutationPath(pathname)
+    || pathname === ADMIN_LOG_PREFIX
+    || pathname.startsWith(ADMIN_LOG_PREFIX);
+}
+
+function isWpsAdminUserDetailPath(pathname) {
+  const prefix = "/admin/wps/users/";
+  if (!pathname.startsWith(prefix)) return false;
+  const tail = pathname.slice(prefix.length);
+  return WPS_ADMIN_RESOURCE_ID.test(tail);
+}
+
+function isWpsAdminMutationPath(pathname) {
+  const userPrefix = "/admin/wps/users/";
+  if (pathname.startsWith(userPrefix)) {
+    const parts = pathname.slice(userPrefix.length).split("/");
+    return parts.length === 2
+      && WPS_ADMIN_RESOURCE_ID.test(parts[0])
+      && new Set(["status", "password", "notifications", "delete"]).has(parts[1]);
+  }
+  const devicePrefix = "/admin/wps/devices/";
+  if (pathname.startsWith(devicePrefix)) {
+    const parts = pathname.slice(devicePrefix.length).split("/");
+    return parts.length === 2
+      && WPS_ADMIN_RESOURCE_ID.test(parts[0])
+      && parts[1] === "status";
+  }
+  return false;
 }
 
 function shouldProxyPath(pathname) {
@@ -68,6 +111,10 @@ function methodAllowed(pathname, method) {
   if (pathname === "/admin/login") return method === "GET" || method === "POST";
   if (pathname === "/admin/logout") return method === "POST";
   if (pathname === "/admin/session") return method === "GET";
+  if (ADMIN_WORKSPACE_READ_PATHS.has(pathname) || isWpsAdminUserDetailPath(pathname)) {
+    return method === "GET";
+  }
+  if (isWpsAdminMutationPath(pathname)) return method === "POST";
   if (pathname === "/monitor" || pathname === "/stats" || pathname === "/ip" || pathname === "/log/" || pathname.startsWith("/log/")) {
     return method === "GET";
   }

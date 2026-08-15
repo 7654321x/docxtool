@@ -68,11 +68,17 @@ async function responseJson(response) {
   return JSON.parse(await response.text());
 }
 
-test("path helpers only proxy api and exact admin routes", () => {
+test("path helpers only proxy api and allow-listed admin routes", () => {
   assert.equal(worker.shouldProxyPath("/api/upload"), true);
   assert.equal(worker.shouldProxyPath("/api/unknown"), true);
   assert.equal(worker.shouldProxyPath("/monitor"), true);
   assert.equal(worker.shouldProxyPath("/log/task-id"), true);
+  assert.equal(worker.shouldProxyPath("/admin"), true);
+  assert.equal(worker.shouldProxyPath("/admin/web/tasks"), true);
+  assert.equal(worker.shouldProxyPath("/admin/wps/users/wusr_1"), true);
+  assert.equal(worker.shouldProxyPath("/admin/wps/users/wusr_1/password"), true);
+  assert.equal(worker.shouldProxyPath("/admin/wps/users/wusr_1/notifications"), true);
+  assert.equal(worker.shouldProxyPath("/admin/wps/users/wusr_1/unexpected"), false);
   assert.equal(worker.shouldProxyPath("/monitor-evil"), false);
   assert.equal(worker.shouldProxyPath("/apiary"), false);
   assert.equal(worker.shouldProxyPath("/unknown"), false);
@@ -83,6 +89,7 @@ test("path helpers only proxy api and exact admin routes", () => {
   assert.equal(worker.backendPath("/api/admin/session"), "/admin/session");
   assert.equal(worker.backendPath("/monitor"), "/monitor");
   assert.equal(worker.backendPath("/log/task-id"), "/log/task-id");
+  assert.equal(worker.backendPath("/admin/wps/users/wusr_1"), "/admin/wps/users/wusr_1");
   assert.equal(worker.backendPath("/api/unknown"), "");
 });
 
@@ -112,6 +119,15 @@ test("admin and log routes proxy with strict method rules", async () => {
     ["/admin/login", "POST", "/admin/login"],
     ["/admin/logout", "POST", "/admin/logout"],
     ["/admin/session", "GET", "/admin/session"],
+    ["/admin", "GET", "/admin"],
+    ["/admin/web/tasks", "GET", "/admin/web/tasks"],
+    ["/admin/wps", "GET", "/admin/wps"],
+    ["/admin/wps/users/wusr_1", "GET", "/admin/wps/users/wusr_1"],
+    ["/admin/wps/users/wusr_1/status", "POST", "/admin/wps/users/wusr_1/status"],
+    ["/admin/wps/users/wusr_1/password", "POST", "/admin/wps/users/wusr_1/password"],
+    ["/admin/wps/users/wusr_1/notifications", "POST", "/admin/wps/users/wusr_1/notifications"],
+    ["/admin/wps/users/wusr_1/delete", "POST", "/admin/wps/users/wusr_1/delete"],
+    ["/admin/wps/devices/wdev_1/status", "POST", "/admin/wps/devices/wdev_1/status"],
     ["/ban?ip=203.0.113.10", "POST", "/ban?ip=203.0.113.10"],
     ["/unban?ip=203.0.113.10", "POST", "/unban?ip=203.0.113.10"],
     ["/limit", "POST", "/limit"],
@@ -128,6 +144,10 @@ test("admin and log routes proxy with strict method rules", async () => {
   const rejected = await callWorker("/ban?ip=203.0.113.10", { method: "GET" });
   assert.equal(rejected.response.status, 405);
   assert.equal(rejected.fetchCalls.length, 0);
+
+  const wrongMethod = await callWorker("/admin/wps/users/wusr_1/status", { method: "GET" });
+  assert.equal(wrongMethod.response.status, 405);
+  assert.equal(wrongMethod.fetchCalls.length, 0);
 });
 
 test("root and static assets fall through to pages assets", async () => {

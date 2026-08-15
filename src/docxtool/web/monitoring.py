@@ -30,8 +30,8 @@ def clamp_int(
     return max(min_value, min(max_value, n))
 
 
-def normalize_monitor_query(values: dict | None = None) -> dict[str, int]:
-    """传入 parse_qs 风格字典，返回监控页分页查询配置。"""
+def normalize_monitor_query(values: dict | None = None) -> dict[str, object]:
+    """传入 parse_qs 风格字典，返回监控页分页和任务筛选配置。"""
     values = values or {}
     return {
         "recent_page": clamp_int(first_query_value(values, "recent_page", 1), 1),
@@ -44,6 +44,8 @@ def normalize_monitor_query(values: dict | None = None) -> dict[str, int]:
             first_query_value(values, "ip_size", DEFAULT_MONITOR_PAGE_SIZE),
             DEFAULT_MONITOR_PAGE_SIZE,
         ),
+        "task_q": str(first_query_value(values, "task_q", "") or "").strip()[:80],
+        "task_status": str(first_query_value(values, "task_status", "") or "").strip()[:20],
     }
 
 

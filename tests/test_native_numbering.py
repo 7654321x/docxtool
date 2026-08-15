@@ -162,7 +162,7 @@ def test_native_heading_numbering_is_rebuilt_once_when_enabled(tmp_path: Path) -
         document_xml = etree.fromstring(archive.read("word/document.xml"))
     assert headings == ["一、第20项工作", "（一）第21项工作", "1.第22项工作", "（1）第23项工作"]
     prefixes = ("一、", "（一）", "1.", "（1）")
-    expected_bold = (False, True, True, False)
+    expected_bold = (False, True, False, False)
     for paragraph, prefix, bold in zip(
         heading_paragraphs, prefixes, expected_bold
     ):

@@ -95,6 +95,7 @@ from docxtool.web.auth_route_handlers import (
     read_auth_json_request as _auth_route_read_json_request,
 )
 from docxtool.wps_server.config import (
+    WPS_ADMIN_MUTATIONS_ENABLED as _WPS_ADMIN_MUTATIONS_ENABLED,
     require_separate_database_paths as _wps_require_separate_database_paths,
     resolve_wps_database_path as _wps_resolve_database_path,
 )
@@ -134,8 +135,22 @@ from docxtool.web.admin_forms import parse_admin_login_token as _admin_forms_par
 from docxtool.web.admin_pages import render_admin_login_html as _admin_pages_render_login_html
 from docxtool.web.admin_workspace_page import (
     render_admin_home_page as _admin_workspace_render_home,
+    render_admin_web_ip_detail_page as _admin_workspace_render_ip_detail,
+    render_admin_web_page as _admin_workspace_render_web,
+    render_admin_web_task_log_page as _admin_workspace_render_task_log,
+    render_wps_devices_page as _admin_workspace_render_devices,
+    render_wps_overview_page as _admin_workspace_render_wps_overview,
+    render_wps_tasks_page as _admin_workspace_render_tasks,
     render_wps_user_page as _admin_workspace_render_user,
     render_wps_users_page as _admin_workspace_render_users,
+)
+from docxtool.web.admin_workspace_routes import (
+    handle_web_page as _admin_workspace_route_handle_web,
+    ip_compat_target as _admin_workspace_ip_compat_target,
+    log_compat_target as _admin_workspace_log_compat_target,
+    monitor_compat_target as _admin_workspace_monitor_compat_target,
+    task_id_from_query as _admin_workspace_task_id_from_query,
+    workspace_session_target as _admin_workspace_session_target,
 )
 from docxtool.web.admin_route_handlers import (
     handle_ban as _admin_route_handle_ban,
@@ -150,8 +165,14 @@ from docxtool.web.admin_session_routes import (
     handle_admin_session as _admin_session_route_handle_session,
 )
 from docxtool.wps_server.admin_routes import (
+    handle_devices as _wps_admin_route_handle_devices,
+    handle_user_delete as _wps_admin_route_handle_user_delete,
+    handle_user_notification as _wps_admin_route_handle_user_notification,
+    handle_overview as _wps_admin_route_handle_overview,
+    handle_tasks as _wps_admin_route_handle_tasks,
     handle_device_status as _wps_admin_route_handle_device_status,
     handle_user as _wps_admin_route_handle_user,
+    handle_user_password_reset as _wps_admin_route_handle_user_password_reset,
     handle_user_status as _wps_admin_route_handle_user_status,
     handle_users as _wps_admin_route_handle_users,
     handle_workspace as _wps_admin_route_handle_workspace,
@@ -201,6 +222,7 @@ from docxtool.web.health import (
     database_ready as _health_database_ready,
     dir_writable as _health_dir_writable,
     health_payload as _build_health_payload,
+    public_startup_urls as _build_public_startup_urls,
     ready_payload as _build_ready_payload,
     server_bind_address as _build_server_bind_address,
     startup_urls as _build_startup_urls,
@@ -408,13 +430,6 @@ from docxtool.web.user_auth import (
     user_session_from_headers as _user_auth_session_from_headers,
     user_session_hash as _user_auth_session_hash,
 )
-from docxtool.web.time_check import (
-    NETWORK_TIME_URLS as _TIME_CHECK_NETWORK_TIME_URLS,
-    fetch_beijing_network_time as _time_check_fetch_beijing_network_time,
-    now_local as _time_check_now_local,
-    parse_http_date_to_beijing as _time_check_parse_http_date_to_beijing,
-    startup_time_check_lines as _time_check_startup_time_check_lines,
-)
 from docxtool.web.bootstrap import (
     ADMIN_CSRF_HEADER,
     ADMIN_SESSION_COOKIE,
@@ -489,11 +504,6 @@ _first_query_value = _monitor_first_query_value
 _clamp_int = _monitor_clamp_int
 
 
-_NETWORK_TIME_URLS = _TIME_CHECK_NETWORK_TIME_URLS
-
-
-
-
 _monitor_query_from = _build_monitor_query_from
 _normalize_monitor_query = _build_normalize_monitor_query
 _where_sql = _monitor_where_sql
@@ -520,6 +530,8 @@ PROXY_SECRET = _ENVIRONMENT.proxy_secret
 PRODUCTION_MODE = _ENVIRONMENT.production_mode
 FRONTEND_ORIGIN = _ENVIRONMENT.frontend_origin
 COOKIE_SECURE = _ENVIRONMENT.cookie_secure
+ADMIN_CONSOLE_ORIGIN = _ENVIRONMENT.admin_console_origin
+ADMIN_COOKIE_SECURE = _ENVIRONMENT.admin_cookie_secure
 USER_SESSION_DAYS = _ENVIRONMENT.user_session_days
 USER_SESSION_MAX_AGE = _ENVIRONMENT.user_session_max_age
 MAX_SIZE = _ENVIRONMENT.max_size
@@ -755,9 +767,6 @@ from docxtool.web.compatibility import (
     _core_feature_config_defaults,
     _seed_default_presets,
     _now_local,
-    _parse_http_date_to_beijing,
-    _fetch_beijing_network_time,
-    _startup_time_check_lines,
     log_sql,
     record_task_queued,
     get_sql_stats,
@@ -878,9 +887,6 @@ _COMPATIBILITY_FUNCTIONS = (
     _core_feature_config_defaults,
     _seed_default_presets,
     _now_local,
-    _parse_http_date_to_beijing,
-    _fetch_beijing_network_time,
-    _startup_time_check_lines,
     log_sql,
     record_task_queued,
     get_sql_stats,
@@ -1045,6 +1051,11 @@ def _ready_payload():
 from docxtool.web.handler import Handler
 
 
+def _public_startup_urls() -> dict:
+    """返回启动日志使用的前端、公网后端和管理后台地址。"""
+    return _build_public_startup_urls(FRONTEND_ORIGIN, ADMIN_CONSOLE_ORIGIN)
+
+
 def main():
     """兼容旧启动入口，无需传入数据，完成 Web 服务启动编排。"""
     return _runtime_run_http_service(
@@ -1053,7 +1064,7 @@ def main():
         handler_class=Handler,
         bind_address=_server_bind_address,
         startup_urls=_startup_urls,
-        startup_time_check_lines=_startup_time_check_lines,
+        public_urls=_public_startup_urls,
         validate_secrets=_validate_secrets_or_exit,
         startup_cleanup=_startup_cleanup,
         init_database=_sql_init,
@@ -1063,6 +1074,7 @@ def main():
         max_queue=MAX_QUEUE,
         max_size=MAX_SIZE,
         rate_window=RATE_WINDOW,
+        production_mode=PRODUCTION_MODE,
     )
 
 if __name__ == "__main__":

@@ -620,6 +620,7 @@ function makeElement(id) {
 function makeTaskpaneHarness(initialState, {
   transport = true,
   commandFailure = "",
+  notificationAckFailure = "",
   invalidJsonPath = "",
   stateWaitFailure = "",
   nowMs = Date.now(),
@@ -638,6 +639,7 @@ function makeTaskpaneHarness(initialState, {
   const consoleLines = [];
   const bridgeCalls = [];
   const commandRequests = [];
+  const notificationAcknowledgements = [];
   const dialogCalls = [];
   const stateWaiters = [];
   const scrollCalls = [];
@@ -649,6 +651,7 @@ function makeTaskpaneHarness(initialState, {
   let hostGeneration = initialState && initialState.host_ready ? 1 : 0;
   let stateRevision = 1;
   let nextStateWaitFailure = stateWaitFailure;
+  let nextNotificationAckFailure = notificationAckFailure;
   let currentAccount = account;
   let currentNowMs = nowMs;
   const HarnessDate = class extends Date {
@@ -661,7 +664,7 @@ function makeTaskpaneHarness(initialState, {
     "format_scope_mode", "format_page_spec",
     "letterhead_modal", "letterhead_mark", "letterhead_number", "letterhead_signer",
     "letterhead_separator", "letterhead_form_error", "letterhead_cancel", "letterhead_confirm",
-    "close_panel", "status", "account", "message", "error", "warnings", "summary", "rows",
+    "close_panel", "status", "account", "message", "error", "warnings", "notifications_panel", "notifications", "summary", "rows",
     "taskpane_header", "content",
   ];
   for (const id of ids) elements.set(id, makeElement(id));
@@ -819,6 +822,20 @@ function makeTaskpaneHarness(initialState, {
       }
       return await new Promise((resolve, reject) => stateWaiters.push({ resolve, reject }));
     }
+    if (path === "/v1/account/notifications/read") {
+      notificationAcknowledgements.push(body.notification_ids || []);
+      if (nextNotificationAckFailure) {
+        const code = nextNotificationAckFailure;
+        nextNotificationAckFailure = "";
+        return response({ ok: false, error_code: code }, { ok: false, status: 400 });
+      }
+      return response({
+        ok: true,
+        data: {
+          acknowledged_notification_ids: body.notification_ids || [],
+        },
+      });
+    }
     if (path === "/v1/bridge/command") {
       commandRequests.push(body);
       if (commandFailure) {
@@ -942,6 +959,7 @@ function makeTaskpaneHarness(initialState, {
     get activeDocumentReads() { return activeDocumentReads; },
     bridgeCalls,
     commandRequests,
+    notificationAcknowledgements,
     dialogCalls,
     consoleLines,
     elements,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ctypes
 from ctypes import wintypes
+import json
 import os
 from pathlib import Path
 import secrets
@@ -127,13 +128,21 @@ def _connect() -> sqlite3.Connection:
                 singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
                 server_origin TEXT NOT NULL,
                 username TEXT NOT NULL,
-                user_id TEXT NOT NULL DEFAULT '',
-                device_id TEXT NOT NULL DEFAULT '',
-                password_cipher BLOB NOT NULL DEFAULT X'',
-                session_token_cipher BLOB NOT NULL DEFAULT X'',
-                device_key_cipher BLOB NOT NULL,
-                session_expires_at INTEGER NOT NULL DEFAULT 0,
-                remember_password INTEGER NOT NULL DEFAULT 1,
+                 user_id TEXT NOT NULL DEFAULT '',
+                 device_id TEXT NOT NULL DEFAULT '',
+                 user_status TEXT NOT NULL DEFAULT '',
+                 device_name TEXT NOT NULL DEFAULT '',
+                 platform TEXT NOT NULL DEFAULT '',
+                 device_status TEXT NOT NULL DEFAULT '',
+                 password_cipher BLOB NOT NULL DEFAULT X'',
+                 session_token_cipher BLOB NOT NULL DEFAULT X'',
+                 device_key_cipher BLOB NOT NULL,
+                 session_created_at INTEGER NOT NULL DEFAULT 0,
+                 session_expires_at INTEGER NOT NULL DEFAULT 0,
+                 features_json TEXT NOT NULL DEFAULT '{}',
+                 config_version TEXT NOT NULL DEFAULT '',
+                 heartbeat_interval_seconds INTEGER NOT NULL DEFAULT 0,
+                 remember_password INTEGER NOT NULL DEFAULT 1,
                 auto_login INTEGER NOT NULL DEFAULT 0,
                 updated_at INTEGER NOT NULL
             )"""
@@ -152,6 +161,20 @@ def _connect() -> sqlite3.Connection:
                 "ALTER TABLE local_account ADD COLUMN "
                 "auto_login INTEGER NOT NULL DEFAULT 0"
             )
+        for name, definition in (
+            ("user_status", "TEXT NOT NULL DEFAULT ''"),
+            ("device_name", "TEXT NOT NULL DEFAULT ''"),
+            ("platform", "TEXT NOT NULL DEFAULT ''"),
+            ("device_status", "TEXT NOT NULL DEFAULT ''"),
+            ("session_created_at", "INTEGER NOT NULL DEFAULT 0"),
+            ("features_json", "TEXT NOT NULL DEFAULT '{}'"),
+            ("config_version", "TEXT NOT NULL DEFAULT ''"),
+            ("heartbeat_interval_seconds", "INTEGER NOT NULL DEFAULT 0"),
+        ):
+            if name not in columns:
+                conn.execute(
+                    f"ALTER TABLE local_account ADD COLUMN {name} {definition}"
+                )
         conn.execute(
             """CREATE TABLE IF NOT EXISTS format_result_outbox (
                 request_id TEXT PRIMARY KEY,
@@ -181,11 +204,18 @@ def load_account() -> dict:
             return {}
         remember_password = bool(row["remember_password"])
         password_cipher = bytes(row["password_cipher"])
+        features = json.loads(str(row["features_json"] or "{}"))
+        if not isinstance(features, dict):
+            raise ValueError("WPS_LOCAL_FEATURES_INVALID")
         return {
             "server_origin": row["server_origin"],
             "username": row["username"],
             "user_id": row["user_id"],
             "device_id": row["device_id"],
+            "user_status": row["user_status"],
+            "device_name": row["device_name"],
+            "platform": row["platform"],
+            "device_status": row["device_status"],
             "password": decrypt_secret(password_cipher) if remember_password else "",
             "session_token": (
                 decrypt_secret(bytes(row["session_token_cipher"]))
@@ -193,7 +223,11 @@ def load_account() -> dict:
                 else ""
             ),
             "device_key": decrypt_secret(bytes(row["device_key_cipher"])),
+            "session_created_at": int(row["session_created_at"]),
             "session_expires_at": int(row["session_expires_at"]),
+            "features": features,
+            "config_version": row["config_version"],
+            "heartbeat_interval_seconds": int(row["heartbeat_interval_seconds"]),
             "remember_password": remember_password,
             "auto_login": bool(row["auto_login"]),
         }
@@ -232,21 +266,45 @@ def save_account(account: dict) -> None:
         encrypt_secret(account["session_token"]) if account["session_token"] else b""
     )
     device_cipher = encrypt_secret(account["device_key"])
+    user_status = str(account.get("user_status") or "")
+    device_name = str(account.get("device_name") or "")
+    platform = str(account.get("platform") or "")
+    device_status = str(account.get("device_status") or "")
+    session_created_at = int(account.get("session_created_at") or 0)
+    features = account.get("features", {})
+    if not isinstance(features, dict):
+        raise ValueError("WPS_LOCAL_FEATURES_INVALID")
+    try:
+        features_json = json.dumps(features, ensure_ascii=False, separators=(",", ":"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("WPS_LOCAL_FEATURES_INVALID") from exc
+    config_version = str(account.get("config_version") or "")
+    heartbeat_interval_seconds = int(account.get("heartbeat_interval_seconds") or 0)
+    if heartbeat_interval_seconds < 0:
+        raise ValueError("WPS_LOCAL_HEARTBEAT_INTERVAL_INVALID")
     conn = _connect()
     try:
         conn.execute(
             """INSERT INTO local_account
-               (singleton_id,server_origin,username,user_id,device_id,password_cipher,session_token_cipher,device_key_cipher,session_expires_at,remember_password,auto_login,updated_at)
-               VALUES (1,?,?,?,?,?,?,?,?,?,?,?)
+               (singleton_id,server_origin,username,user_id,device_id,user_status,device_name,platform,device_status,password_cipher,session_token_cipher,device_key_cipher,session_created_at,session_expires_at,features_json,config_version,heartbeat_interval_seconds,remember_password,auto_login,updated_at)
+               VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(singleton_id) DO UPDATE SET
                  server_origin=excluded.server_origin,
                  username=excluded.username,
                  user_id=excluded.user_id,
                  device_id=excluded.device_id,
+                 user_status=excluded.user_status,
+                 device_name=excluded.device_name,
+                 platform=excluded.platform,
+                 device_status=excluded.device_status,
                  password_cipher=excluded.password_cipher,
                  session_token_cipher=excluded.session_token_cipher,
                  device_key_cipher=excluded.device_key_cipher,
+                 session_created_at=excluded.session_created_at,
                  session_expires_at=excluded.session_expires_at,
+                 features_json=excluded.features_json,
+                 config_version=excluded.config_version,
+                 heartbeat_interval_seconds=excluded.heartbeat_interval_seconds,
                  remember_password=excluded.remember_password,
                  auto_login=excluded.auto_login,
                  updated_at=excluded.updated_at""",
@@ -255,10 +313,18 @@ def save_account(account: dict) -> None:
                 account["username"],
                 account["user_id"],
                 account["device_id"],
+                user_status,
+                device_name,
+                platform,
+                device_status,
                 password_cipher,
                 token_cipher,
                 device_cipher,
+                session_created_at,
                 int(account["session_expires_at"]),
+                features_json,
+                config_version,
+                heartbeat_interval_seconds,
                 int(remember_password),
                 int(auto_login),
                 int(time.time()),
@@ -303,6 +369,34 @@ def clear_account() -> int:
         raise
     finally:
         conn.close()
+
+
+def invalidate_session() -> dict:
+    """Clear only invalid session credentials while preserving the account and outbox."""
+    if not local_account_path().is_file():
+        return {}
+    conn = _connect()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT 1 FROM local_account WHERE singleton_id=1"
+        ).fetchone()
+        if row is None:
+            conn.commit()
+            return {}
+        conn.execute(
+            """UPDATE local_account
+               SET session_token_cipher=X'',session_expires_at=0,auto_login=0,updated_at=?
+               WHERE singleton_id=1""",
+            (int(time.time()),),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return load_account()
 
 
 def enqueue_format_result(payload: dict) -> bool:

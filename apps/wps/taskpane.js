@@ -30,6 +30,9 @@
   let accountErrorCode = "";
   let lastAccountStatusKey = "";
   let lastResultSyncPending = "";
+  let accountNotifications = [];
+  const acknowledgedNotificationIds = new Set();
+  const notificationAcknowledgementInFlight = new Set();
   let activeMode = "format";
   let defaultFormatConfig = null;
   let currentFormatConfig = null;
@@ -66,7 +69,8 @@
     "screen_avail_width", "screen_height", "screen_width", "window_screen_left",
     "window_screen_top", "window_screen_x", "window_screen_y", "window_top_is_self", "book_id_short", "config_version", "style_count",
     "revision", "dialog_width", "dialog_height", "modal", "is_child_window", "need_raise", "duration_ms",
-    "profile_count", "profile_id_short", "legacy_imported"
+    "profile_count", "profile_id_short", "legacy_imported", "notification_count",
+    "pending_notification_count", "acknowledged_count"
   ]);
 
   function node(id) {
@@ -480,6 +484,106 @@
     });
   }
 
+  function notificationSummaries(account) {
+    if (!Object.prototype.hasOwnProperty.call(account, "notifications")) return [];
+    const value = account.notifications;
+    if (!Array.isArray(value) || value.length > 20) {
+      throw new Error("WPS_ACCOUNT_NOTIFICATIONS_INVALID");
+    }
+    const result = [];
+    const seen = new Set();
+    for (const item of value) {
+      if (!item || typeof item !== "object") throw new Error("WPS_ACCOUNT_NOTIFICATIONS_INVALID");
+      const notificationId = item.notification_id;
+      const title = item.title;
+      const body = item.body;
+      const level = item.level;
+      if (
+        typeof notificationId !== "string"
+        || !/^wnot_[A-Za-z0-9]{16,64}$/.test(notificationId)
+        || typeof title !== "string"
+        || !title.trim()
+        || title.length > 120
+        || typeof body !== "string"
+        || !body.trim()
+        || body.length > 2000
+        || !["info", "warning", "error"].includes(level)
+        || !Number.isInteger(item.created_at)
+        || item.created_at < 1
+      ) {
+        throw new Error("WPS_ACCOUNT_NOTIFICATIONS_INVALID");
+      }
+      if (seen.has(notificationId)) continue;
+      seen.add(notificationId);
+      result.push({ notification_id: notificationId, title, body, level, created_at: item.created_at });
+    }
+    return result;
+  }
+
+  function notificationLevelLabel(level) {
+    return level === "warning" ? "注意" : level === "error" ? "重要" : "提示";
+  }
+
+  function renderNotifications() {
+    const visible = accountNotifications.filter((item) => !acknowledgedNotificationIds.has(item.notification_id));
+    node("notifications_panel").hidden = visible.length === 0;
+    node("notifications").textContent = visible.map((item) => (
+      `【${notificationLevelLabel(item.level)}】${item.title}\n${item.body}`
+    )).join("\n\n");
+    return visible.map((item) => item.notification_id);
+  }
+
+  function acknowledgedNotificationIdsFromResponse(result, requestedIds) {
+    const value = result && result.acknowledged_notification_ids;
+    if (!Array.isArray(value) || value.length > requestedIds.length) {
+      throw new Error("WPS_NOTIFICATION_ACK_RESPONSE_INVALID");
+    }
+    const requested = new Set(requestedIds);
+    const seen = new Set();
+    for (const notificationId of value) {
+      if (
+        typeof notificationId !== "string"
+        || !requested.has(notificationId)
+        || seen.has(notificationId)
+      ) {
+        throw new Error("WPS_NOTIFICATION_ACK_RESPONSE_INVALID");
+      }
+      seen.add(notificationId);
+    }
+    return value;
+  }
+
+  async function acknowledgeDisplayedNotifications(notificationIds) {
+    const pending = notificationIds.filter((notificationId) => (
+      !acknowledgedNotificationIds.has(notificationId)
+      && !notificationAcknowledgementInFlight.has(notificationId)
+    ));
+    if (!pending.length) return;
+    pending.forEach((notificationId) => notificationAcknowledgementInFlight.add(notificationId));
+    try {
+      const result = await bridgeApi("/v1/account/notifications/read", {
+        notification_ids: pending,
+      });
+      const acknowledged = acknowledgedNotificationIdsFromResponse(result, pending);
+      acknowledged.forEach((notificationId) => acknowledgedNotificationIds.add(notificationId));
+      renderNotifications();
+      log("INFO", "taskpane.notification.acknowledged", "任务窗格通知展示确认已完成", {
+        acknowledged_count: acknowledged.length,
+        pending_notification_count: accountNotifications.filter(
+          (item) => !acknowledgedNotificationIds.has(item.notification_id)
+        ).length,
+      });
+    } catch (error) {
+      log("WARNING", "taskpane.notification.acknowledge.failed", "任务窗格通知展示确认暂未完成", {
+        notification_count: pending.length,
+        error_code: stableErrorCode(error, "WPS_NOTIFICATION_ACKNOWLEDGE_FAILED"),
+        error_type: error && error.name ? error.name : "Error",
+      });
+    } finally {
+      pending.forEach((notificationId) => notificationAcknowledgementInFlight.delete(notificationId));
+    }
+  }
+
   function renderAccountStatus(account) {
     if (!account || typeof account !== "object") throw new Error("WPS_ACCOUNT_STATUS_MISSING");
     if (!Number.isInteger(account.pending_result_count) || account.pending_result_count < 0) {
@@ -489,6 +593,7 @@
     accountPendingResultCount = account.pending_result_count;
     accountNetworkAvailable = account.network_available === true;
     accountErrorCode = account.error_code || "";
+    accountNotifications = notificationSummaries(account);
     const accountServiceRequired = accountErrorCode === "WPS_PUBLIC_ACCOUNT_REQUIRED";
     if (!accountApplyAvailable) node("apply").disabled = true;
     else if (currentState.host_ready === true && panelReadyCompleted && !pendingRequestId) node("apply").disabled = false;
@@ -497,9 +602,16 @@
       accountApplyAvailable,
       account.network_available === true,
       accountPendingResultCount,
-      account.error_code || ""
+      account.error_code || "",
+      accountNotifications.map((item) => `${item.notification_id}:${item.created_at}`).join(",")
     ].join(":");
-    if (statusKey === lastAccountStatusKey) return;
+    if (statusKey === lastAccountStatusKey) {
+      // A prior display acknowledgement may have failed while the account
+      // snapshot itself remains unchanged. Reuse the next state/wait cycle
+      // for a bounded retry without logging another account-state transition.
+      void acknowledgeDisplayedNotifications(renderNotifications());
+      return;
+    }
     lastAccountStatusKey = statusKey;
     if (accountServiceRequired) {
       node("message").textContent = "请从登录窗口登录或注册后重新启动 DocxTool WPS。";
@@ -508,11 +620,13 @@
       node("message").textContent = "服务器无法连接。";
       node("error").textContent = displayError(account.error_code);
     }
+    void acknowledgeDisplayedNotifications(renderNotifications());
     log("INFO", "taskpane.account.changed", "任务窗格账号状态已更新", {
       apply_available: accountApplyAvailable,
       network_available: account.network_available === true,
       pending_result_count: accountPendingResultCount,
-      error_code: account.error_code || ""
+      error_code: account.error_code || "",
+      pending_notification_count: accountNotifications.length
     });
   }
 

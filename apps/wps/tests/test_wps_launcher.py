@@ -85,7 +85,7 @@ def test_taskpane_scrolls_content_without_moving_header():
     assert 'load("./reader/reader-client.js?v=2")' in source
     assert 'load("./reader/reader-ui.js?v=7")' in source
     assert 'load("./format-config.js?v=2")' in source
-    assert 'load("./taskpane.js?v=22")' in source
+    assert 'load("./taskpane.js?v=24")' in source
 
 def test_taskpane_format_settings_opens_the_central_dialog():
     root = Path(__file__).resolve().parents[1]

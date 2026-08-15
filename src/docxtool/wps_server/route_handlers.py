@@ -11,6 +11,7 @@ from .auth import WpsAuthError, authenticated_session
 from .config import WPS_JSON_MAX_BYTES
 from .service import (
     WpsServiceError,
+    acknowledge_notifications,
     authorize_format,
     current_user,
     heartbeat,
@@ -79,6 +80,7 @@ def handle_wps_action(
         "login": "wps.auth.login.start",
         "format_authorize": "wps.format.authorize.start",
         "format_result": "wps.format.result.start",
+        "notifications_read": "wps.notification.acknowledge.start",
     }
     if action in start_events:
         LOGGER.info("%s | request_id=%s", start_events[action], request_id[:16])
@@ -108,6 +110,14 @@ def handle_wps_action(
                 data = logout_user(principal, connect_func=connect_func, sql_lock=sql_lock)
             elif action == "heartbeat":
                 data = heartbeat(principal, read_wps_json_request(handler), connect_func=connect_func, sql_lock=sql_lock, client_ip=ip, now_func=now_func, config_version=format_profile["config_version"])
+            elif action == "notifications_read":
+                data = acknowledge_notifications(
+                    principal,
+                    read_wps_json_request(handler),
+                    connect_func=connect_func,
+                    sql_lock=sql_lock,
+                    now_func=now_func,
+                )
             elif action == "format_authorize":
                 payload = read_wps_json_request(handler)
                 header_id = handler.headers.get("X-DocxTool-Request-Id", "")
@@ -162,6 +172,12 @@ def handle_wps_action(
                 else "wps.format.result.failed"
             )
             LOGGER.warning("%s | request_id=%s error_code=%s", event, request_id[:16], code)
+        elif action == "notifications_read":
+            LOGGER.warning(
+                "wps.notification.acknowledge.failed | request_id=%s error_code=%s",
+                request_id[:16],
+                code,
+            )
         handler._json(_error(code, message, request_id, int(now_func())), status)
     except Exception:
         LOGGER.exception("wps.api.%s.failed | request_id=%s error_code=WPS_DATABASE_FAILED", action, request_id[:16])

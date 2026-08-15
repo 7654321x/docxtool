@@ -11,10 +11,18 @@ def _account():
         "username": "User01",
         "user_id": "wusr_1",
         "device_id": "wdev_1",
+        "user_status": "active",
+        "device_name": "测试电脑",
+        "platform": "windows",
+        "device_status": "active",
         "password": "Pass01",
         "session_token": "session-token-001",
         "device_key": "device-key-001",
+        "session_created_at": 3600,
         "session_expires_at": 86400,
+        "features": {"controlled": [{"command": "apply", "enabled": True}]},
+        "config_version": "config-1",
+        "heartbeat_interval_seconds": 600,
         "remember_password": True,
         "auto_login": False,
     }
@@ -199,7 +207,17 @@ def test_previous_schema_migrates_to_remember_without_auto_login(tmp_path, monke
             ),
         )
 
-    assert account_store.load_account() == _account()
+    assert account_store.load_account() == {
+        **_account(),
+        "user_status": "",
+        "device_name": "",
+        "platform": "",
+        "device_status": "",
+        "session_created_at": 0,
+        "features": {},
+        "config_version": "",
+        "heartbeat_interval_seconds": 0,
+    }
 
 
 def test_preferences_can_disable_auto_login_without_authentication(tmp_path, monkeypatch):
@@ -228,3 +246,26 @@ def test_preferences_clear_password_when_remember_is_disabled(tmp_path, monkeypa
 
     assert updated["password"] == ""
     assert account_store.load_account()["password"] == ""
+
+
+def test_invalidate_session_preserves_account_snapshot_and_outbox(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    account_store.save_account({**_account(), "auto_login": True})
+    account_store.enqueue_format_result(
+        {
+            "request_id": "request-reauth",
+            "status": "success",
+            "duration_ms": 120,
+            "error_code": "",
+            "app_version": "5.2.1",
+        }
+    )
+
+    invalidated = account_store.invalidate_session()
+
+    assert invalidated["username"] == "User01"
+    assert invalidated["session_token"] == ""
+    assert invalidated["session_expires_at"] == 0
+    assert invalidated["auto_login"] is False
+    assert invalidated["features"] == _account()["features"]
+    assert account_store.count_format_results() == 1

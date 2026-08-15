@@ -18,11 +18,13 @@ from .config import (
     public_feature_manifest,
 )
 from .validation import (
+    WPS_NOTIFICATION_BATCH_MAX,
     WpsValidationError,
     require_object_fields,
     validate_app_version,
     validate_device_payload,
     validate_error_code,
+    validate_notification_ids,
     validate_password,
     validate_request_id,
     validate_username,
@@ -58,7 +60,37 @@ def _id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex}"
 
 
-def _session_response(user: dict, device: dict, session: dict, config_version: str) -> dict:
+def list_pending_notifications(
+    user_id: str,
+    *,
+    connect_func,
+    sql_lock,
+) -> list[dict]:
+    """Return the bounded, account-scoped notifications not yet acknowledged."""
+    with sql_lock:
+        conn = connect_func()
+        try:
+            rows = conn.execute(
+                """SELECT notification_id,title,body,level,created_at
+                   FROM wps_notifications
+                   WHERE user_id=? AND acknowledged_at=0
+                   ORDER BY created_at ASC, notification_id ASC
+                   LIMIT ?""",
+                (user_id, WPS_NOTIFICATION_BATCH_MAX),
+            ).fetchall()
+        finally:
+            conn.close()
+    return [dict(row) for row in rows]
+
+
+def _session_response(
+    user: dict,
+    device: dict,
+    session: dict,
+    config_version: str,
+    *,
+    notifications: list[dict],
+) -> dict:
     return {
         "user": user,
         "device": device,
@@ -67,6 +99,8 @@ def _session_response(user: dict, device: dict, session: dict, config_version: s
         "session_expires_at": session["expires_at"],
         "features": public_feature_manifest(),
         "config_version": config_version,
+        "heartbeat_interval_seconds": WPS_HEARTBEAT_INTERVAL_SECONDS,
+        "notifications": notifications,
     }
 
 
@@ -121,6 +155,11 @@ def register_user(payload, *, connect_func, sql_lock, client_ip, now_func, confi
         {"id": device_id, "device_name": device_data["device_name"], "platform": device_data["platform"], "status": "active"},
         session,
         config_version,
+        notifications=list_pending_notifications(
+            user_id,
+            connect_func=connect_func,
+            sql_lock=sql_lock,
+        ),
     )
 
 
@@ -203,6 +242,11 @@ def login_user(payload, *, connect_func, sql_lock, client_ip, now_func, config_v
         {"id": device_id, "device_name": device_data["device_name"], "platform": device_data["platform"], "status": device_status},
         session,
         config_version,
+        notifications=list_pending_notifications(
+            user["id"],
+            connect_func=connect_func,
+            sql_lock=sql_lock,
+        ),
     )
 
 
@@ -214,6 +258,7 @@ def current_user(principal, *, config_version) -> dict:
         "session_expires_at": principal["expires_at"],
         "features": public_feature_manifest(),
         "config_version": config_version,
+        "heartbeat_interval_seconds": WPS_HEARTBEAT_INTERVAL_SECONDS,
     }
 
 
@@ -265,7 +310,60 @@ def heartbeat(principal, payload, *, connect_func, sql_lock, client_ip, now_func
         "heartbeat_interval_seconds": WPS_HEARTBEAT_INTERVAL_SECONDS,
         "features": public_feature_manifest(),
         "config_version": config_version,
+        "notifications": list_pending_notifications(
+            principal["user_id"],
+            connect_func=connect_func,
+            sql_lock=sql_lock,
+        ),
     }
+
+
+def acknowledge_notifications(
+    principal,
+    payload,
+    *,
+    connect_func,
+    sql_lock,
+    now_func,
+) -> dict:
+    """Acknowledge a bounded notification batch for the authenticated account only."""
+    require_object_fields(payload, required=("notification_ids",))
+    notification_ids = validate_notification_ids(payload["notification_ids"])
+    now = int(now_func())
+    with sql_lock:
+        conn = connect_func()
+        try:
+            placeholders = ",".join("?" for _ in notification_ids)
+            rows = conn.execute(
+                f"""SELECT notification_id FROM wps_notifications
+                    WHERE user_id=? AND acknowledged_at=0
+                    AND notification_id IN ({placeholders})""",
+                (principal["user_id"], *notification_ids),
+            ).fetchall()
+            existing = {str(row["notification_id"]) for row in rows}
+            acknowledged_ids = [item for item in notification_ids if item in existing]
+            if acknowledged_ids:
+                update_placeholders = ",".join("?" for _ in acknowledged_ids)
+                conn.execute("BEGIN IMMEDIATE")
+                conn.execute(
+                    f"""UPDATE wps_notifications SET acknowledged_at=?
+                        WHERE user_id=? AND acknowledged_at=0
+                        AND notification_id IN ({update_placeholders})""",
+                    (now, principal["user_id"], *acknowledged_ids),
+                )
+                conn.commit()
+        except Exception:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
+        finally:
+            conn.close()
+    LOGGER.info(
+        "wps.notification.acknowledge.completed | user_id=%s acknowledged_count=%s",
+        principal["user_id"][:12],
+        len(acknowledged_ids),
+    )
+    return {"acknowledged_notification_ids": acknowledged_ids}
 
 
 def authorize_format(principal, payload, *, connect_func, sql_lock, format_profile, now_func) -> dict:

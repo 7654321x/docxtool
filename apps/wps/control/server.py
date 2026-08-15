@@ -70,6 +70,7 @@ FORMAT_CONFIG_ROUTE = "/v1/format/default"
 FORMAT_PROFILES_ROUTE = "/v1/format/profiles"
 FORMAT_PROFILES_ACTIVE_ROUTE = "/v1/format/profiles/active"
 FORMAT_PROFILES_DETAIL_ROUTE = "/v1/format/profiles/detail"
+ACCOUNT_NOTIFICATION_READ_ROUTE = "/v1/account/notifications/read"
 FORMAT_PROFILE_POST_ROUTES = frozenset(
     {
         "/v1/format/profiles/initialize",
@@ -291,9 +292,18 @@ class WpsControlApplication:
                 "network_available": False,
                 "apply_available": False,
                 "pending_result_count": 0,
+                "notifications": [],
                 "error_code": "WPS_PUBLIC_ACCOUNT_REQUIRED",
             }
         return {"signed_in": True, **self.account_runtime.summary()}
+
+    def acknowledge_notifications(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        """Forward one TaskPane display acknowledgement through AccountRuntime."""
+        if self.account_runtime is None:
+            raise DocumentTransactionError("WPS_PUBLIC_ACCOUNT_REQUIRED")
+        return self.account_runtime.acknowledge_notifications(
+            body.get("notification_ids")
+        )
 
     def dispatch_reader_get(
         self,
@@ -1324,6 +1334,7 @@ def create_server(
             is_bridge_route = route_path in BRIDGE_ROUTES
             is_reader_route = route_path in READER_POST_ROUTES
             is_format_profile_route = route_path in FORMAT_PROFILE_POST_ROUTES
+            is_account_notification_route = route_path == ACCOUNT_NOTIFICATION_READ_ROUTE
             is_quiet_route = is_log_route or is_bridge_route
             if not is_quiet_route:
                 log_event("INFO", "control", "request.start", "WPS Control 请求开始", {"method": "POST", "path": self._safe_path(), "request_id": request_id})
@@ -1359,6 +1370,8 @@ def create_server(
                     )
                 elif is_format_profile_route:
                     data = application.dispatch_format_profiles_post(route_path, body)
+                elif is_account_notification_route:
+                    data = application.acknowledge_notifications(body)
                 elif route_path in BUSINESS_ROUTES:
                     data = monitor.submit(route_path, body, request_id=request_id)
                 else:

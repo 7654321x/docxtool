@@ -75,8 +75,8 @@ def test_handle_ip_detail_renders_valid_ip_or_error() -> None:
     assert bad.responses == [("json_error", ("INVALID_IP", "无效的 IP", 400))]
 
 
-def test_handle_ban_and_unban_validate_ip_and_redirect() -> None:
-    """封禁和解封处理器应校验 IP、调用回调并跳转监控页。"""
+def test_handle_ban_and_unban_validate_ip_and_return_to_security_detail() -> None:
+    """封禁和解封处理器应校验 IP、调用回调并回到规范安全详情。"""
     logger = FakeLogger()
     actions: list[tuple[str, object]] = []
     handler = FakeHandler({"ip": "127.0.0.1", "reason": "manual"})
@@ -97,7 +97,10 @@ def test_handle_ban_and_unban_validate_ip_and_redirect() -> None:
     )
 
     assert actions == [("ban", ("127.0.0.1", "manual")), ("unban", "127.0.0.1")]
-    assert handler.responses == [("redirect", "/monitor"), ("redirect", "/monitor")]
+    assert handler.responses == [
+        ("redirect", "/admin/web/security?ip=127.0.0.1"),
+        ("redirect", "/admin/web/security?ip=127.0.0.1"),
+    ]
     assert [level for level, _ in logger.messages] == ["warning", "warning"]
 
 
@@ -118,8 +121,8 @@ def test_handle_ban_rejects_invalid_ip_before_callback() -> None:
     assert handler.responses == [("json_error", ("INVALID_IP", "无效的 IP", 400))]
 
 
-def test_handle_limit_saves_values_and_redirects() -> None:
-    """上传限额处理器应解析表单参数、保存配置并跳转监控页。"""
+def test_handle_limit_saves_values_and_returns_to_runtime() -> None:
+    """上传限额处理器应解析表单参数、保存配置并回到运行设置。"""
     logger = FakeLogger()
     saved: list[tuple[bool, int, int]] = []
     handler = FakeHandler({"enabled": "1", "window_seconds": "60", "count": "7"})
@@ -134,16 +137,16 @@ def test_handle_limit_saves_values_and_redirects() -> None:
     )
 
     assert saved == [(True, 60, 7)]
-    assert handler.responses == [("redirect", "/monitor")]
+    assert handler.responses == [("redirect", "/admin/web/runtime")]
     assert logger.messages[0][0] == "warning"
 
 
-def test_handle_cleanup_only_logs_and_redirects() -> None:
-    """兼容清理处理器在永久保留策略下只记录日志并跳转。"""
+def test_handle_cleanup_only_logs_and_returns_to_runtime() -> None:
+    """兼容清理处理器在永久保留策略下只记录日志并回到运行设置。"""
     logger = FakeLogger()
     handler = FakeHandler()
 
     handle_cleanup(handler, logger=logger)
 
-    assert handler.responses == [("redirect", "/monitor")]
+    assert handler.responses == [("redirect", "/admin/web/runtime")]
     assert logger.messages == [("info", "[Cleaner] manual cleanup skipped: permanent file retention is enabled")]

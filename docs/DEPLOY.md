@@ -9,14 +9,20 @@ Cloudflare Pages
   ↓ 同源 /api/*
 resources/frontend/pages/_worker.js
   ↓
-BACKEND_BASE_URL=http://<SERVER_PUBLIC_IP>
+BACKEND_BASE_URL=http://<SERVER_PUBLIC_IP>:8080
   ↓
-Nginx 80
+Nginx 8080
   ↓
 127.0.0.1:9527 Python 后端
+
+管理员浏览器
+  ↓
+http://<SERVER_PUBLIC_IP>:8080/admin/login
+  ↓
+Nginx 8080 → 127.0.0.1:9527 Python 后端
 ```
 
-浏览器端只访问 Cloudflare Pages 同源 `/api/*`。后端只信任 Pages Worker 注入的 `X-Proxy-Secret`，不要在前端页面里写后端 IP 或真实密钥。
+浏览器端只访问 Cloudflare Pages 同源 `/api/*`。文件与用户 API 只信任 Pages Worker 注入的 `X-Proxy-Secret`，不要在前端页面里写后端 IP 或真实密钥。
 
 ## 发布文件
 
@@ -127,8 +133,14 @@ export TRUST_PROXY_HEADERS=true
 export TRUSTED_PROXY_IPS=127.0.0.1,::1
 export FRONTEND_ORIGIN="https://你的Pages域名"
 export PRODUCTION_MODE=true
+# 仅在需要独立 HTTP 管理入口时设置；不要把真实服务器 IP 写入仓库。
+export ADMIN_CONSOLE_ORIGIN="http://<SERVER_PUBLIC_IP>:8080"
+# 仅影响管理员会话；普通用户的 Pages HTTPS Cookie 仍由 COOKIE_SECURE 控制。
+export ADMIN_COOKIE_SECURE=false
 export DATABASE_PATH=var/data/stats.db
 export WPS_DATABASE_PATH=var/data/wps_plugin.db
+# 首次部署保持关闭；确认已发布支持重新认证和 outbox 保留的 WPS 客户端后才显式开启。
+export WPS_ADMIN_MUTATIONS_ENABLED=false
 ./run.sh
 ```
 
@@ -141,8 +153,11 @@ export WPS_DATABASE_PATH=var/data/wps_plugin.db
 - Python 后端只监听 `127.0.0.1:9527`，不直接暴露到公网。
 - `FRONTEND_ORIGIN` 必须是精确 Origin，例如 `https://example.pages.dev`，不要带路径、查询参数或末尾多余斜杠。
 - `COOKIE_SECURE` 未设置时会根据 `FRONTEND_ORIGIN` 自动推导。
+- `ADMIN_CONSOLE_ORIGIN` 为空时，启动日志显示 Pages 管理入口；当前 `80` 被占用时填写与 Pages 回源相同的根 Origin，例如 `http://<SERVER_PUBLIC_IP>:8080`，不要填写 `/admin/login` 路径。
+- HTTP 管理入口必须显式设置 `ADMIN_COOKIE_SECURE=false`，否则浏览器会拒绝保存管理员会话 Cookie。该设置只影响管理员会话，不能通过把全局 `COOKIE_SECURE=false` 来解决。
 - 如果根目录仍有旧版 `stats.db` 且未设置 `DATABASE_PATH`，程序会继续使用旧库，避免生成第二份空数据库。迁移前先停服务，运行 `scripts/migrate_legacy_database.ps1` 做 dry run；加 `-Execute` 时脚本会先备份旧库，再复制到目标位置，并在复制前后执行 SQLite `integrity_check`。
 - `WPS_DATABASE_PATH` 必须指向独立于 `DATABASE_PATH` 的 SQLite 文件；默认值为 `var/data/wps_plugin.db`。
+- `WPS_ADMIN_MUTATIONS_ENABLED` 是默认关闭的服务端 WPS 管理写操作门禁。仅在已完成 v2 审计、客户端重新认证和 outbox 保留验证后，才将其显式设为 `true`；非法值会使服务启动失败。
 - wheel 安装后默认运行数据根不在 `site-packages`。如需固定生产数据位置，显式设置 `DATABASE_PATH`、`LOG_DIR`、`OUTPUT_DIR` 和 `RUNTIME_DIR`。
 
 ## Cloudflare Pages 环境变量
@@ -150,7 +165,7 @@ export WPS_DATABASE_PATH=var/data/wps_plugin.db
 在 Cloudflare Pages 项目中配置：
 
 ```text
-BACKEND_BASE_URL=http://<SERVER_PUBLIC_IP>
+BACKEND_BASE_URL=http://<SERVER_PUBLIC_IP>:8080
 PROXY_SECRET=替换为和服务器一致的长随机代理密钥
 ```
 
@@ -158,6 +173,7 @@ PROXY_SECRET=替换为和服务器一致的长随机代理密钥
 
 - 浏览器端仍然只请求同源 `/api/upload`、`/api/status/{task_id}`、`/api/download/{task_id}`。
 - `BACKEND_BASE_URL` 只允许在 `resources/frontend/pages/_worker.js` 代理层使用。
+- 当前服务器 `80` 被其他应用占用时，`BACKEND_BASE_URL` 必须与服务器 `.env` 中的 `ADMIN_CONSOLE_ORIGIN` 保持同一 `http://<SERVER_PUBLIC_IP>:8080` 根地址。
 - `PROXY_SECRET` 必须与服务器环境变量完全一致。
 
 ## Nginx 示例配置
@@ -194,6 +210,48 @@ server {
 }
 ```
 
+## 8080 公网后端与管理入口（80 已被其他应用占用时）
+
+如果同一服务器的 `80` 已被其他应用占用，保留该应用的 `80` 配置，不要修改通用
+`deploy/nginx-docxtool.conf` 的默认端口。为 DocxTool 另建一个供 Cloudflare Pages 回源和
+直接管理后台共同使用的 Nginx server block：
+
+```nginx
+server {
+    listen 8080;
+    server_name _;
+
+    client_max_body_size 50m;
+
+    location / {
+        proxy_pass http://127.0.0.1:9527;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 300;
+        proxy_connect_timeout 300;
+        proxy_send_timeout 300;
+    }
+}
+```
+
+服务器 `.env` 同时保持 `BIND_HOST=127.0.0.1`、`PORT=9527`，并设置：
+
+```bash
+export ADMIN_CONSOLE_ORIGIN="http://<SERVER_PUBLIC_IP>:8080"
+export ADMIN_COOKIE_SECURE=false
+```
+
+不要开放 `9527`。因为 Cloudflare Pages Worker 也需要访问 TCP `8080`，不能把整个
+`8080` 端口只限制为管理员自己的 IP；应使用强 `ADMIN_TOKEN`、现有登录限流和最小权限。
+如需额外的来源限制，只能在确认不再经 Pages 管理后台后，对 Nginx 的管理路径单独设置。
+然后重载 Nginx、重启后端，并通过
+`http://<SERVER_PUBLIC_IP>:8080/admin/login` 验证登录。该入口是裸 HTTP，管理员密钥和
+会话可能被同一网络链路上的第三方读取；如需来源限制，应对管理路径单独配置，具备条件时
+应迁移到 HTTPS 域名入口。
+
 ## WPS 客户端构建
 
 WPS 客户端与公网服务器分开交付。服务器继续通过根目录 `server.py` 启动；用户端运行无控制台 GUI 单文件 `DocxToolWps.exe`。生产构建必须把可直接访问 `/wps-api/v1/*` 的 HTTPS Origin 写入客户端：
@@ -206,9 +264,10 @@ pwsh -NoProfile -File .\apps\wps\scripts\build-exe.ps1 -ServerOrigin https://wps
 
 ## 安全组建议
 
-- `80`：允许 Cloudflare Pages Worker 访问。
+- `80`：由另一个应用占用时不用于 DocxTool。
+- `8080`：DocxTool 公网后端和直接管理入口；必须允许 Cloudflare Pages Worker 回源访问，不能对整个端口仅按管理员 IP 白名单。
 - `9527`：不要开放。
-- 远程管理端口：不要允许全部 IPv4，建议只允许自己的公网 IP。
+- 管理后台：使用强 `ADMIN_TOKEN`；若以后能提供 HTTPS 域名，应优先迁移并恢复 Secure Cookie。
 
 ## 验证命令
 
@@ -221,7 +280,7 @@ env -u ADMIN_TOKEN -u PROXY_SECRET python3 server.py
 直接访问服务器接口且不带 `X-Proxy-Secret` 应返回 403：
 
 ```bash
-curl -i -X PUT "http://<SERVER_PUBLIC_IP>/upload" \
+curl -i -X PUT "http://<SERVER_PUBLIC_IP>:8080/upload" \
   -H "Content-Type: application/octet-stream" \
   --data-binary @test.docx
 ```

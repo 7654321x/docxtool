@@ -16,6 +16,7 @@
 | 真实 WPS 操作步骤和结果 | [`WPS_VALIDATION.md`](WPS_VALIDATION.md) |
 | GitHub 发布范围、SSH 和安全边界 | [`RELEASE.md`](RELEASE.md) |
 | Codex 工作流、任务分级和验证路由 | [`design/CODEX_WORKFLOW_OPTIMIZATION.md`](design/CODEX_WORKFLOW_OPTIMIZATION.md) |
+| 后台工作台、网页业务和 WPS 管理台设计 | [`design/ADMIN_WORKSPACE_WPS_TECHNICAL_DESIGN.md`](design/ADMIN_WORKSPACE_WPS_TECHNICAL_DESIGN.md) |
 | SDK host-text-v1 测试金标 | [`HOST_TEXT_V1_GOLDEN.json`](HOST_TEXT_V1_GOLDEN.json) |
 
 根目录 [`../公文格式规范.md`](../公文格式规范.md) 维护公文格式依据；`WPS_SERVER_PRD.md`、`WPS_SERVER_TECHNICAL_DESIGN.md` 和 `WPS_READER_PRD.md` 分别维护 WPS 公网产品、实现和 Reader 产品边界。

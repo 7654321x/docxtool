@@ -7,6 +7,8 @@ import tempfile
 from collections.abc import Callable
 from typing import Any
 
+from docxtool.web.config import display_frontend_origin
+
 
 def health_payload() -> dict[str, object]:
     """无需传入数据，返回公开健康检查 payload。"""
@@ -126,5 +128,19 @@ def startup_urls(bind_host: str, port: int) -> dict[str, str]:
         "tool": base,
         "admin_login": f"{base}/admin/login",
         "monitor": f"{base}/monitor",
+        "health": f"{base}/health",
+        "ready": f"{base}/ready",
         "tunnel_command": f"cloudflared tunnel --url {base}",
+    }
+
+
+def public_startup_urls(frontend_origin: str, backend_origin: str) -> dict[str, str]:
+    """传入前端和公网后端 Origin，返回启动日志使用的公网访问地址。"""
+    backend = str(backend_origin or "").strip().rstrip("/")
+    if not backend:
+        raise ValueError("public backend origin must not be empty")
+    return {
+        "frontend": display_frontend_origin(frontend_origin),
+        "backend": backend,
+        "admin_login": f"{backend}/admin/login",
     }

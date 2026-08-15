@@ -14,6 +14,7 @@ from .control.logging_adapter import log_event
 from .login_window import (
     _configure_high_dpi,
     login_window_icon,
+    show_login_register_window,
     show_preferences_window,
 )
 
@@ -69,19 +70,26 @@ class SingleInstance(QObject):
 
 class DesktopController(QObject):
     service_failed = Signal(object)
+    reauth_requested = Signal()
 
-    def __init__(self, *, application, account_runtime, start_service, port: int) -> None:
+    def __init__(self, *, application, account_runtime, start_service, port: int, api=None) -> None:
         super().__init__()
         self._application = application
         self._account_runtime = account_runtime
         self._start_service = start_service
         self._port = port
+        self._api = api
         self._stop = threading.Event()
         self._service_error = None
         self.restart_login_requested = False
         self._settings_open = False
+        self._reauth_open = False
         self._service_thread = threading.Thread(target=self._run_service, daemon=True)
         self.service_failed.connect(self._handle_service_failure)
+        self.reauth_requested.connect(self._open_reauthentication)
+        set_reauth_callback = getattr(self._account_runtime, "set_reauth_callback", None)
+        if callable(set_reauth_callback):
+            set_reauth_callback(self._request_reauthentication)
         self._tray = QSystemTrayIcon(login_window_icon(), self)
         self._tray.setToolTip("DocxTool WPS")
         menu = QMenu()
@@ -146,8 +154,59 @@ class DesktopController(QObject):
         if reason == QSystemTrayIcon.DoubleClick:
             self.show_settings()
 
+    def _request_reauthentication(self) -> None:
+        """Receive a worker-thread request and queue the actual dialog on the Qt thread."""
+        self.reauth_requested.emit()
+
+    def _open_reauthentication(self) -> None:
+        """Run the existing login flow without reusing or pre-filling the old password."""
+        if self._reauth_open or self._api is None:
+            return
+        account = account_store.load_account()
+        if not account:
+            return
+        self._reauth_open = True
+        try:
+            result = show_login_register_window(
+                api=self._api,
+                account_store=account_store,
+                initial_username=account.get("username", ""),
+                initial_password="",
+                device_key=account.get("device_key", ""),
+                remember_password=bool(account.get("remember_password", False)),
+                auto_login=False,
+                startup_enabled=windows_startup.is_enabled(),
+                initial_message="登录会话已失效，请重新输入密码完成认证。",
+            )
+            if result:
+                self._account_runtime.reload_account(result)
+                log_event(
+                    "INFO",
+                    "account",
+                    "account.reauth.completed",
+                    "WPS 账号重新认证完成",
+                )
+        except Exception as exc:
+            log_event(
+                "ERROR",
+                "account",
+                "account.reauth.error",
+                "WPS 账号重新认证窗口处理失败",
+                {
+                    "error_code": "WPS_REAUTH_WINDOW_FAILED",
+                    "error_type": type(exc).__name__,
+                },
+            )
+            QMessageBox.warning(None, "DocxTool WPS", "重新认证失败，请从托盘再次打开登录与账号设置。")
+        finally:
+            self._reauth_open = False
+
     def show_settings(self) -> None:
         if self._settings_open:
+            return
+        summary = getattr(self._account_runtime, "summary", lambda: {})()
+        if summary.get("reauth_required"):
+            self._open_reauthentication()
             return
         account = account_store.load_account()
         if not account:

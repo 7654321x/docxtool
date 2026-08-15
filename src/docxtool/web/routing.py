@@ -37,9 +37,19 @@ def match_get_route(path: str) -> RouteMatch:
     if path == "/admin":
         return RouteMatch("admin_workspace")
     if path == "/admin/web":
-        return RouteMatch("admin_web")
+        return RouteMatch("admin_web", "tasks")
+    if path.startswith("/admin/web/"):
+        section = path[len("/admin/web/"):]
+        if section in {"tasks", "security", "runtime", "logs"}:
+            return RouteMatch("admin_web", section)
+    if path == "/admin/wps":
+        return RouteMatch("admin_wps_overview")
     if path == "/admin/wps/users":
         return RouteMatch("admin_wps_users")
+    if path == "/admin/wps/devices":
+        return RouteMatch("admin_wps_devices")
+    if path == "/admin/wps/tasks":
+        return RouteMatch("admin_wps_tasks")
     wps_user_prefix = "/admin/wps/users/"
     if path.startswith(wps_user_prefix):
         user_id = path[len(wps_user_prefix):]
@@ -84,6 +94,8 @@ def match_post_route(path: str) -> RouteMatch:
         return RouteMatch("wps_auth_logout")
     if path == "/wps-api/v1/heartbeat":
         return RouteMatch("wps_heartbeat")
+    if path == "/wps-api/v1/notifications/read":
+        return RouteMatch("wps_notifications_read")
     if path == "/wps-api/v1/format/authorize":
         return RouteMatch("wps_format_authorize")
     if path == "/wps-api/v1/format/result":
@@ -92,6 +104,18 @@ def match_post_route(path: str) -> RouteMatch:
         user_id = path[len("/admin/wps/users/"):-len("/status")].strip("/")
         if user_id and "/" not in user_id:
             return RouteMatch("admin_wps_user_status", user_id)
+    if path.startswith("/admin/wps/users/") and path.endswith("/password"):
+        user_id = path[len("/admin/wps/users/"):-len("/password")].strip("/")
+        if user_id and "/" not in user_id:
+            return RouteMatch("admin_wps_user_password_reset", user_id)
+    if path.startswith("/admin/wps/users/") and path.endswith("/delete"):
+        user_id = path[len("/admin/wps/users/"):-len("/delete")].strip("/")
+        if user_id and "/" not in user_id:
+            return RouteMatch("admin_wps_user_delete", user_id)
+    if path.startswith("/admin/wps/users/") and path.endswith("/notifications"):
+        user_id = path[len("/admin/wps/users/"):-len("/notifications")].strip("/")
+        if user_id and "/" not in user_id:
+            return RouteMatch("admin_wps_user_notification", user_id)
     if path.startswith("/admin/wps/devices/") and path.endswith("/status"):
         device_id = path[len("/admin/wps/devices/"):-len("/status")].strip("/")
         if device_id and "/" not in device_id:

@@ -17,5 +17,4 @@ from docxtool.web.app import main  # noqa: E402
 
 
 if __name__ == "__main__":
-    print("后端网址： https://docxtool.pages.dev/admin/login")
     main()

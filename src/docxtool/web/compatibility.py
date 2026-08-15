@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import functools
+import time
 from docxtool.web.hooks import sync_app_namespace
 
 
@@ -50,22 +51,7 @@ def _seed_default_presets(conn):
 
 def _now_local() -> str:
     """兼容旧私有入口，无需传入数据，返回本地时间字符串。"""
-    return _time_check_now_local()
-
-def _parse_http_date_to_beijing(date_header: str):
-    """兼容旧私有入口，传入 HTTP Date 头，返回北京时间 datetime。"""
-    return _time_check_parse_http_date_to_beijing(date_header)
-
-def _fetch_beijing_network_time(timeout: int = 3):
-    """兼容旧私有入口，传入超时秒数，返回网络北京时间。"""
-    return _time_check_fetch_beijing_network_time(timeout, _NETWORK_TIME_URLS)
-
-def _startup_time_check_lines() -> list:
-    """兼容旧私有入口，无需传入数据，返回启动时间校验日志行。"""
-    return _time_check_startup_time_check_lines(
-        now_func=_now_local,
-        fetch_func=_fetch_beijing_network_time,
-    )
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
 
 def log_sql(task_id, ip, ua, filename, file_size, doc_type,
             paragraphs, headings, body, duration_ms, status="done", error="",
@@ -482,7 +468,7 @@ def _session_cookie_settings() -> str:
     return _request_admin_session_cookie_settings(
         ADMIN_SESSION_COOKIE,
         DEFAULT_ADMIN_SESSION_TTL_SECONDS,
-        secure=COOKIE_SECURE,
+        secure=ADMIN_COOKIE_SECURE,
     )
 
 def _anonymous_user_signing_key() -> bytes:
@@ -946,9 +932,6 @@ COMPATIBILITY_EXPORTS = (
     "_core_feature_config_defaults",
     "_seed_default_presets",
     "_now_local",
-    "_parse_http_date_to_beijing",
-    "_fetch_beijing_network_time",
-    "_startup_time_check_lines",
     "log_sql",
     "record_task_queued",
     "get_sql_stats",

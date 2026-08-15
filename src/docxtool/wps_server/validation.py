@@ -9,6 +9,12 @@ _PASSWORD_RE = re.compile(r"^[A-Za-z0-9]{5,64}$")
 _REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{8,160}$")
 _ERROR_CODE_RE = re.compile(r"^[A-Z0-9_]{0,100}$")
 _APP_VERSION_RE = re.compile(r"^[A-Za-z0-9._+-]{1,40}$")
+_NOTIFICATION_ID_RE = re.compile(r"^wnot_[A-Za-z0-9]{16,64}$")
+
+WPS_NOTIFICATION_TITLE_MAX_CHARS = 120
+WPS_NOTIFICATION_BODY_MAX_CHARS = 2_000
+WPS_NOTIFICATION_BATCH_MAX = 20
+WPS_NOTIFICATION_LEVELS = frozenset({"info", "warning", "error"})
 
 
 class WpsValidationError(ValueError):
@@ -91,3 +97,39 @@ def validate_error_code(value: object) -> str:
     if not isinstance(value, str) or not _ERROR_CODE_RE.fullmatch(value):
         raise WpsValidationError("ERROR_CODE_INVALID", "错误代码格式无效")
     return value
+
+
+def validate_notification_content(
+    title: object,
+    body: object,
+    level: object,
+) -> tuple[str, str, str]:
+    """Normalize one administrator-authored, plain-text notification payload."""
+    if not isinstance(title, str):
+        raise WpsValidationError("WPS_NOTIFICATION_TITLE_INVALID", "通知标题无效")
+    normalized_title = title.strip()
+    if not normalized_title or len(normalized_title) > WPS_NOTIFICATION_TITLE_MAX_CHARS:
+        raise WpsValidationError("WPS_NOTIFICATION_TITLE_INVALID", "通知标题无效")
+    if not isinstance(body, str):
+        raise WpsValidationError("WPS_NOTIFICATION_BODY_INVALID", "通知正文无效")
+    normalized_body = body.strip()
+    if not normalized_body or len(normalized_body) > WPS_NOTIFICATION_BODY_MAX_CHARS:
+        raise WpsValidationError("WPS_NOTIFICATION_BODY_INVALID", "通知正文无效")
+    if not isinstance(level, str) or level not in WPS_NOTIFICATION_LEVELS:
+        raise WpsValidationError("WPS_NOTIFICATION_LEVEL_INVALID", "通知级别无效")
+    return normalized_title, normalized_body, level
+
+
+def validate_notification_ids(value: object) -> list[str]:
+    """Validate and de-duplicate a bounded acknowledgement batch."""
+    if not isinstance(value, list) or not value or len(value) > WPS_NOTIFICATION_BATCH_MAX:
+        raise WpsValidationError("WPS_NOTIFICATION_IDS_INVALID", "通知确认编号无效")
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, str) or not _NOTIFICATION_ID_RE.fullmatch(item):
+            raise WpsValidationError("WPS_NOTIFICATION_IDS_INVALID", "通知确认编号无效")
+        if item not in seen:
+            seen.add(item)
+            normalized.append(item)
+    return normalized

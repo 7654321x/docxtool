@@ -2,6 +2,7 @@ from docxtool.web import app as server
 from docxtool.web.health import (
     database_ready,
     health_payload,
+    public_startup_urls,
     ready_payload,
     server_bind_address,
     startup_urls,
@@ -82,8 +83,23 @@ def test_database_ready_returns_false_on_probe_error() -> None:
 
 def test_startup_helpers_match_app_facade() -> None:
     """启动地址模块传入 host 和 port 后，应与 web.app 兼容入口保持一致。"""
+    local_urls = startup_urls(server.BIND_HOST, server.PORT)
+
     assert server_bind_address(server.BIND_HOST, server.PORT) == server._server_bind_address()
-    assert startup_urls(server.BIND_HOST, server.PORT) == server._startup_urls()
+    assert local_urls == server._startup_urls()
+    assert local_urls["health"] == f"http://{server.BIND_HOST}:{server.PORT}/health"
+    assert local_urls["ready"] == f"http://{server.BIND_HOST}:{server.PORT}/ready"
+
+
+def test_public_startup_urls_distinguish_pages_backend_and_admin() -> None:
+    """启动日志应区分 Pages 前端、8080 后端和管理后台地址。"""
+    urls = public_startup_urls("", "http://43.133.167.18:8080/")
+
+    assert urls == {
+        "frontend": "https://docxtool.pages.dev",
+        "backend": "http://43.133.167.18:8080",
+        "admin_login": "http://43.133.167.18:8080/admin/login",
+    }
 
 
 class _NoopLock:

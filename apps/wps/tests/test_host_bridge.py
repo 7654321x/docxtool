@@ -496,6 +496,46 @@ def _get(server, path, token="test-token"):
         connection.close()
 
 
+def test_control_forwards_taskpane_notification_acknowledgement_to_account_runtime(tmp_path):
+    class AccountRuntime:
+        def __init__(self):
+            self.calls = []
+
+        def summary(self):
+            return {
+                "username": "User01",
+                "network_available": True,
+                "apply_available": True,
+                "pending_result_count": 0,
+                "notifications": [],
+                "error_code": "",
+            }
+
+        def acknowledge_notifications(self, notification_ids):
+            self.calls.append(notification_ids)
+            return {"acknowledged_notification_ids": notification_ids}
+
+    account = AccountRuntime()
+    server = server_module.create_server(tmp_path, "test-token", 0, account_runtime=account)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    notification_id = "wnot_1234567890abcdef1234567890abcdef"
+    try:
+        status, response = _post(
+            server,
+            "/v1/account/notifications/read",
+            {"notification_ids": [notification_id]},
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
+
+    assert status == 200
+    assert response["data"] == {"acknowledged_notification_ids": [notification_id]}
+    assert account.calls == [[notification_id]]
+
+
 def _install_fake_formatter(monkeypatch):
     def fake_format(
         source_path,

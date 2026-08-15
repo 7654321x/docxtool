@@ -94,24 +94,18 @@ class Handler(BaseHTTPRequestHandler):
         )
 
     def _handle_monitor(self, parsed):
-        """传入已解析 URL，通过管理员鉴权后发送监控 HTML 或刷新 session。"""
-        _monitor_route_handle_monitor(
-            self,
+        """传入旧监控 URL，在保留 legacy session 迁移后跳转任务中心。"""
+        self._redirect_legacy_admin_to_workspace(
             parsed,
-            require_admin=self._require_admin,
-            admin_context_or_default=self._admin_context_or_default,
-            create_admin_session=_create_admin_session,
-            admin_cookie_header=_admin_cookie_header,
-            monitor_query_from=_monitor_query_from,
-            get_sql_stats=get_sql_stats,
-            monitor_html=_monitor_html,
-            admin_csrf_token=self._admin_csrf_token,
+            _admin_workspace_monitor_compat_target(
+                parsed, monitor_query_from=_monitor_query_from
+            ),
         )
 
     def _handle_ip_detail_route(self, parsed):
-        """传入已解析 URL，通过管理员鉴权后发送 IP 详情 HTML。"""
-        _protected_route_handle_admin(
-            parsed, require_admin=self._require_admin, action=self._handle_ip_detail
+        """传入旧 IP 详情 URL，跳转到共享安全页面并保留目标 IP。"""
+        self._redirect_legacy_admin_to_workspace(
+            parsed, _admin_workspace_ip_compat_target(self._query_ip(parsed))
         )
 
     def _handle_upload_route(self):
@@ -137,13 +131,45 @@ class Handler(BaseHTTPRequestHandler):
         )
 
     def _handle_log_route(self, parsed, task_id: str):
-        """传入已解析 URL 和任务 ID，通过管理员鉴权后发送任务日志页面。"""
-        _protected_route_handle_admin_resource(
-            parsed,
-            task_id,
-            require_admin=self._require_admin,
-            action=self._handle_log,
+        """传入旧任务日志 URL，跳转到共享日志页面并保留任务编号。"""
+        self._redirect_legacy_admin_to_workspace(
+            parsed, _admin_workspace_log_compat_target(task_id)
         )
+
+    def _redirect_legacy_admin_to_workspace(self, parsed, target: str) -> None:
+        """验证旧管理员入口并在需要时建立 session 后跳转到已允许的工作台地址。"""
+        if not self._require_admin(parsed):
+            return
+        context = self._admin_context_or_default()
+        if context.get("legacy_token") and not context.get("session"):
+            session = _create_admin_session(
+                self.headers.get("User-Agent", ""),
+                self.client_address[0] if self.client_address else "",
+            )
+            self._redirect(
+                target,
+                extra_headers=[("Set-Cookie", _admin_cookie_header(session["session_id"]))],
+            )
+            return
+        self._redirect(target)
+
+    def _require_workspace_admin(self, parsed) -> bool:
+        """Authorize a workspace request and exchange a legacy token for a CSRF session."""
+        if not self._require_admin(parsed):
+            return False
+        context = self._admin_context_or_default()
+        if not context.get("legacy_token") or context.get("session"):
+            return True
+        session = _create_admin_session(
+            self.headers.get("User-Agent", ""),
+            self.client_address[0] if self.client_address else "",
+        )
+        target = _admin_workspace_session_target(parsed)
+        self._redirect(
+            target,
+            extra_headers=[("Set-Cookie", _admin_cookie_header(session["session_id"]))],
+        )
+        return False
 
     def _handle_ban_route(self, parsed):
         """传入已解析 URL，通过管理员 POST 鉴权后执行封禁动作。"""
@@ -235,7 +261,7 @@ class Handler(BaseHTTPRequestHandler):
             delete_admin_session=_delete_admin_session,
             logout_cookie_header=_admin_access_logout_cookie_header,
             cookie_name=ADMIN_SESSION_COOKIE,
-            secure=COOKIE_SECURE,
+            secure=ADMIN_COOKIE_SECURE,
         )
 
     def _require_admin(self, parsed) -> bool:
@@ -395,7 +421,7 @@ class Handler(BaseHTTPRequestHandler):
         _wps_admin_route_handle_workspace(
             self,
             parsed,
-            require_admin=self._require_admin,
+            require_admin=self._require_workspace_admin,
             web_stats=get_sql_stats,
             web_runtime=_version_payload,
             wps_connect=_wps_sql,
@@ -406,21 +432,87 @@ class Handler(BaseHTTPRequestHandler):
             render_page=_admin_workspace_render_home,
         )
 
-    def _handle_admin_web(self, parsed):
-        """发送统一外壳中的网页业务模块。"""
-        self._handle_monitor(parsed)
+    def _handle_admin_web(self, parsed, section: str = "tasks"):
+        """发送共享 shell 中的网页业务二级页面。"""
+        if section == "security" and self._query_ip(parsed):
+            _protected_route_handle_admin(
+                parsed, require_admin=self._require_workspace_admin, action=self._handle_ip_detail
+            )
+            return
+        task_id = _admin_workspace_task_id_from_query(parsed) if section == "logs" else ""
+        if task_id:
+            _protected_route_handle_admin_resource(
+                parsed,
+                task_id,
+                require_admin=self._require_workspace_admin,
+                action=self._handle_log,
+            )
+            return
+        _admin_workspace_route_handle_web(
+            self,
+            parsed,
+            section,
+            require_admin=self._require_workspace_admin,
+            monitor_query_from=_monitor_query_from,
+            web_stats=get_sql_stats,
+            readiness=_ready_payload,
+            runtime=_version_payload,
+            limit_settings=_limit_settings,
+            csrf_input=_csrf_hidden_input,
+            render_page=_admin_workspace_render_web,
+        )
+
+    def _handle_admin_wps_overview(self, parsed):
+        """发送 WPS 运行总览。"""
+        _wps_admin_route_handle_overview(
+            self,
+            parsed,
+            require_admin=self._require_workspace_admin,
+            wps_connect=_wps_sql,
+            wps_lock=_WPS_SQL_LOCK,
+            now_func=_now_unix,
+            csrf_input=_csrf_hidden_input,
+            render_page=_admin_workspace_render_wps_overview,
+        )
 
     def _handle_admin_wps_users(self, parsed):
         """发送 WPS 用户列表。"""
         _wps_admin_route_handle_users(
             self,
             parsed,
-            require_admin=self._require_admin,
+            require_admin=self._require_workspace_admin,
             wps_connect=_wps_sql,
             wps_lock=_WPS_SQL_LOCK,
             now_func=_now_unix,
             csrf_input=_csrf_hidden_input,
             render_page=_admin_workspace_render_users,
+            mutations_enabled=_WPS_ADMIN_MUTATIONS_ENABLED,
+        )
+
+    def _handle_admin_wps_devices(self, parsed):
+        """发送 WPS 设备列表。"""
+        _wps_admin_route_handle_devices(
+            self,
+            parsed,
+            require_admin=self._require_workspace_admin,
+            wps_connect=_wps_sql,
+            wps_lock=_WPS_SQL_LOCK,
+            now_func=_now_unix,
+            csrf_input=_csrf_hidden_input,
+            render_page=_admin_workspace_render_devices,
+            mutations_enabled=_WPS_ADMIN_MUTATIONS_ENABLED,
+        )
+
+    def _handle_admin_wps_tasks(self, parsed):
+        """发送 WPS 排版请求列表。"""
+        _wps_admin_route_handle_tasks(
+            self,
+            parsed,
+            require_admin=self._require_workspace_admin,
+            wps_connect=_wps_sql,
+            wps_lock=_WPS_SQL_LOCK,
+            csrf_input=_csrf_hidden_input,
+            render_page=_admin_workspace_render_tasks,
         )
 
     def _handle_admin_wps_user(self, parsed, user_id: str):
@@ -429,11 +521,13 @@ class Handler(BaseHTTPRequestHandler):
             self,
             parsed,
             user_id,
-            require_admin=self._require_admin,
+            require_admin=self._require_workspace_admin,
             wps_connect=_wps_sql,
             wps_lock=_WPS_SQL_LOCK,
+            now_func=_now_unix,
             csrf_input=_csrf_hidden_input,
             render_page=_admin_workspace_render_user,
+            mutations_enabled=_WPS_ADMIN_MUTATIONS_ENABLED,
         )
 
     def _handle_admin_wps_user_status(self, parsed, user_id: str):
@@ -447,6 +541,7 @@ class Handler(BaseHTTPRequestHandler):
             wps_connect=_wps_sql,
             wps_lock=_WPS_SQL_LOCK,
             now_func=_now_unix,
+            mutations_enabled=_WPS_ADMIN_MUTATIONS_ENABLED,
         )
 
     def _handle_admin_wps_device_status(self, parsed, device_id: str):
@@ -459,6 +554,50 @@ class Handler(BaseHTTPRequestHandler):
             request_params=self._request_params,
             wps_connect=_wps_sql,
             wps_lock=_WPS_SQL_LOCK,
+            now_func=_now_unix,
+            mutations_enabled=_WPS_ADMIN_MUTATIONS_ENABLED,
+        )
+
+    def _handle_admin_wps_user_password_reset(self, parsed, user_id: str):
+        """重置一个 WPS 用户密码。"""
+        _wps_admin_route_handle_user_password_reset(
+            self,
+            parsed,
+            user_id,
+            require_admin_post=self._require_admin_post,
+            request_params=self._request_params,
+            wps_connect=_wps_sql,
+            wps_lock=_WPS_SQL_LOCK,
+            now_func=_now_unix,
+            mutations_enabled=_WPS_ADMIN_MUTATIONS_ENABLED,
+        )
+
+    def _handle_admin_wps_user_notification(self, parsed, user_id: str):
+        """向一个 WPS 用户发送账号级通知。"""
+        _wps_admin_route_handle_user_notification(
+            self,
+            parsed,
+            user_id,
+            require_admin_post=self._require_admin_post,
+            request_params=self._request_params,
+            wps_connect=_wps_sql,
+            wps_lock=_WPS_SQL_LOCK,
+            now_func=_now_unix,
+            mutations_enabled=_WPS_ADMIN_MUTATIONS_ENABLED,
+        )
+
+    def _handle_admin_wps_user_delete(self, parsed, user_id: str):
+        """彻底删除一个已二次确认的 WPS 用户。"""
+        _wps_admin_route_handle_user_delete(
+            self,
+            parsed,
+            user_id,
+            require_admin_post=self._require_admin_post,
+            request_params=self._request_params,
+            wps_connect=_wps_sql,
+            wps_lock=_WPS_SQL_LOCK,
+            now_func=_now_unix,
+            mutations_enabled=_WPS_ADMIN_MUTATIONS_ENABLED,
         )
 
     def _handle_upload_raw(self):
@@ -564,24 +703,36 @@ class Handler(BaseHTTPRequestHandler):
         return _admin_actions_query_ip(parsed)
 
     def _handle_ip_detail(self, parsed):
-        """传入已解析 URL，发送 IP 详情页面或无效 IP 错误。"""
+        """传入已解析 URL，发送共享安全页面中的 IP 详情或稳定错误。"""
         _admin_route_handle_ip_detail(
             self,
             parsed,
             is_ip=_is_ip,
-            render_ip_detail_html=_ip_detail_html,
+            render_ip_detail_html=self._render_admin_web_ip_detail,
+        )
+
+    def _render_admin_web_ip_detail(self, ip: str, csrf_token: str) -> str:
+        """传入已校验 IP 和 CSRF token，渲染共享壳中的 IP 详情。"""
+        return _admin_workspace_render_ip_detail(
+            ip=ip,
+            activity=_ip_activity(ip),
+            total=_ip_upload_count(ip, 0),
+            last_hour=_ip_upload_count(ip, 3600),
+            banned=_is_ip_banned(ip),
+            csrf_input=_csrf_hidden_input(csrf_token),
+            readiness=_ready_payload(),
         )
 
     def _handle_ban(self, parsed):
-        """传入已解析 URL，执行 IP 封禁动作并跳转监控页。"""
+        """传入已解析 URL，执行 IP 封禁动作并回到共享安全页。"""
         _admin_route_handle_ban(self, parsed, is_ip=_is_ip, ban_ip=_ban_ip, logger=logger)
 
     def _handle_unban(self, parsed):
-        """传入已解析 URL，执行 IP 解封动作并跳转监控页。"""
+        """传入已解析 URL，执行 IP 解封动作并回到共享安全页。"""
         _admin_route_handle_unban(self, parsed, is_ip=_is_ip, unban_ip=_unban_ip, logger=logger)
 
     def _handle_limit(self, parsed):
-        """传入已解析 URL，更新上传限额配置并跳转监控页。"""
+        """传入已解析 URL，更新上传限额配置并回到运行设置。"""
         _admin_route_handle_limit(
             self,
             parsed,
@@ -592,7 +743,7 @@ class Handler(BaseHTTPRequestHandler):
         )
 
     def _handle_cleanup(self, parsed):
-        """传入已解析 URL，执行永久保留策略下的兼容清理入口。"""
+        """传入已解析 URL，执行永久保留策略下的兼容清理入口并回到运行设置。"""
         _admin_route_handle_cleanup(self, logger=logger)
 
     def _handle_presets_list(self):
@@ -644,7 +795,7 @@ class Handler(BaseHTTPRequestHandler):
         )
 
     def _handle_log(self, task_id: str):
-        """传入任务 ID，发送脱敏任务日志页面或稳定错误响应。"""
+        """传入任务 ID，发送共享日志页中的脱敏任务日志或稳定错误响应。"""
         _task_route_handle_log(
             self,
             task_id,
@@ -657,7 +808,12 @@ class Handler(BaseHTTPRequestHandler):
             connect=_sql,
             log_dir=LOG_DIR,
             redact_sensitive_log=_redact_sensitive_log,
-            render_task_log_html=_pages_render_task_log_html,
+            render_task_log_html=lambda current_task_id, row, text: _admin_workspace_render_task_log(
+                task_id=current_task_id,
+                row=row,
+                log_text=text,
+                readiness=_ready_payload(),
+            ),
         )
 
     def _text(self, body: str, mime: str, status: int = 200, extra_headers=None):

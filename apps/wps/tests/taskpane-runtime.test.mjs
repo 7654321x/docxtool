@@ -808,6 +808,52 @@ test("TaskPane distinguishes a missing local account service from server offline
   assert.notEqual(harness.elements.get("message").textContent, "服务器无法连接。");
 });
 
+test("TaskPane renders account notifications as text and confirms display through Control", async () => {
+  const notification = {
+    notification_id: "wnot_1234567890abcdef1234567890abcdef",
+    title: "服务维护",
+    body: "<b>任务窗格必须按纯文本显示</b>",
+    level: "warning",
+    created_at: 1000,
+  };
+  const harness = makeTaskpaneHarness(
+    { host_ready: true, status: "READY", updated_at: "1" },
+    {
+      notificationAckFailure: "WPS_PUBLIC_SERVER_UNAVAILABLE",
+      account: {
+        signed_in: true,
+        username: "User01",
+        network_available: true,
+        apply_available: true,
+        pending_result_count: 0,
+        notifications: [notification, { ...notification }],
+        error_code: "",
+      },
+    },
+  );
+  await harness.flushAsync(50);
+
+  assert.equal(harness.elements.get("notifications_panel").hidden, false);
+  assert.match(harness.elements.get("notifications").textContent, /【注意】服务维护/);
+  assert.match(harness.elements.get("notifications").textContent, /<b>任务窗格必须按纯文本显示<\/b>/);
+  assert.deepEqual(harness.notificationAcknowledgements, [[notification.notification_id]]);
+  assert.ok(harness.events().includes("taskpane.notification.acknowledge.failed"));
+  assert.doesNotMatch(JSON.stringify(harness.logs), /任务窗格必须按纯文本显示/);
+
+  // The next state/wait response may carry the same account summary. A failed
+  // display acknowledgement must retry without requiring an unrelated account
+  // state change or a TaskPane reload.
+  harness.pushState({ host_ready: true, status: "READY", updated_at: "2" });
+  await harness.flushAsync(50);
+
+  assert.deepEqual(harness.notificationAcknowledgements, [
+    [notification.notification_id],
+    [notification.notification_id],
+  ]);
+  assert.equal(harness.elements.get("notifications_panel").hidden, true);
+  assert.ok(harness.events().includes("taskpane.notification.acknowledged"));
+});
+
 test("TaskPane logs bridge command failure before request summary", async () => {
   const harness = makeTaskpaneHarness(
     { host_ready: true, status: "READY", updated_at: "1" },

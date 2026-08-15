@@ -7,6 +7,7 @@ from threading import Lock
 
 
 ERROR_STATUSES = ("error", "timeout", "failed", "interrupted", "expired")
+TASK_STATUSES = frozenset(("queued", "processing", "done", *ERROR_STATUSES))
 
 
 def log_task_result(
@@ -141,16 +142,27 @@ def get_task_statistics(
     query = normalize_query(query)
     recent_size = query["recent_size"]
     ip_size = query["ip_size"]
+    task_clause, task_params = _task_where(query)
+    done_clause = _append_condition(task_clause, "status='done'")
     with sql_lock:
         conn = connect()
         try:
-            total = conn.execute("SELECT COUNT(*) as c FROM tasks").fetchone()["c"]
-            done = conn.execute("SELECT COUNT(*) as c FROM tasks WHERE status='done'").fetchone()["c"]
-            err = _count_error_tasks(conn)
-            ips = conn.execute("SELECT COUNT(DISTINCT ip) as c FROM tasks").fetchone()["c"]
-            tbytes = conn.execute("SELECT COALESCE(SUM(file_size),0) as c FROM tasks").fetchone()["c"]
-            avg_p = conn.execute("SELECT AVG(paragraphs) as c FROM tasks WHERE status='done'").fetchone()["c"] or 0
-            avg_ms = conn.execute("SELECT AVG(duration_ms) as c FROM tasks WHERE status='done'").fetchone()["c"] or 0
+            total = conn.execute(f"SELECT COUNT(*) as c FROM tasks{task_clause}", task_params).fetchone()["c"]
+            done = conn.execute(
+                f"SELECT COUNT(*) as c FROM tasks{done_clause}",
+                task_params,
+            ).fetchone()["c"]
+            err = _count_error_tasks(conn, task_clause, task_params)
+            ips = conn.execute(f"SELECT COUNT(DISTINCT ip) as c FROM tasks{task_clause}", task_params).fetchone()["c"]
+            tbytes = conn.execute(f"SELECT COALESCE(SUM(file_size),0) as c FROM tasks{task_clause}", task_params).fetchone()["c"]
+            avg_p = conn.execute(
+                f"SELECT AVG(paragraphs) as c FROM tasks{done_clause}",
+                task_params,
+            ).fetchone()["c"] or 0
+            avg_ms = conn.execute(
+                f"SELECT AVG(duration_ms) as c FROM tasks{done_clause}",
+                task_params,
+            ).fetchone()["c"] or 0
             recent_pages = page_count(total, recent_size)
             recent_page = min(query["recent_page"], recent_pages)
             recent_offset = (recent_page - 1) * recent_size
@@ -160,8 +172,8 @@ def get_task_statistics(
             query["recent_page"] = recent_page
             query["ip_page"] = ip_page
             recent = conn.execute(
-                "SELECT * FROM tasks ORDER BY rowid DESC LIMIT ? OFFSET ?",
-                [recent_size, recent_offset],
+                f"SELECT * FROM tasks{task_clause} ORDER BY rowid DESC LIMIT ? OFFSET ?",
+                [*task_params, recent_size, recent_offset],
             ).fetchall()
             days = _load_daily_trend(conn)
             top_ips = _load_top_ips(conn, ip_size, ip_offset)
@@ -190,12 +202,33 @@ def get_task_statistics(
     )
 
 
-def _count_error_tasks(conn) -> int:
+def _task_where(query: dict) -> tuple[str, list[object]]:
+    """Build a parameterized task filter for the new Web task and log pages."""
+    clauses: list[str] = []
+    params: list[object] = []
+    search = str(query.get("task_q", "") or "").strip()[:80]
+    status = str(query.get("task_status", "") or "").strip()[:20]
+    if search:
+        pattern = f"%{search}%"
+        clauses.append("(id LIKE ? OR filename LIKE ?)")
+        params.extend((pattern, pattern))
+    if status in TASK_STATUSES:
+        clauses.append("status=?")
+        params.append(status)
+    return (" WHERE " + " AND ".join(clauses) if clauses else ""), params
+
+
+def _append_condition(clause: str, condition: str) -> str:
+    """Append a fixed SQL condition to an optional existing WHERE clause."""
+    return f"{clause} AND {condition}" if clause else f" WHERE {condition}"
+
+
+def _count_error_tasks(conn, clause: str = "", params: list[object] | tuple[object, ...] = ()) -> int:
     """传入 SQLite 连接，返回监控中计为失败的任务数量。"""
     placeholders = ",".join("?" for _ in ERROR_STATUSES)
     return conn.execute(
-        f"SELECT COUNT(*) as c FROM tasks WHERE status IN ({placeholders})",
-        ERROR_STATUSES,
+        f"SELECT COUNT(*) as c FROM tasks{_append_condition(clause, f'status IN ({placeholders})')}",
+        [*params, *ERROR_STATUSES],
     ).fetchone()["c"]
 
 

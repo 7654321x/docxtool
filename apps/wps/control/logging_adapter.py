@@ -54,6 +54,7 @@ SAFE_WPS_LOG_FIELDS = frozenset(
         "layout_event_count", "log_file", "method", "network_available",
         "locator_status", "locator_verified", "observed_delay_ms", "operation_id_short", "outer_height", "outer_width",
         "page_persisted", "page_version", "page_x_offset", "page_y_offset", "pane_branch",
+        "notification_count", "pending_notification_count", "acknowledged_count",
         "pane_dock_position", "pane_dock_position_after", "pane_dock_position_before",
         "pane_dock_position_effective", "pane_dock_position_requested", "pane_expected_dock_position",
         "pane_found", "pane_id", "pane_instance_id", "pane_instance_id_present",

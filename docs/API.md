@@ -652,6 +652,8 @@ GET /log/{task_id}?token={ADMIN_TOKEN}
 Worker 还会代理管理页面直接使用的后端路径：
 
 - `/admin/login`、`/admin/logout`、`/admin/session`
+- `/admin`、`/admin/web/*`、`/admin/wps`、`/admin/wps/users`、`/admin/wps/devices`、`/admin/wps/tasks` 和单个 WPS 用户详情
+- 已精确允许的 WPS 管理 POST：用户状态、设备状态、密码重置、通知发送和账号删除
 - `/monitor`、`/stats`、`/ip`
 - `/ban`、`/unban`、`/limit`、`/cleanup`
 - `/log/{task_id}`
@@ -689,9 +691,9 @@ Worker 还会代理管理页面直接使用的后端路径：
 ## 7. 部署注意事项
 
 1. 生产环境必须设置 `ADMIN_TOKEN` 和 `PROXY_SECRET`，代码不提供默认密钥。
-2. 只开放 Nginx 80，不要直接暴露 Python 服务端口 9527。
+2. 只开放配置的 Nginx 公网端口；当前 `80` 被其他应用占用时使用 `8080`，不要直接暴露 Python 服务端口 `9527`。
 3. Nginx 需要允许 `PUT` 方法并转发请求头。
-4. Cloudflare Pages 前端访问同源 `/api/*`，Worker 通过 `BACKEND_BASE_URL` 转发到 Nginx，再由 Nginx 转发到 `127.0.0.1:9527`。
+4. Cloudflare Pages 前端访问同源 `/api/*`，Worker 通过 `BACKEND_BASE_URL=http://<SERVER_PUBLIC_IP>:8080` 转发到 Nginx，再由 Nginx 转发到 `127.0.0.1:9527`。
 5. 推荐部署细节见 `docs/DEPLOY.md`。
 6. `var/logs/` 和 `var/outputs/` 是运行时目录，仓库中只保留 `.gitkeep`，实际日志和生成文件不应提交。
 7. `var/data/stats.db` 是源码树运行时 SQLite 数据库位置，不应提交到仓库。若根目录已有旧版 `stats.db` 且未设置 `DATABASE_PATH`，后端会继续使用旧库，迁移需人工停服务后执行。仅解析默认路径不会创建数据库目录，首次实际连接时才会创建父目录；wheel 安装后默认运行数据根不在 `site-packages`。
@@ -707,6 +709,7 @@ WPS 插件接口统一使用 `/wps-api/v1` 前缀，JSON envelope 的协议版�
 | `GET` | `/wps-api/v1/auth/me` | 查询当前账号、设备、功能列表和会话到期时间 |
 | `POST` | `/wps-api/v1/auth/logout` | 删除当前服务端会话 |
 | `POST` | `/wps-api/v1/heartbeat` | 更新设备和会话最后在线时间，不续期 |
+| `POST` | `/wps-api/v1/notifications/read` | 确认任务窗格已经展示账号通知 |
 | `POST` | `/wps-api/v1/format/authorize` | 为一键排版登记请求并下发服务器格式配置 |
 | `POST` | `/wps-api/v1/format/result` | 使用同一请求编号回传成功或失败结果 |
 
@@ -718,6 +721,84 @@ WPS 登录使用独立限流：同一出口 IP 每 10 分钟最多 300 次，同
 
 公网响应中的完整格式配置只交给本机 Control 授权上下文验证和保存。WPS Host 通过内部 Bridge 只接收请求编号和配置版本，调用本机排版准备接口时不提交格式配置；Control 按请求编号将已授权配置注入 Engine。一个授权只能绑定一个 `apply` 事务，事务后续接口必须使用同一请求编号。TaskPane 的账号、网络、功能可用性和待补报数量由 `/v1/bridge/state/wait` 的 `account` 摘要同步，不单独轮询账号接口。排版结果暂时无法回传时写入本地 SQLite 持久 outbox，心跳恢复或下一次 Launcher 启动后继续补报。
 
+### 8.1 Account Bootstrap Snapshot 与重新认证
+
+`POST /wps-api/v1/auth/register`、`POST /wps-api/v1/auth/login` 和 `GET /wps-api/v1/auth/me` 共用 Account Bootstrap Snapshot。其公共字段为：
+
+- `user.id`、`user.username`、`user.status`；
+- `device.id`、`device.device_name`、`device.platform`、`device.status`；
+- `session_created_at`、`session_expires_at`；
+- `features`、`config_version`、`heartbeat_interval_seconds`。
+
+注册和登录在此 Snapshot 基础上额外返回一次性 `session_token`；`GET /wps-api/v1/auth/me` 不返回 Token，只用于将当前 bearer 对应的公共 Snapshot 合并到本机账号。新客户端必须校验上述必需字段和类型；缺少字段以 `WPS_PUBLIC_RESPONSE_INVALID` 失败，不能猜测本地默认值。旧客户端可以忽略新增字段。
+
+`POST /wps-api/v1/heartbeat` 同样返回 `account_status`、`device_status`、`session_expires_at`、`features`、`config_version` 和 `heartbeat_interval_seconds`。心跳间隔由服务端给出，客户端不应在字段缺失或非法时自行猜测节拍。
+
+当公网请求返回 `SESSION_INVALID`、`SESSION_EXPIRED`、`INVALID_CREDENTIALS`、`ACCOUNT_DISABLED` 或 `DEVICE_DISABLED` 时，桌面客户端必须只清除本地会话并进入重新认证界面，不在运行期自动提交旧密码，也不得清除持久 outbox。重新登录成功后按正常流程继续补报；本地数据清理只能由用户明确确认触发。
+
+### 8.2 账号通知与展示确认
+
+成功的注册、登录和 heartbeat 响应可以追加可选 `notifications` 字段；`GET /wps-api/v1/auth/me` 只返回 Bootstrap Snapshot，不返回待确认通知。新客户端遇到字段缺失时按空列表处理，以兼容尚未提供通知的旧服务端。通知列表最多 20 条，每项包含：
+
+- `notification_id`：以 `wnot_` 开头的稳定通知编号；
+- `title`、`body`：管理员编写的纯文本标题与正文，分别最多 120 和 2000 个字符；
+- `level`：`info`、`warning` 或 `error`；
+- `created_at`：通知创建时间。
+
+客户端按 `notification_id` 去重，展示时按纯文本处理，不能将标题或正文作为 HTML 注入。通知不写入本地账号库；任务窗格已经展示后，通过本机 Control 转发以下公网确认请求：
+
+```json
+POST /wps-api/v1/notifications/read
+Authorization: Bearer <session_token>
+
+{
+  "notification_ids": ["wnot_..."]
+}
+```
+
+响应只返回本次实际从待确认状态更新成功的编号：
+
+```json
+{
+  "acknowledged_notification_ids": ["wnot_..."]
+}
+```
+
+`notification_ids` 必须是 1–20 个合法编号；服务端会去重，并且只确认当前账号尚未确认的通知。未知、其他账号、已确认或重复编号不产生副作用，因此重复确认安全幂等。`acknowledged` 仅表示客户端已确认展示，不声称用户本人已阅读。展示确认失败时客户端保留待确认摘要，后续状态更新可再次尝试。
+
+常见错误：
+
+| HTTP 状态码 | code | 含义 |
+| --- | --- | --- |
+| 400 | `WPS_NOTIFICATION_IDS_INVALID` | 通知确认编号为空、超出上限或格式无效 |
+| 401 / 403 | 现有会话错误 | 确认请求仍遵循现有 Bearer 会话校验 |
+
+### 8.3 WPS 管理写操作
+
+以下路径属于管理员工作台，不属于 WPS 公网客户端协议。它们要求管理员 session、CSRF 校验和服务端 `WPS_ADMIN_MUTATIONS_ENABLED` 门禁同时通过；门禁默认关闭，页面隐藏不替代直接 POST 的服务端检查。
+
+| 方法 | 路径 | 必填表单字段 | 结果 |
+| --- | --- | --- | --- |
+| `POST` | `/admin/wps/users/{user_id}/status` | `status=active/disabled` | 更新账号状态；停用时撤销该账号会话 |
+| `POST` | `/admin/wps/devices/{device_id}/status` | `status=active/disabled` | 更新设备状态；停用时撤销该设备会话 |
+| `POST` | `/admin/wps/users/{user_id}/password` | `password`、`password_confirmation` | 校验并重置密码，撤销该账号会话 |
+| `POST` | `/admin/wps/users/{user_id}/notifications` | `title`、`body`、`level=info/warning/error` | 发送纯文本账号通知并记录成功审计 |
+| `POST` | `/admin/wps/users/{user_id}/delete` | `confirmation_username` | 账号名二次确认后硬删除账号、会话、设备、排版请求和通知 |
+
+成功操作以 `303` 跳转到对应 WPS 管理页。业务写入和成功管理员审计在同一 WPS SQLite 事务中提交；删除确认不匹配仅写入 `result=denied` 的审计事实。审计不保存密码、Token、完整请求体或管理员可复用会话值。
+
+常见错误：
+
+| HTTP 状态码 | code | 含义 |
+| --- | --- | --- |
+| 403 | `WPS_ADMIN_MUTATIONS_DISABLED` | 服务端管理写操作门禁未启用 |
+| 400 | `WPS_ADMIN_STATUS_INVALID` | 账号或设备状态不是 `active` / `disabled` |
+| 400 | `WPS_ADMIN_PASSWORD_CONFIRMATION_INVALID` | 两次输入的新密码不一致 |
+| 400 | `WPS_ADMIN_DELETE_CONFIRMATION_INVALID` | 硬删除确认账号不匹配 |
+| 400 | `WPS_NOTIFICATION_TITLE_INVALID` / `WPS_NOTIFICATION_BODY_INVALID` / `WPS_NOTIFICATION_LEVEL_INVALID` | 通知标题、正文或级别无效 |
+| 403 | `CSRF_INVALID` | 管理员 CSRF 校验失败 |
+| 404 | `WPS_USER_NOT_FOUND` / `WPS_DEVICE_NOT_FOUND` | 目标账号或设备不存在 |
+
 `DATABASE_PATH` 与 `WPS_DATABASE_PATH` 必须解析到两个不同的 SQLite 文件；配置为同一文件时，服务在初始化任一数据库前以 `WPS_DATABASE_PATH_CONFLICT` 停止启动。
 
-公网接口不接收文件名、文件路径、文档正文、DOCX、识别结果或排版后的文档。更完整的字段和错误码契约见根目录 `WPS_SERVER_TECHNICAL_DESIGN.md`。
+公网接口不接收文件名、文件路径、文档正文、DOCX、识别结果或排版后的文档。本文是 WPS 外部字段、状态码和错误码的唯一契约；实现边界见根目录 `WPS_SERVER_TECHNICAL_DESIGN.md`。

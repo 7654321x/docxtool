@@ -3,7 +3,6 @@ import tempfile
 import time
 import unittest
 import zipfile
-from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 from unittest.mock import patch
@@ -22,7 +21,9 @@ class ServerProductionControlsTest(unittest.TestCase):
         self.old_admin_token = server.ADMIN_TOKEN
         self.old_proxy_secret = server.PROXY_SECRET
         self.old_frontend_origin = server.FRONTEND_ORIGIN
+        self.old_admin_console_origin = server.ADMIN_CONSOLE_ORIGIN
         self.old_cookie_secure = server.COOKIE_SECURE
+        self.old_admin_cookie_secure = server.ADMIN_COOKIE_SECURE
         self.old_production_mode = server.PRODUCTION_MODE
         server._DB_PATH = str(root / "stats.db")
         server.LOG_DIR = str(root / "logs")
@@ -31,7 +32,9 @@ class ServerProductionControlsTest(unittest.TestCase):
         server.ADMIN_TOKEN = ""
         server.PROXY_SECRET = ""
         server.FRONTEND_ORIGIN = ""
+        server.ADMIN_CONSOLE_ORIGIN = "https://docxtool.pages.dev"
         server.COOKIE_SECURE = False
+        server.ADMIN_COOKIE_SECURE = False
         server.PRODUCTION_MODE = False
         os.makedirs(server.LOG_DIR, exist_ok=True)
         os.makedirs(server.OUTPUT_DIR, exist_ok=True)
@@ -50,7 +53,9 @@ class ServerProductionControlsTest(unittest.TestCase):
         server.ADMIN_TOKEN = self.old_admin_token
         server.PROXY_SECRET = self.old_proxy_secret
         server.FRONTEND_ORIGIN = self.old_frontend_origin
+        server.ADMIN_CONSOLE_ORIGIN = self.old_admin_console_origin
         server.COOKIE_SECURE = self.old_cookie_secure
+        server.ADMIN_COOKIE_SECURE = self.old_admin_cookie_secure
         server.PRODUCTION_MODE = self.old_production_mode
         with server.TASKS_LOCK:
             server.TASKS.clear()
@@ -74,7 +79,22 @@ class ServerProductionControlsTest(unittest.TestCase):
         self.assertEqual(urls["tool"], "http://127.0.0.1:9527")
         self.assertEqual(urls["admin_login"], "http://127.0.0.1:9527/admin/login")
         self.assertEqual(urls["monitor"], "http://127.0.0.1:9527/monitor")
+        self.assertEqual(urls["health"], "http://127.0.0.1:9527/health")
+        self.assertEqual(urls["ready"], "http://127.0.0.1:9527/ready")
         self.assertEqual(urls["tunnel_command"], "cloudflared tunnel --url http://127.0.0.1:9527")
+
+    def test_public_startup_urls_show_pages_and_direct_backend_separately(self):
+        server.FRONTEND_ORIGIN = "https://docxtool.pages.dev"
+        server.ADMIN_CONSOLE_ORIGIN = "http://43.133.167.18:8080"
+
+        self.assertEqual(
+            server._public_startup_urls(),
+            {
+                "frontend": "https://docxtool.pages.dev",
+                "backend": "http://43.133.167.18:8080",
+                "admin_login": "http://43.133.167.18:8080/admin/login",
+            },
+        )
 
     def test_backend_binds_to_loopback_by_default(self):
         self.assertEqual(server.BIND_HOST, "127.0.0.1")
@@ -125,7 +145,7 @@ class ServerProductionControlsTest(unittest.TestCase):
             server.resolve_cookie_secure("https://example.pages.dev", "false", production_mode=True)
 
     def test_admin_session_cookie_uses_secure_when_configured(self):
-        server.COOKIE_SECURE = True
+        server.ADMIN_COOKIE_SECURE = True
         secure_cookie = server._admin_cookie_header("session-id")
 
         self.assertIn("HttpOnly", secure_cookie)
@@ -133,7 +153,7 @@ class ServerProductionControlsTest(unittest.TestCase):
         self.assertIn("Path=/", secure_cookie)
         self.assertIn("Secure", secure_cookie)
 
-        server.COOKIE_SECURE = False
+        server.ADMIN_COOKIE_SECURE = False
         local_cookie = server._admin_cookie_header("session-id")
 
         self.assertIn("HttpOnly", local_cookie)
@@ -255,24 +275,6 @@ class ServerProductionControlsTest(unittest.TestCase):
         local_time = time.struct_time((2026, 6, 2, 13, 24, 0, 1, 153, -1))
         with patch.object(server.time, "localtime", return_value=local_time):
             self.assertEqual(server._now_local(), "2026-06-02 13:24:00")
-
-    def test_parse_network_beijing_time_from_http_date_header(self):
-        dt = server._parse_http_date_to_beijing("Tue, 02 Jun 2026 05:24:33 GMT")
-
-        self.assertEqual(dt.strftime("%Y-%m-%d %H:%M:%S"), "2026-06-02 13:24:33")
-
-    def test_startup_time_check_warns_when_system_time_differs_from_beijing_minute(self):
-        network_time = datetime(2026, 6, 2, 13, 24, 33, tzinfo=timezone.utc)
-
-        with patch.object(server, "_now_local", return_value="2026-06-02 01:24:05"), \
-             patch.object(server, "_fetch_beijing_network_time", return_value=network_time):
-            lines = server._startup_time_check_lines()
-
-        self.assertIn("系统时间与北京网络时间不一致", lines[0])
-        self.assertIn("系统时间为：2026-06-02 01:24", lines[1])
-        self.assertIn("北京时间为：2026-06-02 13:24", lines[2])
-        self.assertIn("sudo timedatectl set-timezone Asia/Shanghai", lines[3])
-        self.assertIn("sudo timedatectl set-ntp true", lines[4])
 
     def test_queued_task_time_uses_python_local_24_hour_clock(self):
         with patch.object(server, "_now_local", return_value="2026-06-02 13:24:00", create=True):

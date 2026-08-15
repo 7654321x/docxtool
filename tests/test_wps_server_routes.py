@@ -12,6 +12,7 @@ def test_wps_public_routes_are_explicit():
         "/wps-api/v1/auth/login": "wps_auth_login",
         "/wps-api/v1/auth/logout": "wps_auth_logout",
         "/wps-api/v1/heartbeat": "wps_heartbeat",
+        "/wps-api/v1/notifications/read": "wps_notifications_read",
         "/wps-api/v1/format/authorize": "wps_format_authorize",
         "/wps-api/v1/format/result": "wps_format_result",
     }

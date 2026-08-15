@@ -4,7 +4,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from apps.wps.account_runtime import AccountRuntime
+from apps.wps.account_runtime import (
+    AccountRuntime,
+    account_from_response,
+    merge_account_snapshot,
+)
 from apps.wps.public_api import PublicApiError, WpsPublicApi
 
 
@@ -12,6 +16,7 @@ class _Store:
     def __init__(self):
         self.saved = None
         self.cleared = False
+        self.invalidated = False
         self.results = {}
 
     def save_account(self, account):
@@ -22,6 +27,10 @@ class _Store:
         deleted_count = len(self.results)
         self.results.clear()
         return deleted_count
+
+    def invalidate_session(self):
+        self.invalidated = True
+        return {}
 
     def enqueue_format_result(self, payload):
         existing = self.results.get(payload["request_id"])
@@ -46,27 +55,56 @@ def _account(expires=200):
         "username": "User01",
         "user_id": "wusr_1",
         "device_id": "wdev_1",
+        "user_status": "active",
+        "device_name": "测试电脑",
+        "platform": "windows",
+        "device_status": "active",
         "password": "Pass01",
         "session_token": "old-token",
         "device_key": "device-key-001",
+        "session_created_at": 100,
         "session_expires_at": expires,
+        "features": {"controlled": [{"command": "apply", "enabled": True}]},
+        "config_version": "config-1",
+        "heartbeat_interval_seconds": 600,
+        "remember_password": True,
+        "auto_login": False,
     }
 
 
 class _Api:
     origin = "http://127.0.0.1:9527"
 
-    def login(self, payload):
-        assert payload["username"] == "User01"
-        return {
-            "user": {"id": "wusr_1", "username": "User01", "status": "active"},
-            "device": {"id": "wdev_1"},
-            "session_token": "new-token",
-            "session_expires_at": 86500,
-        }
+    def login(self, _payload):
+        raise AssertionError("AccountRuntime must not submit saved credentials in the background")
 
     def heartbeat(self, token, payload):
-        return {"token": token, "device_id": payload["device_id"]}
+        return {
+            "token": token,
+            "device_id": payload["device_id"],
+            "account_status": "active",
+            "device_status": "active",
+            "session_expires_at": 86500,
+            "heartbeat_interval_seconds": 600,
+            "features": {"controlled": [{"command": "apply", "enabled": True}]},
+            "config_version": "config-2",
+        }
+
+    def current_user(self, _token):
+        return {
+            "user": {"id": "wusr_1", "username": "User01", "status": "active"},
+            "device": {
+                "id": "wdev_1",
+                "device_name": "测试电脑",
+                "platform": "windows",
+                "status": "active",
+            },
+            "session_created_at": 100,
+            "session_expires_at": 86500,
+            "features": {"controlled": [{"command": "apply", "enabled": True}]},
+            "config_version": "config-2",
+            "heartbeat_interval_seconds": 600,
+        }
 
     def authorize_format(self, token, payload):
         return {"allowed": True, "token": token, **payload}
@@ -78,13 +116,138 @@ class _Api:
         return {"logged_out": True, "token": token}
 
 
-def test_expired_local_session_is_refreshed_and_saved():
+def test_account_bootstrap_snapshot_creates_and_merges_without_replacing_local_credentials():
+    api = _Api()
+    response = {**api.current_user("old-token"), "session_token": "new-token"}
+
+    created = account_from_response(
+        response,
+        origin=api.origin,
+        username="User01",
+        password="Pass01",
+        device_key="device-key-001",
+        remember_password=True,
+        auto_login=False,
+    )
+    merged = merge_account_snapshot(
+        {**created, "password": "LocalPass01", "session_token": "local-token"},
+        api.current_user("local-token"),
+    )
+
+    assert created["session_token"] == "new-token"
+    assert created["heartbeat_interval_seconds"] == 600
+    assert merged["config_version"] == "config-2"
+    assert merged["password"] == "LocalPass01"
+    assert merged["session_token"] == "local-token"
+    assert merged["device_key"] == "device-key-001"
+
+
+def test_account_bootstrap_snapshot_rejects_missing_required_fields():
+    response = {**_Api().current_user("old-token"), "session_token": "new-token"}
+    response.pop("heartbeat_interval_seconds")
+
+    with pytest.raises(PublicApiError) as exc_info:
+        account_from_response(
+            response,
+            origin="http://127.0.0.1:9527",
+            username="User01",
+            password="Pass01",
+            device_key="device-key-001",
+        )
+
+    assert exc_info.value.code == "WPS_PUBLIC_RESPONSE_INVALID"
+
+
+def test_account_runtime_keeps_bootstrap_notifications_in_memory_and_confirms_by_id(monkeypatch):
+    notification = {
+        "notification_id": "wnot_1234567890abcdef1234567890abcdef",
+        "title": "服务维护",
+        "body": "通知正文只在运行期保存。",
+        "level": "warning",
+        "created_at": 1000,
+    }
+
+    class NotificationApi(_Api):
+        def __init__(self):
+            self.calls = []
+
+        def acknowledge_notifications(self, token, notification_ids):
+            self.calls.append((token, notification_ids))
+            return {"acknowledged_notification_ids": notification_ids}
+
+    response = {
+        **_Api().current_user("old-token"),
+        "session_token": "new-token",
+        "notifications": [notification, {**notification}],
+    }
+    account = account_from_response(
+        response,
+        origin="http://127.0.0.1:9527",
+        username="User01",
+        password="Pass01",
+        device_key="device-key-001",
+    )
+    store = _Store()
+    events = []
+    monkeypatch.setattr(
+        "apps.wps.account_runtime.log_event",
+        lambda _level, _component, event, _message, fields=None: events.append(
+            (event, fields or {})
+        ),
+    )
+    api = NotificationApi()
+    runtime = AccountRuntime(account, api, store=store, now_func=lambda: 100)
+
+    assert "_runtime_notifications" not in runtime._account
+    assert runtime.summary()["notifications"] == [notification]
+    assert runtime.acknowledge_notifications([notification["notification_id"]]) == {
+        "acknowledged_notification_ids": [notification["notification_id"]]
+    }
+    assert api.calls == [("new-token", [notification["notification_id"]])]
+    assert runtime.summary()["notifications"] == []
+    assert [event for event, _fields in events] == [
+        "account.notification.acknowledged"
+    ]
+    assert all("通知正文只在运行期保存。" not in str(fields) for _event, fields in events)
+
+
+def test_heartbeat_merges_optional_notifications_without_persisting_them():
+    notification = {
+        "notification_id": "wnot_abcdef1234567890abcdef1234567890",
+        "title": "版本提示",
+        "body": "请保持应用运行。",
+        "level": "info",
+        "created_at": 1001,
+    }
+
+    class NotificationHeartbeatApi(_Api):
+        def heartbeat(self, token, payload):
+            return {**super().heartbeat(token, payload), "notifications": [notification]}
+
+    store = _Store()
+    runtime = AccountRuntime(
+        _account(), NotificationHeartbeatApi(), store=store, now_func=lambda: 100
+    )
+
+    runtime.heartbeat_once()
+
+    assert runtime.summary()["notifications"] == [notification]
+    assert "notifications" not in store.saved
+
+
+def test_expired_local_session_enters_reauthentication_without_background_login():
     store = _Store()
     runtime = AccountRuntime(_account(), _Api(), store=store, now_func=lambda: 500)
+    requests = []
+    runtime.set_reauth_callback(lambda: requests.append("reauth"))
 
-    assert runtime.ensure_session() == "new-token"
-    assert store.saved["session_token"] == "new-token"
-    assert runtime.authorize_format("pane-request-001")["allowed"] is True
+    with pytest.raises(PublicApiError, match="SESSION_EXPIRED"):
+        runtime.authorize_format("pane-request-001")
+
+    assert store.invalidated is True
+    assert runtime.summary()["reauth_required"] is True
+    assert runtime.summary()["apply_available"] is False
+    assert requests == ["reauth"]
 
 
 def test_expired_session_without_remembered_password_requires_login():
@@ -220,6 +383,41 @@ def test_public_api_rejects_a_mismatched_response_request_id(monkeypatch):
     assert exc_info.value.code == "WPS_PUBLIC_REQUEST_ID_MISMATCH"
 
 
+def test_public_api_posts_notification_display_acknowledgement(monkeypatch):
+    observed = {}
+    api = WpsPublicApi("http://127.0.0.1:9527")
+    monkeypatch.setattr(
+        api,
+        "_request",
+        lambda method, path, payload, *, token="", request_id="": observed.update(
+            method=method,
+            path=path,
+            payload=payload,
+            token=token,
+            request_id=request_id,
+        )
+        or {"acknowledged_notification_ids": payload["notification_ids"]},
+    )
+
+    result = api.acknowledge_notifications(
+        "session-token",
+        ["wnot_1234567890abcdef1234567890abcdef"],
+    )
+
+    assert result == {
+        "acknowledged_notification_ids": ["wnot_1234567890abcdef1234567890abcdef"]
+    }
+    assert observed == {
+        "method": "POST",
+        "path": "/notifications/read",
+        "payload": {
+            "notification_ids": ["wnot_1234567890abcdef1234567890abcdef"]
+        },
+        "token": "session-token",
+        "request_id": "",
+    }
+
+
 def test_public_api_network_failure_is_distinct():
     api = WpsPublicApi("http://127.0.0.1:1", timeout=1)
     with pytest.raises(PublicApiError) as exc_info:
@@ -333,19 +531,24 @@ def test_heartbeat_logs_recovery_after_previously_online(monkeypatch):
     ]
 
 
-def test_invalid_server_session_forces_next_silent_login():
+def test_invalid_server_session_requires_one_ui_reauthentication_and_preserves_outbox():
     class ExpiredApi(_Api):
         def heartbeat(self, token, payload):
             raise PublicApiError("SESSION_EXPIRED", "expired", 401)
 
     store = _Store()
     runtime = AccountRuntime(_account(), ExpiredApi(), store=store, now_func=lambda: 100)
+    requests = []
+    runtime.set_reauth_callback(lambda: requests.append("reauth"))
     with pytest.raises(PublicApiError, match="SESSION_EXPIRED"):
         runtime.heartbeat_once()
 
     assert runtime.summary()["apply_available"] is False
-    assert runtime.ensure_session() == "new-token"
-    assert store.saved["session_token"] == "new-token"
+    assert runtime.summary()["reauth_required"] is True
+    assert store.invalidated is True
+    assert requests == ["reauth"]
+    with pytest.raises(PublicApiError, match="SESSION_EXPIRED"):
+        runtime.ensure_session()
 
 
 def test_pending_result_survives_network_failure_and_flushes_after_recovery():
@@ -398,7 +601,7 @@ def test_pending_result_conflict_is_removed_and_identical_enqueue_is_reused():
     assert runtime.summary()["error_code"] == "REQUEST_STATUS_CONFLICT"
 
 
-def test_account_rejection_deletes_pending_results_without_deferred_log(monkeypatch):
+def test_account_rejection_preserves_pending_results_and_requires_reauthentication(monkeypatch):
     events = []
 
     class RejectedApi(_Api):
@@ -416,16 +619,12 @@ def test_account_rejection_deletes_pending_results_without_deferred_log(monkeypa
     with pytest.raises(PublicApiError, match="ACCOUNT_DISABLED"):
         runtime._flush_pending_results()
 
-    assert store.cleared is True
-    assert runtime.summary()["pending_result_count"] == 0
-    deleted = [item for item in events if item[0] == "account.format_result.deleted.account_rejected"]
-    assert deleted == [
-        (
-            "account.format_result.deleted.account_rejected",
-            {"error_code": "ACCOUNT_DISABLED", "deleted_count": 1},
-        )
-    ]
-    assert not any(item[0] == "account.format_result.deferred" for item in events)
+    assert store.cleared is False
+    assert store.invalidated is True
+    assert runtime.summary()["pending_result_count"] == 1
+    assert runtime.summary()["reauth_required"] is True
+    assert any(item[0] == "account.reauth.required" for item in events)
+    assert any(item[0] == "account.format_result.deferred" for item in events)
 
 
 def test_session_expiry_preserves_pending_result(monkeypatch):

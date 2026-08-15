@@ -118,6 +118,17 @@ class WpsPublicApi:
     def heartbeat(self, session_token: str, payload: dict) -> dict:
         return self._request("POST", "/heartbeat", payload, token=session_token)
 
+    def acknowledge_notifications(
+        self, session_token: str, notification_ids: list[str]
+    ) -> dict:
+        """Confirm TaskPane display for an account-scoped notification batch."""
+        return self._request(
+            "POST",
+            "/notifications/read",
+            {"notification_ids": notification_ids},
+            token=session_token,
+        )
+
     def authorize_format(self, session_token: str, payload: dict) -> dict:
         data = self._request("POST", "/format/authorize", payload, token=session_token, request_id=payload["request_id"])
         if data.get("request_id") != payload["request_id"]:

@@ -11,6 +11,10 @@ from collections.abc import Mapping
 from urllib.parse import urlparse
 
 
+DEFAULT_PUBLIC_FRONTEND_ORIGIN = "https://docxtool.pages.dev"
+DEFAULT_ADMIN_CONSOLE_ORIGIN = DEFAULT_PUBLIC_FRONTEND_ORIGIN
+
+
 def parse_bool(value: object, default: bool = True) -> bool:
     """传入任意配置值，返回布尔解析结果；无法识别时返回默认值。"""
     raw = str(value).strip().lower()
@@ -59,6 +63,51 @@ def parse_frontend_origin(value: str, production_mode: bool = False) -> str:
 
     normalized = f"{parsed.scheme}://{parsed.netloc}"
     return normalized.rstrip("/")
+
+
+def display_frontend_origin(value: str) -> str:
+    """传入已校验的前端 Origin，返回启动日志可展示的公网前端地址。"""
+    return str(value or "").strip().rstrip("/") or DEFAULT_PUBLIC_FRONTEND_ORIGIN
+
+
+def parse_admin_console_origin(value: str) -> str:
+    """传入管理入口 Origin，返回规范化后的根地址或默认 Pages 地址。"""
+    raw = str(value or "").strip()
+    if not raw:
+        return DEFAULT_ADMIN_CONSOLE_ORIGIN
+
+    parsed = urlparse(raw)
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError("ADMIN_CONSOLE_ORIGIN must use http or https")
+    if not parsed.hostname:
+        raise ValueError("ADMIN_CONSOLE_ORIGIN must include host")
+    if parsed.username or parsed.password:
+        raise ValueError("ADMIN_CONSOLE_ORIGIN must not include username or password")
+    if parsed.query:
+        raise ValueError("ADMIN_CONSOLE_ORIGIN must not include query")
+    if parsed.fragment:
+        raise ValueError("ADMIN_CONSOLE_ORIGIN must not include fragment")
+    if parsed.path not in {"", "/"}:
+        raise ValueError("ADMIN_CONSOLE_ORIGIN must not include path")
+
+    return f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
+
+
+def resolve_admin_cookie_secure(
+    admin_console_origin: str,
+    explicit_value: str | None,
+    default: bool,
+    production_mode: bool = False,
+) -> bool:
+    """根据独立管理入口和显式配置，返回管理员 Cookie 的 Secure 标记。"""
+    origin = parse_admin_console_origin(admin_console_origin)
+    secure = default if explicit_value is None or str(explicit_value).strip() == "" else parse_bool(explicit_value, default)
+    scheme = urlparse(origin).scheme
+    if scheme == "http" and secure:
+        raise ValueError("ADMIN_COOKIE_SECURE must be false when ADMIN_CONSOLE_ORIGIN uses http")
+    if production_mode and scheme == "https" and not secure:
+        raise ValueError("ADMIN_COOKIE_SECURE=false is not allowed with HTTPS ADMIN_CONSOLE_ORIGIN in production")
+    return secure
 
 
 def resolve_cookie_secure(

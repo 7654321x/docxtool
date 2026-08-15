@@ -36,9 +36,18 @@ class _Api:
                 "username": payload["username"],
                 "status": "active",
             },
-            "device": {"id": "wdev_1"},
+            "device": {
+                "id": "wdev_1",
+                "device_name": "测试电脑",
+                "platform": "windows",
+                "status": "active",
+            },
             "session_token": "session-token-001",
+            "session_created_at": 3600,
             "session_expires_at": 86400,
+            "features": {"controlled": [{"command": "apply", "enabled": True}]},
+            "config_version": "config-1",
+            "heartbeat_interval_seconds": 600,
         }
 
     def login(self, payload):
@@ -458,6 +467,61 @@ def test_desktop_tray_uses_the_shared_d_icon(qt_app, monkeypatch):
 
     assert controller._tray.icon().cacheKey() == expected_icon.cacheKey()
     assert controller._startup_action.text() == "开机自启"
+
+
+def test_desktop_reauthentication_uses_visible_login_without_old_password(qt_app, monkeypatch):
+    calls = []
+
+    class Runtime:
+        def __init__(self):
+            self.callback = None
+            self.reloaded = 0
+
+        def set_reauth_callback(self, callback):
+            self.callback = callback
+
+        def reload_account(self, account=None):
+            assert account == {"username": "User01"}
+            self.reloaded += 1
+
+        @staticmethod
+        def summary():
+            return {"reauth_required": True}
+
+    runtime = Runtime()
+    monkeypatch.setattr(
+        desktop_runtime.account_store,
+        "load_account",
+        lambda: {
+            "username": "User01",
+            "device_key": "device-key-001",
+            "remember_password": True,
+            "auto_login": True,
+        },
+    )
+    monkeypatch.setattr(desktop_runtime.windows_startup, "is_enabled", lambda: False)
+    monkeypatch.setattr(
+        desktop_runtime,
+        "show_login_register_window",
+        lambda **kwargs: calls.append(kwargs) or {"username": "User01"},
+    )
+    controller = desktop_runtime.DesktopController(
+        application=qt_app,
+        account_runtime=runtime,
+        start_service=lambda *_args, **_kwargs: None,
+        port=9527,
+        api=object(),
+    )
+
+    runtime.callback()
+
+    assert len(calls) == 1
+    assert calls[0]["initial_username"] == "User01"
+    assert calls[0]["initial_password"] == ""
+    assert calls[0]["auto_login"] is False
+    assert "重新输入密码" in calls[0]["initial_message"]
+    assert runtime.reloaded == 1
+    assert controller._reauth_open is False
 
 
 def test_desktop_reports_existing_wps_service_without_killing_it(qt_app, monkeypatch):

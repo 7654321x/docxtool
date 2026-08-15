@@ -11,9 +11,11 @@ from docxtool.paths import project_path, runtime_dir
 from docxtool.storage.database import default_database_path
 from docxtool.version import package_version
 from docxtool.web.config import (
+    parse_admin_console_origin,
     parse_bool,
     parse_frontend_origin,
     parse_int_env,
+    resolve_admin_cookie_secure,
     resolve_cookie_secure,
 )
 
@@ -52,6 +54,8 @@ class EnvironmentConfig:
     production_mode: bool
     frontend_origin: str
     cookie_secure: bool
+    admin_console_origin: str
+    admin_cookie_secure: bool
     user_session_days: int
     user_session_max_age: int
     max_size: int
@@ -126,6 +130,18 @@ def load_environment_config(load_secret: Callable[[str, str], str]) -> Environme
             os.environ.get("COOKIE_SECURE"),
             production_mode,
         )
+        admin_console_origin_raw = os.environ.get("ADMIN_CONSOLE_ORIGIN", "")
+        admin_cookie_secure_raw = os.environ.get("ADMIN_COOKIE_SECURE")
+        admin_console_origin = parse_admin_console_origin(admin_console_origin_raw)
+        if str(admin_console_origin_raw).strip() or str(admin_cookie_secure_raw or "").strip():
+            admin_cookie_secure = resolve_admin_cookie_secure(
+                admin_console_origin,
+                admin_cookie_secure_raw,
+                cookie_secure,
+                production_mode,
+            )
+        else:
+            admin_cookie_secure = cookie_secure
     except ValueError as exc:
         raise SystemExit(f"[配置错误] {exc}") from exc
     user_session_days = max(1, min(365, parse_int_env("DOCXTOOL_USER_SESSION_DAYS", 30)))
@@ -142,6 +158,8 @@ def load_environment_config(load_secret: Callable[[str, str], str]) -> Environme
         production_mode=production_mode,
         frontend_origin=frontend_origin,
         cookie_secure=cookie_secure,
+        admin_console_origin=admin_console_origin,
+        admin_cookie_secure=admin_cookie_secure,
         user_session_days=user_session_days,
         user_session_max_age=user_session_days * 24 * 60 * 60,
         max_size=parse_int_env("MAX_UPLOAD_SIZE_MB", 10) * 1024 * 1024,

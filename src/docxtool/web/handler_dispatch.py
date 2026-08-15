@@ -34,9 +34,15 @@ def dispatch_get(handler: Any, parsed: Any, path: str) -> None:
     elif route.action == "admin_workspace":
         handler._handle_admin_workspace(parsed)
     elif route.action == "admin_web":
-        handler._handle_admin_web(parsed)
+        handler._handle_admin_web(parsed, route.value)
+    elif route.action == "admin_wps_overview":
+        handler._handle_admin_wps_overview(parsed)
     elif route.action == "admin_wps_users":
         handler._handle_admin_wps_users(parsed)
+    elif route.action == "admin_wps_devices":
+        handler._handle_admin_wps_devices(parsed)
+    elif route.action == "admin_wps_tasks":
+        handler._handle_admin_wps_tasks(parsed)
     elif route.action == "admin_wps_user":
         handler._handle_admin_wps_user(parsed, route.value)
     elif route.action == "stats":
@@ -80,12 +86,20 @@ def dispatch_post(handler: Any, parsed: Any, path: str) -> None:
         handler._handle_wps_api("logout")
     elif route.action == "wps_heartbeat":
         handler._handle_wps_api("heartbeat")
+    elif route.action == "wps_notifications_read":
+        handler._handle_wps_api("notifications_read")
     elif route.action == "wps_format_authorize":
         handler._handle_wps_api("format_authorize")
     elif route.action == "wps_format_result":
         handler._handle_wps_api("format_result")
     elif route.action == "admin_wps_user_status":
         handler._handle_admin_wps_user_status(parsed, route.value)
+    elif route.action == "admin_wps_user_password_reset":
+        handler._handle_admin_wps_user_password_reset(parsed, route.value)
+    elif route.action == "admin_wps_user_notification":
+        handler._handle_admin_wps_user_notification(parsed, route.value)
+    elif route.action == "admin_wps_user_delete":
+        handler._handle_admin_wps_user_delete(parsed, route.value)
     elif route.action == "admin_wps_device_status":
         handler._handle_admin_wps_device_status(parsed, route.value)
     elif route.action == "admin_login":

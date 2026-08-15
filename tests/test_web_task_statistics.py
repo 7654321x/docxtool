@@ -152,3 +152,24 @@ def test_get_task_statistics_clamps_pages_for_empty_database(tmp_path: Path) -> 
     assert stats["ip_page"] == 1
     assert stats["recent"] == []
     assert stats["top_ips"] == []
+
+
+def test_get_task_statistics_filters_web_task_and_log_results_without_sql_guessing(tmp_path: Path) -> None:
+    connect, lock = _init_stats_db(tmp_path)
+    _log_sample_task(connect, lock, "task-report", "203.0.113.8", "report.docx", "done")
+    _log_sample_task(connect, lock, "task-other", "203.0.113.9", "other.docx", "failed")
+
+    stats = get_task_statistics(
+        {"task_q": "report", "task_status": "done", "recent_size": 20, "ip_size": 20},
+        connect=connect,
+        sql_lock=lock,
+        normalize_query=normalize_monitor_query,
+        page_count=page_count,
+    )
+
+    assert stats["total"] == 1
+    assert stats["done"] == 1
+    assert stats["error"] == 0
+    assert [row["id"] for row in stats["recent"]] == ["task-report"]
+    assert stats["query"]["task_q"] == "report"
+    assert stats["query"]["task_status"] == "done"

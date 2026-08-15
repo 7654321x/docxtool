@@ -14,6 +14,29 @@ WPS_JSON_MAX_BYTES = 32 * 1024
 WPS_CONTROLLED_COMMANDS = frozenset({"apply"})
 
 
+def _parse_server_bool(name: str, value: str | None, *, default: bool) -> bool:
+    """Parse a server-only boolean setting and fail closed on malformed values."""
+    if value is None or not str(value).strip():
+        return default
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise RuntimeError(f"{name}_INVALID")
+
+
+def resolve_wps_admin_mutations_enabled(value: str | None = None) -> bool:
+    """Return the process-startup WPS admin-mutation gate, disabled by default."""
+    configured = os.environ.get("WPS_ADMIN_MUTATIONS_ENABLED") if value is None else value
+    return _parse_server_bool(
+        "WPS_ADMIN_MUTATIONS_ENABLED", configured, default=False
+    )
+
+
+WPS_ADMIN_MUTATIONS_ENABLED = resolve_wps_admin_mutations_enabled()
+
+
 def resolve_wps_database_path(value=None) -> Path:
     """Return the configured WPS database path without creating it."""
     configured = value if value is not None else os.environ.get("WPS_DATABASE_PATH")

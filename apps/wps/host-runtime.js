@@ -6,7 +6,7 @@
   const config = globalObject.DocxToolWpsConfig || {};
   const TASKPANE_KEY = "docxtool_wps_taskpane_id_v1";
   const TASKPANE_VERSION_KEY = "docxtool_wps_taskpane_version_v1";
-  const TASKPANE_PAGE_VERSION = "24";
+  const TASKPANE_PAGE_VERSION = "26";
   const TASKPANE_DEFAULT_WIDTH = 422;
   const PREVIEW_KEY_PREFIX = "docxtool_wps_preview_v2:";
   const PREVIEW_BATCH_SIZE = 5;

@@ -1,11 +1,14 @@
 import http.client
 import json
 import logging
+import re
 import threading
+from urllib.parse import urlencode
 
 from docxtool.web import app as server
 from docxtool.wps_server import database
-from docxtool.wps_server.admin import overview
+from docxtool.wps_server.admin import overview, send_notification
+from docxtool.wps_server.service import register_user
 
 
 def test_wps_public_http_flow_updates_admin_statistics(tmp_path, monkeypatch, caplog):
@@ -57,6 +60,8 @@ def test_wps_public_http_flow_updates_admin_statistics(tmp_path, monkeypatch, ca
         )
         assert status == 201 and registered["ok"] is True
         registration_token = registered["data"]["session_token"]
+        assert registered["data"]["heartbeat_interval_seconds"] == 10 * 60
+        assert registered["data"]["notifications"] == []
 
         status, current = request(
             "/wps-api/v1/auth/me",
@@ -65,6 +70,9 @@ def test_wps_public_http_flow_updates_admin_statistics(tmp_path, monkeypatch, ca
         )
         assert status == 200
         assert current["data"]["user"]["username"] == "HttpUser01"
+        assert current["data"]["device"]["id"] == registered["data"]["device"]["id"]
+        assert current["data"]["heartbeat_interval_seconds"] == 10 * 60
+        assert "session_token" not in current["data"]
 
         status, logged_out = request(
             "/wps-api/v1/auth/logout",
@@ -88,6 +96,17 @@ def test_wps_public_http_flow_updates_admin_statistics(tmp_path, monkeypatch, ca
         assert status == 200 and logged_in["ok"] is True
         token = logged_in["data"]["session_token"]
         device_id = logged_in["data"]["device"]["id"]
+        notification_id = send_notification(
+            logged_in["data"]["user"]["id"],
+            "服务维护",
+            "通知正文只会作为纯文本交给任务窗格。",
+            "info",
+            connect_func=server._wps_sql,
+            sql_lock=server._WPS_SQL_LOCK,
+            now=1000,
+            actor={"actor_type": "legacy_token", "actor_session_id_short": ""},
+            correlation_id="adm_http_notification",
+        )
 
         status, heartbeat = request(
             "/wps-api/v1/heartbeat",
@@ -96,6 +115,38 @@ def test_wps_public_http_flow_updates_admin_statistics(tmp_path, monkeypatch, ca
         )
         assert status == 200
         assert heartbeat["data"]["session_expires_at"] == 1000 + 7 * 24 * 60 * 60
+        assert heartbeat["data"]["heartbeat_interval_seconds"] == 10 * 60
+        assert heartbeat["data"]["notifications"] == [
+            {
+                "notification_id": notification_id,
+                "title": "服务维护",
+                "body": "通知正文只会作为纯文本交给任务窗格。",
+                "level": "info",
+                "created_at": 1000,
+            }
+        ]
+
+        status, acknowledged = request(
+            "/wps-api/v1/notifications/read",
+            {
+                "notification_ids": [
+                    notification_id,
+                    "wnot_00000000000000000000000000000000",
+                ]
+            },
+            token=token,
+        )
+        assert status == 200
+        assert acknowledged["data"] == {
+            "acknowledged_notification_ids": [notification_id]
+        }
+        status, acknowledged_again = request(
+            "/wps-api/v1/notifications/read",
+            {"notification_ids": [notification_id]},
+            token=token,
+        )
+        assert status == 200
+        assert acknowledged_again["data"] == {"acknowledged_notification_ids": []}
 
         rejected_request_id = "http-format-rejected-001"
         status, rejected = request(
@@ -153,7 +204,15 @@ def test_wps_public_http_flow_updates_admin_statistics(tmp_path, monkeypatch, ca
         thread.join(timeout=5)
 
     summary = overview(connect_func=server._wps_sql, sql_lock=server._WPS_SQL_LOCK, now=1000)
-    assert summary == {"users": 1, "online_devices": 1, "requests": 1, "pending": 0}
+    assert summary == {
+        "users": 1,
+        "online_devices": 1,
+        "requests": 1,
+        "pending": 0,
+        "success": 1,
+        "failed": 0,
+        "average_duration_ms": 321.0,
+    }
     for event in (
         "wps.device.created",
         "wps.device.online",
@@ -167,6 +226,8 @@ def test_wps_public_http_flow_updates_admin_statistics(tmp_path, monkeypatch, ca
         "wps.format.result.start",
         "wps.format.result.completed",
         "wps.format.result.conflict",
+        "wps.notification.acknowledge.start",
+        "wps.notification.acknowledge.completed",
         "wps.format_config.returned",
     ):
         assert event in caplog.text
@@ -178,3 +239,97 @@ def test_wps_public_http_flow_updates_admin_statistics(tmp_path, monkeypatch, ca
         assert value not in caplog.text
         assert all(value not in json.dumps(item, ensure_ascii=False) for item in non_auth_responses)
         assert all(value.encode("utf-8") not in path.read_bytes() for path in tmp_path.glob("wps_plugin.db*"))
+
+
+def test_wps_admin_http_status_mutation_requires_session_csrf_and_writes_audit(tmp_path, monkeypatch):
+    """Exercise the real Handler route from admin login through one gated WPS mutation."""
+    web_database_path = tmp_path / "stats.db"
+    wps_database_path = tmp_path / "wps_plugin.db"
+    monkeypatch.setattr(server, "_DB_PATH", web_database_path)
+    monkeypatch.setattr(server, "_WPS_DB_PATH", wps_database_path)
+    monkeypatch.setattr(server, "ADMIN_TOKEN", "test-admin-token")
+    monkeypatch.setattr(server, "_WPS_ADMIN_MUTATIONS_ENABLED", True)
+    server._sql_init()
+    registered = register_user(
+        {
+            "username": "AdminHttp01",
+            "password": "Pass01",
+            "device": {
+                "device_key": "admin-http-device-key",
+                "device_name": "HTTP 测试电脑",
+                "platform": "windows",
+                "app_version": "5.1",
+            },
+        },
+        connect_func=server._wps_sql,
+        sql_lock=server._WPS_SQL_LOCK,
+        client_ip="127.0.0.1",
+        now_func=lambda: 1000,
+        config_version="config-http-1",
+    )
+    httpd = server.ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    port = int(httpd.server_address[1])
+
+    def request(path, *, method="GET", form=None, headers=None):
+        body = None
+        request_headers = dict(headers or {})
+        if form is not None:
+            body = urlencode(form).encode("utf-8")
+            request_headers["Content-Type"] = "application/x-www-form-urlencoded"
+            request_headers["Content-Length"] = str(len(body))
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request(method, path, body=body, headers=request_headers)
+        response = conn.getresponse()
+        payload = response.read()
+        result = (response.status, dict(response.getheaders()), payload)
+        conn.close()
+        return result
+
+    user_id = registered["user"]["id"]
+    try:
+        status, headers, _body = request("/admin?token=test-admin-token")
+        assert status == 303
+        assert headers["Location"] == "/admin"
+        cookie = headers["Set-Cookie"].split(";", 1)[0]
+
+        status, _headers, page = request(
+            f"/admin/wps/users/{user_id}?tab=security",
+            headers={"Cookie": cookie},
+        )
+        assert status == 200
+        match = re.search(rb'name="csrf_token" value="([^"]+)"', page)
+        assert match is not None
+        csrf_token = match.group(1).decode("ascii")
+
+        status, _headers, denied = request(
+            f"/admin/wps/users/{user_id}/status",
+            method="POST",
+            form={"status": "disabled"},
+            headers={"Cookie": cookie},
+        )
+        assert status == 403
+        assert json.loads(denied.decode("utf-8"))["code"] == "CSRF_INVALID"
+
+        status, headers, _body = request(
+            f"/admin/wps/users/{user_id}/status",
+            method="POST",
+            form={"csrf_token": csrf_token, "status": "disabled"},
+            headers={"Cookie": cookie},
+        )
+        assert status == 303
+        assert headers["Location"] == f"/admin/wps/users/{user_id}?tab=security"
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
+
+    with database.connect(wps_database_path) as conn:
+        assert conn.execute("SELECT status FROM wps_users WHERE id=?", (user_id,)).fetchone()[0] == "disabled"
+        assert conn.execute("SELECT COUNT(*) FROM wps_sessions WHERE user_id=?", (user_id,)).fetchone()[0] == 0
+        audit_row = conn.execute(
+            "SELECT event,result FROM wps_admin_audit_logs WHERE target_user_id=?",
+            (user_id,),
+        ).fetchone()
+        assert tuple(audit_row) == ("wps.admin.user.status.updated", "success")

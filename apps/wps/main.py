@@ -775,6 +775,7 @@ def run_desktop(port: int, *, force_login: bool = False) -> int:
         account_runtime=AccountRuntime(account, api),
         start_service=start,
         port=port,
+        api=api,
     )
     instance.show_requested.connect(controller.show_settings)
     controller.start()
