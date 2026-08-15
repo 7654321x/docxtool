@@ -24,6 +24,7 @@ from docxtool.wps_server.format_config import load_active_format_profile
 
 from .document_transaction import DocumentTransactionError, DocumentTransactionManager
 from .add_letterhead import inspect_letterhead, normalize_letterhead_request
+from ..format_profile_store import FormatProfileError, FormatProfileStore
 from .host_bridge import HostBridge, HostBridgeError
 from .logging_adapter import configure_wps_logging, log_event
 from .monitor import CommandMonitor
@@ -66,6 +67,18 @@ BUSINESS_ROUTES = frozenset(
     }
 )
 FORMAT_CONFIG_ROUTE = "/v1/format/default"
+FORMAT_PROFILES_ROUTE = "/v1/format/profiles"
+FORMAT_PROFILES_ACTIVE_ROUTE = "/v1/format/profiles/active"
+FORMAT_PROFILES_DETAIL_ROUTE = "/v1/format/profiles/detail"
+FORMAT_PROFILE_POST_ROUTES = frozenset(
+    {
+        "/v1/format/profiles/initialize",
+        "/v1/format/profiles/create",
+        "/v1/format/profiles/update",
+        "/v1/format/profiles/delete",
+        "/v1/format/profiles/select",
+    }
+)
 BRIDGE_ROUTES = frozenset(
     {
         "/v1/bridge/host/register",
@@ -113,6 +126,7 @@ class WpsControlApplication:
         session_token: str,
         account_runtime=None,
         reader_service=None,
+        format_profile_store=None,
     ) -> None:
         self.app_root = Path(app_root)
         self.session_token = session_token
@@ -121,6 +135,7 @@ class WpsControlApplication:
         self.host_bridge = HostBridge()
         self.account_runtime = account_runtime
         self._reader_service = reader_service
+        self.format_profile_store = format_profile_store or FormatProfileStore()
         self._authorization_lock = threading.RLock()
         self._authorized_requests: Dict[str, Dict[str, Any]] = {}
         self._plans: "OrderedDict[str, RecognitionPlan]" = OrderedDict()
@@ -155,6 +170,119 @@ class WpsControlApplication:
             "config_version": str(profile["config_version"]),
             "format_config": deepcopy(profile["format_config"]),
         }
+
+    def _format_profile_owner(self) -> str:
+        if self.account_runtime is None:
+            raise FormatProfileError("WPS_FORMAT_PROFILE_ACCOUNT_REQUIRED")
+        summary = self.account_runtime.summary()
+        owner = str(summary.get("user_id", "")).strip()
+        if not owner:
+            raise FormatProfileError("WPS_FORMAT_PROFILE_ACCOUNT_REQUIRED")
+        return owner
+
+    def _system_format_profile(self) -> Dict[str, Any]:
+        profile = self.default_format_config()
+        return {
+            "profile_id": "system:default",
+            "name": "系统默认",
+            "is_system": True,
+            "schema_version": int(profile["format_config"].get("schema_version", 1)),
+            "revision": 0,
+            "config_version": profile["config_version"],
+            "format_config": deepcopy(profile["format_config"]),
+        }
+
+    def _format_profile_response(self, owner: str) -> Dict[str, Any]:
+        active = self.format_profile_store.active_profile(owner)
+        system = self._system_format_profile()
+        active_profile = (
+            {**active, "config_version": system["config_version"]}
+            if active
+            else system
+        )
+        profiles = [system, *self.format_profile_store.list_profiles(owner)]
+        return {
+            "profiles": profiles,
+            "active_profile_id": active["profile_id"] if active else system["profile_id"],
+            "active_profile": active_profile,
+        }
+
+    def format_profiles_initialize(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        owner = self._format_profile_owner()
+        legacy_config = body.get("legacy_format_config")
+        if legacy_config is not None and not isinstance(legacy_config, dict):
+            raise FormatProfileError("WPS_FORMAT_PROFILE_MIGRATION_FAILED")
+        result = self.format_profile_store.initialize(owner, legacy_config)
+        response = self._format_profile_response(owner)
+        response["legacy_imported"] = bool(result["legacy_imported"])
+        return response
+
+    def format_profiles_list(self) -> Dict[str, Any]:
+        return self._format_profile_response(self._format_profile_owner())
+
+    def format_profiles_active(self) -> Dict[str, Any]:
+        owner = self._format_profile_owner()
+        response = self._format_profile_response(owner)
+        return {
+            "active_profile_id": response["active_profile_id"],
+            "active_profile": response["active_profile"],
+        }
+
+    def format_profiles_detail(self, profile_id: str) -> Dict[str, Any]:
+        owner = self._format_profile_owner()
+        if profile_id == "system:default":
+            return {"profile": self._system_format_profile()}
+        profile = self.format_profile_store.get(owner, profile_id)
+        profile["config_version"] = self.default_format_config()["config_version"]
+        return {"profile": profile}
+
+    def format_profiles_create(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        owner = self._format_profile_owner()
+        profile = self.format_profile_store.create(
+            owner, body.get("name", ""), body.get("format_config")
+        )
+        return {**self._format_profile_response(owner), "saved_profile": profile}
+
+    def format_profiles_update(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        owner = self._format_profile_owner()
+        profile_id = str(body.get("profile_id", ""))
+        if profile_id == "system:default":
+            raise FormatProfileError("WPS_FORMAT_PROFILE_SYSTEM_LOCKED")
+        profile = self.format_profile_store.update(
+            owner, profile_id, body.get("name", ""), body.get("format_config")
+        )
+        return {**self._format_profile_response(owner), "saved_profile": profile}
+
+    def format_profiles_delete(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        owner = self._format_profile_owner()
+        profile_id = str(body.get("profile_id", ""))
+        if profile_id == "system:default":
+            raise FormatProfileError("WPS_FORMAT_PROFILE_SYSTEM_LOCKED")
+        self.format_profile_store.delete(owner, profile_id)
+        return self._format_profile_response(owner)
+
+    def format_profiles_select(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        owner = self._format_profile_owner()
+        profile_id = str(body.get("profile_id", ""))
+        if profile_id == "system:default":
+            profile_id = ""
+        self.format_profile_store.select(owner, profile_id)
+        return self._format_profile_response(owner)
+
+    def dispatch_format_profiles_post(
+        self, path: str, body: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        if path == "/v1/format/profiles/initialize":
+            return self.format_profiles_initialize(body)
+        if path == "/v1/format/profiles/create":
+            return self.format_profiles_create(body)
+        if path == "/v1/format/profiles/update":
+            return self.format_profiles_update(body)
+        if path == "/v1/format/profiles/delete":
+            return self.format_profiles_delete(body)
+        if path == "/v1/format/profiles/select":
+            return self.format_profiles_select(body)
+        raise DocumentTransactionError("WPS_CONTROL_ROUTE_NOT_FOUND")
 
     def account_summary(self) -> Dict[str, Any]:
         if self.account_runtime is None:
@@ -958,6 +1086,7 @@ def create_server(
     *,
     account_runtime=None,
     reader_service=None,
+    format_profile_store=None,
     allowed_origin: str = "",
 ) -> WpsControlHttpServer:
     application = WpsControlApplication(
@@ -965,6 +1094,7 @@ def create_server(
         session_token,
         account_runtime,
         reader_service=reader_service,
+        format_profile_store=format_profile_store,
     )
     monitor = CommandMonitor(application.dispatch)
 
@@ -1123,7 +1253,15 @@ def create_server(
                 request_id = self._request_id()
                 route_path = self._route_path()
                 log_event("INFO", "control", "request.start", "WPS Control 请求开始", {"method": "GET", "path": route_path, "request_id": request_id})
-                if route_path not in {"/v1/health", "/v1/account", FORMAT_CONFIG_ROUTE, *READER_GET_ROUTES}:
+                if route_path not in {
+                    "/v1/health",
+                    "/v1/account",
+                    FORMAT_CONFIG_ROUTE,
+                    FORMAT_PROFILES_ROUTE,
+                    FORMAT_PROFILES_ACTIVE_ROUTE,
+                    FORMAT_PROFILES_DETAIL_ROUTE,
+                    *READER_GET_ROUTES,
+                }:
                     self._json(404, {"ok": False, "error_code": "WPS_CONTROL_ROUTE_NOT_FOUND"})
                     log_event("ERROR", "control", "control.route.not_found", "WPS Control 路由不存在", {"method": "GET", "path": self._safe_path(), "request_id": request_id, "http_status": 404, "error_code": "WPS_CONTROL_ROUTE_NOT_FOUND"})
                     return
@@ -1137,6 +1275,14 @@ def create_server(
                     data = application.account_summary()
                 elif route_path == FORMAT_CONFIG_ROUTE:
                     data = application.default_format_config()
+                elif route_path == FORMAT_PROFILES_ROUTE:
+                    data = application.format_profiles_list()
+                elif route_path == FORMAT_PROFILES_ACTIVE_ROUTE:
+                    data = application.format_profiles_active()
+                elif route_path == FORMAT_PROFILES_DETAIL_ROUTE:
+                    data = application.format_profiles_detail(
+                        self._query().get("profile_id", "")
+                    )
                 else:
                     data = application.dispatch_reader_get(route_path, self._query())
                 self._json(200, {"ok": True, "data": data})
@@ -1177,6 +1323,7 @@ def create_server(
             is_log_route = route_path == "/v1/log"
             is_bridge_route = route_path in BRIDGE_ROUTES
             is_reader_route = route_path in READER_POST_ROUTES
+            is_format_profile_route = route_path in FORMAT_PROFILE_POST_ROUTES
             is_quiet_route = is_log_route or is_bridge_route
             if not is_quiet_route:
                 log_event("INFO", "control", "request.start", "WPS Control 请求开始", {"method": "POST", "path": self._safe_path(), "request_id": request_id})
@@ -1210,6 +1357,8 @@ def create_server(
                         import_filename=self.headers.get("X-DocxTool-Reader-Filename", ""),
                         request_id=request_id,
                     )
+                elif is_format_profile_route:
+                    data = application.dispatch_format_profiles_post(route_path, body)
                 elif route_path in BUSINESS_ROUTES:
                     data = monitor.submit(route_path, body, request_id=request_id)
                 else:

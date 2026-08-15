@@ -2192,12 +2192,17 @@ def test_verify_files_requires_new_bootstrap_files(monkeypatch, tmp_path):
             "host-runtime.js",
         "taskpane.html",
         "taskpane.js",
+        "format-config.js",
+        "format-settings.html",
+        "format-settings.js",
+        "format-settings.css",
         "client-config.json",
         "reader/reader-client.js",
         "reader/reader-ui.js",
         "reader/reader.css",
         "account_store.py",
         "account_runtime.py",
+        "format_profile_store.py",
         "public_api.py",
         "login_window.py",
         "desktop_runtime.py",
@@ -2241,26 +2246,42 @@ def test_taskpane_scrolls_content_without_moving_header():
     assert '<main id="content">' in source
     assert 'fetch("./runtime/config"' in source
     assert 'load("./reader/reader-client.js?v=2")' in source
-    assert 'load("./reader/reader-ui.js?v=6")' in source
-    assert 'load("./taskpane.js?v=18")' in source
+    assert 'load("./reader/reader-ui.js?v=7")' in source
+    assert 'load("./format-config.js?v=2")' in source
+    assert 'load("./taskpane.js?v=21")' in source
 
 
-def test_taskpane_format_settings_exposes_only_the_four_requested_sections():
+def test_taskpane_format_settings_opens_the_central_dialog():
     root = Path(__file__).resolve().parents[1]
     source = (root / "taskpane.html").read_text(encoding="utf-8")
     script = (root / "taskpane.js").read_text(encoding="utf-8")
     assert 'id="format_settings"' in source
-    assert 'id="format_settings_panel"' in source
-    for label in ("段落样式", "页面版式", "字符设置", "页码设置"):
-        assert label in source
+    assert 'id="format_settings_panel"' not in source
+    assert "format-settings.html" in script
+    assert "ShowDialog" in script
+    for resource in ("format-settings.html", "format-settings.js", "format-settings.css"):
+        assert (root / resource).is_file()
     for hidden_field in (
         "lines_per_page", "chars_per_line", "grid_alignment",
         "space_before_line", "space_after_line",
     ):
         assert hidden_field not in source
-    assert "ensureFormatDefaults" in script
+    assert "ensureFormatProfiles" in script
     assert "currentFormatConfig" in script
     assert 'format_config: formatConfig' in script
+
+
+def test_taskpane_format_action_buttons_use_the_requested_three_row_order_and_labels():
+    source = (Path(__file__).resolve().parents[1] / "taskpane.html").read_text(encoding="utf-8")
+    order = [
+        'id="apply"', 'id="health"', 'id="preview"',
+        'id="clear_preview"', 'id="add_letterhead"', 'id="format_settings"',
+    ]
+    positions = [source.index(item) for item in order]
+    assert positions == sorted(positions)
+    assert "预览格式" in source
+    assert "预览排版" not in source
+    assert ".format-actions #health" not in source
 
 
 def test_start_handles_keyboard_interrupt_without_traceback(monkeypatch):

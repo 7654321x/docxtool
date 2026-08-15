@@ -45,6 +45,10 @@ for filename in (
     "host-runtime.js",
     "taskpane.html",
     "taskpane.js",
+    "format-config.js",
+    "format-settings.html",
+    "format-settings.js",
+    "format-settings.css",
 ):
     datas.append((str(wps_root / filename), "."))
 for directory in ("js", "images", "reader"):

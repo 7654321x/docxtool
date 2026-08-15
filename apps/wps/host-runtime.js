@@ -6,8 +6,8 @@
   const config = globalObject.DocxToolWpsConfig || {};
   const TASKPANE_KEY = "docxtool_wps_taskpane_id_v1";
   const TASKPANE_VERSION_KEY = "docxtool_wps_taskpane_version_v1";
-  const TASKPANE_PAGE_VERSION = "19";
-  const TASKPANE_DEFAULT_WIDTH = 633;
+  const TASKPANE_PAGE_VERSION = "23";
+  const TASKPANE_DEFAULT_WIDTH = 422;
   const PREVIEW_KEY_PREFIX = "docxtool_wps_preview_v2:";
   const PREVIEW_BATCH_SIZE = 5;
   const TASKPANE_HOST_PROBE_DELAYS_MS = [0, 100, 500, 1000];
@@ -25,6 +25,7 @@
   let statePublishChain = Promise.resolve();
   let statePublishError = "";
   let ribbonUI = null;
+  let taskpaneInstance = null;
   let logSequence = 0;
   let logTransportFailureReported = false;
   let logTransportUnavailableReported = false;
@@ -792,6 +793,17 @@
     return `${PREVIEW_KEY_PREFIX}${documentPathHash}`;
   }
 
+  function previewAuthorIdentities(session) {
+    const candidates = session && session.authors
+      ? [session.authors.confirmed, session.authors.review]
+      : [session];
+    return candidates.filter((identity) => identity
+      && typeof identity.author === "string"
+      && identity.author.length > 0
+      && typeof identity.initial === "string"
+      && identity.initial.length > 0);
+  }
+
   async function buildHostSnapshot(requestContext, requireDocx = true) {
     const document = activeDocument();
     const paragraphsCollection = document.Paragraphs;
@@ -1130,6 +1142,7 @@
       }
       return 0;
     }
+    const authorIdentities = previewAuthorIdentities(session);
     const comments = activeDocument().Comments;
     if (!comments || typeof comments.Item !== "function") {
       log("ERROR", "preview.comments.collection_unsupported", "WPS Comments 集合不可用", {
@@ -1140,7 +1153,12 @@
     let deleted = 0;
     for (let index = Number(comments.Count || 0); index >= 1; index -= 1) {
       const comment = comments.Item(index);
-      if (String(comment.Author || "") !== session.author || String(comment.Initial || "") !== session.initial) continue;
+      const commentAuthor = String(comment.Author || "");
+      const commentInitial = String(comment.Initial || "");
+      const belongsToPreview = authorIdentities.some((identity) => (
+        commentAuthor === identity.author && commentInitial === identity.initial
+      ));
+      if (!belongsToPreview) continue;
       if (typeof comment.Delete !== "function") {
         log("ERROR", "preview.comment.delete_unsupported", "WPS 批注不支持删除", {
           ...contextDetails(requestContext), block_index: index,
@@ -1212,8 +1230,10 @@
       throw new Error("WPS_PREVIEW_COMMENT_ADD_UNSUPPORTED");
     }
     const sessionId = randomId();
-    const author = `DocxTool·${sessionId.slice(-8)}`;
-    const initial = "DCT";
+    const authors = {
+      confirmed: { author: `DocxTool·${sessionId.slice(-8)}`, initial: "DCT" },
+      review: { author: `DocxTool复核·${sessionId.slice(-8)}`, initial: "DCR" }
+    };
     const created = [];
     let applied = 0;
     let confirmedApplied = 0;
@@ -1252,6 +1272,7 @@
         const requiresReview = item.binding_status === "review"
           || item.review_level === "review"
           || item.review_level === "critical_review";
+        const identity = requiresReview ? authors.review : authors.confirmed;
         const review = requiresReview ? "；建议人工复核" : "";
         let comment;
         try {
@@ -1273,8 +1294,8 @@
         }
         created.push(comment);
         try {
-          comment.Author = author;
-          comment.Initial = initial;
+          comment.Author = identity.author;
+          comment.Initial = identity.initial;
         } catch (error) {
           log("ERROR", "preview.comment.metadata.failed", "预览批注标识写入失败", {
             ...contextDetails(requestContext), block_index: item.block_index,
@@ -1284,7 +1305,7 @@
           throw new Error("WPS_PREVIEW_COMMENT_METADATA_FAILED");
         }
         applied += 1;
-        if (item.binding_status === "review") reviewApplied += 1;
+        if (requiresReview) reviewApplied += 1;
         else confirmedApplied += 1;
         log("DEBUG", "preview.comment.created", "预览批注已创建", {
           ...contextDetails(requestContext), block_index: item.block_index,
@@ -1299,7 +1320,11 @@
       }
       const currentHash = await currentDocumentPathHash();
       try {
-        storage().setItem(previewStorageKey(currentHash), JSON.stringify({ session_id: sessionId, author, initial }));
+        storage().setItem(previewStorageKey(currentHash), JSON.stringify({
+          schema_version: 2,
+          session_id: sessionId,
+          authors
+        }));
       } catch (error) {
         log("ERROR", "preview.session.write_failed", "预览批注会话写入失败", {
           ...contextDetails(requestContext), error_code: "WPS_PREVIEW_SESSION_WRITE_FAILED",
@@ -1438,6 +1463,32 @@
       throw new Error("WPS_TASKPANE_CREATE_UNSUPPORTED");
     }
     void reconcileDocumentContext(requestContext, false).catch((error) => log("WARNING", "document.context.refresh.failed", "任务窗格刷新文档上下文失败", { ...contextDetails(requestContext), error_code: stableErrorCode(error, "WPS_DOCUMENT_CONTEXT_UNAVAILABLE") }));
+    if (taskpaneInstance) {
+      try {
+        const before = taskpaneDetails(taskpaneInstance, "memory_reused");
+        taskpaneInstance.Visible = true;
+        applyTaskpaneDefaultWidth(taskpaneInstance, "memory_reused", requestContext);
+        const after = taskpaneDetails(taskpaneInstance, "memory_reused");
+        if (after.pane_visible !== true) throw new Error("WPS_TASKPANE_NOT_VISIBLE");
+        activateDocumentAfterTaskpaneOpen(requestContext, "memory_reused");
+        log("INFO", "taskpane.memory_reuse.completed", "已复用当前 Host 进程中的任务窗格", {
+          ...contextDetails(requestContext), ...after,
+          pane_visible_before: before.pane_visible,
+          pane_visible_after: after.pane_visible,
+        });
+        log("INFO", "taskpane.reuse.completed", "已有任务窗格复用完成", {
+          ...contextDetails(requestContext), ...after, pane_branch: "memory_reused"
+        });
+        scheduleTaskpaneHostSnapshots(taskpaneInstance, "memory_reused", requestContext);
+        return taskpaneInstance;
+      } catch (error) {
+        log("WARNING", "taskpane.memory_reuse.failed", "当前 Host 进程任务窗格已不可用，继续检查持久标识", {
+          ...contextDetails(requestContext), error_code: stableErrorCode(error, "WPS_TASKPANE_MEMORY_REUSE_FAILED"),
+          error_type: error && error.name ? error.name : "Error"
+        });
+        taskpaneInstance = null;
+      }
+    }
     let current = readTaskpaneId(requestContext);
     const currentPageVersion = current ? readTaskpaneVersion(requestContext) : "";
     log("INFO", "taskpane.storage_state.resolved", "任务窗格本地标识和页面版本已读取", {
@@ -1506,6 +1557,7 @@
         log("WARNING", "taskpane.reuse.failed", "已有任务窗格不可用，准备重建", { ...contextDetails(requestContext), error_code: stableErrorCode(error, "WPS_TASKPANE_REUSE_FAILED") });
       }
       if (reusablePane) {
+        taskpaneInstance = reusablePane;
         logUnexpectedTaskpaneDock(reusablePane, "reused", requestContext);
         activateDocumentAfterTaskpaneOpen(requestContext, "reused");
         log("INFO", "taskpane.reuse.completed", "任务窗格复用完成", {
@@ -1597,6 +1649,7 @@
       activateDocumentAfterTaskpaneOpen(requestContext, "created");
       writeTaskpaneVersion(TASKPANE_PAGE_VERSION, requestContext);
       writeTaskpaneId(String(pane.ID), requestContext);
+      taskpaneInstance = pane;
       log("INFO", "taskpane.rebuild.completed", "任务窗格重建完成", {
         ...contextDetails(requestContext), ...taskpaneDetails(pane, "created"),
         page_version: TASKPANE_PAGE_VERSION, duration_ms: Date.now() - openStartedAt
@@ -1690,7 +1743,13 @@
       document_name: activeDocumentName(),
       error_code: ""
     });
-    openTaskpane();
+    if (!requestContext || requestContext.source !== "taskpane") {
+      openTaskpane(requestContext);
+    } else {
+      log("INFO", "preview.taskpane.open.skipped", "预览由现有任务窗格发起，不重复创建状态面板", {
+        ...contextDetails(requestContext), reason: "taskpane_already_visible"
+      });
+    }
     log("INFO", "preview.completed", "预览排版完成", {
       ...contextDetails(requestContext), block_count: result.block_count, applied_count: applied,
       review_count: result.binding_review_count, unresolved_count: result.unresolved_count,
@@ -2590,7 +2649,9 @@
   async function runHealth(requestContext) {
     const result = await api("/v1/health", null, "GET", requestContext);
     writeState({ status: "PASS", stage: "health", message: `本地服务正常；DocxTool ${result.docxtool_version}`, health: result, error_code: "" });
-    openTaskpane(requestContext);
+    if (!requestContext || requestContext.source !== "taskpane") {
+      openTaskpane(requestContext);
+    }
     log("INFO", "health.pass", "WPS 本机检测通过", {
       ...contextDetails(requestContext), docxtool_version: result.docxtool_version
     });
@@ -2693,7 +2754,7 @@
           error_type: stateError && stateError.name ? stateError.name : "Error"
         });
       }
-      if (name !== "panel_ready") {
+      if (name !== "panel_ready" && (!requestContext || requestContext.source !== "taskpane")) {
         try {
           openTaskpane(requestContext);
         } catch (panelError) {

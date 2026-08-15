@@ -27,12 +27,13 @@ validate_docx_integrity
 
 项目根 `index.html` 只负责加载 `main.js`，真正的 bootstrap 顺序仍由 `main.js` 单一负责。`main.py` 使用本机静态服务发布这些文件，并更新当前项目的 WPS 加载项注册，不依赖 `wpsjs debug` 自动拉起 WPS。
 
-关键 bootstrap 使用经典同步脚本加载。WPS 会在加载项装载阶段解析 Ribbon 回调，因此 `host-runtime.js` 必须先于 `ribbon.js` 完成执行，确保 `OnAddinLoad` 被调用时 Host Runtime 已可用。Host 与 TaskPane 各保持一个 Control Server 异步长请求：TaskPane 将命令写入单槽，Host 领取后复用现有业务流程并发布递增 revision 的状态。空闲时不轮询 WPS API；PluginStorage 只保存任务窗格 ID、页面版本和预览批注元数据。
+关键 bootstrap 使用经典同步脚本加载。WPS 会在加载项装载阶段解析 Ribbon 回调，因此 `host-runtime.js` 必须先于 `ribbon.js` 完成执行，确保 `OnAddinLoad` 被调用时 Host Runtime 已可用。Host 与 TaskPane 各保持一个 Control Server 异步长请求：TaskPane 将命令写入单槽，Host 领取后复用现有业务流程并发布递增 revision 的状态。空闲时不轮询 WPS API；PluginStorage 只保存任务窗格 ID、页面版本和预览批注元数据，旧格式设置仅在本地模板库首次初始化时迁移一次。
 
 ## 已迁移能力
 
 - Ribbon：预览排版、一键排版、清除预览、状态面板、本机检测
-- TaskPane：识别结果、宿主绑定状态、兼容性提示、执行状态、关闭面板
+- TaskPane：识别结果、宿主绑定状态、兼容性提示、执行状态、格式设置入口、关闭面板
+- 格式设置：点击 TaskPane 按钮后由 WPS `Application.ShowDialog` 打开中央 WebDialog；TaskPane 主面板保持可见。Dialog 提供模板 `select`、添加模板、删除模板和可编辑模板名称，模板内容保存在 `%LOCALAPPDATA%\DocxTool\wps\format_profiles.db`，按登录账号隔离；预览和一键排版提交前读取当前活动模板。
 - 当前 WPS DOCX 保存完成确认、关闭、重新打开确认
 - authoritative 识别预览
 - `HostSnapshot -> bind_recognition_plan()` 正式 SDK 宿主绑定
@@ -162,7 +163,7 @@ pwsh -NoProfile -Command "python apps/wps/main.py control"
 pwsh -NoProfile -File apps/wps/scripts/build-exe.ps1 -ServerOrigin https://wps.example.com
 ```
 
-生产构建只接受不带路径的 HTTPS Origin。脚本固定 PyInstaller 6.22.0，生成 `dist/wps/DocxToolWps.exe`，并自动从仓库外目录执行冻结态 `verify`。源码 `client-config.json` 继续使用本机开发地址，正式 Origin 只在构建时注入。
+生产构建只接受不带路径的 HTTPS Origin。脚本固定 PyInstaller 6.22.0，生成 `dist/wps/DocxToolWps.exe`，并自动从仓库外目录执行冻结态 `verify`。源码 `client-config.json` 继续使用本机开发地址，正式 Origin 只在构建时注入。模板数据库保持在用户本机数据目录，不进入 EXE 或发布包。
 
 ## 验证
 

@@ -15,3 +15,4 @@
 11. 多字段阅读设置必须通过一个 SQLite 事务原子写入。当前 Reader 使用整本 UTF-8 文本读取；字符 offset 无法直接安全映射到字节 offset，本轮有界读取评估为 `DEFERRED`，不得用错误的 `seek(character_offset)` 假装修复。
 12. 修改后至少运行 Reader Python 测试、`apps/wps/tests/test_reader_routes.py` 和 Reader/WPS Node 测试。
 13. 阅读进度必须以当前视口实际可见正文位置计算，`text_offset` 与 `scroll_ratio` 表示整本 TXT 的全局位置；界面百分比固定显示两位小数。自动播放按实际行高逐行滚动，窗口或章节结束时自动加载后续内容，只有整本书末尾才停止。修改后至少运行 `apps/wps/tests/reader-ui.test.mjs`。
+14. 重开书籍恢复进度时，必须从当前章节开头按有界块累计加载到保存位置之后，确保保存位置之前的章节正文仍在同一滚动区；不得把正文起点直接设置为“进度减半个窗口”。后续正文仍按窗口继续加载。分块接口必须严格使用请求的字符偏移，不能回退到段首导致长段重复或恢复停滞。

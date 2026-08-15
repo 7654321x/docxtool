@@ -192,9 +192,6 @@ class ReaderService:
             text = (self.paths.books_dir / book.stored_filename).read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as exc:
             raise ReaderError("READER_CONTENT_NOT_FOUND") from exc
-        starts = paragraph_starts(text[chapter.start_offset : chapter.end_offset], chapter.start_offset)
-        if starts:
-            start = max((value for value in starts if value <= start), default=starts[0])
         end = min(start + limit, chapter.end_offset)
         return ReaderContent(
             book_id=book.id,

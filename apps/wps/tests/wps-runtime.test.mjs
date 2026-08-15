@@ -12,6 +12,10 @@ const TASKPANE_SOURCE = await readFile(
   new URL("../taskpane.js", import.meta.url),
   "utf8",
 );
+const FORMAT_CONFIG_SOURCE = await readFile(
+  new URL("../format-config.js", import.meta.url),
+  "utf8",
+);
 const MAIN_SOURCE = await readFile(new URL("../main.js", import.meta.url), "utf8");
 const RIBBON_SOURCE = await readFile(
   new URL("../js/ribbon.js", import.meta.url),
@@ -615,6 +619,8 @@ test("Host preview keeps one request_id through save, binding, Range, and commen
     "host.command.completed",
   ];
   for (const event of required) assert.ok(harness.events().includes(event), event);
+  assert.equal(harness.taskpaneCreateCalls.length, 0);
+  assert.ok(harness.events().includes("preview.taskpane.open.skipped"));
   for (const entry of harness.logs.filter((item) => required.includes(item.event))) {
     assert.equal(entry.details.request_id, "request-preview", entry.event);
   }
@@ -646,6 +652,8 @@ test("Host writes canonical review bindings as explicit review comments", async 
 
   assert.equal(harness.comments.created.length, 1);
   assert.match(harness.comments.created[0].Text, /建议人工复核/);
+  assert.match(harness.comments.created[0].Author, /^DocxTool复核·/);
+  assert.equal(harness.comments.created[0].Initial, "DCR");
   const state = harness.runtime.getStateSnapshot();
   assert.equal(state.preview_comment_count, 1);
   assert.equal(state.preview_confirmed_count, 0);
@@ -702,6 +710,23 @@ test("Host writes confirmed and review comments but skips unresolved blocks", as
   );
 
   assert.equal(harness.comments.created.length, 2);
+  const [confirmedComment, reviewComment] = harness.comments.created;
+  assert.match(confirmedComment.Author, /^DocxTool·/);
+  assert.equal(confirmedComment.Initial, "DCT");
+  assert.doesNotMatch(confirmedComment.Text, /建议人工复核/);
+  assert.notEqual(confirmedComment.Text, "");
+  assert.match(reviewComment.Author, /^DocxTool复核·/);
+  assert.equal(reviewComment.Initial, "DCR");
+  assert.match(reviewComment.Text, /建议人工复核/);
+  assert.notEqual(reviewComment.Text, "");
+  assert.notEqual(confirmedComment.Author, reviewComment.Author);
+  const documentPathHash = sha256("c:\\fixtures\\sample.docx");
+  const session = JSON.parse(harness.values.get(`docxtool_wps_preview_v2:${documentPathHash}`));
+  assert.equal(session.schema_version, 2);
+  assert.equal(session.authors.confirmed.author, confirmedComment.Author);
+  assert.equal(session.authors.confirmed.initial, "DCT");
+  assert.equal(session.authors.review.author, reviewComment.Author);
+  assert.equal(session.authors.review.initial, "DCR");
   const state = harness.runtime.getStateSnapshot();
   assert.equal(state.preview_confirmed_count, 1);
   assert.equal(state.preview_review_count, 1);
@@ -804,7 +829,15 @@ test("Host rolls back earlier comments when a later Comments.Add fails", async (
 });
 
 test("Host rolls back comments when preview session storage fails", async () => {
-  const harness = makeHostHarness();
+  const items = [
+    bindingItem("ABCD", 0, 2, 0),
+    bindingItem("ABCD", 2, 4, 1, {
+      binding_status: "review",
+      review_level: "critical_review",
+      recommended_action: "preview_only",
+    }),
+  ];
+  const harness = makeHostHarness({ bindingItems: items });
   harness.runtime.start();
   const documentPathHash = sha256("c:\\fixtures\\sample.docx");
   harness.storage.failSetKey = `docxtool_wps_preview_v2:${documentPathHash}`;
@@ -817,11 +850,75 @@ test("Host rolls back comments when preview session storage fails", async () => 
     /WPS_PREVIEW_SESSION_WRITE_FAILED/,
   );
 
-  assert.equal(harness.comments.created.length, 1);
-  assert.equal(harness.comments.created[0].deleted, true);
+  assert.equal(harness.comments.created.length, 2);
+  assert.equal(harness.comments.created[0].Initial, "DCT");
+  assert.equal(harness.comments.created[1].Initial, "DCR");
+  assert.ok(harness.comments.created.every((comment) => comment.deleted));
   assert.ok(harness.events().includes("preview.session.write_failed"));
   assert.ok(harness.events().includes("preview.comments.rollback.completed"));
   assert.ok(!harness.events().includes("preview.comments.completed"));
+});
+
+test("Host clears both preview authors without deleting user or other plugin comments", async () => {
+  const items = [
+    bindingItem("ABCD", 0, 2, 0),
+    bindingItem("ABCD", 2, 4, 1, {
+      binding_status: "review",
+      recommended_action: "preview_only",
+    }),
+  ];
+  const harness = makeHostHarness({ bindingItems: items });
+  harness.runtime.start();
+
+  await harness.runtime.runCommand(
+    "preview",
+    requestContext("preview", "request-dual-author-preview"),
+  );
+
+  const userComment = harness.comments.Add({}, "");
+  userComment.Author = "本机用户";
+  userComment.Initial = "用户";
+  const otherPluginComment = harness.comments.Add({}, "其他插件批注");
+  otherPluginComment.Author = "OtherPlugin";
+  otherPluginComment.Initial = "OTP";
+
+  await harness.runtime.runCommand(
+    "clear_preview",
+    requestContext("clear_preview", "request-dual-author-clear"),
+  );
+
+  assert.equal(harness.comments.created[0].deleted, true);
+  assert.equal(harness.comments.created[1].deleted, true);
+  assert.equal(userComment.deleted, false);
+  assert.equal(otherPluginComment.deleted, false);
+});
+
+test("Host clears legacy single-author preview sessions", async () => {
+  const harness = makeHostHarness();
+  const legacyComment = harness.comments.Add({}, "旧版预览批注");
+  legacyComment.Author = "DocxTool·legacy01";
+  legacyComment.Initial = "DCT";
+  const userComment = harness.comments.Add({}, "");
+  userComment.Author = "本机用户";
+  userComment.Initial = "用户";
+  const documentPathHash = sha256("c:\\fixtures\\sample.docx");
+  harness.values.set(
+    `docxtool_wps_preview_v2:${documentPathHash}`,
+    JSON.stringify({
+      session_id: "legacy-session",
+      author: legacyComment.Author,
+      initial: legacyComment.Initial,
+    }),
+  );
+  harness.runtime.start();
+
+  await harness.runtime.runCommand(
+    "clear_preview",
+    requestContext("clear_preview", "request-legacy-author-clear"),
+  );
+
+  assert.equal(legacyComment.deleted, true);
+  assert.equal(userComment.deleted, false);
 });
 
 test("Host keeps metadata and cleanup failures as separate comment events", async () => {
@@ -1287,8 +1384,8 @@ test("Panel action starts one Host bridge when OnAddinLoad was not observed", as
   assert.equal(harness.bridgeWaiterCount, 1);
   assert.equal(harness.taskpaneCreateCalls.length, 1);
   assert.equal(harness.taskpaneCreateCalls[0].length, 1);
-  assert.match(harness.taskpaneCreateCalls[0][0], /taskpane\.html\?v=19$/);
-  assert.equal(harness.values.get(TASKPANE_VERSION_KEY), "19");
+  assert.match(harness.taskpaneCreateCalls[0][0], /taskpane\.html\?v=23$/);
+  assert.equal(harness.values.get(TASKPANE_VERSION_KEY), "23");
   assert.ok(harness.events().includes("host.start.lazy.enter"));
   assert.ok(harness.events().includes("host.start.lazy.scheduled"));
 
@@ -1319,9 +1416,9 @@ test("Panel records TaskPane creation and reuse host properties", () => {
   assert.equal(shown.details.pane_visible_after, true);
   assert.equal(shown.details.pane_visible_effective, true);
   assert.equal(widthStarted.details.pane_width_before, 325);
-  assert.equal(widthStarted.details.pane_width_requested, 633);
-  assert.equal(width.details.pane_width, 633);
-  assert.equal(width.details.pane_width_after, 633);
+  assert.equal(widthStarted.details.pane_width_requested, 422);
+  assert.equal(width.details.pane_width, 422);
+  assert.equal(width.details.pane_width_after, 422);
   assert.equal(width.details.pane_width_effective, true);
   assert.equal(rebuilt.details.pane_branch, "created");
   assert.equal(rebuilt.details.pane_expected_dock_position, 2);
@@ -1336,9 +1433,9 @@ test("Panel records TaskPane creation and reuse host properties", () => {
   harness.runtime.handleRibbonAction("panel");
 
   const reused = harness.logs.filter((entry) => entry.event === "taskpane.reuse.completed").at(-1);
-  assert.equal(reused.details.pane_branch, "reused");
+  assert.equal(reused.details.pane_branch, "memory_reused");
   assert.equal(reused.details.pane_visible, true);
-  assert.equal(reused.details.pane_width, 633);
+  assert.equal(reused.details.pane_width, 422);
   assert.equal(reused.details.pane_dock_position, 2);
 });
 
@@ -1350,13 +1447,29 @@ test("Panel applies the native width after show and returns focus to the documen
 
   assert.deepEqual(
     harness.taskpaneOperations.slice(0, 3),
-    ["dock:2", "visible:true", "width:633"],
+    ["dock:2", "visible:true", "width:422"],
   );
   assert.deepEqual(harness.activationCalls, ["document", "window"]);
   const events = harness.events();
   assert.ok(events.indexOf("taskpane.dock_position.completed") < events.indexOf("taskpane.show.completed"));
   assert.ok(events.indexOf("taskpane.show.completed") < events.indexOf("taskpane.width.completed"));
   assert.ok(events.indexOf("taskpane.show.completed") < events.indexOf("taskpane.document_focus.completed"));
+});
+
+test("Panel reuses the in-process TaskPane even when persistent pane storage was cleared", async () => {
+  const harness = makeHostHarness();
+  harness.runtime.start();
+  harness.runtime.handleRibbonAction("panel");
+  harness.values.set(TASKPANE_KEY, "");
+  harness.values.set(TASKPANE_VERSION_KEY, "");
+
+  await harness.runtime.runCommand(
+    "health",
+    { ...requestContext("health", "request-memory-pane-reuse"), source: "ribbon" },
+  );
+
+  assert.equal(harness.taskpaneCreateCalls.length, 1);
+  assert.ok(harness.events().includes("taskpane.memory_reuse.completed"));
 });
 
 test("panel_ready mirrors the successful document lifecycle without window focus", async () => {
@@ -1476,8 +1589,8 @@ test("Panel replaces a stale TaskPane page before showing it", () => {
 
   assert.equal(stalePane.Visible, false);
   assert.equal(harness.taskpaneCreateCalls.length, 2);
-  assert.match(harness.taskpaneCreateCalls[1][0], /taskpane\.html\?v=19$/);
-  assert.equal(harness.values.get(TASKPANE_VERSION_KEY), "19");
+  assert.match(harness.taskpaneCreateCalls[1][0], /taskpane\.html\?v=23$/);
+  assert.equal(harness.values.get(TASKPANE_VERSION_KEY), "23");
   assert.ok(harness.events().includes("taskpane.page_version.mismatch"));
 });
 
@@ -1629,7 +1742,7 @@ test("Host distinguishes TaskPane creation, layout, focus, and storage failures"
     await assert.rejects(
       harness.runtime.runCommand(
         "health",
-        requestContext("health", `request-${item.code}`),
+        { ...requestContext("health", `request-${item.code}`), source: "ribbon" },
       ),
       new RegExp(item.code),
     );
@@ -1843,6 +1956,7 @@ function makeTaskpaneHarness(initialState, {
   const consoleLines = [];
   const bridgeCalls = [];
   const commandRequests = [];
+  const dialogCalls = [];
   const stateWaiters = [];
   const scrollCalls = [];
   const timeouts = [];
@@ -1861,12 +1975,7 @@ function makeTaskpaneHarness(initialState, {
   const ids = [
     "preview", "apply", "format_settings", "add_letterhead", "clear_preview", "health",
     "format_mode", "reader_mode", "format_mode_tab", "reader_mode_tab",
-    "format_main_panel", "format_settings_panel", "format_settings_close",
-    "format_settings_restore", "format_settings_save",
-    "format_style_settings",
-    "format_paper_size", "format_margin_top", "format_margin_bottom", "format_margin_left", "format_margin_right", "format_line_spacing",
-    "format_number_font", "format_number_size", "format_letter_font", "format_letter_size",
-    "format_page_font", "format_page_size", "format_page_style", "format_page_position",
+    "format_main_panel",
     "format_scope_mode", "format_page_spec",
     "letterhead_modal", "letterhead_mark", "letterhead_number", "letterhead_signer",
     "letterhead_separator", "letterhead_form_error", "letterhead_cancel", "letterhead_confirm",
@@ -1879,7 +1988,7 @@ function makeTaskpaneHarness(initialState, {
   elements.get("format_page_spec").focus = () => {};
   elements.get("letterhead_separator").value = "straight";
   elements.get("reader_mode").hidden = true;
-  elements.get("format_settings_panel").hidden = true;
+  elements.get("format_main_panel").hidden = false;
   elements.get("content").scrollTop = 80;
   const body = {
     scrollTop: 80,
@@ -1921,6 +2030,48 @@ function makeTaskpaneHarness(initialState, {
     createElement(tagName) { return makeElement(tagName); },
     createTextNode(text) { const item = makeElement("TEXT"); item.textContent = String(text); return item; },
   };
+  const defaultFormatConfig = {
+    styles: [
+      { name: "主标题", font: "方正小标宋简体", size: "二号", bold: false, pattern: "", indent: 0, align: "居中" },
+      { name: "一级标题", font: "黑体", size: "三号", bold: false, pattern: "{a}、", indent: 2, align: "左对齐" },
+      { name: "二级标题", font: "楷体_GB2312", size: "三号", bold: true, pattern: "（{b}）", indent: 2, align: "左对齐" },
+      { name: "三级标题", font: "仿宋_GB2312", size: "三号", bold: true, pattern: "{c}.", indent: 2, align: "左对齐" },
+      { name: "四级标题", font: "仿宋_GB2312", size: "三号", bold: false, pattern: "（{d}）", indent: 2, align: "左对齐" },
+      { name: "正文", font: "仿宋_GB2312", size: "三号", bold: false, pattern: "", indent: 2, align: "两端对齐" },
+      { name: "数字", font: "Times New Roman", bold: false },
+      { name: "字母", font: "Times New Roman", bold: false },
+      { name: "页码设置", font: "宋体", size: "四号", pattern: "— 1 —", align: "奇右|偶左" },
+    ],
+    page: { width_cm: 21, height_cm: 29.7, margin_top_cm: 3.7, margin_bottom_cm: 3.5, margin_left_cm: 2.8, margin_right_cm: 2.6, lines_per_page: 22, chars_per_line: 28, line_spacing_pt: 28, space_before_line: 0, space_after_line: 0, grid_alignment: "文字对齐字符网络" },
+    page_number: { enabled: true, style: "dash", position: "outside", font_name: "宋体", font_size_pt: 14, first_page: true, section_numbering: "continue", offset_from_text_mm: 7 },
+  };
+  const cloneFormatConfig = (value) => JSON.parse(JSON.stringify(value));
+  let activeFormatProfile = {
+    profile_id: "system:default",
+    name: "系统默认",
+    is_system: true,
+    revision: 0,
+    config_version: "config-1",
+    format_config: cloneFormatConfig(defaultFormatConfig),
+  };
+  function formatProfileResponse() {
+    const system = {
+      profile_id: "system:default",
+      name: "系统默认",
+      is_system: true,
+      revision: 0,
+      config_version: "config-1",
+      format_config: cloneFormatConfig(defaultFormatConfig),
+    };
+    return {
+      profiles: activeFormatProfile.profile_id === "system:default"
+        ? [system]
+        : [system, { ...activeFormatProfile, format_config: undefined }],
+      active_profile_id: activeFormatProfile.profile_id,
+      active_profile: cloneFormatConfig(activeFormatProfile),
+      legacy_imported: false,
+    };
+  }
   function response(data, { ok = true, status = 200 } = {}) {
     return {
       ok,
@@ -1944,23 +2095,25 @@ function makeTaskpaneHarness(initialState, {
         ok: true,
         data: {
           config_version: "config-1",
-          format_config: {
-            styles: [
-              { name: "主标题", font: "方正小标宋简体", size: "二号", bold: false, pattern: "", indent: 0, align: "居中" },
-              { name: "一级标题", font: "黑体", size: "三号", bold: false, pattern: "{a}、", indent: 2, align: "左对齐" },
-              { name: "二级标题", font: "楷体_GB2312", size: "三号", bold: true, pattern: "（{b}）", indent: 2, align: "左对齐" },
-              { name: "三级标题", font: "仿宋_GB2312", size: "三号", bold: true, pattern: "{c}.", indent: 2, align: "左对齐" },
-              { name: "四级标题", font: "仿宋_GB2312", size: "三号", bold: false, pattern: "（{d}）", indent: 2, align: "左对齐" },
-              { name: "正文", font: "仿宋_GB2312", size: "三号", bold: false, pattern: "", indent: 2, align: "两端对齐" },
-              { name: "数字", font: "Times New Roman", bold: false },
-              { name: "字母", font: "Times New Roman", bold: false },
-              { name: "页码设置", font: "宋体", size: "四号", pattern: "— 1 —", align: "奇右|偶左" },
-            ],
-            page: { width_cm: 21, height_cm: 29.7, margin_top_cm: 3.7, margin_bottom_cm: 3.5, margin_left_cm: 2.8, margin_right_cm: 2.6, lines_per_page: 22, chars_per_line: 28, line_spacing_pt: 28, space_before_line: 0, space_after_line: 0, grid_alignment: "文字对齐字符网络" },
-            page_number: { enabled: true, style: "dash", position: "outside", font_name: "宋体", font_size_pt: 14, first_page: true, section_numbering: "continue", offset_from_text_mm: 7 },
-          },
+          format_config: structuredClone(defaultFormatConfig),
         },
       });
+    }
+    if (path === "/v1/format/profiles/initialize" || path === "/v1/format/profiles") {
+      return response({ ok: true, data: formatProfileResponse() });
+    }
+    if (path === "/v1/format/profiles/active") {
+      const data = formatProfileResponse();
+      return response({ ok: true, data: {
+        active_profile_id: data.active_profile_id,
+        active_profile: data.active_profile,
+      } });
+    }
+    if (path === "/v1/format/profiles/detail") {
+      const data = formatProfileResponse();
+      return response({ ok: true, data: {
+        profile: data.active_profile,
+      } });
     }
     if (path === "/v1/bridge/state/wait") {
       if (nextStateWaitFailure) {
@@ -2005,6 +2158,7 @@ function makeTaskpaneHarness(initialState, {
   }
   const application = {
     PluginStorage: storage,
+    ShowDialog(...args) { dialogCalls.push(args); },
     GetTaskPane() {
       return null;
     },
@@ -2030,6 +2184,8 @@ function makeTaskpaneHarness(initialState, {
     Math,
     Object,
     Promise,
+    URL,
+    location: { href: "http://127.0.0.1:3889/taskpane.html" },
     console: {
       log(message) { consoleLines.push(String(message)); },
       warn(message) { consoleLines.push(String(message)); },
@@ -2095,6 +2251,7 @@ function makeTaskpaneHarness(initialState, {
   context.window = context;
   context.self = context;
   context.top = context;
+  vm.runInNewContext(FORMAT_CONFIG_SOURCE, context, { filename: "format-config.js" });
   vm.runInNewContext(TASKPANE_SOURCE, context, { filename: "taskpane.js" });
   return {
     click(id) {
@@ -2103,6 +2260,7 @@ function makeTaskpaneHarness(initialState, {
     get activeDocumentReads() { return activeDocumentReads; },
     bridgeCalls,
     commandRequests,
+    dialogCalls,
     consoleLines,
     elements,
     context,
@@ -2165,6 +2323,19 @@ function makeTaskpaneHarness(initialState, {
     get stateWaiterCount() { return stateWaiters.length; },
     advanceTime(milliseconds) { currentNowMs += milliseconds; },
     values,
+    getActiveFormatConfig() {
+      return cloneFormatConfig(activeFormatProfile.format_config);
+    },
+    setActiveFormatConfig(configValue) {
+      activeFormatProfile = {
+        ...activeFormatProfile,
+        profile_id: "fmt_test_profile",
+        name: "测试模板",
+        is_system: false,
+        revision: Number(activeFormatProfile.revision || 0) + 1,
+        format_config: cloneFormatConfig(configValue),
+      };
+    },
   };
 }
 
@@ -2243,64 +2414,38 @@ test("TaskPane switches format and reader modes without submitting reader comman
   assert.equal(harness.commandRequests.length, 0);
 });
 
-test("TaskPane opens the four-section format settings view and saves the session config", async () => {
+test("TaskPane opens the central format settings dialog without hiding the main panel", async () => {
   const harness = makeTaskpaneHarness({ host_ready: true, status: "READY", updated_at: "1" });
   await harness.flushAsync();
   harness.click("format_settings");
   await harness.flushAsync();
-  assert.equal(harness.elements.get("format_settings_panel").hidden, false);
-  assert.equal(harness.elements.get("format_main_panel").hidden, true);
-  assert.equal(harness.elements.get("format_style_settings").children.length, 6);
-  harness.elements.get("format_margin_top").value = "4.0cm";
-  harness.click("format_settings_restore");
-  assert.equal(harness.elements.get("format_margin_top").value, "3.7cm");
-  harness.elements.get("format_margin_top").value = "4.0cm";
-  harness.elements.get("format_page_position").value = "center";
-  harness.click("format_settings_save");
-  assert.equal(harness.elements.get("format_settings_panel").hidden, true);
   assert.equal(harness.elements.get("format_main_panel").hidden, false);
+  assert.equal(harness.dialogCalls.length, 1, JSON.stringify({ events: harness.events(), error: harness.elements.get("error").textContent, message: harness.elements.get("message").textContent }));
+  assert.match(harness.dialogCalls[0][0], /format-settings\.html\?v=2$/);
+  assert.equal(harness.dialogCalls[0][1], "格式设置");
+  assert.equal(harness.dialogCalls[0][4], true);
+  assert.equal(harness.dialogCalls[0][5], false);
+  assert.equal(harness.dialogCalls[0][9], true);
+  assert.equal(harness.dialogCalls[0][11], true);
+  assert.equal(harness.storage.getItem("docxtool_wps_format_config_draft_v1"), "");
+});
+
+test("TaskPane uses the Dialog's shared current config for Preview and Apply", async () => {
+  const harness = makeTaskpaneHarness({ host_ready: true, status: "READY", updated_at: "1" });
+  await harness.flushAsync();
+  harness.click("format_settings");
+  await harness.flushAsync();
+  const updated = harness.getActiveFormatConfig();
+  updated.page.margin_top_cm = 4;
+  harness.setActiveFormatConfig(updated);
   harness.click("preview");
   await harness.flushAsync();
   const preview = harness.commandRequests.find((item) => item.command === "preview");
   assert.equal(preview.format_config.page.margin_top_cm, 4);
   assert.equal(preview.format_config.page.lines_per_page, 22);
   assert.equal(preview.format_config.page.grid_alignment, "文字对齐字符网络");
-  assert.equal(preview.format_config.page_number.position, "center");
+  assert.equal(preview.format_config.page.margin_top_cm, 4);
   assert.equal(preview.format_config.page_number.first_page, true);
-});
-
-test("TaskPane sends the same saved format config to Preview and Apply", async () => {
-  const makeSaved = async () => {
-    const harness = makeTaskpaneHarness({ host_ready: true, status: "READY", updated_at: "1" });
-    await harness.flushAsync();
-    harness.click("format_settings");
-    await harness.flushAsync();
-    harness.elements.get("format_margin_left").value = "3.2cm";
-    harness.click("format_settings_save");
-    await harness.flushAsync();
-    return harness;
-  };
-  const previewHarness = await makeSaved();
-  previewHarness.click("preview");
-  await previewHarness.flushAsync();
-  const applyHarness = await makeSaved();
-  applyHarness.click("apply");
-  await applyHarness.flushAsync();
-  const previewConfig = previewHarness.commandRequests.find((item) => item.command === "preview").format_config;
-  const applyConfig = applyHarness.commandRequests.find((item) => item.command === "apply").format_config;
-  assert.deepEqual(previewConfig, applyConfig);
-});
-
-test("TaskPane closes format settings without saving draft changes", async () => {
-  const harness = makeTaskpaneHarness({ host_ready: true, status: "READY", updated_at: "1" });
-  await harness.flushAsync();
-  harness.click("format_settings");
-  await harness.flushAsync();
-  harness.elements.get("format_margin_right").value = "4.0cm";
-  harness.click("format_settings_close");
-  harness.click("format_settings");
-  await harness.flushAsync();
-  assert.equal(harness.elements.get("format_margin_right").value, "2.6cm");
 });
 
 test("TaskPane submits panel_ready once after READY and load_settled", async () => {
@@ -2984,8 +3129,8 @@ test("TaskPane logs bridge command failure before request summary", async () => 
     { host_ready: true, status: "READY", updated_at: "1" },
     { commandFailure: "WPS_COMMAND_BUSY" },
   );
-  await harness.flushAsync();
-  harness.click("apply");
+  await harness.flushAsync(30);
+  harness.click("health");
   await harness.flushAsync();
   const specific = harness.events().indexOf("taskpane.bridge.command.submit.failed");
   const summary = harness.events().indexOf("taskpane.request.failed");
@@ -2999,8 +3144,8 @@ test("TaskPane distinguishes an invalid bridge command response", async () => {
     { host_ready: true, status: "READY", updated_at: "1" },
     { invalidJsonPath: "/v1/bridge/command" },
   );
-  await harness.flushAsync();
-  harness.click("preview");
+  await harness.flushAsync(30);
+  harness.click("health");
   await harness.flushAsync();
   const specific = harness.events().indexOf("taskpane.bridge.command.submit.failed");
   const summary = harness.events().indexOf("taskpane.request.failed");
@@ -3078,7 +3223,9 @@ test("Idle TaskPane keeps one long request and does not touch WPS objects", asyn
 
   assert.equal(harness.stateWaiterCount, 1);
   assert.equal(harness.activeDocumentReads, 0);
-  assert.deepEqual(harness.storage.getCalls, []);
+  assert.deepEqual(harness.storage.getCalls, [
+    "docxtool_wps_format_config_current_v1",
+  ]);
   assert.equal(TASKPANE_SOURCE.includes("setInterval("), false);
   assert.equal(HOST_SOURCE.includes("setInterval("), false);
 });

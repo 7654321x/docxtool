@@ -23,9 +23,21 @@
 - [ ] 真实响应写入错误仍记录 `control.response.write_failed` 并保留原异常。
 - [ ] TaskPane 状态值在协议中保持大写稳定值，用户界面显示“就绪、处理中、成功、失败”等中文；错误码只能放在“错误代码：”之后。
 - [ ] TaskPane 页面自身不滚动，顶部操作区保持正常布局，只允许内容区滚动；初始化和 `load` 后均清理宿主恢复的根滚动位置。
+- [ ] 格式设置模板使用本机 `format_profiles.db`，按登录账号 `user_id` 隔离；`select` 可切换模板，添加、重命名、修改和删除自定义模板，系统默认不可删除。
+- [ ] 账号退出、拒绝或本地账号清除不删除格式模板；同一账号重新登录恢复模板，新账号不可见旧账号模板。
+- [ ] 旧 PluginStorage 格式配置只在账号首次初始化时迁移到“我的格式”，数据库提交成功后才清理旧值；迁移失败保留旧值。
+- [ ] 由现有 TaskPane 发起的预览、本机检测或失败状态只更新当前窗格，不再次调用 `CreateTaskPane`；Ribbon 等外部入口才允许打开或复用状态面板，任一时刻本插件最多显示一个 TaskPane。
 - [ ] WPS 会在窗格首次显示时重置原生宽度；首次创建必须按 `DockPosition → Visible → Width` 设置，复用旧窗格也必须在显示后重设默认宽度并核对读回值。不得用 CSS 宽度或位移掩盖 WPS 原生窗格过窄。
 - [ ] `panel_ready` 只执行一次宿主工作区重排，不保存临时文档、不调用 Engine、不自动重提同一命令。
 - [ ] Ribbon 只保留官方支持的按钮回调；自定义图标使用仓库内 SVG，不调用未公开 WPS API。
+
+### 格式设置中央 WebDialog
+
+- [ ] 点击 TaskPane“格式设置”使用同源 `format-settings.html` 打开 WPS 主窗口中央 WebDialog，TaskPane 排版主面板不隐藏、不切页。
+- [ ] Dialog 保留段落样式、页面版式、字符设置和页码设置四个区块，以及六种现有段落样式配置。
+- [ ] Dialog 保存只写 PluginStorage 的 current 和递增 revision；取消或关闭不修改 current；恢复默认只修改当前 draft。
+- [ ] Preview/Apply 提交前重新读取 current，确保使用 Dialog 最后保存的配置。
+- [ ] 真机未验证时报告 `REAL_WPS_FORMAT_DIALOG_SMOKE = NOT_RUN`；Windows 7 未验证时报告 `WINDOWS_7_FORMAT_DIALOG_SMOKE = NOT_RUN`。
 
 ## 正式排版与事务
 
@@ -66,8 +78,12 @@
 ## 日志、隐私与人工门禁
 
 - [ ] 日志只记录阶段、状态、耗时、计数、稳定错误码和脱敏短 ID，不记录正文、路径、Token、Cookie、完整哈希或快照。
+- [ ] 同轮识别预览中，普通批注使用 `DocxTool·会话号` / `DCT`，人工复核批注使用 `DocxTool复核·会话号` / `DCR`；具体气泡颜色由 WPS 版本和主题分配，不承诺固定色值。
+- [ ] 清除或重新生成预览时同时清理本轮两类 DocxTool 批注，并兼容旧版单作者会话；只按作者和 initials 完全匹配删除，不得删除用户账号批注、空批注或其他插件批注。
 - [ ] 后台心跳只有 `PublicApiError.network=True` 才显示“服务器无法连接”；账号禁用、会话过期和业务拒绝不得误报网络离线。
 - [ ] 真实 WPS 未执行时分别报告 `WPS_AUTO_NUMBERING_SMOKE`、`WPS_STYLE_GALLERY_SMOKE`、`WPS_PAGE_RANGE_SMOKE`、`WPS_LETTERHEAD_SMOKE = NOT_RUN`。
+- [ ] 真实 WPS 批注颜色与双作者气泡未执行时报告 `REAL_WPS_REVIEW_COMMENT_COLOR_SMOKE = NOT_RUN`；不以模拟对象测试代替 WPS 版本/主题下的颜色验证。
+- [ ] 真实 WPS 模板选择、添加、重命名、删除和重启恢复未执行时报告 `REAL_WPS_FORMAT_PROFILE_SMOKE = NOT_RUN`。
 
 ## 最小验证命令
 

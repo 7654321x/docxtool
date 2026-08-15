@@ -79,14 +79,15 @@ def verify_files() -> None:
     required = [
         "package.json", "manifest.xml", "ribbon.xml", "index.html", "main.js",
         "js/bootstrap-log.js", "js/bootstrap-complete.js", "js/ribbon.js", "images/taskpane.svg", "host-runtime.js",
-        "taskpane.html", "taskpane.js", "client-config.json",
+        "taskpane.html", "taskpane.js", "format-config.js", "format-settings.html", "format-settings.js", "format-settings.css", "client-config.json",
         "reader/reader-client.js", "reader/reader-ui.js", "reader/reader.css",
         "images/check.svg", "images/eye.svg", "images/eye-off.svg", "images/taskpane-icons.svg",
         "images/login-window.png", "images/user.svg",
     ]
     if not FROZEN:
         required.extend([
-            "account_store.py", "account_runtime.py", "public_api.py", "login_window.py",
+            "account_store.py", "account_runtime.py", "format_profile_store.py",
+            "public_api.py", "login_window.py",
             "desktop_runtime.py", "windows_startup.py",
             "control/server.py", "control/host_bridge.py", "control/format_current_document.py",
             "control/add_letterhead.py",

@@ -342,10 +342,55 @@
       ? Number(progress.text_offset)
       : undefined;
     const chapter = chapters()[chapterIndex];
-    const windowStart = Number.isInteger(restoredOffset) && chapter
-      ? Math.max(chapter.start_offset, restoredOffset - Math.floor(BLOCK_CHARS / 2))
-      : undefined;
-    await loadContent(chapterIndex, windowStart, restoredOffset);
+    if (Number.isInteger(restoredOffset) && chapter) {
+      await loadRestoredContent(chapterIndex, restoredOffset);
+      return;
+    }
+    await loadContent(chapterIndex);
+  }
+
+  async function loadRestoredContent(chapterIndex, restoredOffset) {
+    pause(false);
+    const book = activeBook();
+    const chapter = chapters()[chapterIndex];
+    if (!book || !chapter) throw new Error("READER_CONTENT_NOT_FOUND");
+    const targetEnd = Math.min(
+      chapter.end_offset,
+      Math.max(chapter.start_offset + BLOCK_CHARS, restoredOffset + Math.floor(BLOCK_CHARS / 2)),
+    );
+    let cursor = chapter.start_offset;
+    let combined = null;
+    let blockCount = 0;
+    log("INFO", "reader.progress.restore.prefix.start", "开始从本章开头恢复阅读正文", {
+      book_id_short: book.id.slice(0, 12),
+      chapter_index: chapterIndex,
+      requested_start_offset: restoredOffset,
+      content_end_offset: targetEnd,
+    });
+    while (cursor < targetEnd) {
+      const part = await client.loadContent(book.id, chapterIndex, cursor, BLOCK_CHARS);
+      blockCount += 1;
+      if (!combined) {
+        combined = { ...part };
+      } else {
+        const overlap = Math.max(0, combined.end_offset - part.start_offset);
+        combined.text += part.text.slice(overlap);
+        combined.end_offset = part.end_offset;
+      }
+      if (part.end_offset <= cursor) throw new Error("READER_CONTENT_WINDOW_STALLED");
+      cursor = part.end_offset;
+    }
+    content = combined;
+    log("INFO", "reader.content.load.completed", "Reader 正文加载完成", readerDetails({
+      requested_start_offset: chapter.start_offset,
+    }));
+    log("INFO", "reader.progress.restore.prefix.completed", "已保留阅读位置之前的本章正文", readerDetails({
+      requested_start_offset: restoredOffset,
+      content_end_offset: content ? content.end_offset : -1,
+      block_count: blockCount,
+    }));
+    renderContent();
+    restoreLoadedProgress(restoredOffset);
   }
 
   async function loadContent(chapterIndex, startOffset, restoredOffset, options = {}) {
@@ -362,18 +407,20 @@
       requested_start_offset: Number.isInteger(startOffset) ? startOffset : -1,
     }));
     renderContent();
-    if (Number.isInteger(restoredOffset)) {
-      const starts = contentParagraphStarts().filter((value) => value <= restoredOffset);
-      const targetOffset = starts.length ? starts[starts.length - 1] : content.start_offset;
-      const restored = scrollToLoadedParagraph(targetOffset, false);
-      log(restored ? "INFO" : "WARNING", "reader.progress.restore.completed", restored
-        ? "Reader 已恢复到保存的阅读位置"
-        : "Reader 未能滚动到保存的阅读位置", readerDetails({
-        requested_start_offset: restoredOffset,
-        target_offset: targetOffset,
-        reason: restored ? "position_restored" : "target_not_rendered",
-      }));
-    }
+    if (Number.isInteger(restoredOffset)) restoreLoadedProgress(restoredOffset);
+  }
+
+  function restoreLoadedProgress(restoredOffset) {
+    const starts = contentParagraphStarts().filter((value) => value <= restoredOffset);
+    const targetOffset = starts.length ? starts[starts.length - 1] : content.start_offset;
+    const restored = scrollToLoadedParagraph(targetOffset, false);
+    log(restored ? "INFO" : "WARNING", "reader.progress.restore.completed", restored
+      ? "Reader 已恢复到保存的阅读位置"
+      : "Reader 未能滚动到保存的阅读位置", readerDetails({
+      requested_start_offset: restoredOffset,
+      target_offset: targetOffset,
+      reason: restored ? "position_restored" : "target_not_rendered",
+    }));
   }
 
   function currentProgress() {

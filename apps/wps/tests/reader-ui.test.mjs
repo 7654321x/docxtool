@@ -261,16 +261,18 @@ test("Reader import shows progress and completion feedback", async () => {
   assert.equal(harness.elements.get("reader_notice").textContent, "TXT 导入完成，内容已加载。");
 });
 
-test("Reader restores saved progress inside a context window instead of loading only the tail", async () => {
+test("Reader restores saved progress while keeping all earlier chapter text in the scroll area", async () => {
   const harness = createHarness({ progressOffset: 12000 });
   harness.context.DocxToolReader.initialize();
   await harness.context.DocxToolReader.activate();
   await harness.flush();
 
-  const request = harness.calls.find((item) => item.method === "content");
-  assert.equal(request.startOffset, 6000);
-  assert.equal(harness.elements.get("reader_content").children.length, 2);
+  const requests = harness.calls.filter((item) => item.method === "content");
+  assert.deepEqual(requests.map((item) => item.startOffset), [0, 12000]);
+  assert.equal(harness.context.DocxToolReader._testing.getState().content.start_offset, 0);
+  assert.equal(harness.elements.get("reader_content").children.length, 3);
   assert.equal(harness.elements.get("reader_content").scrollTop, 600);
+  assert.ok(harness.logs.some((item) => item.event === "reader.progress.restore.prefix.completed"));
   assert.ok(harness.logs.some((item) => item.event === "reader.progress.restore.completed"));
 });
 

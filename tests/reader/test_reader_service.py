@@ -64,6 +64,17 @@ def test_service_returns_only_a_bounded_content_block_and_deletes_only_managed_c
         reader.get_book(book.id)
 
 
+def test_service_keeps_successive_content_window_offsets_exact(monkeypatch, tmp_path):
+    reader = service(monkeypatch, tmp_path)
+    book = reader.import_bytes(("第一章\n" + "正文" * 20_000).encode(), "book.txt").book
+
+    first = reader.get_content(book.id, 0, start_offset=0, limit=12_000)
+    second = reader.get_content(book.id, 0, start_offset=first.end_offset, limit=12_000)
+
+    assert second.start_offset == first.end_offset
+    assert second.end_offset > second.start_offset
+
+
 def test_service_rejects_invalid_progress_and_settings(monkeypatch, tmp_path):
     reader = service(monkeypatch, tmp_path)
     book = reader.import_bytes("第一章\n正文".encode(), "book.txt").book

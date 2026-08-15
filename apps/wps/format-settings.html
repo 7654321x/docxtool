@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>格式设置</title>
+  <link rel="stylesheet" href="./format-settings.css?v=2">
+  <script defer src="./format-config.js?v=2"></script>
+  <script defer src="./format-settings.js?v=2"></script>
+</head>
+<body>
+  <main class="dialog-shell" role="dialog" aria-modal="true" aria-labelledby="dialog_title">
+    <header class="dialog-header">
+      <div>
+        <h1 id="dialog_title">格式设置</h1>
+        <p>模板保存在本机并按登录账号隔离，预览和一键排版使用当前模板。</p>
+      </div>
+      <button id="dialog_close" class="icon-button" type="button" aria-label="关闭格式设置">×</button>
+    </header>
+
+    <div class="dialog-content">
+      <p id="format_dialog_error" class="dialog-error" aria-live="assertive"></p>
+
+      <section class="template-manager" aria-labelledby="section_templates">
+        <h2 id="section_templates">格式模板</h2>
+        <div class="template-grid">
+          <label>选择模板<select id="format_profile_select"></select></label>
+          <label>模板名称<input id="format_profile_name" type="text" maxlength="80" placeholder="请输入模板名称"></label>
+          <div class="template-actions">
+            <button id="format_profile_add" class="outline-button" type="button">添加模板</button>
+            <button id="format_profile_delete" class="danger-button" type="button">删除模板</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="settings-section" aria-labelledby="section_styles">
+        <h2 id="section_styles"><span>01</span>段落样式</h2>
+        <div class="style-table-wrap">
+          <table class="style-table">
+            <thead>
+              <tr><th>样式</th><th>字体</th><th>字号</th><th>加粗</th><th>编号 / 样式</th><th>编号类型</th><th>首行缩进</th><th>对齐方式</th></tr>
+            </thead>
+            <tbody id="format_style_rows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="settings-section" aria-labelledby="section_page">
+        <h2 id="section_page"><span>02</span>页面版式</h2>
+        <div class="field-grid page-grid">
+          <label>纸张规格<select id="format_paper_size"></select></label>
+          <label>上边距<select id="format_margin_top"></select></label>
+          <label>下边距<select id="format_margin_bottom"></select></label>
+          <label>左边距<select id="format_margin_left"></select></label>
+          <label>右边距<select id="format_margin_right"></select></label>
+          <label>固定行距<select id="format_line_spacing"></select></label>
+        </div>
+      </section>
+
+      <section class="settings-section" aria-labelledby="section_characters">
+        <h2 id="section_characters"><span>03</span>字符设置</h2>
+        <div class="field-grid four-grid">
+          <label>数字字体<select id="format_number_font"></select></label>
+          <label>数字字号<select id="format_number_size"></select></label>
+          <label>字母字体<select id="format_letter_font"></select></label>
+          <label>字母字号<select id="format_letter_size"></select></label>
+        </div>
+      </section>
+
+      <section class="settings-section" aria-labelledby="section_page_number">
+        <h2 id="section_page_number"><span>04</span>页码设置</h2>
+        <div class="field-grid four-grid">
+          <label>字体<select id="format_page_font"></select></label>
+          <label>字号<select id="format_page_size"></select></label>
+          <label>样式<select id="format_page_style"><option value="dash">— 1 —</option><option value="plain">1</option><option value="cn">第 1 页</option><option value="cn_total">第 1 页 / 共 n 页</option></select></label>
+          <label>位置<select id="format_page_position"><option value="outside">奇右偶左</option><option value="center">居中</option><option value="left">左对齐</option><option value="right">右对齐</option></select></label>
+        </div>
+      </section>
+    </div>
+
+    <footer class="dialog-footer">
+      <button id="format_settings_restore" class="outline-button" type="button">恢复默认</button>
+      <div class="footer-actions">
+        <button id="format_settings_cancel" class="secondary-button" type="button">取消</button>
+        <button id="format_settings_save" class="primary-button" type="button">保存设置</button>
+      </div>
+    </footer>
+  </main>
+</body>
+</html>

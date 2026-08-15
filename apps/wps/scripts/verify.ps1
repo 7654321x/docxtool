@@ -23,7 +23,9 @@ try {
         "apps/wps/js/bootstrap-complete.js",
         "apps/wps/js/ribbon.js",
         "apps/wps/host-runtime.js",
-        "apps/wps/taskpane.js"
+        "apps/wps/taskpane.js",
+        "apps/wps/format-config.js",
+        "apps/wps/format-settings.js"
     )
     foreach ($javaScriptFile in $javaScriptFiles) {
         & node --check $javaScriptFile
@@ -32,6 +34,11 @@ try {
 
     & node --test "apps/wps/tests/wps-runtime.test.mjs"
     if ($LASTEXITCODE) { throw "WPS_JAVASCRIPT_RUNTIME_TESTS_FAILED" }
+
+    if (Test-Path -LiteralPath "apps/wps/tests/format-settings.test.mjs") {
+        & node --test "apps/wps/tests/format-settings.test.mjs"
+        if ($LASTEXITCODE) { throw "WPS_FORMAT_SETTINGS_TESTS_FAILED" }
+    }
 
     if (-not (Test-Path -LiteralPath "apps/wps/index.html" -PathType Leaf)) {
         throw "WPS_ROOT_INDEX_MISSING"
