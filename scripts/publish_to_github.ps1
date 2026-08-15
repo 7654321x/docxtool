@@ -506,7 +506,16 @@ $requiredFiles = @(
 $testFiles = Get-ChildItem -LiteralPath (Join-Path $SourceRoot "tests") -File -Recurse |
     Where-Object { $_.Name -like "test_*.py" -or $_.Name -like "*.test.mjs" } |
     ForEach-Object { [System.IO.Path]::GetRelativePath($SourceRoot, $_.FullName).Replace("\", "/") }
-$publishFiles = @($requiredFiles + $testFiles | Sort-Object -Unique)
+$requiredPublishFiles = @($requiredFiles + $testFiles | Sort-Object -Unique)
+$publishDeletionRoots = @(
+    "apps/reader/",
+    "apps/wps/",
+    "docs/",
+    "resources/frontend/pages/",
+    "scripts/",
+    "src/docxtool/",
+    "tests/"
+)
 $stagedByScript = $false
 $commitCreated = $false
 
@@ -543,7 +552,18 @@ try {
     }
 
     Assert-CleanIndex -Root $SourceRoot
-    Assert-RequiredFiles -Root $SourceRoot -RelativePaths $publishFiles
+    Assert-RequiredFiles -Root $SourceRoot -RelativePaths $requiredPublishFiles
+
+    $deletedPublishFiles = @(git diff --name-only --diff-filter=D | ForEach-Object {
+        $_.Replace("\", "/")
+    } | Where-Object {
+        $relative = $_
+        $publishDeletionRoots | Where-Object { $relative.StartsWith($_, [System.StringComparison]::Ordinal) }
+    })
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unable to inspect deleted publish files."
+    }
+    $publishFiles = @($requiredPublishFiles + $deletedPublishFiles | Sort-Object -Unique)
     Assert-NoForbiddenFiles -Root $SourceRoot -RelativePaths $publishFiles
 
     Invoke-Checked git @("fetch", "origin", $Branch)
