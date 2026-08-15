@@ -60,26 +60,28 @@ local_recycle/
 pwsh -NoProfile -File .\scripts\publish_to_github.ps1 -DryRun
 ```
 
-快速发布：
+普通发布（默认使用）：
 
 ```pwsh
 pwsh -NoProfile -File .\scripts\publish_to_github.ps1 -Quick -CommitMessage "说明本次修改"
 ```
 
-完整门禁发布：
+完整验收发布（仅用户明确要求时使用）：
 
 ```pwsh
 pwsh -NoProfile -File .\scripts\publish_to_github.ps1 -Verify -CommitMessage "说明本次修改"
 ```
 
-脚本固定按以下顺序执行：
+普通发布固定按以下顺序执行：
 
 1. 核验当前本地仓库、`main` 分支、SSH 远端和本地/远端基线。
 2. 按允许清单在当前本地 Git 仓库中暂存文件。
 3. 在本地创建提交，使 `git log` 能直接看到本次发布。
-4. 再通过 SSH 推送 `main`，并核验远端提交号与本地提交号一致。
+4. 再通过 SSH 推送 `main`；以 SSH 推送成功作为普通发布成功依据。
 
-禁止只在临时克隆中创建提交。脚本不执行 force push，远端分支在发布期间发生变化时立即停止。
+`-Verify` 额外运行全量测试、WPS/EXE 门禁和推送后的远端提交号二次核验。除非用户明确要求，不使用完整验收发布。
+
+禁止只在临时克隆中创建提交。脚本不执行 force push，发布前基线不一致时立即停止；提交前检查失败会撤销本轮暂存。
 
 ## 发布后核验
 

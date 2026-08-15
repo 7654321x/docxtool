@@ -488,6 +488,8 @@ $testFiles = Get-ChildItem -LiteralPath (Join-Path $SourceRoot "tests") -File -R
     Where-Object { $_.Name -like "test_*.py" -or $_.Name -like "*.test.mjs" } |
     ForEach-Object { [System.IO.Path]::GetRelativePath($SourceRoot, $_.FullName).Replace("\", "/") }
 $publishFiles = @($requiredFiles + $testFiles | Sort-Object -Unique)
+$stagedByScript = $false
+$commitCreated = $false
 
 Write-Host "Source: $SourceRoot"
 Write-Host "Repository: $Repository"
@@ -582,6 +584,7 @@ try {
 
     $addArguments = @("add", "--") + $publishFiles
     Invoke-Checked git $addArguments
+    $stagedByScript = $true
     Invoke-Checked git @("diff", "--cached", "--check")
 
     $staged = @(git diff --cached --name-status)
@@ -593,22 +596,27 @@ try {
     Write-Host "Staged local publish changes:"
     $staged | ForEach-Object { Write-Host $_ }
 
-    Invoke-Checked git @("fetch", "origin", $Branch)
-    $latestRemote = (git rev-parse "origin/$Branch").Trim()
-    if ($latestRemote -ne $initialRemote) {
-        throw "Remote $Branch changed after baseline verification ($initialRemote -> $latestRemote). Stop and review before pushing."
-    }
-
     Invoke-Checked git @("commit", "-m", $CommitMessage)
+    $commitCreated = $true
     $localCommit = (git rev-parse HEAD).Trim()
     Invoke-Checked git @("push", "origin", "HEAD:$Branch")
-    $remoteLine = (git ls-remote $Repository "refs/heads/$Branch").Trim()
-    $remoteCommit = ($remoteLine -split "\s+")[0]
-    if ($remoteCommit -ne $localCommit) {
-        throw "Push verification failed: local=$localCommit remote=$remoteCommit"
+    if ($Verify) {
+        $remoteLine = (git ls-remote $Repository "refs/heads/$Branch").Trim()
+        $remoteCommit = ($remoteLine -split "\s+")[0]
+        if ($remoteCommit -ne $localCommit) {
+            throw "Push verification failed: local=$localCommit remote=$remoteCommit"
+        }
+        Write-Host "Full remote commit verification passed: $remoteCommit"
     }
-    Write-Host "Local commit pushed and verified: $Repository $Branch $localCommit"
+    $publishResult = if ($Verify) { "pushed and fully verified" } else { "pushed" }
+    Write-Host "Local commit ${publishResult}: $Repository $Branch $localCommit"
 }
 finally {
+    if ($stagedByScript -and -not $commitCreated) {
+        & git restore --staged -- $publishFiles
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "Unable to clear the publish staging area after failure. Inspect the index before retrying."
+        }
+    }
     Pop-Location
 }

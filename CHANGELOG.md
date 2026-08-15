@@ -1,5 +1,10 @@
 # Changelog
 
+## 5.4.3 - 2026-08-15
+
+- Made ordinary GitHub publishing lightweight by reserving full test, package, and remote-SHA gates for explicitly requested `-Verify` releases.
+- Made failed pre-commit validation clear only the staging created by the publish script.
+
 ## 5.4.2 - 2026-08-15
 
 - Repaired the local Git baseline and completed the tracked release set for document configuration, diagnostics, shared errors, WPS Control helpers, account-scoped format profiles, TaskPane icons, tests, and design documentation.

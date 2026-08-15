@@ -1,6 +1,6 @@
 # DocxTool 公文排版服务
 
-DocxTool 5.4.2 提供 DOCX 识别、规范化、公文排版、Web 服务、本地识别 SDK、WPS 插件和本地 TXT Reader。
+DocxTool 5.4.3 提供 DOCX 识别、规范化、公文排版、Web 服务、本地识别 SDK、WPS 插件和本地 TXT Reader。
 
 文档处理主链保持单向：
 
