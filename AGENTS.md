@@ -62,7 +62,7 @@ pwsh -NoProfile -Command "..."
 1. `local_recycle/` 仅用于本机临时补丁、快照、备份和可重新生成产物，不得提交。
 2. 已被 Git 跟踪的修改必须保留在原路径，不能移动到回收站制造干净工作树。
 3. 发布前阅读 `docs/RELEASE.md`，使用 `scripts/publish_to_github.ps1`，不得直接把整棵工作树推送到 GitHub。
-4. 版本以 `src/docxtool/version.py`、`pyproject.toml` 和 `CHANGELOG.md` 为准；当前文档基线为 5.4。
+4. 版本以 `src/docxtool/version.py`、`pyproject.toml` 和 `CHANGELOG.md` 为准；当前文档基线为 5.4.1。
 
 ## 重复问题处理
 

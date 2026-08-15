@@ -1,5 +1,12 @@
 # Changelog
 
+## 5.4.1 - 2026-08-15
+
+- Added account-scoped local SQLite format profiles and a WPS format-settings dialog with named template creation, selection, editing, and deletion while preserving the immutable system default.
+- Made preview and one-click formatting read the same active template configuration, and added focused UI, runtime, persistence, and account-isolation regression coverage.
+- Fixed Reader book restoration, viewport-based navigation, line-by-line playback, visibility pause/resume, and persisted progress behavior without storing complete book text in SQLite.
+- Updated WPS packaging resources, regression rules, and the GitHub publish allowlist for the format-settings and Reader changes.
+
 ## 5.4 - 2026-08-14
 
 - Consolidated project documentation to eleven current root files, moved WPS UI designs into `docs/design`, folded architecture, SDK binding, release, validation, and recognition gates into their owned documents, and removed obsolete login, outbox, version, EXE, and duplicate-document descriptions without changing runtime behavior.
