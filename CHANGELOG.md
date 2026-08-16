@@ -1,5 +1,12 @@
 # Changelog
 
+## 5.5.0 - 2026-08-16
+
+- Fixed CI fresh-interpreter imports by installing the current package before Python tests, while retaining the locked dependency install.
+- Made WPS result reporting omit invalid optional document names before they reach the durable outbox, so metadata cannot block later core formatting results.
+- Corrected failed Web-task duration reporting, retained internal tracebacks in server logs without changing the sanitized external error, and accurately named the hashed import-log field as `source_path_hash`.
+- Made task-log route coverage use platform-native temporary paths so the same path-safety behavior is verified on Linux CI and Windows.
+
 ## 5.4.4 - 2026-08-16
 
 - Consolidated production traffic behind Cloudflare Pages, Access, and Tunnel while keeping the Python service loopback-only and removing the obsolete public Nginx path.
