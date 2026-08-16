@@ -39,7 +39,7 @@ ADMIN_NAVIGATION = (
 
 
 def _navigation_html(active_module: str, active_page: str) -> str:
-    """Render the canonical three-item primary navigation and active submenu."""
+    """Render the canonical primary navigation with both module submenus visible."""
     rendered: list[str] = []
     for item in ADMIN_NAVIGATION:
         key = item["key"]
@@ -50,10 +50,10 @@ def _navigation_html(active_module: str, active_page: str) -> str:
             f'{html.escape(str(item["label"]))}</a>'
         )
         children = item["children"]
-        if not active or not children:
+        if not children:
             continue
         child_html = "".join(
-            f'<a class="secondary-nav{" active" if child_key == active_page else ""}" '
+            f'<a class="secondary-nav{" active" if active and child_key == active_page else ""}" '
             f'href="{html.escape(child_href, quote=True)}">{html.escape(child_label)}</a>'
             for child_key, child_label, child_href in children
         )

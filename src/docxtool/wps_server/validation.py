@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 
 _USERNAME_RE = re.compile(r"^[A-Za-z0-9]{5,32}$")
 _PASSWORD_RE = re.compile(r"^[A-Za-z0-9]{5,64}$")
@@ -15,6 +16,7 @@ WPS_NOTIFICATION_TITLE_MAX_CHARS = 120
 WPS_NOTIFICATION_BODY_MAX_CHARS = 2_000
 WPS_NOTIFICATION_BATCH_MAX = 20
 WPS_NOTIFICATION_LEVELS = frozenset({"info", "warning", "error"})
+WPS_DOCUMENT_NAME_MAX_CHARS = 120
 
 
 class WpsValidationError(ValueError):
@@ -96,6 +98,24 @@ def validate_app_version(value: object) -> str:
 def validate_error_code(value: object) -> str:
     if not isinstance(value, str) or not _ERROR_CODE_RE.fullmatch(value):
         raise WpsValidationError("ERROR_CODE_INVALID", "错误代码格式无效")
+    return value
+
+
+def validate_document_name(value: object) -> str:
+    """Accept only one bounded filename, never a local path or document content."""
+    if (
+        not isinstance(value, str)
+        or not 1 <= len(value) <= WPS_DOCUMENT_NAME_MAX_CHARS
+        or value != value.strip()
+        or value in {".", ".."}
+        or "/" in value
+        or "\\" in value
+        or any(
+            unicodedata.category(character) in {"Cc", "Zl", "Zp"}
+            for character in value
+        )
+    ):
+        raise WpsValidationError("DOCUMENT_NAME_INVALID", "文档名称无效")
     return value
 
 

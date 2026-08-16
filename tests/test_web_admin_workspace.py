@@ -19,6 +19,7 @@ from docxtool.web.admin_workspace_routes import (
     task_id_from_query,
     workspace_session_target,
 )
+from docxtool.web.admin_shell import render_admin_shell
 from docxtool.web.routing import match_get_route, match_post_route
 
 
@@ -64,6 +65,21 @@ def test_admin_workspace_routes_are_explicit():
     assert match_post_route("/admin/wps/users/wusr_1/notifications").action == "admin_wps_user_notification"
     assert match_post_route("/admin/wps/users/wusr_1/delete").action == "admin_wps_user_delete"
     assert match_post_route("/admin/wps/devices/wdev_1/status").action == "admin_wps_device_status"
+
+
+def test_workspace_navigation_keeps_web_and_wps_submenus_visible() -> None:
+    """两个业务模块的二级菜单应同时显示，仅当前模块高亮对应页面。"""
+    page = render_admin_shell(
+        title="WPS 排版任务",
+        active_module="wps",
+        active_page="tasks",
+        body="",
+        csrf_input="",
+    )
+
+    assert page.count('class="secondary-nav-list"') == 2
+    assert '<a class="secondary-nav" href="/admin/web/tasks">任务中心</a>' in page
+    assert '<a class="secondary-nav active" href="/admin/wps/tasks">排版任务</a>' in page
 
 
 def test_legacy_workspace_targets_keep_only_supported_detail_and_filter_state():
@@ -151,7 +167,7 @@ def test_wps_overview_devices_tasks_and_user_tabs_render_only_real_data():
         csrf_input="",
     )
     tasks = render_wps_tasks_page(
-        result={"rows": [{"requested_at": 1000, "request_id": "request-1", "username": "User01", "device_name": "测试电脑", "command": "format", "status": "success", "config_version": "config-1", "duration_ms": 120, "error_code": "", "app_version": "5.1"}], "total": 1, "page": 1, "page_size": 20},
+        result={"rows": [{"requested_at": 1000, "request_id": "request-1", "document_name": "通知.docx", "username": "User01", "device_name": "测试电脑", "command": "format", "status": "success", "config_version": "config-1", "duration_ms": 120, "error_code": "", "app_version": "5.1"}], "total": 1, "page": 1, "page_size": 20},
         filters={"q": "", "status": "", "online": "", "version": "", "page": 1, "page_size": 20},
         csrf_input="",
     )
@@ -167,6 +183,10 @@ def test_wps_overview_devices_tasks_and_user_tabs_render_only_real_data():
     assert "暂无趋势数据" not in overview
     assert "设备管理" in devices and "测试电脑" in devices
     assert "WPS 排版任务" in tasks and "request-1" in tasks
+    assert "<th>文件名</th>" in tasks and "通知.docx" in tasks
+    assert "<th>配置</th>" not in tasks
+    assert "config-1" not in tasks
+    assert "<th>版本</th>" in tasks and "5.1" in tasks
     assert "WPS 管理写操作尚未启用" in user
     assert 'action="/admin/wps/users/wusr_1/status"' not in user
 

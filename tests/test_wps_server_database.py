@@ -60,13 +60,18 @@ def test_wps_database_creates_core_admin_audit_and_notification_tables(tmp_path)
         "wps_admin_audit_logs",
         "wps_notifications",
     }
-    assert version == 3
+    assert version == 4
+    with sqlite3.connect(str(path)) as conn:
+        columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(wps_format_requests)")
+        }
+    assert "document_name" in columns
 
 
 def test_wps_database_rejects_newer_schema(tmp_path):
     path = tmp_path / "wps_plugin.db"
     with sqlite3.connect(str(path)) as conn:
-        conn.execute("PRAGMA user_version=4")
+        conn.execute("PRAGMA user_version=5")
 
     try:
         database.initialize_database(_factory(path), threading.Lock())
@@ -92,7 +97,7 @@ def test_wps_database_migrates_v1_without_losing_existing_rows(tmp_path):
     database.initialize_database(connect, threading.Lock())
 
     with sqlite3.connect(str(path)) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
         assert conn.execute("SELECT username FROM wps_users").fetchone()[0] == "Legacy01"
         assert conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='wps_admin_audit_logs'"
@@ -100,6 +105,9 @@ def test_wps_database_migrates_v1_without_losing_existing_rows(tmp_path):
         assert conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='wps_notifications'"
         ).fetchone()
+        assert "document_name" in {
+            row[1] for row in conn.execute("PRAGMA table_info(wps_format_requests)")
+        }
 
 
 def test_wps_database_v1_migration_failure_rolls_back(tmp_path, monkeypatch, caplog):
@@ -145,6 +153,53 @@ def test_wps_database_v2_to_v3_migration_is_rollback_safe(tmp_path, monkeypatch)
         assert conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='wps_notifications'"
         ).fetchone() is None
+
+
+def _create_v3_database(path) -> None:
+    """Build the exact v3 shape without relying on SQLite DROP COLUMN support."""
+    conn = database.connect(path)
+    try:
+        database._execute_all(conn, database._CORE_SCHEMA_STATEMENTS)
+        database._migrate_v1_to_v2(conn)
+        database._migrate_v2_to_v3(conn)
+        conn.execute("PRAGMA user_version=3")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_wps_database_v3_to_v4_adds_document_name(tmp_path):
+    path = tmp_path / "wps_plugin.db"
+    _create_v3_database(path)
+
+    database.initialize_database(_factory(path), threading.Lock())
+
+    with sqlite3.connect(str(path)) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
+        columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(wps_format_requests)")
+        }
+    assert "document_name" in columns
+
+
+def test_wps_database_v3_to_v4_migration_is_rollback_safe(tmp_path, monkeypatch):
+    path = tmp_path / "wps_plugin.db"
+    _create_v3_database(path)
+    monkeypatch.setattr(
+        database,
+        "_migrate_v3_to_v4",
+        lambda _conn: (_ for _ in ()).throw(RuntimeError("forced v4 migration failure")),
+    )
+
+    with pytest.raises(RuntimeError, match="forced v4 migration failure"):
+        database.initialize_database(_factory(path), threading.Lock())
+
+    with sqlite3.connect(str(path)) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+        columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(wps_format_requests)")
+        }
+    assert "document_name" not in columns
 
 
 def test_wps_admin_mutation_gate_is_disabled_by_default_and_rejects_invalid_values(monkeypatch):

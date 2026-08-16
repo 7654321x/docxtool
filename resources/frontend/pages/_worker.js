@@ -4,6 +4,16 @@ const API_DOWNLOAD = "/api/download/";
 const API_PRESETS = "/api/presets";
 const API_ADMIN_SESSION = "/api/admin/session";
 const API_AUTH_PREFIX = "/api/auth/";
+const WPS_API_METHODS = new Map([
+  ["/wps-api/v1/auth/register", new Set(["POST"])],
+  ["/wps-api/v1/auth/login", new Set(["POST"])],
+  ["/wps-api/v1/auth/me", new Set(["GET"])],
+  ["/wps-api/v1/auth/logout", new Set(["POST"])],
+  ["/wps-api/v1/heartbeat", new Set(["POST"])],
+  ["/wps-api/v1/notifications/read", new Set(["POST"])],
+  ["/wps-api/v1/format/authorize", new Set(["POST"])],
+  ["/wps-api/v1/format/result", new Set(["POST"])],
+]);
 const ADMIN_EXACT_PATHS = new Set([
   "/admin/login",
   "/admin/logout",
@@ -51,6 +61,7 @@ function backendPath(pathname) {
   if (pathname === "/api/health") return "/health";
   if (pathname === "/api/ready") return "/ready";
   if (pathname === "/api/version") return "/version";
+  if (isWpsPublicApiPath(pathname)) return pathname;
   if (isAdminProxyPath(pathname)) {
     return pathname;
   }
@@ -59,6 +70,10 @@ function backendPath(pathname) {
 
 function isApiPath(pathname) {
   return pathname.startsWith("/api/");
+}
+
+function isWpsPublicApiPath(pathname) {
+  return WPS_API_METHODS.has(pathname);
 }
 
 function isAdminProxyPath(pathname) {
@@ -96,7 +111,7 @@ function isWpsAdminMutationPath(pathname) {
 }
 
 function shouldProxyPath(pathname) {
-  return isApiPath(pathname) || isAdminProxyPath(pathname);
+  return isApiPath(pathname) || isWpsPublicApiPath(pathname) || isAdminProxyPath(pathname);
 }
 
 function methodAllowed(pathname, method) {
@@ -124,6 +139,8 @@ function methodAllowed(pathname, method) {
   if (pathname === "/api/health" || pathname === "/api/ready" || pathname === "/api/version") {
     return method === "GET";
   }
+  const wpsMethods = WPS_API_METHODS.get(pathname);
+  if (wpsMethods) return wpsMethods.has(method);
   return false;
 }
 
@@ -153,23 +170,52 @@ async function proxyApi(request, env, url) {
 
     const backendBase = String(env.BACKEND_BASE_URL || "").trim().replace(/\/+$/, "");
     const proxySecret = String(env.PROXY_SECRET || "").trim();
+    const accessClientId = String(env.CF_ACCESS_CLIENT_ID || "").trim();
+    const accessClientSecret = String(env.CF_ACCESS_CLIENT_SECRET || "").trim();
     if (!backendBase) {
       return jsonError("BACKEND_NOT_CONFIGURED", "Cloudflare Pages env BACKEND_BASE_URL is not configured", 500);
     }
     if (!proxySecret) {
       return jsonError("PROXY_SECRET_NOT_CONFIGURED", "Cloudflare Pages env PROXY_SECRET is not configured", 500);
     }
+    if (!accessClientId) {
+      return jsonError("CF_ACCESS_CLIENT_ID_NOT_CONFIGURED", "Cloudflare Pages env CF_ACCESS_CLIENT_ID is not configured", 500);
+    }
+    if (!accessClientSecret) {
+      return jsonError("CF_ACCESS_CLIENT_SECRET_NOT_CONFIGURED", "Cloudflare Pages env CF_ACCESS_CLIENT_SECRET is not configured", 500);
+    }
 
-    const target = new URL(backendBase + path);
+    let backendOrigin;
+    try {
+      backendOrigin = new URL(backendBase);
+    } catch (_) {
+      return jsonError("BACKEND_URL_INVALID", "Cloudflare Pages env BACKEND_BASE_URL must be an HTTPS hostname origin", 500);
+    }
+    if (
+      backendOrigin.protocol !== "https:"
+      || !backendOrigin.hostname
+      || backendOrigin.username
+      || backendOrigin.password
+      || backendOrigin.pathname !== "/"
+      || backendOrigin.search
+      || backendOrigin.hash
+      || isIpLiteralHost(backendOrigin.hostname)
+    ) {
+      return jsonError("BACKEND_URL_INVALID", "Cloudflare Pages env BACKEND_BASE_URL must be an HTTPS hostname origin", 500);
+    }
+
+    const target = new URL(path, backendOrigin);
     target.search = url.search;
 
     const headers = new Headers(request.headers);
     const clientIp = request.headers.get("CF-Connecting-IP") || "";
-    for (const key of [
+    const protectedHeaders = [
       "Host",
       "Forwarded",
       "X-Proxy-Secret",
       "X-Docxtool-Proxy",
+      "CF-Access-Client-Id",
+      "CF-Access-Client-Secret",
       "X-Forwarded-For",
       "X-Real-IP",
       "X-Forwarded-Host",
@@ -177,19 +223,26 @@ async function proxyApi(request, env, url) {
       "CF-Connecting-IP",
       "X-Admin-Token",
       "Cookie",
-      "Authorization",
       "Proxy-Authorization",
-    ]) {
+    ];
+    if (!isWpsPublicApiPath(url.pathname)) {
+      protectedHeaders.push("Authorization");
+    }
+    for (const key of protectedHeaders) {
       headers.delete(key);
     }
-    const cookieHeader = filterCookieHeader(request.headers.get("Cookie"));
-    if (cookieHeader) {
-      headers.set("Cookie", cookieHeader);
-    } else {
-      headers.delete("Cookie");
+    if (!isWpsPublicApiPath(url.pathname)) {
+      const cookieHeader = filterCookieHeader(request.headers.get("Cookie"));
+      if (cookieHeader) {
+        headers.set("Cookie", cookieHeader);
+      } else {
+        headers.delete("Cookie");
+      }
     }
     headers.set("X-Proxy-Secret", proxySecret);
     headers.set("X-Docxtool-Proxy", "cloudflare-pages");
+    headers.set("CF-Access-Client-Id", accessClientId);
+    headers.set("CF-Access-Client-Secret", accessClientSecret);
     headers.set("X-Forwarded-Host", url.host);
     headers.set("X-Forwarded-Proto", "https");
     if (clientIp) {
@@ -211,6 +264,10 @@ async function proxyApi(request, env, url) {
   } catch (_) {
     return jsonError("PROXY_WORKER_ERROR", "Worker proxy failed", 502);
   }
+}
+
+function isIpLiteralHost(hostname) {
+  return /^\d{1,3}(?:\.\d{1,3}){3}$/.test(hostname) || hostname.includes(":");
 }
 
 export default {

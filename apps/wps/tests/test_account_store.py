@@ -65,6 +65,49 @@ def test_format_result_outbox_is_durable_idempotent_and_conflict_checked(tmp_pat
     assert account_store.count_format_results() == 0
 
 
+def test_format_result_outbox_migrates_and_preserves_document_name(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    path = account_store.local_account_path()
+    path.parent.mkdir(parents=True)
+    with sqlite3.connect(str(path)) as conn:
+        conn.execute(
+            """CREATE TABLE format_result_outbox (
+                request_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                duration_ms INTEGER NOT NULL,
+                error_code TEXT NOT NULL,
+                app_version TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            )"""
+        )
+        conn.execute(
+            """INSERT INTO format_result_outbox
+               (request_id,status,duration_ms,error_code,app_version,created_at)
+               VALUES ('legacy-request','success',12,'','5.1',1)"""
+        )
+        conn.commit()
+
+    assert account_store.list_format_results() == [
+        {
+            "request_id": "legacy-request",
+            "status": "success",
+            "duration_ms": 12,
+            "error_code": "",
+            "app_version": "5.1",
+        }
+    ]
+    payload = {
+        "request_id": "request-with-name",
+        "status": "success",
+        "duration_ms": 120,
+        "error_code": "",
+        "document_name": "会议纪要.docx",
+        "app_version": "5.2.1",
+    }
+    assert account_store.enqueue_format_result(payload) is False
+    assert account_store.list_format_results()[-1] == payload
+
+
 def test_clear_account_rolls_back_account_and_outbox_together(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     account_store.save_account(_account())

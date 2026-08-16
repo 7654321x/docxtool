@@ -12,9 +12,9 @@ from docxtool.storage.database import default_database_path
 from docxtool.version import package_version
 from docxtool.web.config import (
     parse_admin_console_origin,
-    parse_bool,
     parse_frontend_origin,
     parse_int_env,
+    parse_strict_bool,
     resolve_admin_cookie_secure,
     resolve_cookie_secure,
 )
@@ -119,12 +119,17 @@ def load_environment_config(load_secret: Callable[[str, str], str]) -> Environme
     started_at = time.strftime("%Y-%m-%d %H:%M:%S")
     admin_token = load_secret("ADMIN_TOKEN", DEFAULT_ADMIN_TOKEN)
     proxy_secret = load_secret("PROXY_SECRET", DEFAULT_PROXY_SECRET)
-    production_mode = parse_bool(os.environ.get("PRODUCTION_MODE", "false"), False)
     try:
+        production_mode = parse_strict_bool(
+            os.environ.get("PRODUCTION_MODE", "false"),
+            "PRODUCTION_MODE",
+        )
         frontend_origin = parse_frontend_origin(
             os.environ.get("FRONTEND_ORIGIN", ""),
             production_mode,
         )
+        if production_mode and not frontend_origin:
+            raise ValueError("FRONTEND_ORIGIN must be configured in production")
         cookie_secure = resolve_cookie_secure(
             frontend_origin,
             os.environ.get("COOKIE_SECURE"),
@@ -132,7 +137,12 @@ def load_environment_config(load_secret: Callable[[str, str], str]) -> Environme
         )
         admin_console_origin_raw = os.environ.get("ADMIN_CONSOLE_ORIGIN", "")
         admin_cookie_secure_raw = os.environ.get("ADMIN_COOKIE_SECURE")
-        admin_console_origin = parse_admin_console_origin(admin_console_origin_raw)
+        admin_console_origin = parse_admin_console_origin(
+            admin_console_origin_raw or frontend_origin,
+            production_mode,
+        )
+        if production_mode and admin_console_origin != frontend_origin:
+            raise ValueError("ADMIN_CONSOLE_ORIGIN must match FRONTEND_ORIGIN in production")
         if str(admin_console_origin_raw).strip() or str(admin_cookie_secure_raw or "").strip():
             admin_cookie_secure = resolve_admin_cookie_secure(
                 admin_console_origin,
@@ -142,6 +152,10 @@ def load_environment_config(load_secret: Callable[[str, str], str]) -> Environme
             )
         else:
             admin_cookie_secure = cookie_secure
+        trust_proxy_headers = parse_strict_bool(
+            os.environ.get("TRUST_PROXY_HEADERS", "true"),
+            "TRUST_PROXY_HEADERS",
+        )
     except ValueError as exc:
         raise SystemExit(f"[配置错误] {exc}") from exc
     user_session_days = max(1, min(365, parse_int_env("DOCXTOOL_USER_SESSION_DAYS", 30)))
@@ -184,7 +198,7 @@ def load_environment_config(load_secret: Callable[[str, str], str]) -> Environme
         max_docx_xml_bytes=parse_int_env("MAX_DOCX_XML_SIZE_MB", 20) * 1024 * 1024,
         max_docx_media_bytes=parse_int_env("MAX_DOCX_MEDIA_SIZE_MB", 30) * 1024 * 1024,
         max_docx_compression_ratio=parse_int_env("MAX_DOCX_COMPRESSION_RATIO", 100),
-        trust_proxy_headers=parse_bool(os.environ.get("TRUST_PROXY_HEADERS", "true"), True),
+        trust_proxy_headers=trust_proxy_headers,
         trusted_proxy_ips={
             ip.strip()
             for ip in os.environ.get("TRUSTED_PROXY_IPS", "127.0.0.1,::1").split(",")

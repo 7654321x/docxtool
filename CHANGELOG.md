@@ -1,5 +1,11 @@
 # Changelog
 
+## 5.4.4 - 2026-08-16
+
+- Consolidated production traffic behind Cloudflare Pages, Access, and Tunnel while keeping the Python service loopback-only and removing the obsolete public Nginx path.
+- Reorganized the administrator workspace into overview, web-business, and WPS-plugin modules with persistent secondary navigation and WPS task, device, and account views.
+- Added a path-free WPS document filename to completed formatting-task records, preserved it through the durable result outbox, and displayed it only in the authenticated administrator task table.
+
 ## 5.4.3 - 2026-08-15
 
 - Made ordinary GitHub publishing lightweight by reserving full test, package, and remote-SHA gates for explicitly requested `-Verify` releases.

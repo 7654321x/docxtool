@@ -6,12 +6,14 @@ import pytest
 
 from docxtool.wps_server import database
 from docxtool.wps_server.auth import authenticated_session
+from docxtool.wps_server.admin import list_format_requests
 from docxtool.wps_server.service import (
     WpsServiceError,
     authorize_format,
     record_format_result,
     register_user,
 )
+from docxtool.wps_server.validation import WpsValidationError
 
 
 def _context(tmp_path):
@@ -75,14 +77,14 @@ def test_authorization_is_recorded_once_and_result_is_terminal(tmp_path, caplog)
 
     result = record_format_result(
         principal,
-        {"request_id": "pane-request-001", "status": "success", "duration_ms": 4200, "error_code": "", "app_version": "5.1"},
+        {"request_id": "pane-request-001", "status": "success", "duration_ms": 4200, "error_code": "", "document_name": "会议纪要.docx", "app_version": "5.1"},
         connect_func=connect,
         sql_lock=lock,
         now_func=lambda: 1200,
     )
     repeated = record_format_result(
         principal,
-        {"request_id": "pane-request-001", "status": "success", "duration_ms": 4200, "error_code": "", "app_version": "5.1"},
+        {"request_id": "pane-request-001", "status": "success", "duration_ms": 4200, "error_code": "", "document_name": "会议纪要.docx", "app_version": "5.1"},
         connect_func=connect,
         sql_lock=lock,
         now_func=lambda: 1201,
@@ -93,6 +95,8 @@ def test_authorization_is_recorded_once_and_result_is_terminal(tmp_path, caplog)
     assert "wps.format.authorize.reused" in caplog.text
     assert "wps.format.result.completed" in caplog.text
     assert "wps.format.result.reused" in caplog.text
+    listed = list_format_requests(connect_func=connect, sql_lock=lock)
+    assert listed["rows"][0]["document_name"] == "会议纪要.docx"
 
     after_terminal = authorize_format(
         principal,
@@ -115,3 +119,40 @@ def test_authorization_is_recorded_once_and_result_is_terminal(tmp_path, caplog)
             now_func=lambda: 1400,
         )
     assert exc_info.value.code == "REQUEST_STATUS_CONFLICT"
+
+    with pytest.raises(WpsServiceError) as exc_info:
+        record_format_result(
+            principal,
+            {"request_id": "pane-request-001", "status": "success", "duration_ms": 4200, "error_code": "", "document_name": "另一份材料.docx", "app_version": "5.1"},
+            connect_func=connect,
+            sql_lock=lock,
+            now_func=lambda: 1401,
+        )
+    assert exc_info.value.code == "REQUEST_STATUS_CONFLICT"
+
+
+@pytest.mark.parametrize(
+    "document_name",
+    (r"C:\\private\\会议纪要.docx", "report\n.docx", "report\u0085.docx", " ", "x" * 121),
+)
+def test_format_result_rejects_non_filename_metadata(tmp_path, document_name):
+    _path, connect, lock, principal = _context(tmp_path)
+    payload = {"request_id": "pane-request-002", "command": "apply", "app_version": "5.1"}
+    authorize_format(
+        principal,
+        payload,
+        connect_func=connect,
+        sql_lock=lock,
+        format_profile={"config_version": "config-1", "format_config": {"features": {}}},
+        now_func=lambda: 1100,
+    )
+
+    with pytest.raises(WpsValidationError) as exc_info:
+        record_format_result(
+            principal,
+            {"request_id": "pane-request-002", "status": "success", "duration_ms": 1, "error_code": "", "document_name": document_name, "app_version": "5.1"},
+            connect_func=connect,
+            sql_lock=lock,
+            now_func=lambda: 1101,
+        )
+    assert getattr(exc_info.value, "code", "") == "DOCUMENT_NAME_INVALID"

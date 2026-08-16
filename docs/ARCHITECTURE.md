@@ -13,7 +13,6 @@ docxtool/
 ├─ tests/                    Python、Node 和架构回归
 ├─ scripts/                  构建、发布、迁移和批量验证
 ├─ docs/                     当前文档、设计、迁移记录和协议示例
-├─ deploy/                   Nginx 等部署模板
 ├─ server.py                 Web 服务兼容入口
 └─ pyproject.toml            包、依赖、入口和版本配置
 ```

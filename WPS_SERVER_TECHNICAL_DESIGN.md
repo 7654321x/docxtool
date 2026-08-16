@@ -23,7 +23,7 @@ TaskPane 一键排版
   → 心跳或下次启动补报结果
 ```
 
-公网服务器不接收 DOCX、正文、文件名、路径、图片、表格、文档哈希或识别结果。服务器只处理账号、设备、会话、授权配置版本和排版终态统计。
+公网服务器不接收 DOCX、正文、文档路径、图片、表格、文档哈希或识别结果。唯一的最小例外是：用户明确需要在管理员后台查看排版任务时，结果补报可以携带 WPS Host 已读取的基础文件名；它不包含路径，也不进入日志。
 
 ## 服务端模块
 
@@ -49,13 +49,13 @@ TaskPane 一键排版
 | `wps_users` | 标准化账号、Argon2id 摘要、状态和时间 |
 | `wps_devices` | 用户设备摘要、状态、客户端版本和最后在线时间 |
 | `wps_sessions` | 会话摘要、用户、设备、签发时间和到期时间 |
-| `wps_format_requests` | 唯一请求编号、功能、授权状态、终态和配置版本 |
+| `wps_format_requests` | 唯一请求编号、功能、授权状态、终态、配置版本和受限基础文件名 |
 | `wps_admin_audit_logs` | 管理员授权上下文、目标账号、写操作结果和关联编号；不保存密码或 Token |
 | `wps_notifications` | 账号级纯文本通知、级别、创建时间和展示确认时间 |
 
 数据库不保存原始密码、原始设备序列号、原始会话 Token 或文档数据。用户、设备和会话状态必须在授权和心跳事务内联合复核。
 
-当前 Schema v3 在 v1 的核心表基础上，先于 v2 追加管理员审计表及索引，再于 v3 追加账号级通知表及待确认查询索引。管理写操作与其成功审计在同一 SQLite 事务中提交；审计写入失败时业务写入必须回滚。账号硬删除不级联删除审计事实，审计中的目标账号编号不设指向 `wps_users` 的外键；通知则随该账号业务数据在同一事务中删除。
+当前 Schema v4 在 v1 的核心表基础上，先于 v2 追加管理员审计表及索引，再于 v3 追加账号级通知表及待确认查询索引，最后由 v4 为 `wps_format_requests` 追加非空 `document_name` 字段，默认空字符串。管理写操作与其成功审计在同一 SQLite 事务中提交；审计写入失败时业务写入必须回滚。账号硬删除不级联删除审计事实，审计中的目标账号编号不设指向 `wps_users` 的外键；通知则随该账号业务数据在同一事务中删除。
 
 新注册和新登录会话从签发时起精确有效 7 天；心跳不续期。已有会话只按数据库中的 `expires_at` 判断，不执行批量迁移。
 
@@ -106,6 +106,38 @@ AccountRuntime 启动后立即心跳，随后使用登录/注册/`/auth/me` Boot
 
 预览、清除预览、本机检测、TaskPane 设置、添加版头和 Reader 不调用公网排版授权。
 
+## 排版任务文件名元数据
+
+### 目标与非目标
+
+管理员需要在“WPS 排版任务”表中识别对应的本地文档，因此每次实际执行的一键排版可保存一个基础文件名。该字段仅用于管理员已授权的任务查询，不用于搜索、统计、路由、授权、格式配置或文档处理决策。
+
+本轮不上传或保存完整路径、目录、正文、DOCX、摘要、哈希、识别结果或任何其他文档内容；不改变 TaskPane 与 HostBridge 的职责，也不为此新增第二条本机或公网通信链路。
+
+### 数据流与所有权
+
+```text
+WPS Host Runtime（唯一可读取 WPS Document.Name 的边界）
+        ↓ 终态 active_request.document_name
+Control Server（只在结果补报时转交，不写本地诊断日志）
+        ↓
+AccountRuntime + 本地 format_result_outbox（离线可重试）
+        ↓ POST /wps-api/v1/format/result
+WPS 服务端校验并写入 wps_format_requests.document_name
+        ↓
+管理员 WPS 排版任务表
+```
+
+文件名不放在授权请求中：TaskPane 不直接访问 WPS 对象，且它持有的状态可能已过期。只有 Host 在同一请求实际开始执行时读取的 `Document.Name` 才是本次排版的事实来源。结果无法立即上报时，文件名与状态、耗时和错误码一起进入现有 outbox，恢复网络后原样补报。
+
+### 契约、校验与兼容性
+
+- `POST /wps-api/v1/format/result` 新增可选 `document_name`。新客户端仅在 Host 返回非空名称时发送；旧客户端省略该字段仍按现有结果流程成功。
+- 接受的值必须是 1–120 个字符的单一基础文件名，不能含路径分隔符、NUL、换行或其他控制字符。服务端不从客户端猜测、清洗或还原路径；无效值以稳定 `DOCUMENT_NAME_INVALID` 失败。
+- `document_name` 是结果幂等 payload 的一部分。相同请求编号重复补报必须带相同名称或同时省略；终态已保存后不得用重试覆写为另一个文件名。
+- 服务端先升级到 Schema v4，再发布会发送该可选字段的客户端。历史记录和旧客户端因默认空字符串保持可读，后台以 `-` 展示未知名称。
+- `wps_format_requests.document_name` 只通过已有管理员 session 保护的 WPS 查询展示。应用日志、WPS 本地诊断日志、错误消息、审计日志和最终状态摘要均不得记录该值。
+
 ## 本机通信与事务
 
 Host 与 TaskPane 通过 Control Server 的 HostBridge 单槽长请求通信。WPS 对象只在 Host Runtime 主线程操作；Python CommandMonitor 串行业务命令。
@@ -130,7 +162,7 @@ WPS 外部接口统一位于 `/wps-api/v1/*`。注册、登录、当前账号、
 
 ## 日志与隐私
 
-日志只记录事件名、阶段、状态、耗时、计数、稳定错误码、异常类型和脱敏短 ID。禁止记录密码、Token、Authorization、Cookie、设备密钥、正文、文件路径、完整哈希或数据库内容。
+日志只记录事件名、阶段、状态、耗时、计数、稳定错误码、异常类型和脱敏短 ID。禁止记录密码、Token、Authorization、Cookie、设备密钥、正文、基础文件名、文件路径、完整哈希或数据库内容。
 
 后台心跳离线只在状态变化时记录一次“服务器无法连接”；恢复后记录一次恢复事件。TaskPane 用户提示使用中文，稳定代码放在“错误代码：”之后。
 
@@ -138,7 +170,7 @@ WPS 外部接口统一位于 `/wps-api/v1/*`。注册、登录、当前账号、
 
 最低覆盖：
 
-- WPS 数据库 v1→v2→v3 迁移、唯一约束、状态事务、通知确认和 7 天到期；
+- WPS 数据库 v1→v2→v3→v4 迁移、唯一约束、状态事务、通知确认、文件名元数据和 7 天到期；
 - Argon2 参数、双槽并发限制和锁外哈希升级；
 - 登录窗口、自动登录提交、无账号不加载插件和端口冲突；
 - Bootstrap/`/auth/me` Snapshot、服务端心跳节拍、重新认证交接、离线/恢复状态和持久 outbox；
@@ -148,6 +180,117 @@ WPS 外部接口统一位于 `/wps-api/v1/*`。注册、登录、当前账号、
 - Control、文档事务和真实 WPS 人工验收。
 
 自动化门禁见 [`docs/WPS_REGRESSION_CHECKLIST.md`](docs/WPS_REGRESSION_CHECKLIST.md)。真实宿主步骤和结果见 [`docs/WPS_VALIDATION.md`](docs/WPS_VALIDATION.md)。
+
+## 生产部署链路收敛
+
+### 目标与非目标
+
+生产环境只有一个面向浏览器和 WPS 正式客户端的公开 Origin：
+`https://docxtool.pages.dev`。网页、管理后台和 WPS 公网 API 分别使用
+`/api/*`、`/admin/*` 与 `/wps-api/v1/*`，均由同一个 Cloudflare Pages Worker
+转发。
+
+目标链路固定为：
+
+```text
+浏览器 / WPS 客户端
+        ↓ HTTPS
+https://docxtool.pages.dev
+        ↓ Cloudflare Pages Worker
+        ↓ HTTPS + Access Service Token + X-Proxy-Secret
+https://<PRIVATE_ORIGIN_HOST>
+        ↓ Cloudflare Access → Cloudflare Tunnel
+http://127.0.0.1:9527
+        ↓
+DocxTool Python
+```
+
+`<PRIVATE_ORIGIN_HOST>` 仅为文档占位符，不记录真实服务器 IP、域名或密钥。Python
+始终绑定 `127.0.0.1:9527`；DocxTool 不公开监听 `8080` 或 `9527`。本轮不改动
+Recognition、Normalization、Engine、WPS 本机 Control 协议，也不新建第二个 Worker、
+独立管理后台或直连 Origin fallback。
+
+### 已核实基线与设计决策
+
+- Pages Worker 已按 allowlist 代理 Web、管理员和 WPS 管理后台路由，并注入
+  `X-Proxy-Secret` 与 `X-Docxtool-Proxy`；本轮在同一代理实现中加入 Access Service
+  Token，不复制代理逻辑。
+- WPS 公网协议固定为 `/wps-api/v1/*`。其客户端只要求无路径的 HTTPS Origin，并在
+  登录后以 `Authorization: Bearer <session>` 认证；服务端已有固定路由和 Bearer
+  校验，不依赖独立公网域名。
+- 因此 WPS 正式 EXE 可以使用 `https://docxtool.pages.dev`。Worker 只对固定
+  WPS allowlist 保留 Bearer 请求头；普通 Web/API 路由仍剥离浏览器提交的
+  `Authorization`。WPS 路径不转发浏览器 Cookie，不新增直连服务器 IP 的兼容路径。
+- 管理登录与所有管理写操作继续使用同源相对跳转、Cookie、CSRF 和 Worker allowlist；
+  后端当前生成相对 `Location`，不会把浏览器重定向到 Private Origin。
+
+### Worker 服务间认证
+
+Pages 环境变量只由 Pages Secret 保存：
+
+```text
+BACKEND_BASE_URL=https://<PRIVATE_ORIGIN_HOST>
+PROXY_SECRET=<same-as-backend>
+CF_ACCESS_CLIENT_ID=<Cloudflare Access service token id>
+CF_ACCESS_CLIENT_SECRET=<Cloudflare Access service token secret>
+```
+
+Worker 对每个实际回源请求先删除客户端提交的 `CF-Access-Client-Id`、
+`CF-Access-Client-Secret`、`X-Proxy-Secret`、代理来源头和管理员凭据，再仅从
+Pages 环境变量注入：
+
+```text
+CF-Access-Client-Id
+CF-Access-Client-Secret
+X-Proxy-Secret
+X-Docxtool-Proxy: cloudflare-pages
+```
+
+缺少任一回源配置、使用非 HTTPS 回源或把 `BACKEND_BASE_URL` 配置为 IP 字面量时，
+Worker 返回明确的 5xx 配置错误，不回退到裸服务器地址。Service Token、Proxy Secret
+和浏览器 Bearer Token 不写入响应、日志、文档示例或客户端源码。
+
+### 后端生产配置与 Fail Fast
+
+生产服务器配置为：
+
+```text
+BIND_HOST=127.0.0.1
+PORT=9527
+PRODUCTION_MODE=true
+FRONTEND_ORIGIN=https://docxtool.pages.dev
+ADMIN_CONSOLE_ORIGIN=https://docxtool.pages.dev
+COOKIE_SECURE=true
+ADMIN_COOKIE_SECURE=true
+TRUST_PROXY_HEADERS=true
+TRUSTED_PROXY_IPS=127.0.0.1,::1
+```
+
+`ADMIN_TOKEN` 和 `PROXY_SECRET` 继续使用不同的随机生产密钥。生产模式要求明确的 HTTPS
+`FRONTEND_ORIGIN`，管理 Origin 与前端 Origin 相同；管理员 Cookie 使用 `Secure`，不
+再支持生产 HTTP 管理入口。
+
+`PRODUCTION_MODE`、`TRUST_PROXY_HEADERS`、`COOKIE_SECURE` 与
+`ADMIN_COOKIE_SECURE` 使用严格布尔解析。合法值仅为现有的
+`1/true/yes/on` 或 `0/false/no/off`；拼写错误必须在启动时以包含变量名的配置错误退出，
+不得回退默认值。文件 API 在生产环境仍只接受有效 `X-Proxy-Secret`；本地 loopback
+开发例外不额外复制第二套判断，而由可靠的生产模式解析保护。
+
+### 迁移、发布与验收
+
+部署文档移除 Nginx、服务器 `8080`、裸 HTTP 管理入口和 IP 回源说明；仅服务旧路径的
+`deploy/nginx-docxtool.conf` 已删除，发布脚本同步允许该删除。运维侧需自行：
+
+1. 让 `cloudflared` 将 Private Origin 的 Tunnel 服务指向 `http://127.0.0.1:9527`；
+2. 用 Cloudflare Access 的 Service Auth 保护 Private Origin；
+3. 将上述四个 Pages 变量配置为 Secret，并按后端配置重启服务；
+4. 关闭服务器对 DocxTool `8080` 与 `9527` 的公网入站规则；
+5. 用 Pages HTTPS 路径验证用户、管理员登录/登出、会话、管理写操作和 WPS 公网 API。
+
+代码验收覆盖 Worker 注入/覆盖 Token、缺失配置、管理员 Cookie/相对跳转、WPS Bearer
+透传及 allowlist；后端覆盖严格布尔解析、HTTPS 同源管理员配置和生产文件 API 边界。
+完整自动化验证不等同于真实 Tunnel、Access 或 Pages 线上联通；后者必须在配置完成后
+人工验证。
 
 ## 非目标
 

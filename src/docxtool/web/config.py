@@ -25,6 +25,18 @@ def parse_bool(value: object, default: bool = True) -> bool:
     return default
 
 
+def parse_strict_bool(value: object, name: str) -> bool:
+    """解析安全边界布尔配置；无法识别时明确拒绝启动。"""
+    raw = str(value).strip().lower()
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(
+        f"{name} must be one of 1, true, yes, on, 0, false, no, or off"
+    )
+
+
 def parse_int_env(name: str, default: int, environ: Mapping[str, str] | None = None) -> int:
     """传入环境变量名和默认整数，返回解析后的整数配置。"""
     source = os.environ if environ is None else environ
@@ -70,7 +82,7 @@ def display_frontend_origin(value: str) -> str:
     return str(value or "").strip().rstrip("/") or DEFAULT_PUBLIC_FRONTEND_ORIGIN
 
 
-def parse_admin_console_origin(value: str) -> str:
+def parse_admin_console_origin(value: str, production_mode: bool = False) -> str:
     """传入管理入口 Origin，返回规范化后的根地址或默认 Pages 地址。"""
     raw = str(value or "").strip()
     if not raw:
@@ -89,6 +101,8 @@ def parse_admin_console_origin(value: str) -> str:
         raise ValueError("ADMIN_CONSOLE_ORIGIN must not include fragment")
     if parsed.path not in {"", "/"}:
         raise ValueError("ADMIN_CONSOLE_ORIGIN must not include path")
+    if production_mode and parsed.scheme != "https":
+        raise ValueError("ADMIN_CONSOLE_ORIGIN must use https in production")
 
     return f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
 
@@ -100,8 +114,12 @@ def resolve_admin_cookie_secure(
     production_mode: bool = False,
 ) -> bool:
     """根据独立管理入口和显式配置，返回管理员 Cookie 的 Secure 标记。"""
-    origin = parse_admin_console_origin(admin_console_origin)
-    secure = default if explicit_value is None or str(explicit_value).strip() == "" else parse_bool(explicit_value, default)
+    origin = parse_admin_console_origin(admin_console_origin, production_mode)
+    secure = (
+        default
+        if explicit_value is None or str(explicit_value).strip() == ""
+        else parse_strict_bool(explicit_value, "ADMIN_COOKIE_SECURE")
+    )
     scheme = urlparse(origin).scheme
     if scheme == "http" and secure:
         raise ValueError("ADMIN_COOKIE_SECURE must be false when ADMIN_CONSOLE_ORIGIN uses http")
@@ -119,7 +137,7 @@ def resolve_cookie_secure(
     if explicit_value is None or str(explicit_value).strip() == "":
         return str(origin or "").startswith("https://")
 
-    secure = parse_bool(explicit_value, False)
+    secure = parse_strict_bool(explicit_value, "COOKIE_SECURE")
     if production_mode and str(origin or "").startswith("https://") and not secure:
         raise ValueError("COOKIE_SECURE=false is not allowed with HTTPS FRONTEND_ORIGIN in production")
     return secure

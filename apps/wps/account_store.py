@@ -181,10 +181,20 @@ def _connect() -> sqlite3.Connection:
                 status TEXT NOT NULL,
                 duration_ms INTEGER NOT NULL,
                 error_code TEXT NOT NULL,
+                document_name TEXT NOT NULL DEFAULT '',
                 app_version TEXT NOT NULL,
                 created_at INTEGER NOT NULL
             )"""
         )
+        outbox_columns = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA table_info(format_result_outbox)").fetchall()
+        }
+        if "document_name" not in outbox_columns:
+            conn.execute(
+                "ALTER TABLE format_result_outbox "
+                "ADD COLUMN document_name TEXT NOT NULL DEFAULT ''"
+            )
     except sqlite3.Error:
         conn.close()
         raise
@@ -403,7 +413,7 @@ def enqueue_format_result(payload: dict) -> bool:
     conn = _connect()
     try:
         row = conn.execute(
-            "SELECT request_id,status,duration_ms,error_code,app_version "
+            "SELECT request_id,status,duration_ms,error_code,document_name,app_version "
             "FROM format_result_outbox WHERE request_id=?",
             (payload["request_id"],),
         ).fetchone()
@@ -412,6 +422,7 @@ def enqueue_format_result(payload: dict) -> bool:
             "status": payload["status"],
             "duration_ms": int(payload["duration_ms"]),
             "error_code": payload["error_code"],
+            "document_name": str(payload.get("document_name") or ""),
             "app_version": payload["app_version"],
         }
         if row is not None:
@@ -420,13 +431,14 @@ def enqueue_format_result(payload: dict) -> bool:
             return True
         conn.execute(
             "INSERT INTO format_result_outbox "
-            "(request_id,status,duration_ms,error_code,app_version,created_at) "
-            "VALUES (?,?,?,?,?,?)",
+            "(request_id,status,duration_ms,error_code,document_name,app_version,created_at) "
+            "VALUES (?,?,?,?,?,?,?)",
             (
                 expected["request_id"],
                 expected["status"],
                 expected["duration_ms"],
                 expected["error_code"],
+                expected["document_name"],
                 expected["app_version"],
                 int(time.time()),
             ),
@@ -441,10 +453,16 @@ def list_format_results() -> list:
     conn = _connect()
     try:
         rows = conn.execute(
-            "SELECT request_id,status,duration_ms,error_code,app_version "
+            "SELECT request_id,status,duration_ms,error_code,document_name,app_version "
             "FROM format_result_outbox ORDER BY created_at, rowid"
         ).fetchall()
-        return [dict(row) for row in rows]
+        results = []
+        for row in rows:
+            result = dict(row)
+            if not result["document_name"]:
+                result.pop("document_name")
+            results.append(result)
+        return results
     finally:
         conn.close()
 

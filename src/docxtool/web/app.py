@@ -1052,8 +1052,8 @@ from docxtool.web.handler import Handler
 
 
 def _public_startup_urls() -> dict:
-    """返回启动日志使用的前端、公网后端和管理后台地址。"""
-    return _build_public_startup_urls(FRONTEND_ORIGIN, ADMIN_CONSOLE_ORIGIN)
+    """返回启动日志使用的唯一 Pages 前端和管理后台地址。"""
+    return _build_public_startup_urls(FRONTEND_ORIGIN)
 
 
 def main():

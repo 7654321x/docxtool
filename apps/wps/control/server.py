@@ -449,8 +449,13 @@ class WpsControlApplication:
             duration_ms = int((time.monotonic() - pending["started_at"]) * 1000)
         status = "success" if completed["request_status"] == "PASS" else "failed"
         error_code = "" if status == "success" else str(completed.get("error_code", "WPS_COMMAND_FAILED"))
+        document_name = completed.get("document_name")
         self.account_runtime.report_format_result(
-            request_id, status, duration_ms, error_code
+            request_id,
+            status,
+            duration_ms,
+            error_code,
+            document_name if isinstance(document_name, str) else "",
         )
         self._authorized_requests.pop(request_id, None)
         log_event(

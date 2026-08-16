@@ -9,7 +9,7 @@ from typing import Callable
 
 from .config import resolve_wps_database_path
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 LOGGER = logging.getLogger("docx_tool")
 
 _CORE_SCHEMA_STATEMENTS = (
@@ -109,6 +109,10 @@ _V3_SCHEMA_STATEMENTS = (
     "ON wps_notifications(acknowledged_at, created_at DESC, notification_id DESC)",
 )
 
+_V4_SCHEMA_STATEMENTS = (
+    "ALTER TABLE wps_format_requests ADD COLUMN document_name TEXT NOT NULL DEFAULT ''",
+)
+
 
 def connect(path=None) -> sqlite3.Connection:
     db_path = resolve_wps_database_path(path)
@@ -136,6 +140,16 @@ def _migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
     _execute_all(conn, _V3_SCHEMA_STATEMENTS)
 
 
+def _migrate_v3_to_v4(conn: sqlite3.Connection) -> None:
+    """Add the optional, path-free task filename used only by the WPS admin view."""
+    columns = {
+        str(row[1])
+        for row in conn.execute("PRAGMA table_info(wps_format_requests)").fetchall()
+    }
+    if "document_name" not in columns:
+        _execute_all(conn, _V4_SCHEMA_STATEMENTS)
+
+
 def _upgrade_in_connection(conn: sqlite3.Connection, version: int) -> int:
     """Apply the strictly forward WPS schema chain inside the caller transaction."""
     if version == 0:
@@ -147,6 +161,9 @@ def _upgrade_in_connection(conn: sqlite3.Connection, version: int) -> int:
     if version == 2:
         _migrate_v2_to_v3(conn)
         version = 3
+    if version == 3:
+        _migrate_v3_to_v4(conn)
+        version = 4
     return version
 
 
@@ -205,6 +222,7 @@ def database_ready(connect_func: Callable, sql_lock) -> bool:
             conn = connect_func()
             try:
                 conn.execute("SELECT 1 FROM wps_users LIMIT 1").fetchone()
+                conn.execute("SELECT document_name FROM wps_format_requests LIMIT 1").fetchone()
                 conn.execute("SELECT 1 FROM wps_admin_audit_logs LIMIT 1").fetchone()
                 conn.execute("SELECT 1 FROM wps_notifications LIMIT 1").fetchone()
             finally:

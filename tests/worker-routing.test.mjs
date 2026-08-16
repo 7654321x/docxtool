@@ -46,8 +46,10 @@ async function callWorker(pathname, options = {}) {
         return new Response(`asset:${new URL(request.url).pathname}`, { status: 203 });
       },
     },
-    BACKEND_BASE_URL: "https://backend.example/base/",
+    BACKEND_BASE_URL: "https://backend.example",
     PROXY_SECRET: "worker-secret",
+    CF_ACCESS_CLIENT_ID: "access-client-id",
+    CF_ACCESS_CLIENT_SECRET: "access-client-secret",
     ...options.env,
   };
 
@@ -79,6 +81,8 @@ test("path helpers only proxy api and allow-listed admin routes", () => {
   assert.equal(worker.shouldProxyPath("/admin/wps/users/wusr_1/password"), true);
   assert.equal(worker.shouldProxyPath("/admin/wps/users/wusr_1/notifications"), true);
   assert.equal(worker.shouldProxyPath("/admin/wps/users/wusr_1/unexpected"), false);
+  assert.equal(worker.shouldProxyPath("/wps-api/v1/auth/me"), true);
+  assert.equal(worker.shouldProxyPath("/wps-api/v1/unknown"), false);
   assert.equal(worker.shouldProxyPath("/monitor-evil"), false);
   assert.equal(worker.shouldProxyPath("/apiary"), false);
   assert.equal(worker.shouldProxyPath("/unknown"), false);
@@ -90,6 +94,7 @@ test("path helpers only proxy api and allow-listed admin routes", () => {
   assert.equal(worker.backendPath("/monitor"), "/monitor");
   assert.equal(worker.backendPath("/log/task-id"), "/log/task-id");
   assert.equal(worker.backendPath("/admin/wps/users/wusr_1"), "/admin/wps/users/wusr_1");
+  assert.equal(worker.backendPath("/wps-api/v1/auth/me"), "/wps-api/v1/auth/me");
   assert.equal(worker.backendPath("/api/unknown"), "");
 });
 
@@ -98,7 +103,7 @@ test("api upload proxies PUT and rejects other methods", async () => {
 
   assert.equal(proxied.response.status, 209);
   assert.equal(proxied.fetchCalls.length, 1);
-  assert.equal(proxied.fetchCalls[0].target, "https://backend.example/base/upload?x=1");
+  assert.equal(proxied.fetchCalls[0].target, "https://backend.example/upload?x=1");
   assert.equal(proxied.fetchCalls[0].init.method, "PUT");
 
   const rejected = await callWorker("/api/upload", { method: "GET" });
@@ -138,7 +143,7 @@ test("admin and log routes proxy with strict method rules", async () => {
   for (const [pathname, method, targetPath] of routes) {
     const result = await callWorker(pathname, { method });
     assert.equal(result.response.status, 209, `${method} ${pathname}`);
-    assert.equal(result.fetchCalls[0].target, `https://backend.example/base${targetPath}`);
+    assert.equal(result.fetchCalls[0].target, `https://backend.example${targetPath}`);
   }
 
   const rejected = await callWorker("/ban?ip=203.0.113.10", { method: "GET" });
@@ -203,6 +208,46 @@ test("missing proxy configuration returns clear errors", async () => {
     code: "PROXY_SECRET_NOT_CONFIGURED",
     error: "Cloudflare Pages env PROXY_SECRET is not configured",
   });
+
+  const missingAccessClientId = await callWorker("/api/upload", {
+    body: "docx-bytes",
+    env: { CF_ACCESS_CLIENT_ID: "" },
+    method: "PUT",
+  });
+  assert.equal(missingAccessClientId.response.status, 500);
+  assert.deepEqual(await responseJson(missingAccessClientId.response), {
+    code: "CF_ACCESS_CLIENT_ID_NOT_CONFIGURED",
+    error: "Cloudflare Pages env CF_ACCESS_CLIENT_ID is not configured",
+  });
+
+  const missingAccessClientSecret = await callWorker("/api/upload", {
+    body: "docx-bytes",
+    env: { CF_ACCESS_CLIENT_SECRET: "" },
+    method: "PUT",
+  });
+  assert.equal(missingAccessClientSecret.response.status, 500);
+  assert.deepEqual(await responseJson(missingAccessClientSecret.response), {
+    code: "CF_ACCESS_CLIENT_SECRET_NOT_CONFIGURED",
+    error: "Cloudflare Pages env CF_ACCESS_CLIENT_SECRET is not configured",
+  });
+});
+
+test("proxy rejects non-HTTPS, direct-IP, and path-bearing backend origins", async () => {
+  for (const backendBase of [
+    "http://backend.example",
+    "https://203.0.113.9",
+    "https://backend.example/private",
+  ]) {
+    const result = await callWorker("/api/presets", {
+      env: { BACKEND_BASE_URL: backendBase },
+    });
+    assert.equal(result.response.status, 500, backendBase);
+    assert.deepEqual(await responseJson(result.response), {
+      code: "BACKEND_URL_INVALID",
+      error: "Cloudflare Pages env BACKEND_BASE_URL must be an HTTPS hostname origin",
+    });
+    assert.equal(result.fetchCalls.length, 0, backendBase);
+  }
 });
 
 test("proxy strips sensitive inbound headers and forwards only allowed cookies", async () => {
@@ -210,6 +255,8 @@ test("proxy strips sensitive inbound headers and forwards only allowed cookies",
     body: "docx-bytes",
     headers: {
       Authorization: "Bearer user-secret",
+      "CF-Access-Client-Id": "attacker-client-id",
+      "CF-Access-Client-Secret": "attacker-client-secret",
       "CF-Connecting-IP": "203.0.113.5",
       Cookie: "docxtool_admin_session=session-id; docxtool_anon_user=v1.token; docxtool_user_session=user-token; other=value",
       "X-Admin-Token": "admin-secret",
@@ -223,6 +270,8 @@ test("proxy strips sensitive inbound headers and forwards only allowed cookies",
 
   assert.equal(headers.get("X-Proxy-Secret"), "worker-secret");
   assert.equal(headers.get("X-Docxtool-Proxy"), "cloudflare-pages");
+  assert.equal(headers.get("CF-Access-Client-Id"), "access-client-id");
+  assert.equal(headers.get("CF-Access-Client-Secret"), "access-client-secret");
   assert.equal(headers.get("X-Forwarded-Host"), "front.example");
   assert.equal(headers.get("X-Forwarded-Proto"), "https");
   assert.equal(headers.get("CF-Connecting-IP"), "203.0.113.5");
@@ -232,6 +281,30 @@ test("proxy strips sensitive inbound headers and forwards only allowed cookies",
   assert.equal(headers.get("X-Custom"), "kept");
   assert.equal(headers.has("Authorization"), false);
   assert.equal(headers.has("X-Admin-Token"), false);
+});
+
+test("WPS public routes preserve only their Bearer session and no browser cookies", async () => {
+  const result = await callWorker("/wps-api/v1/auth/me", {
+    headers: {
+      Authorization: "Bearer wps-session-token",
+      Cookie: "docxtool_admin_session=admin; other=value",
+      "CF-Access-Client-Id": "attacker-client-id",
+      "CF-Access-Client-Secret": "attacker-client-secret",
+      "X-Proxy-Secret": "attacker-secret",
+    },
+  });
+  const headers = result.fetchCalls[0].init.headers;
+
+  assert.equal(result.response.status, 209);
+  assert.equal(result.fetchCalls[0].target, "https://backend.example/wps-api/v1/auth/me");
+  assert.equal(headers.get("Authorization"), "Bearer wps-session-token");
+  assert.equal(headers.has("Cookie"), false);
+  assert.equal(headers.get("X-Proxy-Secret"), "worker-secret");
+  assert.equal(headers.get("CF-Access-Client-Id"), "access-client-id");
+  assert.equal(headers.get("CF-Access-Client-Secret"), "access-client-secret");
+
+  assert.equal((await callWorker("/wps-api/v1/auth/me", { method: "POST" })).response.status, 405);
+  assert.equal((await callWorker("/wps-api/v1/heartbeat", { method: "POST", body: "{}" })).response.status, 209);
 });
 
 test("user auth routes proxy only their allowed methods", async () => {
@@ -253,5 +326,22 @@ test("proxy preserves anonymous Set-Cookie from backend", async () => {
   assert.equal(
     result.response.headers.get("Set-Cookie"),
     "docxtool_anon_user=v1.token; HttpOnly; SameSite=Lax; Secure",
+  );
+});
+
+test("admin login preserves backend relative redirects and secure session cookies", async () => {
+  const result = await callWorker("/admin/login", {
+    backendHeaders: {
+      Location: "/admin",
+      "Set-Cookie": "docxtool_admin_session=session-id; HttpOnly; SameSite=Strict; Secure; Path=/",
+    },
+    body: "token=admin-token",
+    method: "POST",
+  });
+
+  assert.equal(result.response.headers.get("Location"), "/admin");
+  assert.equal(
+    result.response.headers.get("Set-Cookie"),
+    "docxtool_admin_session=session-id; HttpOnly; SameSite=Strict; Secure; Path=/",
   );
 });

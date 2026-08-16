@@ -1,6 +1,6 @@
 # 公文排版 Web 服务接口说明
 
-本文档说明 `server.py` 暴露的 HTTP 接口，适用于本地部署、Nginx 反向代理或 Cloudflare Pages Worker 代理接入。
+本文档说明 `server.py` 暴露的 HTTP 接口，适用于本机开发和 Cloudflare Pages Worker → Access → Tunnel 的生产代理接入。
 
 维护约定：后续只要修改 `server.py` 中的接口路径、请求方法、鉴权方式、请求头、请求体、响应字段、状态码或错误码，必须同步更新本文档，并与代码一起提交推送。
 
@@ -10,10 +10,10 @@
 http://127.0.0.1:9527
 ```
 
-可通过环境变量修改：
+本机开发可通过环境变量调整端口；生产环境始终保持 loopback 监听：
 
 ```bash
-BIND_HOST=0.0.0.0 PORT=9527 python3 server.py
+PORT=9527 python3 server.py
 ```
 
 ## 1. 鉴权与访问约定
@@ -690,11 +690,11 @@ Worker 还会代理管理页面直接使用的后端路径：
 
 ## 7. 部署注意事项
 
-1. 生产环境必须设置 `ADMIN_TOKEN` 和 `PROXY_SECRET`，代码不提供默认密钥。
-2. 只开放配置的 Nginx 公网端口；当前 `80` 被其他应用占用时使用 `8080`，不要直接暴露 Python 服务端口 `9527`。
-3. Nginx 需要允许 `PUT` 方法并转发请求头。
-4. Cloudflare Pages 前端访问同源 `/api/*`，Worker 通过 `BACKEND_BASE_URL=http://<SERVER_PUBLIC_IP>:8080` 转发到 Nginx，再由 Nginx 转发到 `127.0.0.1:9527`。
-5. 推荐部署细节见 `docs/DEPLOY.md`。
+1. 生产环境必须设置不同的随机 `ADMIN_TOKEN` 和 `PROXY_SECRET`；缺失、弱密钥或示例值会拒绝启动。
+2. Python 只监听 `127.0.0.1:9527`。网页、管理后台和 WPS 公网 API 的唯一入口是 `https://docxtool.pages.dev`；不要对公网开放 DocxTool `8080` 或 `9527`，也不要保留服务器 IP 或 HTTP 管理入口。
+3. Cloudflare Pages 前端访问同源 `/api/*`、`/admin/*` 与 `/wps-api/v1/*`。Worker 通过 HTTPS `BACKEND_BASE_URL=https://<PRIVATE_ORIGIN_HOST>` 注入 Cloudflare Access Service Token 和 `X-Proxy-Secret`，再经 Cloudflare Tunnel 访问本机后端。
+4. `BACKEND_BASE_URL`、`PROXY_SECRET`、`CF_ACCESS_CLIENT_ID` 和 `CF_ACCESS_CLIENT_SECRET` 只配置为 Pages Secret；浏览器、WPS 客户端和仓库源码都不能持有这些服务间凭据。
+5. 推荐部署细节见 [`DEPLOY.md`](DEPLOY.md)。
 6. `var/logs/` 和 `var/outputs/` 是运行时目录，仓库中只保留 `.gitkeep`，实际日志和生成文件不应提交。
 7. `var/data/stats.db` 是源码树运行时 SQLite 数据库位置，不应提交到仓库。若根目录已有旧版 `stats.db` 且未设置 `DATABASE_PATH`，后端会继续使用旧库，迁移需人工停服务后执行。仅解析默认路径不会创建数据库目录，首次实际连接时才会创建父目录；wheel 安装后默认运行数据根不在 `site-packages`。
 
@@ -717,7 +717,9 @@ WPS 插件接口统一使用 `/wps-api/v1` 前缀，JSON envelope 的协议版�
 
 WPS 登录使用独立限流：同一出口 IP 每 10 分钟最多 300 次，同一标准化账号每 10 分钟最多 10 次；注册仍为同一 IP 每小时最多 5 次。该调整不改变网页版账号的登录限流。单进程 WPS 服务最多同时执行两个 Argon2 操作，等待中的登录自然排队，不新增超时或降级响应。
 
-排版授权请求字段为：请求编号、命令和客户端版本。第一阶段唯一受控命令是 `apply`。允许时返回：是否允许、是否复用已有请求、同一请求编号、请求状态、配置版本和完整格式配置。结果回传字段为：请求编号、结果状态、耗时、错误代码和客户端版本。成功状态不能携带错误代码，失败状态必须携带明确错误代码。
+排版授权请求字段为：请求编号、命令和客户端版本。第一阶段唯一受控命令是 `apply`。允许时返回：是否允许、是否复用已有请求、同一请求编号、请求状态、配置版本和完整格式配置。结果回传字段为：请求编号、结果状态、耗时、错误代码、客户端版本，以及可选 `document_name`。成功状态不能携带错误代码，失败状态必须携带明确错误代码。
+
+`document_name` 仅在 WPS Host 实际执行一键排版时由 `Document.Name` 获取；它是 1–120 个字符的基础文件名，不能含路径分隔符、NUL、换行或其他控制字符。名称不可用时客户端省略该字段。该字段与结果一起进入本机持久 outbox，以便网络恢复后原样补报；它只保存到对应的 WPS 排版请求并在管理员后台展示，不写入日志、错误消息或公开响应。旧客户端可省略该字段，历史请求显示为 `-`；同一 `request_id` 的重复结果补报不得更换已保存的文件名。
 
 公网响应中的完整格式配置只交给本机 Control 授权上下文验证和保存。WPS Host 通过内部 Bridge 只接收请求编号和配置版本，调用本机排版准备接口时不提交格式配置；Control 按请求编号将已授权配置注入 Engine。一个授权只能绑定一个 `apply` 事务，事务后续接口必须使用同一请求编号。TaskPane 的账号、网络、功能可用性和待补报数量由 `/v1/bridge/state/wait` 的 `account` 摘要同步，不单独轮询账号接口。排版结果暂时无法回传时写入本地 SQLite 持久 outbox，心跳恢复或下一次 Launcher 启动后继续补报。
 
@@ -801,4 +803,4 @@ Authorization: Bearer <session_token>
 
 `DATABASE_PATH` 与 `WPS_DATABASE_PATH` 必须解析到两个不同的 SQLite 文件；配置为同一文件时，服务在初始化任一数据库前以 `WPS_DATABASE_PATH_CONFLICT` 停止启动。
 
-公网接口不接收文件名、文件路径、文档正文、DOCX、识别结果或排版后的文档。本文是 WPS 外部字段、状态码和错误码的唯一契约；实现边界见根目录 `WPS_SERVER_TECHNICAL_DESIGN.md`。
+公网接口不接收文件路径、文档正文、DOCX、识别结果或排版后的文档。唯一例外是 `POST /wps-api/v1/format/result` 的可选受限 `document_name`：它只允许基础文件名，服务端不记录或推断路径。本文是 WPS 外部字段、状态码和错误码的唯一契约；实现边界见根目录 `WPS_SERVER_TECHNICAL_DESIGN.md`。

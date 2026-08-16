@@ -542,7 +542,14 @@ class AccountRuntime:
                 self._record_public_error(exc)
             raise
 
-    def report_format_result(self, request_id: str, status: str, duration_ms: int, error_code: str) -> dict:
+    def report_format_result(
+        self,
+        request_id: str,
+        status: str,
+        duration_ms: int,
+        error_code: str,
+        document_name: str = "",
+    ) -> dict:
         payload = {
             "request_id": request_id,
             "status": status,
@@ -550,6 +557,8 @@ class AccountRuntime:
             "error_code": error_code,
             "app_version": package_version(),
         }
+        if document_name:
+            payload["document_name"] = document_name
         with self._lock:
             reused = self._store.enqueue_format_result(payload)
         self._wake.set()

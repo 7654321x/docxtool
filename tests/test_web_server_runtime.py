@@ -85,8 +85,7 @@ def test_run_http_service_starts_in_existing_order_and_closes_on_interrupt() -> 
         },
         public_urls=lambda: {
             "frontend": "https://docxtool.pages.dev",
-            "backend": "http://43.133.167.18:8080",
-            "admin_login": "http://43.133.167.18:8080/admin/login",
+            "admin_login": "https://docxtool.pages.dev/admin/login",
         },
         validate_secrets=lambda: calls.append("validate"),
         startup_cleanup=lambda: calls.append("cleanup"),
@@ -112,9 +111,13 @@ def test_run_http_service_starts_in_existing_order_and_closes_on_interrupt() -> 
     ]
     assert "serve_forever" in calls
     assert "server_close" in calls
-    assert "print:前端网站:       https://docxtool.pages.dev" in calls
-    assert "print:后端网站:       http://43.133.167.18:8080" in calls
-    assert "print:管理后台:       http://43.133.167.18:8080/admin/login" in calls
-    assert "print:本地健康检查:   http://127.0.0.1:9527/health" in calls
-    assert "print:运行模式:       生产 | 监听: http://127.0.0.1:9527" in calls
-    assert not any("时间校验" in call for call in calls)
+    printed = [call[len("print:"):] for call in calls if call.startswith("print:")]
+    assert printed == [
+        "访问地址:",
+        "前端网站:       https://docxtool.pages.dev",
+        "管理后台:       https://docxtool.pages.dev/admin/login",
+        "本地前端:       http://127.0.0.1:9527",
+        "本地管理后台:   http://127.0.0.1:9527/admin/login",
+        "Ctrl+C 停止",
+        "\n已停止",
+    ]

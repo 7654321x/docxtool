@@ -567,12 +567,14 @@ def test_pending_result_survives_network_failure_and_flushes_after_recovery():
     runtime = AccountRuntime(
         _account(), RecoveringApi(), store=_Store(), now_func=lambda: 100
     )
-    runtime.report_format_result("request-1", "success", 120, "")
+    runtime.report_format_result("request-1", "success", 120, "", "会议纪要.docx")
 
     with pytest.raises(PublicApiError, match="WPS_PUBLIC_SERVER_UNAVAILABLE"):
         runtime._flush_pending_results()
     assert runtime.summary()["pending_result_count"] == 1
     assert runtime.summary()["network_available"] is False
+
+    assert runtime._store.results["request-1"]["document_name"] == "会议纪要.docx"
 
     runtime._flush_pending_results()
     assert runtime.summary()["pending_result_count"] == 0

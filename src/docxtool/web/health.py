@@ -134,13 +134,10 @@ def startup_urls(bind_host: str, port: int) -> dict[str, str]:
     }
 
 
-def public_startup_urls(frontend_origin: str, backend_origin: str) -> dict[str, str]:
-    """传入前端和公网后端 Origin，返回启动日志使用的公网访问地址。"""
-    backend = str(backend_origin or "").strip().rstrip("/")
-    if not backend:
-        raise ValueError("public backend origin must not be empty")
+def public_startup_urls(frontend_origin: str) -> dict[str, str]:
+    """传入 Pages Origin，返回唯一公网浏览器入口。"""
+    frontend = display_frontend_origin(frontend_origin)
     return {
-        "frontend": display_frontend_origin(frontend_origin),
-        "backend": backend,
-        "admin_login": f"{backend}/admin/login",
+        "frontend": frontend,
+        "admin_login": f"{frontend}/admin/login",
     }

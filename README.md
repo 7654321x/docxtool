@@ -1,6 +1,6 @@
 # DocxTool 公文排版服务
 
-DocxTool 5.4.3 提供 DOCX 识别、规范化、公文排版、Web 服务、本地识别 SDK、WPS 插件和本地 TXT Reader。
+DocxTool 5.4.4 提供 DOCX 识别、规范化、公文排版、Web 服务、本地识别 SDK、WPS 插件和本地 TXT Reader。
 
 文档处理主链保持单向：
 
@@ -65,7 +65,7 @@ export PROXY_SECRET='换成正式长随机密钥'
 ./run.sh
 ```
 
-Web 服务默认监听 `127.0.0.1:9527`。生产环境通过 Nginx 反向代理，不直接把 9527 暴露到公网。完整部署说明见 [`docs/DEPLOY.md`](docs/DEPLOY.md)。
+Web 服务默认监听 `127.0.0.1:9527`。生产环境通过 Cloudflare Tunnel 与 Cloudflare Access 回源，浏览器与 WPS 客户端只访问 Cloudflare Pages，不直接把 `8080` 或 `9527` 暴露到公网。完整部署说明见 [`docs/DEPLOY.md`](docs/DEPLOY.md)。
 
 ## 运行数据
 

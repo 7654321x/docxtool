@@ -227,7 +227,6 @@ $requiredFiles = @(
     "requirements-dev.lock",
     "run.sh",
     "run.ps1",
-    "deploy/nginx-docxtool.conf",
     "pyproject.toml",
     "src/docxtool/resources/__init__.py",
     "src/docxtool/resources/config/default-format.json",
@@ -510,6 +509,7 @@ $requiredPublishFiles = @($requiredFiles + $testFiles | Sort-Object -Unique)
 $publishDeletionRoots = @(
     "apps/reader/",
     "apps/wps/",
+    "deploy/",
     "docs/",
     "resources/frontend/pages/",
     "scripts/",

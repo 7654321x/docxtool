@@ -83,16 +83,15 @@ class ServerProductionControlsTest(unittest.TestCase):
         self.assertEqual(urls["ready"], "http://127.0.0.1:9527/ready")
         self.assertEqual(urls["tunnel_command"], "cloudflared tunnel --url http://127.0.0.1:9527")
 
-    def test_public_startup_urls_show_pages_and_direct_backend_separately(self):
+    def test_public_startup_urls_show_pages_as_the_only_browser_entry(self):
         server.FRONTEND_ORIGIN = "https://docxtool.pages.dev"
-        server.ADMIN_CONSOLE_ORIGIN = "http://43.133.167.18:8080"
+        server.ADMIN_CONSOLE_ORIGIN = "https://unexpected.example"
 
         self.assertEqual(
             server._public_startup_urls(),
             {
                 "frontend": "https://docxtool.pages.dev",
-                "backend": "http://43.133.167.18:8080",
-                "admin_login": "http://43.133.167.18:8080/admin/login",
+                "admin_login": "https://docxtool.pages.dev/admin/login",
             },
         )
 

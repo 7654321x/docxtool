@@ -177,6 +177,7 @@ def test_wps_public_http_flow_updates_admin_statistics(tmp_path, monkeypatch, ca
                 "status": "success",
                 "duration_ms": 321,
                 "error_code": "",
+                "document_name": "HTTP 排版测试.docx",
                 "app_version": "5.1",
             },
             token=token,
@@ -232,6 +233,7 @@ def test_wps_public_http_flow_updates_admin_statistics(tmp_path, monkeypatch, ca
     ):
         assert event in caplog.text
     assert "wps.api.heartbeat.completed" not in caplog.text
+    assert "HTTP 排版测试.docx" not in caplog.text
 
     sensitive_values = ("Pass01", "device-key-http-001", token)
     non_auth_responses = (heartbeat, rejected, authorized, completed, conflicting)

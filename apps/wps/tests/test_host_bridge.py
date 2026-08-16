@@ -886,11 +886,14 @@ def test_apply_is_authorized_before_host_delivery_and_result_is_reported(tmp_pat
                         "request_status": "PASS",
                         "error_code": "",
                         "duration_ms": 321,
+                        "document_name": "会议纪要.docx",
                     },
                 },
             },
         )
-        assert account.reports == [("request-http-apply", "success", 321, "")]
+        assert account.reports == [
+            ("request-http-apply", "success", 321, "", "会议纪要.docx")
+        ]
     finally:
         server.shutdown()
         server.server_close()

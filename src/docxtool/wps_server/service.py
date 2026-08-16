@@ -23,6 +23,7 @@ from .validation import (
     require_object_fields,
     validate_app_version,
     validate_device_payload,
+    validate_document_name,
     validate_error_code,
     validate_notification_ids,
     validate_password,
@@ -436,7 +437,11 @@ def authorize_format(principal, payload, *, connect_func, sql_lock, format_profi
 
 
 def record_format_result(principal, payload, *, connect_func, sql_lock, now_func) -> dict:
-    require_object_fields(payload, required=("request_id", "status", "duration_ms", "error_code", "app_version"))
+    require_object_fields(
+        payload,
+        required=("request_id", "status", "duration_ms", "error_code", "app_version"),
+        optional=("document_name",),
+    )
     request_id = validate_request_id(payload["request_id"])
     status = payload["status"]
     if status not in {"success", "failed"}:
@@ -446,6 +451,11 @@ def record_format_result(principal, payload, *, connect_func, sql_lock, now_func
         raise WpsValidationError("DURATION_INVALID", "执行耗时无效")
     error_code = validate_error_code(payload["error_code"])
     validate_app_version(payload["app_version"])
+    document_name = (
+        validate_document_name(payload["document_name"])
+        if "document_name" in payload
+        else ""
+    )
     if status == "success" and error_code:
         raise WpsValidationError("ERROR_CODE_INVALID", "成功结果不能包含错误代码")
     if status == "failed" and not error_code:
@@ -461,15 +471,27 @@ def record_format_result(principal, payload, *, connect_func, sql_lock, now_func
             if row["user_id"] != principal["user_id"] or row["device_id"] != principal["device_id"]:
                 raise WpsServiceError("REQUEST_ID_CONFLICT", "排版请求不属于当前账号或设备", 409)
             if row["status"] in {"success", "failed"}:
-                if row["status"] != status or row["error_code"] != error_code:
+                if (
+                    row["status"] != status
+                    or row["error_code"] != error_code
+                    or row["document_name"] != document_name
+                ):
                     raise WpsServiceError("REQUEST_STATUS_CONFLICT", "排版结果与已有状态冲突", 409)
                 reused = True
             else:
                 conn.execute(
                     """UPDATE wps_format_requests
-                       SET status=?,finished_at=?,duration_ms=?,error_code=?,app_version=?
+                       SET status=?,finished_at=?,duration_ms=?,error_code=?,document_name=?,app_version=?
                        WHERE request_id=?""",
-                    (status, now, duration_ms, error_code, payload["app_version"], request_id),
+                    (
+                        status,
+                        now,
+                        duration_ms,
+                        error_code,
+                        document_name,
+                        payload["app_version"],
+                        request_id,
+                    ),
                 )
                 reused = False
             conn.commit()

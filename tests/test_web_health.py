@@ -91,14 +91,13 @@ def test_startup_helpers_match_app_facade() -> None:
     assert local_urls["ready"] == f"http://{server.BIND_HOST}:{server.PORT}/ready"
 
 
-def test_public_startup_urls_distinguish_pages_backend_and_admin() -> None:
-    """启动日志应区分 Pages 前端、8080 后端和管理后台地址。"""
-    urls = public_startup_urls("", "http://43.133.167.18:8080/")
+def test_public_startup_urls_keep_pages_as_the_only_browser_entry() -> None:
+    """启动日志应只公布 Pages 前端与同源管理后台，不公布私有回源。"""
+    urls = public_startup_urls("")
 
     assert urls == {
         "frontend": "https://docxtool.pages.dev",
-        "backend": "http://43.133.167.18:8080",
-        "admin_login": "http://43.133.167.18:8080/admin/login",
+        "admin_login": "https://docxtool.pages.dev/admin/login",
     }
 
 
