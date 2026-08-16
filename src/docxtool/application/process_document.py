@@ -65,7 +65,7 @@ def _task_error_result(
         "output_filename": "",
         "output_path": "",
         "duration_s": duration_s,
-        "duration_ms": 0,
+        "duration_ms": int(duration_s * 1000),
         "doc_mode": "",
         "paragraphs": 0,
         "headings": 0,
@@ -236,7 +236,7 @@ def process_uploaded_docx_task(
             "compatibility_warnings": list(export_stats.get("compatibility_warnings", []) or []),
         }
     except Exception as exc:
-        logger.error("[Task] %s internal failure type=%s", task_id[:8], type(exc).__name__)
+        logger.exception("[Task] %s internal failure type=%s", task_id[:8], type(exc).__name__)
         return _task_error_result(
             log_filename=log_filename,
             log_path=log_path,

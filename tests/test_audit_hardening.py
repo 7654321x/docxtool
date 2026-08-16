@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import logging
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -167,6 +168,25 @@ def test_default_import_is_strict_and_preserves_text_and_order(tmp_path: Path) -
     assert [item.original_text for item in data.paragraphs] == original
     assert data.normalization_changes
     assert all(change.applied is False for change in data.normalization_changes)
+
+
+def test_import_log_names_the_hashed_source_path_accurately(tmp_path: Path, caplog) -> None:
+    source = tmp_path / "logged-source.docx"
+    document = Document()
+    document.add_paragraph("普通正文")
+    document.save(source)
+
+    caplog.set_level(logging.INFO, logger="docx_tool")
+    DocxImporter().load(str(source), _rules())
+
+    messages = [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("[导入] source_path_hash=")
+    ]
+    assert len(messages) == 1
+    assert "file_sha256=" not in messages[0]
+    assert str(source) not in messages[0]
 
 
 def test_non_strict_import_records_applied_changes(tmp_path: Path) -> None:

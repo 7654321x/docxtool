@@ -62,6 +62,7 @@ class _Logger:
     def __init__(self) -> None:
         self.infos: list[str] = []
         self.errors: list[tuple] = []
+        self.exceptions: list[tuple] = []
 
     def info(self, message: str) -> None:
         """传入日志文本，记录 info 级别消息。"""
@@ -70,6 +71,10 @@ class _Logger:
     def error(self, *args) -> None:
         """传入日志参数，记录 error 级别消息。"""
         self.errors.append(args)
+
+    def exception(self, *args) -> None:
+        """传入异常日志参数，记录会保留 traceback 的调用。"""
+        self.exceptions.append(args)
 
 
 def _process_task(tmp_path: Path, *, format_config: dict | None = None, **overrides):
@@ -190,9 +195,13 @@ def test_process_uploaded_docx_task_returns_sanitized_internal_error(tmp_path: P
     assert result["status"] == "error"
     assert result["error_code"] == "TASK_PROCESSING_ERROR"
     assert result["error_message"].startswith("sanitized:")
+    assert result["duration_s"] == 1.25
+    assert result["duration_ms"] == 1250
     assert result["recognition_summary"] == {}
     assert state["reset_tokens"]
-    assert logger.errors
+    assert logger.exceptions == [
+        ("[Task] %s internal failure type=%s", "task-123", "RuntimeError")
+    ]
 
 
 def test_process_task_does_not_retry_exporter_internal_type_error(tmp_path: Path) -> None:

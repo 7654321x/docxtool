@@ -581,6 +581,44 @@ def test_pending_result_survives_network_failure_and_flushes_after_recovery():
     assert runtime.summary()["network_available"] is True
 
 
+def test_invalid_document_name_is_omitted_without_blocking_later_results():
+    class RecordingApi(_Api):
+        def __init__(self):
+            self.reported_payloads = []
+
+        def report_format_result(self, token, payload):
+            self.reported_payloads.append({"token": token, **payload})
+            return {"reported": True}
+
+    api = RecordingApi()
+    runtime = AccountRuntime(_account(), api, store=_Store(), now_func=lambda: 100)
+
+    runtime.report_format_result("request-too-long", "success", 120, "", "a" * 121)
+    runtime.report_format_result("request-with-path", "success", 121, "", "folder/report.docx")
+    runtime.report_format_result("request-without-name", "success", 122, "")
+    runtime.report_format_result("request-valid-name", "success", 123, "", "会议纪要.docx")
+
+    assert "document_name" not in runtime._store.results["request-too-long"]
+    assert "document_name" not in runtime._store.results["request-with-path"]
+    assert "document_name" not in runtime._store.results["request-without-name"]
+    assert runtime._store.results["request-valid-name"]["document_name"] == "会议纪要.docx"
+
+    runtime._flush_pending_results()
+
+    assert runtime.summary()["pending_result_count"] == 0
+    assert [payload["request_id"] for payload in api.reported_payloads] == [
+        "request-too-long",
+        "request-with-path",
+        "request-without-name",
+        "request-valid-name",
+    ]
+    assert all(
+        "document_name" not in payload
+        for payload in api.reported_payloads[:3]
+    )
+    assert api.reported_payloads[-1]["document_name"] == "会议纪要.docx"
+
+
 def test_pending_result_conflict_is_removed_and_identical_enqueue_is_reused():
     class ConflictApi(_Api):
         def report_format_result(self, token, payload):

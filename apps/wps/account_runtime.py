@@ -5,6 +5,7 @@ from __future__ import annotations
 import socket
 import threading
 import time
+import unicodedata
 
 from docxtool.version import package_version
 from docxtool.wps_server.validation import (
@@ -19,6 +20,25 @@ from docxtool.wps_server.validation import (
 from . import account_store
 from .control.logging_adapter import log_event
 from .public_api import PublicApiError
+
+
+_DOCUMENT_NAME_MAX_CHARS = 120
+
+
+def _is_valid_document_name(value: object) -> bool:
+    """Keep optional result metadata within the public filename contract."""
+    return (
+        isinstance(value, str)
+        and 1 <= len(value) <= _DOCUMENT_NAME_MAX_CHARS
+        and value == value.strip()
+        and value not in {".", ".."}
+        and "/" not in value
+        and "\\" not in value
+        and not any(
+            unicodedata.category(character) in {"Cc", "Zl", "Zp"}
+            for character in value
+        )
+    )
 
 
 def device_payload(device_key: str) -> dict:
@@ -557,7 +577,7 @@ class AccountRuntime:
             "error_code": error_code,
             "app_version": package_version(),
         }
-        if document_name:
+        if _is_valid_document_name(document_name):
             payload["document_name"] = document_name
         with self._lock:
             reused = self._store.enqueue_format_result(payload)

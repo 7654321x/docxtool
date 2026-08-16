@@ -245,7 +245,7 @@ def run_document_pipeline(
     validate_layout_preservation(data)
     data.recognition_diagnostics["structure_tree"] = "built"
     logger.info(
-        "[导入] file_sha256=%s paragraphs=%s tables=%s strategy=%s recognition=%s",
+        "[导入] source_path_hash=%s paragraphs=%s tables=%s strategy=%s recognition=%s",
         hashlib.sha256(str(original_filepath).encode("utf-8")).hexdigest()[:12],
         len(data.paragraphs),
         len(data.tables),

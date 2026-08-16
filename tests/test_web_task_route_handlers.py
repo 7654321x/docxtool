@@ -206,16 +206,14 @@ def test_handle_download_reports_not_ready_or_expired() -> None:
     assert expired.responses == [("json_error_fields", ("FILE_EXPIRED", "过期", 410))]
 
 
-def test_handle_log_reads_redacts_and_renders_log() -> None:
+def test_handle_log_reads_redacts_and_renders_log(tmp_path) -> None:
     """日志处理器应校验日志路径、脱敏日志文本并渲染 HTML。"""
     handler = FakeHandler()
-    row = FakeRow(log_path="C:\\logs\\task.log", filename="a.docx")
-
-    class FakeOpen:
-        """测试用 open 返回上下文管理器。"""
-
-        def __call__(self, *_args, **_kwargs):
-            return io.StringIO("secret")
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    log_path = log_dir / "task.log"
+    log_path.write_text("secret", encoding="utf-8")
+    row = FakeRow(log_path=str(log_path), filename="a.docx")
 
     handle_log(
         handler,
@@ -227,22 +225,24 @@ def test_handle_log_reads_redacts_and_renders_log() -> None:
         tasks_lock=nullcontext(),
         sql_lock=nullcontext(),
         connect=lambda: FakeConnection(row),
-        log_dir="C:\\logs",
+        log_dir=str(log_dir),
         redact_sensitive_log=lambda text: text.replace("secret", "redacted"),
         render_task_log_html=lambda task_id, _row, text: f"{task_id}:{text}",
-        path_abspath=lambda path: path,
-        path_exists=lambda path: path == "C:\\logs\\task.log",
-        open_text=FakeOpen(),
     )
 
     assert handler.responses == [("text", ("task-1:redacted", "text/html"))]
 
 
-def test_handle_log_reports_missing_or_unsafe_path() -> None:
+def test_handle_log_reports_missing_or_unsafe_path(tmp_path) -> None:
     """日志处理器应在日志缺失或路径越界时返回稳定错误。"""
     missing = FakeHandler()
     unsafe = FakeHandler()
-    row = FakeRow(log_path="D:/other/task.log")
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    unsafe_path = tmp_path / "outside" / "task.log"
+    unsafe_path.parent.mkdir()
+    unsafe_path.write_text("outside", encoding="utf-8")
+    row = FakeRow(log_path=str(unsafe_path))
 
     common = {
         "is_safe_uuid": lambda value: value == "task-1",
@@ -251,11 +251,9 @@ def test_handle_log_reports_missing_or_unsafe_path() -> None:
         "tasks": {},
         "tasks_lock": nullcontext(),
         "sql_lock": nullcontext(),
-        "log_dir": "C:/logs",
+        "log_dir": str(log_dir),
         "redact_sensitive_log": lambda text: text,
         "render_task_log_html": lambda *_args: "",
-        "path_abspath": lambda path: path,
-        "path_exists": lambda _path: True,
     }
 
     handle_log(missing, "task-1", connect=lambda: FakeConnection(None), **common)
