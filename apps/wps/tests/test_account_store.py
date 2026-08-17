@@ -7,7 +7,6 @@ from apps.wps import account_store
 
 def _account():
     return {
-        "server_origin": "http://127.0.0.1:9527",
         "username": "User01",
         "user_id": "wusr_1",
         "device_id": "wdev_1",
@@ -143,7 +142,7 @@ def test_clear_account_returns_zero_when_database_does_not_exist(tmp_path, monke
     assert account_store.local_account_path().exists() is False
 
 
-def test_local_account_ignores_a_legacy_display_name_column(tmp_path, monkeypatch):
+def test_local_account_migrates_away_legacy_origin_and_display_columns(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     path = account_store.local_account_path()
     path.parent.mkdir(parents=True)
@@ -167,13 +166,9 @@ def test_local_account_ignores_a_legacy_display_name_column(tmp_path, monkeypatc
     account_store.save_account(_account())
 
     with sqlite3.connect(str(path)) as conn:
-        conn.execute(
-            "UPDATE local_account SET display_name='Legacy Name' WHERE singleton_id=1"
-        )
-        conn.commit()
-        assert conn.execute(
-            "SELECT display_name FROM local_account WHERE singleton_id=1"
-        ).fetchone()[0] == "Legacy Name"
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(local_account)")}
+        assert "server_origin" not in columns
+        assert "display_name" not in columns
     assert account_store.load_account() == _account()
 
 
@@ -238,7 +233,7 @@ def test_previous_schema_migrates_to_remember_without_auto_login(tmp_path, monke
         conn.execute(
             "INSERT INTO local_account VALUES (1,?,?,?,?,?,?,?,?,?)",
             (
-                _account()["server_origin"],
+                "https://legacy.invalid",
                 _account()["username"],
                 _account()["user_id"],
                 _account()["device_id"],

@@ -117,36 +117,78 @@ def new_device_key() -> str:
     return secrets.token_urlsafe(32)
 
 
+def _create_local_account_table(conn: sqlite3.Connection, table_name: str = "local_account") -> None:
+    if_not_exists = "IF NOT EXISTS " if table_name == "local_account" else ""
+    conn.execute(
+        f"""CREATE TABLE {if_not_exists}{table_name} (
+            singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+            username TEXT NOT NULL,
+            user_id TEXT NOT NULL DEFAULT '',
+            device_id TEXT NOT NULL DEFAULT '',
+            user_status TEXT NOT NULL DEFAULT '',
+            device_name TEXT NOT NULL DEFAULT '',
+            platform TEXT NOT NULL DEFAULT '',
+            device_status TEXT NOT NULL DEFAULT '',
+            password_cipher BLOB NOT NULL DEFAULT X'',
+            session_token_cipher BLOB NOT NULL DEFAULT X'',
+            device_key_cipher BLOB NOT NULL,
+            session_created_at INTEGER NOT NULL DEFAULT 0,
+            session_expires_at INTEGER NOT NULL DEFAULT 0,
+            features_json TEXT NOT NULL DEFAULT '{{}}',
+            config_version TEXT NOT NULL DEFAULT '',
+            heartbeat_interval_seconds INTEGER NOT NULL DEFAULT 0,
+            remember_password INTEGER NOT NULL DEFAULT 1,
+            auto_login INTEGER NOT NULL DEFAULT 0,
+            updated_at INTEGER NOT NULL
+        )"""
+    )
+
+
+def _remove_legacy_server_origin_column(
+    conn: sqlite3.Connection, columns: set[str]
+) -> set[str]:
+    """Rebuild the singleton table once to remove the obsolete public URL copy."""
+    if "server_origin" not in columns:
+        return columns
+    retained = (
+        "singleton_id",
+        "username",
+        "user_id",
+        "device_id",
+        "user_status",
+        "device_name",
+        "platform",
+        "device_status",
+        "password_cipher",
+        "session_token_cipher",
+        "device_key_cipher",
+        "session_created_at",
+        "session_expires_at",
+        "features_json",
+        "config_version",
+        "heartbeat_interval_seconds",
+        "remember_password",
+        "auto_login",
+        "updated_at",
+    )
+    _create_local_account_table(conn, "local_account_rebuilt")
+    column_list = ",".join(retained)
+    conn.execute(
+        f"INSERT INTO local_account_rebuilt ({column_list}) "
+        f"SELECT {column_list} FROM local_account"
+    )
+    conn.execute("DROP TABLE local_account")
+    conn.execute("ALTER TABLE local_account_rebuilt RENAME TO local_account")
+    return set(retained)
+
+
 def _connect() -> sqlite3.Connection:
     path = local_account_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(path))
     conn.row_factory = sqlite3.Row
     try:
-        conn.execute(
-            """CREATE TABLE IF NOT EXISTS local_account (
-                singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
-                server_origin TEXT NOT NULL,
-                username TEXT NOT NULL,
-                 user_id TEXT NOT NULL DEFAULT '',
-                 device_id TEXT NOT NULL DEFAULT '',
-                 user_status TEXT NOT NULL DEFAULT '',
-                 device_name TEXT NOT NULL DEFAULT '',
-                 platform TEXT NOT NULL DEFAULT '',
-                 device_status TEXT NOT NULL DEFAULT '',
-                 password_cipher BLOB NOT NULL DEFAULT X'',
-                 session_token_cipher BLOB NOT NULL DEFAULT X'',
-                 device_key_cipher BLOB NOT NULL,
-                 session_created_at INTEGER NOT NULL DEFAULT 0,
-                 session_expires_at INTEGER NOT NULL DEFAULT 0,
-                 features_json TEXT NOT NULL DEFAULT '{}',
-                 config_version TEXT NOT NULL DEFAULT '',
-                 heartbeat_interval_seconds INTEGER NOT NULL DEFAULT 0,
-                 remember_password INTEGER NOT NULL DEFAULT 1,
-                auto_login INTEGER NOT NULL DEFAULT 0,
-                updated_at INTEGER NOT NULL
-            )"""
-        )
+        _create_local_account_table(conn, "local_account")
         columns = {
             str(row["name"])
             for row in conn.execute("PRAGMA table_info(local_account)").fetchall()
@@ -175,6 +217,11 @@ def _connect() -> sqlite3.Connection:
                 conn.execute(
                     f"ALTER TABLE local_account ADD COLUMN {name} {definition}"
                 )
+        columns = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA table_info(local_account)").fetchall()
+        }
+        _remove_legacy_server_origin_column(conn, columns)
         conn.execute(
             """CREATE TABLE IF NOT EXISTS format_result_outbox (
                 request_id TEXT PRIMARY KEY,
@@ -195,6 +242,7 @@ def _connect() -> sqlite3.Connection:
                 "ALTER TABLE format_result_outbox "
                 "ADD COLUMN document_name TEXT NOT NULL DEFAULT ''"
             )
+        conn.commit()
     except sqlite3.Error:
         conn.close()
         raise
@@ -218,7 +266,6 @@ def load_account() -> dict:
         if not isinstance(features, dict):
             raise ValueError("WPS_LOCAL_FEATURES_INVALID")
         return {
-            "server_origin": row["server_origin"],
             "username": row["username"],
             "user_id": row["user_id"],
             "device_id": row["device_id"],
@@ -254,7 +301,6 @@ def quarantine_corrupted_account() -> Path:
 
 def save_account(account: dict) -> None:
     required = {
-        "server_origin",
         "username",
         "user_id",
         "device_id",
@@ -296,10 +342,9 @@ def save_account(account: dict) -> None:
     try:
         conn.execute(
             """INSERT INTO local_account
-               (singleton_id,server_origin,username,user_id,device_id,user_status,device_name,platform,device_status,password_cipher,session_token_cipher,device_key_cipher,session_created_at,session_expires_at,features_json,config_version,heartbeat_interval_seconds,remember_password,auto_login,updated_at)
-               VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               (singleton_id,username,user_id,device_id,user_status,device_name,platform,device_status,password_cipher,session_token_cipher,device_key_cipher,session_created_at,session_expires_at,features_json,config_version,heartbeat_interval_seconds,remember_password,auto_login,updated_at)
+               VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(singleton_id) DO UPDATE SET
-                 server_origin=excluded.server_origin,
                  username=excluded.username,
                  user_id=excluded.user_id,
                  device_id=excluded.device_id,
@@ -319,7 +364,6 @@ def save_account(account: dict) -> None:
                  auto_login=excluded.auto_login,
                  updated_at=excluded.updated_at""",
             (
-                account["server_origin"],
                 account["username"],
                 account["user_id"],
                 account["device_id"],

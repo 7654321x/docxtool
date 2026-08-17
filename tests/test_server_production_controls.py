@@ -32,7 +32,7 @@ class ServerProductionControlsTest(unittest.TestCase):
         server.ADMIN_TOKEN = ""
         server.PROXY_SECRET = ""
         server.FRONTEND_ORIGIN = ""
-        server.ADMIN_CONSOLE_ORIGIN = "https://docxtool.pages.dev"
+        server.ADMIN_CONSOLE_ORIGIN = "https://docx.toolpp.cn"
         server.COOKIE_SECURE = False
         server.ADMIN_COOKIE_SECURE = False
         server.PRODUCTION_MODE = False
@@ -81,17 +81,16 @@ class ServerProductionControlsTest(unittest.TestCase):
         self.assertEqual(urls["monitor"], "http://127.0.0.1:9527/monitor")
         self.assertEqual(urls["health"], "http://127.0.0.1:9527/health")
         self.assertEqual(urls["ready"], "http://127.0.0.1:9527/ready")
-        self.assertEqual(urls["tunnel_command"], "cloudflared tunnel --url http://127.0.0.1:9527")
 
     def test_public_startup_urls_show_pages_as_the_only_browser_entry(self):
-        server.FRONTEND_ORIGIN = "https://docxtool.pages.dev"
+        server.FRONTEND_ORIGIN = "https://docx.toolpp.cn"
         server.ADMIN_CONSOLE_ORIGIN = "https://unexpected.example"
 
         self.assertEqual(
             server._public_startup_urls(),
             {
-                "frontend": "https://docxtool.pages.dev",
-                "admin_login": "https://docxtool.pages.dev/admin/login",
+                "frontend": "https://docx.toolpp.cn",
+                "admin_login": "https://docx.toolpp.cn/admin/login",
             },
         )
 

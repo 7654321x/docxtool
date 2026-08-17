@@ -96,8 +96,8 @@ def test_public_startup_urls_keep_pages_as_the_only_browser_entry() -> None:
     urls = public_startup_urls("")
 
     assert urls == {
-        "frontend": "https://docxtool.pages.dev",
-        "admin_login": "https://docxtool.pages.dev/admin/login",
+        "frontend": "https://docx.toolpp.cn",
+        "admin_login": "https://docx.toolpp.cn/admin/login",
     }
 
 

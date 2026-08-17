@@ -225,6 +225,14 @@ test("two Pages variables are sufficient for API proxying", async () => {
   assert.equal(headers.has("CF-Access-Client-Secret"), false);
 });
 
+test("worker source keeps origin deployment details out of the public proxy", () => {
+  assert.equal(workerSource.includes("origin.toolpp.cn"), false);
+  assert.equal(workerSource.includes("43.130.232.115"), false);
+  assert.equal(workerSource.includes("cloudflared"), false);
+  assert.equal(workerSource.includes("env.BACKEND_BASE_URL"), true);
+  assert.equal(workerSource.includes("env.PROXY_SECRET"), true);
+});
+
 test("proxy rejects non-HTTPS, direct-IP, and path-bearing backend origins", async () => {
   for (const backendBase of [
     "http://backend.example",

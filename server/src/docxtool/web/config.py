@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from urllib.parse import urlparse
 
 
-DEFAULT_PUBLIC_FRONTEND_ORIGIN = "https://docxtool.pages.dev"
+DEFAULT_PUBLIC_FRONTEND_ORIGIN = "https://docx.toolpp.cn"
 DEFAULT_ADMIN_CONSOLE_ORIGIN = DEFAULT_PUBLIC_FRONTEND_ORIGIN
 
 

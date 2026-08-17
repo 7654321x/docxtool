@@ -6,9 +6,9 @@
 
 ```text
 浏览器 / WPS
-  -> https://docx.<domain> (Cloudflare Pages)
+  -> https://docx.toolpp.cn (Cloudflare Pages)
   -> Pages Worker + X-Proxy-Secret
-  -> https://origin.<domain> (Caddy)
+  -> https://origin.toolpp.cn (DNS A: 43.130.232.115; Caddy)
   -> http://127.0.0.1:9527 (DocxTool)
 ```
 
@@ -17,9 +17,9 @@
 
 ## 约束
 
-- Pages 前端子域名使用 CNAME 指向现有 `<project>.pages.dev`，并先在 Pages
+- `docx.toolpp.cn` 使用 CNAME 指向现有 Pages 项目，并先在 Pages
   项目的 Custom domains 中关联。
-- Origin 子域名使用 A/AAAA 记录指向服务器；Caddy 管理它的 HTTPS 证书。
+- `origin.toolpp.cn` 使用 A 记录指向 `43.130.232.115`；Caddy 管理它的 HTTPS 证书。
 - 后端 `.env` 不保存 Origin IP 或 `BACKEND_BASE_URL`；它保存用户入口 Origin、
   两个不同随机密钥和 loopback 监听配置。
 - `PROXY_SECRET` 是唯一 Pages 到后端的共享鉴别值，必须同时作为 Pages Secret 和
@@ -40,7 +40,7 @@
 
 1. `systemctl status docxtool` 为 `active (running)`。
 2. `curl http://127.0.0.1:9527/health` 返回 HTTP 200。
-3. `curl https://origin.<domain>/health` 经 Caddy 返回 HTTP 200。
+3. `curl https://origin.toolpp.cn/health` 经 Caddy 返回 HTTP 200。
 4. Pages 环境只包含 `BACKEND_BASE_URL` 和 `PROXY_SECRET`；用户经
-   `https://docx.<domain>` 完成 Web、管理后台和 WPS 冒烟。
+   `https://docx.toolpp.cn` 完成 Web、管理后台和 WPS 冒烟。
 5. 公网安全组仅开放 Caddy 所需的 TCP 80、443；不开放 9527。

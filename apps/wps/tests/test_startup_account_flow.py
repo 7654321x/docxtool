@@ -113,7 +113,6 @@ def test_force_login_opens_window_even_when_auto_login_is_enabled(monkeypatch):
 
 def _auto_account(*, expires_at):
     return {
-        "server_origin": "https://example.test",
         "username": "User01",
         "user_id": "wusr_1",
         "device_id": "wdev_1",

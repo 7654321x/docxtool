@@ -40,8 +40,8 @@
    BIND_HOST=127.0.0.1
    PORT=9527
    PRODUCTION_MODE=true
-   FRONTEND_ORIGIN=https://docxtool.pages.dev
-   ADMIN_CONSOLE_ORIGIN=https://docxtool.pages.dev
+   FRONTEND_ORIGIN=https://docx.toolpp.cn
+   ADMIN_CONSOLE_ORIGIN=https://docx.toolpp.cn
    COOKIE_SECURE=true
    ADMIN_COOKIE_SECURE=true
    TRUST_PROXY_HEADERS=true
@@ -63,7 +63,7 @@ Ubuntu 使用 Python 3.10、systemd 和 Caddy。解压后进入 `server` 目录�
 
 ```bash
 chmod +x linux/install.sh
-sudo ./linux/install.sh --origin-host origin.example.com --replace-caddyfile
+sudo ./linux/install.sh --origin-host origin.toolpp.cn --replace-caddyfile
 ```
 
 该脚本会把服务安装到 `/opt/docxtool`，但不会写入真实密钥。它首次创建
@@ -73,8 +73,8 @@ sudo ./linux/install.sh --origin-host origin.example.com --replace-caddyfile
 BIND_HOST=127.0.0.1
 PORT=9527
 PRODUCTION_MODE=true
-FRONTEND_ORIGIN=https://docx.example.com
-ADMIN_CONSOLE_ORIGIN=https://docx.example.com
+FRONTEND_ORIGIN=https://docx.toolpp.cn
+ADMIN_CONSOLE_ORIGIN=https://docx.toolpp.cn
 COOKIE_SECURE=true
 ADMIN_COOKIE_SECURE=true
 TRUST_PROXY_HEADERS=true
@@ -88,7 +88,7 @@ PROXY_SECRET=<different-long-random-secret>
 ```bash
 sudo systemctl enable --now docxtool
 curl http://127.0.0.1:9527/health
-curl https://origin.example.com/health
+curl https://origin.toolpp.cn/health
 ```
 
 安全组仅开放 TCP 80、443；不得开放 9527。`--replace-caddyfile` 会替换现有 Caddy
@@ -96,14 +96,14 @@ curl https://origin.example.com/health
 
 ## Cloudflare Pages
 
-浏览器和 WPS 客户端只访问 Pages 的自定义域名，例如 `https://docx.example.com`。
-Pages Worker 回源到 Caddy 的 HTTPS Origin，例如 `https://origin.example.com`；不要公开
-或使用服务器 IP、`8080` 或 `9527`。不使用 Quick Tunnel 或 `trycloudflare.com`。
+浏览器和 WPS 客户端只访问 `https://docx.toolpp.cn`。Pages Worker 回源到 Caddy 的 HTTPS
+Origin `https://origin.toolpp.cn`（DNS A 记录为 `43.130.232.115`）；不要公开或使用服务器 IP、
+`8080` 或 `9527`。不使用 Cloudflare Tunnel、Quick Tunnel 或 `trycloudflare.com`。
 
 Pages 只配置两个 Secret：
 
 ```text
-BACKEND_BASE_URL=https://origin.example.com
+BACKEND_BASE_URL=https://origin.toolpp.cn
 PROXY_SECRET=<与服务器 .env 中 PROXY_SECRET 完全一致的值>
 ```
 

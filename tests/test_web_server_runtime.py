@@ -84,8 +84,8 @@ def test_run_http_service_starts_in_existing_order_and_closes_on_interrupt() -> 
             "ready": "http://127.0.0.1:9527/ready",
         },
         public_urls=lambda: {
-            "frontend": "https://docxtool.pages.dev",
-            "admin_login": "https://docxtool.pages.dev/admin/login",
+            "frontend": "https://docx.toolpp.cn",
+            "admin_login": "https://docx.toolpp.cn/admin/login",
         },
         validate_secrets=lambda: calls.append("validate"),
         startup_cleanup=lambda: calls.append("cleanup"),
@@ -114,8 +114,8 @@ def test_run_http_service_starts_in_existing_order_and_closes_on_interrupt() -> 
     printed = [call[len("print:"):] for call in calls if call.startswith("print:")]
     assert printed == [
         "访问地址:",
-        "前端网站:       https://docxtool.pages.dev",
-        "管理后台:       https://docxtool.pages.dev/admin/login",
+        "前端网站:       https://docx.toolpp.cn",
+        "管理后台:       https://docx.toolpp.cn/admin/login",
         "本地前端:       http://127.0.0.1:9527",
         "本地管理后台:   http://127.0.0.1:9527/admin/login",
         "Ctrl+C 停止",

@@ -203,6 +203,7 @@ $requiredFiles = @(
     "docs/design/CODEX_WORKFLOW_OPTIMIZATION.md",
     "docs/design/MEETING_TITLE_METADATA_RECOGNITION.md",
     "docs/design/UBUNTU_DIRECT_ORIGIN_DEPLOYMENT.md",
+    "docs/design/UNIFIED_WPS_PUBLIC_GATEWAY.md",
     "docs/design/ADMIN_WORKSPACE_WPS_TECHNICAL_DESIGN.md",
     "docs/design/wps-format-settings.md",
     "docs/WPS_REGRESSION_CHECKLIST.md",
@@ -615,16 +616,24 @@ try {
         Invoke-Checked pwsh @("-NoProfile", "-File", "apps/wps/scripts/verify.ps1")
         Invoke-Checked pwsh @(
             "-NoProfile", "-File", "apps/wps/scripts/build-exe.ps1",
-            "-ServerOrigin", "https://acceptance.invalid"
+            "-PublicApiBaseUrl", "https://acceptance.invalid"
         )
     }
 
     if ($DryRun) {
-        $statusArguments = @("status", "--short", "--") + $publishFiles
-        $publishStatus = & git @statusArguments
-        if ($LASTEXITCODE -ne 0) {
-            throw "Unable to inspect allowlisted publish changes."
+        $publishFileSet = [System.Collections.Generic.HashSet[string]]::new(
+            [System.StringComparer]::Ordinal
+        )
+        foreach ($publishFile in $publishFiles) {
+            [void]$publishFileSet.Add($publishFile)
         }
+        $workingStatus = @(git status --short --untracked-files=all)
+        if ($LASTEXITCODE -ne 0) {
+            throw "Unable to inspect local publish changes."
+        }
+        $publishStatus = @($workingStatus | Where-Object {
+            $_.Length -ge 4 -and $publishFileSet.Contains($_.Substring(3).Replace("\\", "/"))
+        })
         if ($publishStatus) {
             Write-Host "Allowlisted publish changes:"
             $publishStatus | ForEach-Object { Write-Host $_ }

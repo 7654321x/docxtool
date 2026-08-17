@@ -186,7 +186,7 @@ WPS 外部接口统一位于 `/wps-api/v1/*`。注册、登录、当前账号、
 ### 目标与非目标
 
 生产环境只有一个面向浏览器和 WPS 正式客户端的公开 Origin：
-`https://docxtool.pages.dev`。网页、管理后台和 WPS 公网 API 分别使用
+`https://docx.toolpp.cn`。网页、管理后台和 WPS 公网 API 分别使用
 `/api/*`、`/admin/*` 与 `/wps-api/v1/*`，均由同一个 Cloudflare Pages Worker
 转发。
 
@@ -195,17 +195,18 @@ WPS 外部接口统一位于 `/wps-api/v1/*`。注册、登录、当前账号、
 ```text
 浏览器 / WPS 客户端
         ↓ HTTPS
-https://docxtool.pages.dev
+https://docx.toolpp.cn
         ↓ Cloudflare Pages Worker
         ↓ HTTPS + X-Proxy-Secret
-BACKEND_BASE_URL（实际可用的 HTTPS hostname）
-        ↓ Cloudflare Tunnel
+https://origin.toolpp.cn (DNS A: 43.130.232.115)
+        ↓ Caddy :443
 http://127.0.0.1:9527
         ↓
 DocxTool Python
 ```
 
-`BACKEND_BASE_URL` 必须是实际可用的 HTTPS hostname，但不要求用户拥有自有域名；文档不记录真实服务器 IP、域名或密钥。Python
+`BACKEND_BASE_URL` 必须是无路径、无凭据、非 IP 字面量的 HTTPS hostname；本部署使用
+`https://origin.toolpp.cn`。Python
 始终绑定 `127.0.0.1:9527`；DocxTool 不公开监听 `8080` 或 `9527`。本轮不改动
 Recognition、Normalization、Engine、WPS 本机 Control 协议，也不新建第二个 Worker、
 独立管理后台或直连 Origin fallback。
@@ -218,7 +219,7 @@ Recognition、Normalization、Engine、WPS 本机 Control 协议，也不新建�
 - WPS 公网协议固定为 `/wps-api/v1/*`。其客户端只要求无路径的 HTTPS Origin，并在
   登录后以 `Authorization: Bearer <session>` 认证；服务端已有固定路由和 Bearer
   校验，不依赖独立公网域名。
-- 因此 WPS 正式 EXE 可以使用 `https://docxtool.pages.dev`。Worker 只对固定
+- 因此 WPS 正式 EXE 使用 `https://docx.toolpp.cn`。Worker 只对固定
   WPS allowlist 保留 Bearer 请求头；普通 Web/API 路由仍剥离浏览器提交的
   `Authorization`。WPS 路径不转发浏览器 Cookie，不新增直连服务器 IP 的兼容路径。
 - 管理登录与所有管理写操作继续使用同源相对跳转、Cookie、CSRF 和 Worker allowlist；
@@ -229,7 +230,7 @@ Recognition、Normalization、Engine、WPS 本机 Control 协议，也不新建�
 Pages 只配置两个 Secret：
 
 ```text
-BACKEND_BASE_URL=<实际可用的 HTTPS 后端 hostname>
+BACKEND_BASE_URL=https://origin.toolpp.cn
 PROXY_SECRET=<same-as-backend>
 ```
 
@@ -256,8 +257,8 @@ Worker 仍支持或生成 Cloudflare Access 凭据。`PROXY_SECRET` 和浏览器
 BIND_HOST=127.0.0.1
 PORT=9527
 PRODUCTION_MODE=true
-FRONTEND_ORIGIN=https://docxtool.pages.dev
-ADMIN_CONSOLE_ORIGIN=https://docxtool.pages.dev
+FRONTEND_ORIGIN=https://docx.toolpp.cn
+ADMIN_CONSOLE_ORIGIN=https://docx.toolpp.cn
 COOKIE_SECURE=true
 ADMIN_COOKIE_SECURE=true
 TRUST_PROXY_HEADERS=true
@@ -276,18 +277,17 @@ TRUSTED_PROXY_IPS=127.0.0.1,::1
 
 ### 迁移、发布与验收
 
-部署文档移除 Nginx、服务器 `8080`、裸 HTTP 管理入口和 IP 回源说明；仅服务旧路径的
-`deploy/nginx-docxtool.conf` 已删除，发布脚本同步允许该删除。运维侧需自行：
+部署文档移除 Nginx、服务器 `8080`、裸 HTTP 管理入口和 Tunnel 生产路径；运维侧需自行：
 
-1. 让 `cloudflared` 将 Private Origin 的 Tunnel 服务指向 `http://127.0.0.1:9527`；
-2. 在 Pages 中只配置 `BACKEND_BASE_URL` 与 `PROXY_SECRET` 两个 Secret，并按后端配置重启服务；
-3. 不启用 Cloudflare Zero Trust / Access，也不创建 Access Service Token；
-4. 关闭服务器对 DocxTool `8080` 与 `9527` 的公网入站规则；
-5. 用 Pages HTTPS 路径验证用户、管理员登录/登出、会话、管理写操作和 WPS 公网 API。
+1. 让 `origin.toolpp.cn` 的 DNS A 记录指向 `43.130.232.115`，并由 Caddy 将 `:443` 反向代理到 `127.0.0.1:9527`；
+2. 在 Pages 中只配置 `BACKEND_BASE_URL=https://origin.toolpp.cn` 与 `PROXY_SECRET` 两个 Secret，并按后端配置重启服务；
+3. 不启用 Cloudflare Tunnel、Zero Trust / Access，也不创建 Access Service Token；
+4. 关闭服务器对 DocxTool `8080` 与 `9527` 的公网入站规则，只开放 Caddy 所需的 `80`、`443`；
+5. 用 `https://docx.toolpp.cn` 验证用户、管理员登录/登出、会话、管理写操作和 WPS 公网 API。
 
 代码验收覆盖 Worker 覆盖 `X-Proxy-Secret`、缺失两项配置、管理员 Cookie/相对跳转、WPS Bearer
 透传及 allowlist；后端覆盖严格布尔解析、HTTPS 同源管理员配置和生产文件 API 边界。
-完整自动化验证不等同于真实 Tunnel 或 Pages 线上联通；后者必须在配置完成后
+完整自动化验证不等同于真实 Caddy、DNS 或 Pages 线上联通；后者必须在配置完成后
 人工验证。
 
 ## 非目标

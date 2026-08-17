@@ -17,6 +17,7 @@
 | GitHub 发布范围、SSH 和安全边界 | [`RELEASE.md`](RELEASE.md) |
 | Codex 工作流、任务分级和验证路由 | [`design/CODEX_WORKFLOW_OPTIMIZATION.md`](design/CODEX_WORKFLOW_OPTIMIZATION.md) |
 | Ubuntu 直接 HTTPS Origin 部署 | [`design/UBUNTU_DIRECT_ORIGIN_DEPLOYMENT.md`](design/UBUNTU_DIRECT_ORIGIN_DEPLOYMENT.md) |
+| WPS 统一公网入口与 Gateway 契约 | [`design/UNIFIED_WPS_PUBLIC_GATEWAY.md`](design/UNIFIED_WPS_PUBLIC_GATEWAY.md) |
 | 文首会议日期与会议说明识别 | [`design/MEETING_TITLE_METADATA_RECOGNITION.md`](design/MEETING_TITLE_METADATA_RECOGNITION.md) |
 | 后台工作台、网页业务和 WPS 管理台设计 | [`design/ADMIN_WORKSPACE_WPS_TECHNICAL_DESIGN.md`](design/ADMIN_WORKSPACE_WPS_TECHNICAL_DESIGN.md) |
 | SDK host-text-v1 测试金标 | [`HOST_TEXT_V1_GOLDEN.json`](HOST_TEXT_V1_GOLDEN.json) |

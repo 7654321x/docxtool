@@ -65,6 +65,7 @@ id_ed25519
 
 # Generated portable deployment copy; canonical source remains at repository root.
 /docx/
+/docxtool/
 
 # WPS integration keeps its reusable format specification in source control,
 # but locally copied SDK wheels must not be published with the plugin source.

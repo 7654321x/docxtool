@@ -10,12 +10,12 @@ from PyInstaller.utils.hooks import collect_data_files
 
 project_root = Path(SPECPATH).parents[1]
 wps_root = project_root / "apps" / "wps"
-server_origin = os.environ.get("DOCXTOOL_WPS_SERVER_ORIGIN", "")
-parsed_origin = urlparse(server_origin)
+public_api_base_url = os.environ.get("DOCXTOOL_WPS_PUBLIC_API_BASE_URL", "")
+parsed_origin = urlparse(public_api_base_url)
 try:
     _ = parsed_origin.port
 except ValueError as exc:
-    raise RuntimeError("WPS_BUILD_SERVER_ORIGIN_INVALID") from exc
+    raise RuntimeError("WPS_BUILD_PUBLIC_API_BASE_URL_INVALID") from exc
 if (
     parsed_origin.scheme != "https"
     or not parsed_origin.hostname
@@ -25,13 +25,13 @@ if (
     or parsed_origin.query
     or parsed_origin.fragment
 ):
-    raise RuntimeError("WPS_BUILD_SERVER_ORIGIN_INVALID")
+    raise RuntimeError("WPS_BUILD_PUBLIC_API_BASE_URL_INVALID")
 
 generated_root = project_root / "build" / "wps-client"
 generated_root.mkdir(parents=True, exist_ok=True)
 client_config = generated_root / "client-config.json"
 client_config.write_text(
-    json.dumps({"server_origin": server_origin.rstrip("/")}, ensure_ascii=False, indent=2) + "\n",
+    json.dumps({"public_api_base_url": public_api_base_url.rstrip("/")}, ensure_ascii=False, indent=2) + "\n",
     encoding="utf-8",
 )
 icon_path = generated_root / "docxtool-wps.ico"

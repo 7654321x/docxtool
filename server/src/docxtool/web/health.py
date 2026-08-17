@@ -130,7 +130,6 @@ def startup_urls(bind_host: str, port: int) -> dict[str, str]:
         "monitor": f"{base}/monitor",
         "health": f"{base}/health",
         "ready": f"{base}/ready",
-        "tunnel_command": f"cloudflared tunnel --url {base}",
     }
 
 

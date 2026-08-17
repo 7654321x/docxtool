@@ -65,7 +65,7 @@ export PROXY_SECRET='换成正式长随机密钥'
 ./run.sh
 ```
 
-Web 服务默认监听 `127.0.0.1:9527`。生产环境通过 Cloudflare Pages Worker 注入 `X-Proxy-Secret` 并经 Cloudflare Tunnel 回源；浏览器与 WPS 客户端只访问 Cloudflare Pages，不直接把 `8080` 或 `9527` 暴露到公网，也不启用 Cloudflare Access。完整部署说明见 [`docs/DEPLOY.md`](docs/DEPLOY.md)。
+Web 服务默认监听 `127.0.0.1:9527`。生产环境中浏览器与 WPS 客户端只访问 `https://docx.toolpp.cn`；Cloudflare Pages Worker 注入 `X-Proxy-Secret` 后经 `https://origin.toolpp.cn`（DNS 指向 `43.130.232.115`）回源到 Caddy，再反向代理到 loopback 后端。不开放 `8080` 或 `9527`，也不使用 Cloudflare Tunnel 或 Access。完整部署说明见 [`docs/DEPLOY.md`](docs/DEPLOY.md)。
 
 ## 运行数据
 
@@ -95,7 +95,7 @@ WPS 开发、构建和人工验收见：
 构建正式客户端时必须显式传入 HTTPS Origin：
 
 ```pwsh
-pwsh -NoProfile -File .\apps\wps\scripts\build-exe.ps1 -ServerOrigin https://wps.example.com
+pwsh -NoProfile -File .\apps\wps\scripts\build-exe.ps1 -PublicApiBaseUrl https://docx.toolpp.cn
 ```
 
 源码修改默认不构建 EXE；只有用户明确要求生成 EXE 时才执行冻结构建和仓库外验证。

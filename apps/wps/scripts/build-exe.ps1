@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [string]$ServerOrigin,
+    [string]$PublicApiBaseUrl,
     [string]$Python = "",
     [switch]$SkipInstall
 )
@@ -17,14 +17,14 @@ if (-not (Test-Path -LiteralPath $Python -PathType Leaf)) {
 }
 
 $origin = $null
-if (-not [Uri]::TryCreate($ServerOrigin, [UriKind]::Absolute, [ref]$origin) -or
+if (-not [Uri]::TryCreate($PublicApiBaseUrl, [UriKind]::Absolute, [ref]$origin) -or
     $origin.Scheme -ne "https" -or
     -not $origin.Host -or
     $origin.UserInfo -or
     $origin.AbsolutePath -ne "/" -or
     $origin.Query -or
     $origin.Fragment) {
-    throw "ServerOrigin must be an HTTPS origin without a path, query, or fragment."
+    throw "PublicApiBaseUrl must be an HTTPS origin without a path, query, or fragment."
 }
 
 function New-WpsApplicationIcon {
@@ -106,7 +106,7 @@ if (-not $SkipInstall) {
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller installation failed." }
 }
 
-$env:DOCXTOOL_WPS_SERVER_ORIGIN = $ServerOrigin.TrimEnd("/")
+$env:DOCXTOOL_WPS_PUBLIC_API_BASE_URL = $PublicApiBaseUrl.TrimEnd("/")
 $spec = Join-Path $ProjectRoot "apps\wps\DocxToolWps.spec"
 $dist = Join-Path $ProjectRoot "dist\wps"
 $work = Join-Path $ProjectRoot "build\wps"

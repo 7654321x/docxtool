@@ -83,6 +83,18 @@ pwsh -NoProfile -File .\scripts\verify_changed.ps1
 5. 普通发布使用脚本默认流程；只有用户明确要求时才使用 `-Verify` 完整验收。版本以 `src/docxtool/version.py`、`pyproject.toml` 和 `CHANGELOG.md` 为准；当前文档基线为 5.5.0。
 6. 新增或移动正式源码、资源、测试和文档时，第一时间同步写入 `scripts/publish_to_github.ps1` 的允许清单；新增长期文档还必须立即登记到 `docs/README.md`，不得等到发布前再补。
 
+## 当前生产回源事实
+
+以下信息由用户于 2026-08-17 明确确认；处理部署、Nginx、Cloudflare Pages 或 WPS 公网链路时必须以此为准：
+
+- 公网母域名：`toolpp.cn`。
+- 后端 HTTPS Origin：`origin.toolpp.cn`。
+- 后端服务器公网 IP：`43.130.232.115`。
+- 后端服务仅监听：`127.0.0.1:9527`，由反向代理提供公网 HTTPS。
+- 公网用户入口：`https://docx.toolpp.cn`；WPS 和浏览器只使用该地址，不直连 Origin。
+- Origin TLS 证书：`origin.toolpp.cn` 使用 Let's Encrypt 免费证书，由 Ubuntu 上的
+  `certbot --nginx -d origin.toolpp.cn` 获取并部署给 Nginx；Certbot 定时任务自动续期。
+
 ## 重复问题处理
 
 1. 先查阅相关专项回归清单和文档唯一职责表，避免重复实现或重复记录。

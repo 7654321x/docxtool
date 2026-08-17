@@ -26,7 +26,7 @@ _MESSAGES = {
     "WPS_PUBLIC_CLIENT_BLOCKED": "客户端请求被访问规则拦截，请更新客户端或联系管理员。",
     "WPS_PUBLIC_RESPONSE_INVALID": "服务器响应异常，请稍后重试。",
     "WPS_PUBLIC_REQUEST_ID_MISMATCH": "服务器响应校验失败，请重试。",
-    "WPS_SERVER_ORIGIN_INVALID": "客户端服务器地址配置无效，请更新或重新安装客户端。",
+    "WPS_PUBLIC_API_BASE_URL_INVALID": "客户端公网服务地址配置无效，请更新或重新安装客户端。",
     "WPS_CLIENT_CONFIG_INVALID": "客户端服务配置无效，请更新或重新安装客户端。",
     "WPS_SINGLE_INSTANCE_LISTEN_FAILED": (
         "已有登录窗口或 DocxTool WPS 后台程序正在运行。"

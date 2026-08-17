@@ -219,4 +219,4 @@ jobs:
 
       - name: Build and verify packaged WPS executable
         shell: pwsh
-        run: pwsh -NoProfile -File .\apps\wps\scripts\build-exe.ps1 -ServerOrigin "https://acceptance.invalid" -SkipInstall
+        run: pwsh -NoProfile -File .\apps\wps\scripts\build-exe.ps1 -PublicApiBaseUrl "https://acceptance.invalid" -SkipInstall

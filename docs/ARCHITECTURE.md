@@ -94,6 +94,17 @@ flowchart TD
 
 Web 服务使用内存任务队列、daemon worker 和 spawn 子进程。数据库记录任务状态，但不替代队列，也不在服务重启后自动重跑中断任务。
 
+## 生产公网网关
+
+浏览器与 WPS 的唯一公网入口为 `https://docx.toolpp.cn`。Cloudflare Pages Worker 将同源 Web、
+管理后台和 `/wps-api/v1/*` allowlist 路由使用唯一的 `BACKEND_BASE_URL=https://origin.toolpp.cn`
+回源；Worker 只注入 `X-Proxy-Secret` 与 `X-Docxtool-Proxy`，WPS Bearer 会话仅在 WPS
+路由透传。
+
+`origin.toolpp.cn` 的 DNS A 记录指向 `43.130.232.115`。服务器由 Caddy 在 `:443` 提供 TLS，
+反向代理到仅监听 `127.0.0.1:9527` 的 DocxTool。WPS 的正式 EXE 只持有一个
+`public_api_base_url=https://docx.toolpp.cn`，不会了解 Origin、服务器 IP、Tunnel 或公网 `:9527`。
+
 ## SDK 与宿主适配链
 
 ```mermaid

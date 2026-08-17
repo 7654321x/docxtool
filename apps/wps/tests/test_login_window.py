@@ -24,8 +24,6 @@ from apps.wps.user_messages import user_message_for_error
 
 
 class _Api:
-    origin = "http://127.0.0.1:9527"
-
     def __init__(self):
         self.calls = []
 

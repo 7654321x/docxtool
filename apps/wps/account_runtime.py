@@ -53,7 +53,6 @@ def device_payload(device_key: str) -> dict:
 def account_from_response(
     response: dict,
     *,
-    origin: str,
     username: str,
     password: str,
     device_key: str,
@@ -64,7 +63,6 @@ def account_from_response(
     snapshot = account_snapshot_from_response(response)
     token = _required_text(response.get("session_token"), "session_token")
     account = {
-        "server_origin": origin,
         **snapshot,
         "password": password,
         "session_token": token,

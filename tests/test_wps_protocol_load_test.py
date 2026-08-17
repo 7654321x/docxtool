@@ -52,11 +52,11 @@ def test_public_target_and_settings_require_explicit_production_authorization():
         match="confirm-production-load",
     ):
         wps_protocol_load_test.parse_target(
-            "https://docxtool.pages.dev", confirm_production_load=False
+            "https://docx.toolpp.cn", confirm_production_load=False
         )
 
     target = wps_protocol_load_test.parse_target(
-        "https://docxtool.pages.dev", confirm_production_load=True
+        "https://docx.toolpp.cn", confirm_production_load=True
     )
     settings = wps_protocol_load_test.ScenarioSettings(
         users=2,

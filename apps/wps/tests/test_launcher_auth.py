@@ -52,7 +52,6 @@ class _Store:
 
 def _account(expires=200):
     return {
-        "server_origin": "http://127.0.0.1:9527",
         "username": "User01",
         "user_id": "wusr_1",
         "device_id": "wdev_1",
@@ -74,7 +73,6 @@ def _account(expires=200):
 
 
 class _Api:
-    origin = "http://127.0.0.1:9527"
 
     def login(self, _payload):
         raise AssertionError("AccountRuntime must not submit saved credentials in the background")
@@ -123,7 +121,6 @@ def test_account_bootstrap_snapshot_creates_and_merges_without_replacing_local_c
 
     created = account_from_response(
         response,
-        origin=api.origin,
         username="User01",
         password="Pass01",
         device_key="device-key-001",
@@ -150,7 +147,6 @@ def test_account_bootstrap_snapshot_rejects_missing_required_fields():
     with pytest.raises(PublicApiError) as exc_info:
         account_from_response(
             response,
-            origin="http://127.0.0.1:9527",
             username="User01",
             password="Pass01",
             device_key="device-key-001",
@@ -183,7 +179,6 @@ def test_account_runtime_keeps_bootstrap_notifications_in_memory_and_confirms_by
     }
     account = account_from_response(
         response,
-        origin="http://127.0.0.1:9527",
         username="User01",
         password="Pass01",
         device_key="device-key-001",
@@ -454,7 +449,7 @@ def test_public_api_rejects_insecure_public_origin():
         "https://user:password@example.com",
         "https://example.com:99999",
     ):
-        with pytest.raises(RuntimeError, match="WPS_SERVER_ORIGIN_INVALID"):
+        with pytest.raises(RuntimeError, match="WPS_PUBLIC_API_BASE_URL_INVALID"):
             WpsPublicApi(origin)
 
 

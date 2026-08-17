@@ -67,8 +67,8 @@ def test_direct_admin_console_origin_rejects_paths_and_secure_cookie_on_http() -
 def _load_security_config(monkeypatch, **overrides):
     values = {
         "PRODUCTION_MODE": "true",
-        "FRONTEND_ORIGIN": "https://docxtool.pages.dev",
-        "ADMIN_CONSOLE_ORIGIN": "https://docxtool.pages.dev",
+        "FRONTEND_ORIGIN": "https://docx.toolpp.cn",
+        "ADMIN_CONSOLE_ORIGIN": "https://docx.toolpp.cn",
         "COOKIE_SECURE": "true",
         "ADMIN_COOKIE_SECURE": "true",
         "TRUST_PROXY_HEADERS": "true",
@@ -109,7 +109,7 @@ def test_production_admin_origin_must_be_the_https_pages_origin(monkeypatch) -> 
         _load_security_config(monkeypatch, ADMIN_CONSOLE_ORIGIN="https://other.example")
 
     config = _load_security_config(monkeypatch)
-    assert config.admin_console_origin == "https://docxtool.pages.dev"
+    assert config.admin_console_origin == "https://docx.toolpp.cn"
     assert config.cookie_secure is True
     assert config.admin_cookie_secure is True
 

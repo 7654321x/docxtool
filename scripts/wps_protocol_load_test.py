@@ -1026,7 +1026,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="通过 Cloudflare Pages 对 WPS 注册与排版协议执行受控并发验证。"
     )
-    parser.add_argument("--base-url", required=True, help="根地址，例如 https://docxtool.pages.dev")
+    parser.add_argument("--base-url", required=True, help="根地址，例如 https://docx.toolpp.cn")
     parser.add_argument("--users", type=int, default=DEFAULT_USERS, help="并发测试账号数，默认 2，公网最多 4")
     parser.add_argument("--format-requests-per-user", type=int, default=DEFAULT_FORMAT_REQUESTS_PER_USER, help="每个账号的授权/结果事务数，默认 1，最多 3")
     parser.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY, help="并发虚拟用户数，默认 2，最多 4")

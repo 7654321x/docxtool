@@ -1,7 +1,7 @@
 param(
     [string]$AppRoot = $PSScriptRoot,
-    [string]$BackendOrigin = "https://43.133.167.18.nip.io",
-    [string]$PagesOrigin = "https://docxtool.pages.dev"
+    [string]$BackendOrigin = "https://origin.toolpp.cn",
+    [string]$PublicGateway = "https://docx.toolpp.cn"
 )
 
 $ErrorActionPreference = "Stop"
@@ -109,34 +109,14 @@ if ($cfg["ADMIN_TOKEN"] -and $cfg["PROXY_SECRET"] -and
     Write-Host "FAIL: ADMIN_TOKEN 与 PROXY_SECRET 相同" -ForegroundColor Red
 }
 
-Write-Section "本机、Origin 与 Pages 联通性"
+Write-Section "本机、Origin 与公网网关联通性"
 $local = Test-HttpUrl "本机后端" "http://127.0.0.1:9527/health"
-$origin = Test-HttpUrl "CF 后端 Origin" ($BackendOrigin.TrimEnd("/") + "/health")
-$pages = Test-HttpUrl "Pages 代理" ($PagesOrigin.TrimEnd("/") + "/api/health")
+$origin = Test-HttpUrl "后端 Origin" ($BackendOrigin.TrimEnd("/") + "/health")
+$gateway = Test-HttpUrl "公网网关" ($PublicGateway.TrimEnd("/") + "/api/health")
 
-@($local, $origin, $pages) |
+@($local, $origin, $gateway) |
     Select-Object Name, Status, Result, Url, Detail |
     Format-Table -Wrap -AutoSize
-
-Write-Section "Cloudflare Tunnel 状态"
-$services = Get-Service -ErrorAction SilentlyContinue |
-    Where-Object { $_.Name -match "cloudflared" -or $_.DisplayName -match "cloudflare" }
-
-$processes = Get-Process -Name "cloudflared" -ErrorAction SilentlyContinue
-
-if ($services) {
-    $services | Select-Object Name, DisplayName, Status | Format-Table -AutoSize
-}
-else {
-    Write-Host "未发现 cloudflared Windows 服务"
-}
-
-if ($processes) {
-    $processes | Select-Object Id, ProcessName, StartTime | Format-Table -AutoSize
-}
-else {
-    Write-Host "未发现 cloudflared 进程"
-}
 
 Write-Section "最近后端错误（已脱敏）"
 $logFile = Join-Path $AppRoot "var\logs\公文排版工具.log"
@@ -152,13 +132,13 @@ else {
 }
 
 Write-Section "结论"
-if ($local.Result -eq "PASS" -and ($origin.Result -ne "PASS" -or $pages.Result -ne "PASS")) {
-    Write-Host "本机后端正常，问题在 HTTPS Origin / Cloudflare Tunnel / Pages 回源配置。" -ForegroundColor Yellow
+if ($local.Result -eq "PASS" -and ($origin.Result -ne "PASS" -or $gateway.Result -ne "PASS")) {
+    Write-Host "本机后端正常，问题在 HTTPS Origin / Cloudflare Pages Worker 回源配置。" -ForegroundColor Yellow
 }
 elseif ($local.Result -ne "PASS") {
     Write-Host "本机后端未正常运行，先检查计划任务和后端日志。" -ForegroundColor Red
 }
-elseif ($pages.Result -ne "PASS") {
+elseif ($gateway.Result -ne "PASS") {
     Write-Host "Pages 到后端的链路异常；重点核对 BACKEND_BASE_URL 和 PROXY_SECRET。" -ForegroundColor Yellow
 }
 else {

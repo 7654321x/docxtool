@@ -136,7 +136,6 @@ def submit_account(
         raise ValueError("WPS_LOGIN_MODE_INVALID")
     account = account_from_response(
         response,
-        origin=api.origin,
         username=validated_username,
         password=validated_password,
         device_key=device_key,

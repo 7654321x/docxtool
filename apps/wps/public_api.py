@@ -36,15 +36,15 @@ def _config_path() -> Path:
     return root / "client-config.json"
 
 
-def _validate_server_origin(origin: str) -> str:
-    if not isinstance(origin, str):
-        raise RuntimeError("WPS_SERVER_ORIGIN_INVALID")
-    parsed = urlparse(origin)
+def _validate_public_api_base_url(base_url: str) -> str:
+    if not isinstance(base_url, str):
+        raise RuntimeError("WPS_PUBLIC_API_BASE_URL_INVALID")
+    parsed = urlparse(base_url)
     is_loopback = parsed.scheme == "http" and parsed.hostname in {"127.0.0.1", "localhost"}
     try:
         _ = parsed.port
     except ValueError as exc:
-        raise RuntimeError("WPS_SERVER_ORIGIN_INVALID") from exc
+        raise RuntimeError("WPS_PUBLIC_API_BASE_URL_INVALID") from exc
     if (
         not parsed.hostname
         or parsed.username is not None
@@ -54,20 +54,24 @@ def _validate_server_origin(origin: str) -> str:
         or parsed.query
         or parsed.fragment
     ):
-        raise RuntimeError("WPS_SERVER_ORIGIN_INVALID")
-    return origin.rstrip("/")
+        raise RuntimeError("WPS_PUBLIC_API_BASE_URL_INVALID")
+    return base_url.rstrip("/")
 
 
-def configured_server_origin() -> str:
+def configured_public_api_base_url() -> str:
     value = json.loads(_config_path().read_text(encoding="utf-8"))
-    if not isinstance(value, dict) or set(value) != {"server_origin"}:
+    if not isinstance(value, dict) or set(value) != {"public_api_base_url"}:
         raise RuntimeError("WPS_CLIENT_CONFIG_INVALID")
-    return _validate_server_origin(value["server_origin"])
+    return _validate_public_api_base_url(value["public_api_base_url"])
 
 
 class WpsPublicApi:
-    def __init__(self, origin: str = "", timeout: int = DEFAULT_TIMEOUT_SECONDS) -> None:
-        self.origin = _validate_server_origin(origin) if origin else configured_server_origin()
+    def __init__(self, public_api_base_url: str = "", timeout: int = DEFAULT_TIMEOUT_SECONDS) -> None:
+        self.public_api_base_url = (
+            _validate_public_api_base_url(public_api_base_url)
+            if public_api_base_url
+            else configured_public_api_base_url()
+        )
         self.timeout = timeout
 
     def _request(self, method: str, path: str, payload=None, *, token: str = "", request_id: str = "") -> dict:
@@ -85,7 +89,7 @@ class WpsPublicApi:
             headers["Authorization"] = f"Bearer {token}"
         if request_id:
             headers["X-DocxTool-Request-Id"] = request_id
-        request = Request(self.origin + API_PREFIX + path, data=body, headers=headers, method=method)
+        request = Request(self.public_api_base_url + API_PREFIX + path, data=body, headers=headers, method=method)
         try:
             response = urlopen(request, timeout=self.timeout)
             raw = response.read()

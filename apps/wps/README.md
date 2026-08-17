@@ -160,10 +160,10 @@ pwsh -NoProfile -Command "python apps/wps/main.py control"
 构建用户端无控制台 GUI 单文件 EXE：
 
 ```pwsh
-pwsh -NoProfile -File apps/wps/scripts/build-exe.ps1 -ServerOrigin https://docxtool.pages.dev
+pwsh -NoProfile -File apps/wps/scripts/build-exe.ps1 -PublicApiBaseUrl https://docx.toolpp.cn
 ```
 
-生产构建只接受不带路径的 HTTPS Origin；正式 EXE 使用唯一的 Cloudflare Pages Origin，而不是服务器 IP 或独立 WPS 域名。脚本固定 PyInstaller 6.22.0，生成 `dist/wps/DocxToolWps.exe`，并自动从仓库外目录执行冻结态 `verify`。源码 `client-config.json` 继续使用本机开发地址，正式 Origin 只在构建时注入。模板数据库保持在用户本机数据目录，不进入 EXE 或发布包。
+生产构建只接受不带路径的 HTTPS 公网 API 基址；正式 EXE 使用唯一的 Cloudflare Gateway `https://docx.toolpp.cn`，而不是服务器 IP、Origin 域名或独立 WPS 域名。脚本固定 PyInstaller 6.22.0，生成 `dist/wps/DocxToolWps.exe`，并自动从仓库外目录执行冻结态 `verify`。源码 `client-config.json` 继续使用本机开发地址，正式公网 API 基址只在构建时注入。模板数据库保持在用户本机数据目录，不进入 EXE 或发布包。
 
 ## 验证
 
