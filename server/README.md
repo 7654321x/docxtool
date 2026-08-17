@@ -1,4 +1,4 @@
-# DocxTool 后端部署包
+# DocxTool 5.5.5 后端部署包
 
 此目录是可上传到服务器的后端运行包。它只包含 Python 后端、运行资源、依赖锁、启动脚本和脱敏配置模板。
 
@@ -91,7 +91,9 @@ curl http://127.0.0.1:9527/health
 curl https://origin.toolpp.cn/health
 ```
 
-安全组仅开放 TCP 80、443；不得开放 9527。安装脚本只写入 `/etc/nginx/sites-available/docxtool`
+安全组仅开放 TCP 80、443；不得开放 9527。生产 Backend 除 `/health`、`/ready` 外的业务请求必须
+带正确的 `X-Proxy-Secret`，因此不能绕过 `https://docx.toolpp.cn` 直接调用 Origin。Nginx 模板使用
+`client_max_body_size 0`，真正的上传限制只由 `MAX_UPLOAD_SIZE_MB` 决定。安装脚本只写入 `/etc/nginx/sites-available/docxtool`
 及其启用链接，不替换默认站点或其他 Nginx 站点。Certbot 通过 Nginx 集成管理
 `origin.toolpp.cn` 的 Let's Encrypt 证书和自动续期。
 
@@ -100,7 +102,8 @@ curl https://origin.toolpp.cn/health
 浏览器和 WPS 客户端只访问 `https://docx.toolpp.cn`。Pages Worker 回源到 Nginx 的 HTTPS
 Origin `https://origin.toolpp.cn`（DNS A 记录为 `43.130.232.115`）；不要公开或使用服务器 IP、
 `8080` 或 `9527`。不使用 Cloudflare Tunnel、Quick Tunnel 或 `trycloudflare.com`。
-`origin.toolpp.cn` 只配置 IPv4 A 记录 `43.130.232.115`，不配置 AAAA。
+`origin.toolpp.cn` 只配置 IPv4 A 记录 `43.130.232.115`，不配置 AAAA。Cloudflare 可以接受终端用户的 IPv4
+或 IPv6 请求；WPS 不得强制 IPv4，也不得在网关失败后直连 Origin 或裸 IP。
 
 Pages 只配置两个 Secret：
 

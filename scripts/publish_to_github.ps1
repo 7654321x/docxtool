@@ -170,6 +170,7 @@ $requiredFiles = @(
     "apps/wps/tests/test_command_monitor.py",
     "apps/wps/tests/test_host_bridge.py",
     "apps/wps/tests/test_account_store.py",
+    "apps/wps/tests/test_account_store_migration.py",
     "apps/wps/tests/test_launcher_auth.py",
     "apps/wps/tests/test_login_window.py",
     "apps/wps/tests/test_windows_startup.py",

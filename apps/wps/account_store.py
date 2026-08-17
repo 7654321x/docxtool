@@ -171,6 +171,7 @@ def _remove_legacy_server_origin_column(
         "auto_login",
         "updated_at",
     )
+    conn.execute("DROP TABLE IF EXISTS local_account_rebuilt")
     _create_local_account_table(conn, "local_account_rebuilt")
     column_list = ",".join(retained)
     conn.execute(
@@ -188,6 +189,7 @@ def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(str(path))
     conn.row_factory = sqlite3.Row
     try:
+        conn.execute("BEGIN IMMEDIATE")
         _create_local_account_table(conn, "local_account")
         columns = {
             str(row["name"])
@@ -243,7 +245,8 @@ def _connect() -> sqlite3.Connection:
                 "ADD COLUMN document_name TEXT NOT NULL DEFAULT ''"
             )
         conn.commit()
-    except sqlite3.Error:
+    except Exception:
+        conn.rollback()
         conn.close()
         raise
     return conn

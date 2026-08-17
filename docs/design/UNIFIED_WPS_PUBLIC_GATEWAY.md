@@ -66,10 +66,45 @@ WPS 的 `client-config.json` 从 `server_origin` 改为只含 `public_api_base_u
 - Pages 不配置 `PROXY_SECRET` 或与后端不一致时，Worker/后端按既有鉴权逻辑拒绝请求。
 - 迁移遇到无法读取的本机数据库时沿用现有隔离逻辑，不猜测或伪造账户状态。
 
+## 5.5.5 网关收尾约束
+
+### 客户端网络
+
+`origin.toolpp.cn` 仅有 IPv4 A 记录不影响客户端到公共网关的地址族选择。WPS 统一使用标准
+`urllib.request` 访问 `https://docx.toolpp.cn`，由操作系统和 Cloudflare 正常选择 IPv4 或 IPv6；
+不得手工解析地址、强制 IPv4，或在网关失败后尝试 Origin、裸 IP 或 Tunnel。
+
+### 后端网关鉴权
+
+生产模式下，`PROXY_SECRET` 是 Backend 唯一的公共网关凭据。所有业务 HTTP 请求在统一
+`Handler -> handler_lifecycle` 入口处校验该请求头，未通过时返回
+`PUBLIC_GATEWAY_REQUIRED` / HTTP 403，业务分派不会执行。仅 `/health` 和 `/ready` 是部署
+所需的直连 Origin 检查路径；`/version`、`/api/*`、`/admin/*` 和 `/wps-api/v1/*` 都不例外。
+开发模式不施加该网关门禁。File API 原有的文件操作授权保留为第二层独立检查。
+
+### 真实客户端地址
+
+只有 loopback Nginx 被配置为可信代理时才读取转发头。可信请求严格按
+`CF-Connecting-IP -> X-Forwarded-For（最左合法项）-> X-Real-IP -> socket peer` 取值，IPv4
+与 IPv6 无优先级差异，避免 Cloudflare 的 IPv4 回源地址覆盖 IPv6 终端用户地址。
+
+### 部署包
+
+Nginx 只负责反向代理，因此使用 `client_max_body_size 0`；唯一上传大小策略仍是 Backend 的
+`MAX_UPLOAD_SIZE_MB`。Ubuntu 应用目录固定为 `/opt/docxtool`，安装器不提供与 systemd
+路径冲突的自定义目录参数。根 `.env.example` 保持本地开发语义；`server/.env.example` 是必须
+明确填写密钥后才能启动的生产配置。根包和 `server/` 部署包的项目版本及本轮 Gateway 源码必须一致。
+
+### WPS 本地账户迁移
+
+旧 `local_account.server_origin` 列只在一次性重建中移除。创建临时表、复制、删除旧表、重命名和
+其他本地 schema 更新处于同一个 `BEGIN IMMEDIATE` 事务内；任意 Python 或 SQLite 异常都回滚并
+继续抛出，不保留半迁移表或静默降级路径。
+
 ## 验证与停止条件
 
 - WPS 公共 API、账户存储/迁移、登录、心跳、授权与结果上报聚焦 pytest；WPS Node 入口。
-- Worker 路由测试、Web/Pages 包装测试、服务器安装脚本语法检查、文档架构测试与
-  `verify_changed.ps1`。
+- Worker 路由测试、网关入口/客户端 IP 测试、服务器包版本与 Gateway 源码 parity 测试、安装脚本
+  语法检查、文档架构测试与 `verify_changed.ps1`。
 - 真实 WPS、Pages Secret、DNS、Nginx/Certbot 证书和 Ubuntu 连通性均为独立线上验证，不由本地测试宣称通过。
 - 若发现现有 WPS 路由无法经 Worker 转发，或 `origin.toolpp.cn` 已被其他生产服务占用，停止实施并报告。

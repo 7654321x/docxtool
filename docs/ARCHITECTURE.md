@@ -105,6 +105,9 @@ Web 服务使用内存任务队列、daemon worker 和 spawn 子进程。数据�
 `:443` 提供 TLS，Certbot 管理 Let's Encrypt 证书，
 反向代理到仅监听 `127.0.0.1:9527` 的 DocxTool。WPS 的正式 EXE 只持有一个
 `public_api_base_url=https://docx.toolpp.cn`，不会了解 Origin、服务器 IP、Tunnel 或公网 `:9527`。
+终端用户到 Public Gateway 可使用 IPv4 或 IPv6；Backend 生产模式下只有 `/health` 和 `/ready` 可直连
+Origin 检查，所有其他 HTTP 请求必须携带 Worker 注入的 `X-Proxy-Secret`。Nginx 不复制上传业务限制，
+使用 `client_max_body_size 0`，`MAX_UPLOAD_SIZE_MB` 是唯一上传大小配置。
 
 ## SDK 与宿主适配链
 

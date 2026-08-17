@@ -21,6 +21,10 @@ Browser / WPS
 - Python 固定监听 `127.0.0.1:9527`；安全组仅开放 TCP `80`、`443`，不开放 `9527`。
 - Cloudflare 到 Origin 通过 IPv4 HTTPS 回源。终端用户到 Cloudflare 可以使用 IPv4 或 IPv6；
   Origin 的 IPv4-only 状态不改变客户端网络策略。
+- Nginx 使用 `client_max_body_size 0`，不复制 Backend 的上传大小策略；唯一上传限制为
+  `MAX_UPLOAD_SIZE_MB`。
+- 生产 Backend 除 `/health`、`/ready` 外的所有 HTTP 请求必须带正确的 `X-Proxy-Secret`；
+  统一入口拒绝 Origin 直连业务请求。
 - 不改变 Pages Worker 的 `BACKEND_BASE_URL`、`PROXY_SECRET`、WPS 公网地址或任何业务 API。
 
 ## 安装接口与数据流

@@ -21,6 +21,11 @@ Browser / WPS
 `https://origin.toolpp.cn` 仅用于 Pages Worker 回源。WPS、浏览器、EXE、浏览器代码和 Worker
 源码都不使用服务器 IP、Origin 直连、Tunnel URL 或公网 `9527`。
 
+终端用户到 `https://docx.toolpp.cn` 可使用 IPv4 或 IPv6。生产 Backend 的统一 HTTP 网关门禁使用
+唯一的 `PROXY_SECRET`：除 `/health`、`/ready` 外，任何 `/version`、`/api/*`、`/admin/*` 或
+`/wps-api/v1/*` 业务请求缺少或使用错误的 `X-Proxy-Secret` 都返回 HTTP 403；不根据 User-Agent、Host、IP、
+Referer 或 Origin 放行。
+
 ## Ubuntu 后端
 
 DocxTool 只监听：

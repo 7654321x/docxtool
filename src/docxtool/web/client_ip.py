@@ -15,14 +15,6 @@ def is_ip(value: str) -> bool:
     return True
 
 
-def is_ipv4(value: str) -> bool:
-    """Return whether the input string is a valid IPv4 address."""
-    try:
-        return isinstance(ipaddress.ip_address(str(value or "").strip()), ipaddress.IPv4Address)
-    except ValueError:
-        return False
-
-
 def split_ip_header(value: str) -> list[str]:
     """Split a comma-separated proxy IP header into trimmed non-empty candidates."""
     return [part.strip() for part in str(value or "").split(",") if part.strip()]
@@ -55,15 +47,13 @@ def client_ip(headers, client_address, *, trust_proxy_headers: bool, trusted_pro
     ):
         return socket_ip
 
-    candidates = []
-    for name in ("X-Forwarded-For", "X-Real-IP", "CF-Connecting-IP"):
-        candidates.extend(split_ip_header(headers.get(name, "") if headers else ""))
-    if socket_ip:
-        candidates.append(socket_ip)
-    for ip in candidates:
-        if is_ipv4(ip):
-            return ip
-    for ip in candidates:
-        if is_ip(ip):
-            return ip
+    cf_connecting_ip = headers.get("CF-Connecting-IP", "") if headers else ""
+    if is_ip(cf_connecting_ip):
+        return cf_connecting_ip
+    for value in split_ip_header(headers.get("X-Forwarded-For", "") if headers else ""):
+        if is_ip(value):
+            return value
+    x_real_ip = headers.get("X-Real-IP", "") if headers else ""
+    if is_ip(x_real_ip):
+        return x_real_ip
     return socket_ip

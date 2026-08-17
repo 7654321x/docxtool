@@ -72,6 +72,21 @@ def test_dispatch_http_method_parses_path_and_dispatches_route_path() -> None:
         handler,
         route_path=lambda path: f"route:{path}",
         dispatch=lambda _handler, parsed, path: calls.append((parsed.query, path)),
+        authorize=lambda path: path == "route:/api/task/abc",
     )
 
     assert calls == [("x=1", "route:/api/task/abc")]
+
+
+def test_dispatch_http_method_stops_before_dispatch_when_gateway_denies() -> None:
+    handler = FakeHandler(path="/wps-api/v1/auth/login")
+    calls: list[str] = []
+
+    dispatch_http_method(
+        handler,
+        route_path=lambda path: path,
+        authorize=lambda path: calls.append(f"authorize:{path}") or False,
+        dispatch=lambda *_args: calls.append("dispatch"),
+    )
+
+    assert calls == ["authorize:/wps-api/v1/auth/login"]

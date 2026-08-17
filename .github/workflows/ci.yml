@@ -187,11 +187,13 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Create project virtual environment
+      - name: Create server package virtual environment
+        working-directory: server
         run: python -m venv .venv
 
-      - name: Check Windows startup entry point
+      - name: Check Windows server package startup entry point
         shell: pwsh
+        working-directory: server
         run: pwsh -NoProfile -File .\run.ps1 -CheckOnly
 
   windows-wps-release:

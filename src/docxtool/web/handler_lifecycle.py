@@ -36,7 +36,11 @@ def dispatch_http_method(
     *,
     route_path: Callable[[str], str],
     dispatch: Callable[[Any, Any, str], None],
+    authorize: Callable[[str], bool],
 ) -> None:
-    """传入 handler、路径规范化和分派回调，解析当前路径并执行对应分派。"""
+    """传入 handler、路径规范化、网关鉴权和分派回调，解析后按顺序执行。"""
     parsed = urlparse(handler.path)
-    dispatch(handler, parsed, route_path(parsed.path))
+    path = route_path(parsed.path)
+    if not authorize(path):
+        return
+    dispatch(handler, parsed, path)

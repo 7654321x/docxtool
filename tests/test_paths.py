@@ -38,7 +38,7 @@ def test_user_data_root_stays_out_of_site_packages(monkeypatch, tmp_path: Path) 
 
 
 def test_windows_launcher_accepts_supported_python_versions() -> None:
-    script = PROJECT_ROOT.joinpath("run.ps1").read_text(encoding="utf-8")
+    script = PROJECT_ROOT.joinpath("server", "run.ps1").read_text(encoding="utf-8")
 
     assert "(3, 8) <= sys.version_info[:2] < (3, 11)" in script
     assert 'foreach ($selector in @("-3.8", "-3.9", "-3.10"))' in script
@@ -46,7 +46,7 @@ def test_windows_launcher_accepts_supported_python_versions() -> None:
 
 
 def test_windows_launcher_has_windows_7_schtasks_fallback() -> None:
-    script = PROJECT_ROOT.joinpath("run.ps1").read_text(encoding="utf-8")
+    script = PROJECT_ROOT.joinpath("server", "run.ps1").read_text(encoding="utf-8")
 
     assert "Test-ModernScheduledTaskSupport" in script
     assert "schtasks.exe /Create" in script

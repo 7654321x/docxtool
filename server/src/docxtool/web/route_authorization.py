@@ -10,6 +10,24 @@ from collections.abc import Callable
 from typing import Any
 
 
+DIRECT_ORIGIN_PATHS = frozenset({"/health", "/ready"})
+
+
+def gateway_request_authorized(
+    headers,
+    path: str,
+    *,
+    production_mode: bool,
+    proxy_secret: str,
+    compare_secret: Callable[[str, str], bool],
+) -> bool:
+    """Return whether one request may enter the backend outside development mode."""
+    if not production_mode or path in DIRECT_ORIGIN_PATHS:
+        return True
+    token = headers.get("X-Proxy-Secret", "") if headers else ""
+    return compare_secret(token, proxy_secret)
+
+
 def set_preset_mutation_context(handler, context: dict[str, object]) -> None:
     """传入 handler 和 preset 上下文，写入旧 handler 属性并返回 None。"""
     handler._preset_owner_id = context["owner_id"]

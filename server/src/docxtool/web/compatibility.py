@@ -688,6 +688,16 @@ def _file_api_authorized(headers, client_address=None) -> bool:
         compare_secret=_compare_secret,
     )
 
+def _gateway_request_authorized(headers, path: str) -> bool:
+    """兼容旧入口：校验请求是否经公共网关进入生产 Backend。"""
+    return _route_gateway_request_authorized(
+        headers,
+        path,
+        production_mode=PRODUCTION_MODE,
+        proxy_secret=PROXY_SECRET,
+        compare_secret=_compare_secret,
+    )
+
 def _decode_format_config(headers) -> dict:
     """兼容旧入口：解码请求头中的格式配置并返回已验证配置。"""
     return _format_decode_format_config(
@@ -1014,6 +1024,7 @@ COMPATIBILITY_EXPORTS = (
     "_admin_session_from_headers",
     "_admin_request_context",
     "_file_api_authorized",
+    "_gateway_request_authorized",
     "_decode_format_config",
     "_validate_requested_processing_mode",
     "_admin_hidden_input",

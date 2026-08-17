@@ -80,7 +80,7 @@ pwsh -NoProfile -File .\scripts\verify_changed.ps1
 2. 已被 Git 跟踪的修改必须保留在原路径，不能移动到回收站制造干净工作树。
 3. 发布前阅读 `docs/RELEASE.md`，使用 `scripts/publish_to_github.ps1`，不得直接把整棵工作树推送到 GitHub。
 4. 发布必须先同步并核验本地分支基线，再在当前本地仓库按允许清单暂存并创建提交，最后通过 SSH 推送；禁止只在临时克隆中生成远端提交。
-5. 普通发布使用脚本默认流程；只有用户明确要求时才使用 `-Verify` 完整验收。版本以 `src/docxtool/version.py`、`pyproject.toml` 和 `CHANGELOG.md` 为准；当前文档基线为 5.5.0。
+5. 普通发布使用脚本默认流程；只有用户明确要求时才使用 `-Verify` 完整验收。版本以 `src/docxtool/version.py`、`pyproject.toml` 和 `CHANGELOG.md` 为准；当前文档基线为 5.5.5。
 6. 新增或移动正式源码、资源、测试和文档时，第一时间同步写入 `scripts/publish_to_github.ps1` 的允许清单；新增长期文档还必须立即登记到 `docs/README.md`，不得等到发布前再补。
 
 ## 当前生产回源事实
@@ -95,6 +95,9 @@ pwsh -NoProfile -File .\scripts\verify_changed.ps1
 - Origin TLS 证书：`origin.toolpp.cn` 使用 Let's Encrypt 免费证书，由 Ubuntu 上的
   `certbot --nginx -d origin.toolpp.cn` 获取并部署给 Nginx；Certbot 定时任务自动续期。
 - Origin DNS 仅使用 A 记录 `43.130.232.115`，当前不配置 AAAA。
+- 浏览器和 WPS 到 `https://docx.toolpp.cn` 可使用 IPv4 或 IPv6；WPS 不得因 Origin IPv4-only 而强制 IPv4。
+- `PRODUCTION_MODE=true` 时，除 `/health`、`/ready` 外的所有 Backend HTTP 业务请求必须由 Worker 注入正确的 `X-Proxy-Secret`；Origin 直连不提供业务旁路。
+- Nginx 使用 `client_max_body_size 0`，上传大小只由 Backend 的 `MAX_UPLOAD_SIZE_MB` 决定。
 
 ## 重复问题处理
 

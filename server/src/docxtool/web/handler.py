@@ -42,25 +42,37 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         """无需传入数据，解析当前路径并分派 GET 路由。"""
         _handler_lifecycle_dispatch_http_method(
-            self, route_path=_route_path, dispatch=_dispatch_get
+            self,
+            route_path=_route_path,
+            dispatch=_dispatch_get,
+            authorize=self._require_public_gateway,
         )
 
     def do_POST(self):
         """无需传入数据，解析当前路径并分派 POST 路由。"""
         _handler_lifecycle_dispatch_http_method(
-            self, route_path=_route_path, dispatch=_dispatch_post
+            self,
+            route_path=_route_path,
+            dispatch=_dispatch_post,
+            authorize=self._require_public_gateway,
         )
 
     def do_PUT(self):
         """无需传入数据，解析当前路径并分派 PUT 路由。"""
         _handler_lifecycle_dispatch_http_method(
-            self, route_path=_route_path, dispatch=_dispatch_put
+            self,
+            route_path=_route_path,
+            dispatch=_dispatch_put,
+            authorize=self._require_public_gateway,
         )
 
     def do_DELETE(self):
         """无需传入数据，解析当前路径并分派 DELETE 路由。"""
         _handler_lifecycle_dispatch_http_method(
-            self, route_path=_route_path, dispatch=_dispatch_delete
+            self,
+            route_path=_route_path,
+            dispatch=_dispatch_delete,
+            authorize=self._require_public_gateway,
         )
 
     def _serve_html(self):
@@ -313,6 +325,13 @@ class Handler(BaseHTTPRequestHandler):
     def _require_file_api(self) -> bool:
         """无需传入数据，校验文件 API 访问权限；失败时发送代理密钥错误。"""
         return _route_auth_require_file_api(self, file_api_authorized=_file_api_authorized)
+
+    def _require_public_gateway(self, path: str) -> bool:
+        """传入规范化路径，拒绝绕过公共网关的生产业务请求。"""
+        if _gateway_request_authorized(self.headers, path):
+            return True
+        self._json_error("PUBLIC_GATEWAY_REQUIRED", "需要通过公共网关访问", 403)
+        return False
 
     def _parsed_url(self):
         """无需传入数据，返回当前请求路径解析后的 URL 对象。"""

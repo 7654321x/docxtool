@@ -55,7 +55,6 @@ from docxtool.web.client_ip import (
     client_ip as _client_ip_from_headers,
     compare_secret as _client_compare_secret,
     is_ip as _client_is_ip,
-    is_ipv4 as _client_is_ipv4,
     split_ip_header as _client_split_ip_header,
     trusted_proxy_source as _client_trusted_proxy_source,
 )
@@ -335,6 +334,7 @@ from docxtool.web.request_utils import (
 )
 from docxtool.web.request_params import request_params as _request_params_from_parts
 from docxtool.web.route_authorization import (
+    gateway_request_authorized as _route_gateway_request_authorized,
     require_admin as _route_auth_require_admin,
     require_admin_post as _route_auth_require_admin_post,
     require_file_api as _route_auth_require_file_api,
@@ -751,7 +751,6 @@ _html_escape = _request_html_escape
 _redact_sensitive_log = _log_redact_sensitive_log
 
 _split_ip_header = _client_split_ip_header
-_is_ipv4 = _client_is_ipv4
 
 
 
@@ -849,6 +848,7 @@ from docxtool.web.compatibility import (
     _admin_session_from_headers,
     _admin_request_context,
     _file_api_authorized,
+    _gateway_request_authorized,
     _decode_format_config,
     _validate_requested_processing_mode,
     _admin_hidden_input,
@@ -969,6 +969,7 @@ _COMPATIBILITY_FUNCTIONS = (
     _admin_session_from_headers,
     _admin_request_context,
     _file_api_authorized,
+    _gateway_request_authorized,
     _decode_format_config,
     _validate_requested_processing_mode,
     _admin_hidden_input,

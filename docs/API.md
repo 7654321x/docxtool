@@ -31,6 +31,10 @@ PORT=9527 python3 server.py
 
 文件接口始终要求请求头携带 `X-Proxy-Secret`，值必须等于服务端环境变量 `PROXY_SECRET`。不要依赖 `Host`、`localhost`、服务器本机地址或来源 IP 作为鉴权依据。
 
+生产模式下，统一 HTTP 入口还要求除 `GET /health`、`GET /ready` 外的所有请求携带正确的
+`X-Proxy-Secret`；缺少或错误时返回 `403 PUBLIC_GATEWAY_REQUIRED`，业务路由不会执行。开发模式允许
+本地请求按既有开发配置进入。此网关门禁与文件接口自身的 `PROXY_REQUIRED` 鉴权是两层独立责任。
+
 后端启动前必须显式设置：
 
 ```bash
@@ -691,7 +695,7 @@ Worker 还会代理管理页面直接使用的后端路径：
 ## 7. 部署注意事项
 
 1. 生产环境必须设置不同的随机 `ADMIN_TOKEN` 和 `PROXY_SECRET`；缺失、弱密钥或示例值会拒绝启动。
-2. Python 只监听 `127.0.0.1:9527`。网页、管理后台和 WPS 公网 API 的唯一入口是 `https://docx.toolpp.cn`；不要对公网开放 DocxTool `8080` 或 `9527`，也不要保留服务器 IP 或 HTTP 管理入口。
+2. Python 只监听 `127.0.0.1:9527`。网页、管理后台和 WPS 公网 API 的唯一入口是 `https://docx.toolpp.cn`；终端用户可使用 IPv4 或 IPv6。不要对公网开放 DocxTool `8080` 或 `9527`，也不要保留服务器 IP 或 HTTP 管理入口。
 3. Cloudflare Pages 前端访问同源 `/api/*`、`/admin/*` 与 `/wps-api/v1/*`。Worker 通过 HTTPS `BACKEND_BASE_URL=https://origin.toolpp.cn` 注入 `X-Proxy-Secret`，经 Nginx `:443` 回源到本机后端。`origin.toolpp.cn` 仅有 DNS A 记录 `43.130.232.115`，不配置 AAAA；Nginx 的 Let's Encrypt 证书由 Certbot 管理。`BACKEND_BASE_URL` 必须是无路径、无凭据、非 IP 字面量的 HTTPS hostname。
 4. Pages 只配置 `BACKEND_BASE_URL` 与 `PROXY_SECRET` 两个 Secret；后者必须与后端环境变量 `PROXY_SECRET` 完全一致。浏览器、WPS 客户端和仓库源码都不能持有这些服务间凭据，也不启用 Cloudflare Access Service Token。
 5. 推荐部署细节见 [`DEPLOY.md`](DEPLOY.md)。
