@@ -1,46 +1,69 @@
-# Ubuntu 直接 HTTPS Origin 部署设计
+# Ubuntu Nginx HTTPS Origin 部署设计
 
 ## 目标
 
-为 Ubuntu 22.04 提供与现有 Pages Worker 两变量契约一致的后端部署路径：
+Ubuntu 生产环境只保留一条正式反向代理路径：Nginx 以 `origin.toolpp.cn` 的 HTTPS
+终点反向代理到 loopback DocxTool 服务。证书由 Certbot 的 Nginx 集成申请、写入配置并自动续期。
 
 ```text
-浏览器 / WPS
+Browser / WPS
   -> https://docx.toolpp.cn (Cloudflare Pages)
   -> Pages Worker + X-Proxy-Secret
-  -> https://origin.toolpp.cn (DNS A: 43.130.232.115; Caddy)
+  -> https://origin.toolpp.cn (A -> 43.130.232.115)
+  -> Nginx :443
   -> http://127.0.0.1:9527 (DocxTool)
 ```
 
-不使用 Quick Tunnel、`trycloudflare.com`、Cloudflare Access Service Token 或公网
-`9527`。`origin.<domain>` 仅是 Pages Worker 的回源地址，不是用户入口。
+## 已确认事实与非目标
 
-## 约束
+- 生产服务器只使用 Nginx；不安装、配置、启动或保留第二套生产反向代理路径。
+- `origin.toolpp.cn` 当前仅配置 A 记录 `43.130.232.115`，不配置 AAAA 记录。
+- Python 固定监听 `127.0.0.1:9527`；安全组仅开放 TCP `80`、`443`，不开放 `9527`。
+- Cloudflare 到 Origin 通过 IPv4 HTTPS 回源。终端用户到 Cloudflare 可以使用 IPv4 或 IPv6；
+  Origin 的 IPv4-only 状态不改变客户端网络策略。
+- 不改变 Pages Worker 的 `BACKEND_BASE_URL`、`PROXY_SECRET`、WPS 公网地址或任何业务 API。
 
-- `docx.toolpp.cn` 使用 CNAME 指向现有 Pages 项目，并先在 Pages
-  项目的 Custom domains 中关联。
-- `origin.toolpp.cn` 使用 A 记录指向 `43.130.232.115`；Caddy 管理它的 HTTPS 证书。
-- 后端 `.env` 不保存 Origin IP 或 `BACKEND_BASE_URL`；它保存用户入口 Origin、
-  两个不同随机密钥和 loopback 监听配置。
-- `PROXY_SECRET` 是唯一 Pages 到后端的共享鉴别值，必须同时作为 Pages Secret 和
-  后端 `.env` 值，绝不写入仓库或部署包。
-- Linux 包以 `/opt/docxtool` 运行，使用专用低权限 `docxtool` 用户与 systemd。
+## 安装接口与数据流
 
-## 安装与更新
+`linux/install.sh` 接收 `--origin-host` 与 `--certbot-email`。它安装 `nginx`、`certbot`、
+`python3-certbot-nginx` 和 Python 运行依赖，将模板渲染到
+`/etc/nginx/sites-available/docxtool`，并启用该站点：
 
-部署包中的 `linux/install.sh` 接收 `--origin-host`，安装 Python 3.10、Caddy、
-虚拟环境、systemd 单元和 Caddy 配置。替换已有 `/etc/caddy/Caddyfile` 必须显式
-传入 `--replace-caddyfile`，避免覆盖服务器其他站点。
+```nginx
+server {
+    listen 80;
+    server_name origin.toolpp.cn;
 
-更新时脚本同步源码和锁文件，但排除 `.env`、`var/` 和 `.venv/`；运行数据和密钥
-不会被新包覆盖。首次安装只创建 `.env` 模板，不会输出、生成或提交真实密钥，也
-不会在模板密钥仍存在时启动后端。
+    location / {
+        proxy_pass http://127.0.0.1:9527;
+        # Host、X-Forwarded-* 与连接语义由模板统一定义。
+    }
+}
+```
 
-## 验收
+脚本先执行 `nginx -t` 并启用 Nginx，再执行：
 
-1. `systemctl status docxtool` 为 `active (running)`。
-2. `curl http://127.0.0.1:9527/health` 返回 HTTP 200。
-3. `curl https://origin.toolpp.cn/health` 经 Caddy 返回 HTTP 200。
-4. Pages 环境只包含 `BACKEND_BASE_URL` 和 `PROXY_SECRET`；用户经
-   `https://docx.toolpp.cn` 完成 Web、管理后台和 WPS 冒烟。
-5. 公网安全组仅开放 Caddy 所需的 TCP 80、443；不开放 9527。
+```bash
+certbot --nginx --non-interactive --agree-tos \
+  --email <运维邮箱> --keep-until-expiring -d origin.toolpp.cn
+```
+
+Certbot 是证书文件路径、Nginx TLS 块与续期的唯一 owner；部署包不复制私钥或硬编码证书路径。
+安装脚本只覆盖专属 `docxtool` site，不重写默认站点或其他业务站点。
+
+## 失败边界
+
+- `origin.toolpp.cn` 未解析到服务器、TCP 80 未开放、Nginx 配置非法或证书签发失败时，安装立即失败，
+  不宣称 HTTPS 可用。
+- `.env` 仍为示例密钥时，安装完成后不启动 `docxtool`，由运维填写密钥后显式启动。
+- 不为裸 IP、公开 `9527`、Tunnel 或备用 Origin 保留兼容分支。
+
+## 验收与停止条件
+
+1. `nginx -t` 与 `systemctl is-active nginx` 成功。
+2. `certbot certificates --cert-name origin.toolpp.cn` 显示有效证书。
+3. `curl http://127.0.0.1:9527/health` 与 `curl https://origin.toolpp.cn/health` 返回 HTTP 200。
+4. `ss -ltn` 不显示 `0.0.0.0:9527` 或 `[::]:9527`。
+5. 窄部署架构测试断言脚本、模板和正式文档只描述 Nginx、Certbot、IPv4 Origin 与 loopback 后端。
+
+真实 DNS、Certbot 与服务器连通性需要在 Ubuntu 环境人工验收；本地静态测试不能替代它们。

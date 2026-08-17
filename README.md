@@ -42,17 +42,9 @@ Windows PowerShell 7：
 
 ```pwsh
 Copy-Item .env.example .env
-pwsh -NoProfile -File .\run.ps1 -InstallDependencies
-pwsh -NoProfile -File .\run.ps1
+.\.venv\Scripts\python.exe -m pip install --require-hashes -r requirements.lock
+.\.venv\Scripts\python.exe server.py
 ```
-
-安装为当前 Windows 用户的计划任务：
-
-```pwsh
-pwsh -NoProfile -File .\run.ps1 -InstallService
-```
-
-Windows 7 兼容检查使用系统 Windows PowerShell 5.1；其他开发和发布命令固定使用 PowerShell 7。
 
 Linux：
 
@@ -62,10 +54,10 @@ python3 -m venv .venv
 pip install --require-hashes -r requirements.lock
 export ADMIN_TOKEN='换成正式长随机密钥'
 export PROXY_SECRET='换成正式长随机密钥'
-./run.sh
+python3 server.py
 ```
 
-Web 服务默认监听 `127.0.0.1:9527`。生产环境中浏览器与 WPS 客户端只访问 `https://docx.toolpp.cn`；Cloudflare Pages Worker 注入 `X-Proxy-Secret` 后经 `https://origin.toolpp.cn`（DNS 指向 `43.130.232.115`）回源到 Caddy，再反向代理到 loopback 后端。不开放 `8080` 或 `9527`，也不使用 Cloudflare Tunnel 或 Access。完整部署说明见 [`docs/DEPLOY.md`](docs/DEPLOY.md)。
+Web 服务默认监听 `127.0.0.1:9527`。生产环境中浏览器与 WPS 客户端只访问 `https://docx.toolpp.cn`；Cloudflare Pages Worker 注入 `X-Proxy-Secret` 后经 `https://origin.toolpp.cn`（仅配置 IPv4 A 记录 `43.130.232.115`）回源到 Nginx，再反向代理到 loopback 后端。Nginx 通过 Certbot 管理 Let's Encrypt HTTPS 证书。不开放 `8080` 或 `9527`，也不使用 Cloudflare Tunnel 或 Access。完整部署说明见 [`docs/DEPLOY.md`](docs/DEPLOY.md)。
 
 ## 运行数据
 

@@ -90,10 +90,11 @@ pwsh -NoProfile -File .\scripts\verify_changed.ps1
 - 公网母域名：`toolpp.cn`。
 - 后端 HTTPS Origin：`origin.toolpp.cn`。
 - 后端服务器公网 IP：`43.130.232.115`。
-- 后端服务仅监听：`127.0.0.1:9527`，由反向代理提供公网 HTTPS。
+- 后端服务仅监听：`127.0.0.1:9527`，由 Nginx 提供公网 HTTPS；不开放 `9527`。
 - 公网用户入口：`https://docx.toolpp.cn`；WPS 和浏览器只使用该地址，不直连 Origin。
 - Origin TLS 证书：`origin.toolpp.cn` 使用 Let's Encrypt 免费证书，由 Ubuntu 上的
   `certbot --nginx -d origin.toolpp.cn` 获取并部署给 Nginx；Certbot 定时任务自动续期。
+- Origin DNS 仅使用 A 记录 `43.130.232.115`，当前不配置 AAAA。
 
 ## 重复问题处理
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## 5.5.5 - 2026-08-17
+
+- Unified the Ubuntu production reverse-proxy path on Nginx and removed the obsolete Caddy deployment configuration.
+- Made the Linux installer configure the DocxTool Nginx site and obtain and renew the Let's Encrypt certificate through Certbot's Nginx integration.
+- Documented the IPv4-only Origin (`origin.toolpp.cn` → `43.130.232.115`), loopback-only Python service (`127.0.0.1:9527`), and the requirement to expose only ports 80 and 443 publicly.
+- Added focused deployment-contract coverage to prevent the Nginx, Origin, TLS, and loopback security facts from drifting.
+
 ## 5.5.0 - 2026-08-16
 
 - Fixed CI fresh-interpreter imports by installing the current package before Python tests, while retaining the locked dependency install.

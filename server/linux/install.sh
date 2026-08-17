@@ -5,14 +5,16 @@ set -Eeuo pipefail
 
 APP_DIR="/opt/docxtool"
 ORIGIN_HOST=""
-REPLACE_CADDYFILE=false
+CERTBOT_EMAIL=""
+NGINX_SITE_AVAILABLE="/etc/nginx/sites-available/docxtool"
+NGINX_SITE_ENABLED="/etc/nginx/sites-enabled/docxtool"
 
 usage() {
     cat <<'EOF'
-Usage: sudo ./linux/install.sh --origin-host origin.example.com [--app-dir /opt/docxtool] [--replace-caddyfile]
+Usage: sudo ./linux/install.sh --origin-host origin.example.com --certbot-email ops@example.com [--app-dir /opt/docxtool]
 
-Installs the loopback-only DocxTool service and a Caddy HTTPS reverse proxy.
---replace-caddyfile is required before replacing an existing Caddyfile.
+Installs the loopback-only DocxTool service and its Nginx HTTPS reverse-proxy site.
+Certbot obtains and manages the Let's Encrypt certificate through the Nginx integration.
 EOF
 }
 
@@ -22,13 +24,13 @@ while (($#)); do
             ORIGIN_HOST="${2:-}"
             shift 2
             ;;
+        --certbot-email)
+            CERTBOT_EMAIL="${2:-}"
+            shift 2
+            ;;
         --app-dir)
             APP_DIR="${2:-}"
             shift 2
-            ;;
-        --replace-caddyfile)
-            REPLACE_CADDYFILE=true
-            shift
             ;;
         -h|--help)
             usage
@@ -50,37 +52,24 @@ if [[ ! "$ORIGIN_HOST" =~ ^[A-Za-z0-9.-]+$ || "$ORIGIN_HOST" != *.* ]]; then
     echo "--origin-host must be a DNS hostname, for example origin.example.com." >&2
     exit 2
 fi
+if [[ ! "$CERTBOT_EMAIL" =~ ^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$ ]]; then
+    echo "--certbot-email must be a valid operations email address." >&2
+    exit 2
+fi
 if [[ "$APP_DIR" != /opt/* ]]; then
     echo "--app-dir must stay under /opt." >&2
     exit 2
 fi
 
 SOURCE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
-if [[ ! -f "$SOURCE_DIR/server.py" || ! -f "$SOURCE_DIR/requirements.lock" ]]; then
+if [[ ! -f "$SOURCE_DIR/server.py" || ! -f "$SOURCE_DIR/requirements.lock" || ! -f "$SOURCE_DIR/linux/nginx-docxtool.conf" ]]; then
     echo "Run from the unpacked DocxTool server package." >&2
-    exit 1
-fi
-
-if [[ -s /etc/caddy/Caddyfile && "$REPLACE_CADDYFILE" != true ]]; then
-    echo "Existing /etc/caddy/Caddyfile detected. Re-run with --replace-caddyfile after confirming it does not serve another site." >&2
     exit 1
 fi
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y python3.10 python3.10-venv python3-pip rsync \
-    debian-keyring debian-archive-keyring apt-transport-https curl gpg
-
-if ! command -v caddy >/dev/null 2>&1; then
-    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
-        | gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
-        -o /etc/apt/sources.list.d/caddy-stable.list
-    chmod o+r /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-    chmod o+r /etc/apt/sources.list.d/caddy-stable.list
-    apt-get update
-    apt-get install -y caddy
-fi
+apt-get install -y python3.10 python3.10-venv python3-pip rsync nginx certbot python3-certbot-nginx
 
 if ! id -u docxtool >/dev/null 2>&1; then
     useradd --system --home-dir "$APP_DIR" --shell /usr/sbin/nologin docxtool
@@ -107,11 +96,17 @@ if [[ ! -f "$APP_DIR/.env" ]]; then
     install -o docxtool -g docxtool -m 0600 "$APP_DIR/.env.example" "$APP_DIR/.env"
 fi
 
-sed "s|__ORIGIN_HOST__|$ORIGIN_HOST|g" "$APP_DIR/linux/Caddyfile" > /etc/caddy/Caddyfile
+sed "s|__ORIGIN_HOST__|$ORIGIN_HOST|g" "$APP_DIR/linux/nginx-docxtool.conf" > "$NGINX_SITE_AVAILABLE"
+ln -sfn "$NGINX_SITE_AVAILABLE" "$NGINX_SITE_ENABLED"
+nginx -t
+systemctl enable --now nginx
+systemctl reload nginx
+certbot --nginx --non-interactive --agree-tos --email "$CERTBOT_EMAIL" --keep-until-expiring -d "$ORIGIN_HOST"
+nginx -t
+systemctl reload nginx
+
 install -m 0644 "$APP_DIR/linux/docxtool.service" /etc/systemd/system/docxtool.service
 systemctl daemon-reload
-systemctl enable caddy
-systemctl restart caddy
 systemctl enable docxtool
 
 if grep -Eq '^(ADMIN_TOKEN|PROXY_SECRET)=($|change-me-)' "$APP_DIR/.env"; then
@@ -128,4 +123,4 @@ else
     echo "DocxTool started. Check: systemctl status docxtool --no-pager"
 fi
 
-echo "Caddy origin: https://$ORIGIN_HOST -> http://127.0.0.1:9527"
+echo "Nginx origin: https://$ORIGIN_HOST -> http://127.0.0.1:9527"

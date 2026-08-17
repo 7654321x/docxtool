@@ -101,7 +101,8 @@ Web 服务使用内存任务队列、daemon worker 和 spawn 子进程。数据�
 回源；Worker 只注入 `X-Proxy-Secret` 与 `X-Docxtool-Proxy`，WPS Bearer 会话仅在 WPS
 路由透传。
 
-`origin.toolpp.cn` 的 DNS A 记录指向 `43.130.232.115`。服务器由 Caddy 在 `:443` 提供 TLS，
+`origin.toolpp.cn` 的 DNS A 记录指向 `43.130.232.115`，当前不配置 AAAA。服务器由 Nginx 在
+`:443` 提供 TLS，Certbot 管理 Let's Encrypt 证书，
 反向代理到仅监听 `127.0.0.1:9527` 的 DocxTool。WPS 的正式 EXE 只持有一个
 `public_api_base_url=https://docx.toolpp.cn`，不会了解 Origin、服务器 IP、Tunnel 或公网 `:9527`。
 

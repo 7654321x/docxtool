@@ -1,6 +1,6 @@
 # 公文排版 Web 服务接口说明
 
-本文档说明 `server.py` 暴露的 HTTP 接口，适用于本机开发和 Cloudflare Pages Worker → HTTPS Origin → Caddy 的生产代理接入。
+本文档说明 `server.py` 暴露的 HTTP 接口，适用于本机开发和 Cloudflare Pages Worker → HTTPS Origin → Nginx 的生产代理接入。
 
 维护约定：后续只要修改 `server.py` 中的接口路径、请求方法、鉴权方式、请求头、请求体、响应字段、状态码或错误码，必须同步更新本文档，并与代码一起提交推送。
 
@@ -692,7 +692,7 @@ Worker 还会代理管理页面直接使用的后端路径：
 
 1. 生产环境必须设置不同的随机 `ADMIN_TOKEN` 和 `PROXY_SECRET`；缺失、弱密钥或示例值会拒绝启动。
 2. Python 只监听 `127.0.0.1:9527`。网页、管理后台和 WPS 公网 API 的唯一入口是 `https://docx.toolpp.cn`；不要对公网开放 DocxTool `8080` 或 `9527`，也不要保留服务器 IP 或 HTTP 管理入口。
-3. Cloudflare Pages 前端访问同源 `/api/*`、`/admin/*` 与 `/wps-api/v1/*`。Worker 通过 HTTPS `BACKEND_BASE_URL=https://origin.toolpp.cn` 注入 `X-Proxy-Secret`，经 Caddy `:443` 回源到本机后端。`origin.toolpp.cn` 的 DNS A 记录为 `43.130.232.115`；`BACKEND_BASE_URL` 必须是无路径、无凭据、非 IP 字面量的 HTTPS hostname。
+3. Cloudflare Pages 前端访问同源 `/api/*`、`/admin/*` 与 `/wps-api/v1/*`。Worker 通过 HTTPS `BACKEND_BASE_URL=https://origin.toolpp.cn` 注入 `X-Proxy-Secret`，经 Nginx `:443` 回源到本机后端。`origin.toolpp.cn` 仅有 DNS A 记录 `43.130.232.115`，不配置 AAAA；Nginx 的 Let's Encrypt 证书由 Certbot 管理。`BACKEND_BASE_URL` 必须是无路径、无凭据、非 IP 字面量的 HTTPS hostname。
 4. Pages 只配置 `BACKEND_BASE_URL` 与 `PROXY_SECRET` 两个 Secret；后者必须与后端环境变量 `PROXY_SECRET` 完全一致。浏览器、WPS 客户端和仓库源码都不能持有这些服务间凭据，也不启用 Cloudflare Access Service Token。
 5. 推荐部署细节见 [`DEPLOY.md`](DEPLOY.md)。
 6. `var/logs/` 和 `var/outputs/` 是运行时目录，仓库中只保留 `.gitkeep`，实际日志和生成文件不应提交。

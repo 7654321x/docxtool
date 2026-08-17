@@ -100,7 +100,7 @@ WPS / 浏览器
 └─ https://docx.toolpp.cn
    └─ Cloudflare Pages Worker
       └─ https://origin.toolpp.cn (DNS A: 43.130.232.115)
-         └─ Caddy :443
+         └─ Nginx :443
             └─ 127.0.0.1:9527 DocxTool Python 后端
                ├─ 现有网页接口（var/data/stats.db）
                └─ /wps-api/v1/*（var/data/wps_plugin.db）
@@ -527,7 +527,7 @@ POST /wps-api/v1/format/result
 ### 15.1 第一阶段
 
 - 保留现有 Python 后端内部端口 `9527`。
-- Cloudflare Pages 是唯一公网入口；Worker 注入 `X-Proxy-Secret` 后经 `https://origin.toolpp.cn`、Caddy 回源到 loopback 后端，不启用 Cloudflare Tunnel 或 Access。
+- Cloudflare Pages 是唯一公网入口；Worker 注入 `X-Proxy-Secret` 后经 `https://origin.toolpp.cn`、Nginx 回源到 loopback 后端，不启用 Cloudflare Tunnel 或 Access。
 - 新增 `/wps-api/v1/*` 路由，不开放新的公网端口。
 - 网页业务继续使用 `stats.db`。
 - WPS 业务使用 `wps_plugin.db`。

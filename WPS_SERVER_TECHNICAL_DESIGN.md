@@ -199,7 +199,7 @@ https://docx.toolpp.cn
         ↓ Cloudflare Pages Worker
         ↓ HTTPS + X-Proxy-Secret
 https://origin.toolpp.cn (DNS A: 43.130.232.115)
-        ↓ Caddy :443
+        ↓ Nginx :443
 http://127.0.0.1:9527
         ↓
 DocxTool Python
@@ -277,17 +277,17 @@ TRUSTED_PROXY_IPS=127.0.0.1,::1
 
 ### 迁移、发布与验收
 
-部署文档移除 Nginx、服务器 `8080`、裸 HTTP 管理入口和 Tunnel 生产路径；运维侧需自行：
+部署文档只保留 Nginx、并移除服务器 `8080`、裸 HTTP 管理入口和 Tunnel 生产路径；运维侧需自行：
 
-1. 让 `origin.toolpp.cn` 的 DNS A 记录指向 `43.130.232.115`，并由 Caddy 将 `:443` 反向代理到 `127.0.0.1:9527`；
+1. 让 `origin.toolpp.cn` 的 DNS A 记录指向 `43.130.232.115`（不配置 AAAA），并由 Nginx 将 `:443` 反向代理到 `127.0.0.1:9527`，使用 Certbot 管理 Let's Encrypt 证书；
 2. 在 Pages 中只配置 `BACKEND_BASE_URL=https://origin.toolpp.cn` 与 `PROXY_SECRET` 两个 Secret，并按后端配置重启服务；
 3. 不启用 Cloudflare Tunnel、Zero Trust / Access，也不创建 Access Service Token；
-4. 关闭服务器对 DocxTool `8080` 与 `9527` 的公网入站规则，只开放 Caddy 所需的 `80`、`443`；
+4. 关闭服务器对 DocxTool `8080` 与 `9527` 的公网入站规则，只开放 Nginx 所需的 `80`、`443`；
 5. 用 `https://docx.toolpp.cn` 验证用户、管理员登录/登出、会话、管理写操作和 WPS 公网 API。
 
 代码验收覆盖 Worker 覆盖 `X-Proxy-Secret`、缺失两项配置、管理员 Cookie/相对跳转、WPS Bearer
 透传及 allowlist；后端覆盖严格布尔解析、HTTPS 同源管理员配置和生产文件 API 边界。
-完整自动化验证不等同于真实 Caddy、DNS 或 Pages 线上联通；后者必须在配置完成后
+完整自动化验证不等同于真实 Nginx/Certbot、DNS 或 Pages 线上联通；后者必须在配置完成后
 人工验证。
 
 ## 非目标

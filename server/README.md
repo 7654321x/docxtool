@@ -59,11 +59,11 @@
 
 ## Ubuntu 22.04 首次部署
 
-Ubuntu 使用 Python 3.10、systemd 和 Caddy。解压后进入 `server` 目录，以 root 权限运行：
+Ubuntu 使用 Python 3.10、systemd、Nginx 与 Certbot。解压后进入 `server` 目录，以 root 权限运行：
 
 ```bash
 chmod +x linux/install.sh
-sudo ./linux/install.sh --origin-host origin.toolpp.cn --replace-caddyfile
+sudo ./linux/install.sh --origin-host origin.toolpp.cn --certbot-email ops@example.com
 ```
 
 该脚本会把服务安装到 `/opt/docxtool`，但不会写入真实密钥。它首次创建
@@ -91,14 +91,16 @@ curl http://127.0.0.1:9527/health
 curl https://origin.toolpp.cn/health
 ```
 
-安全组仅开放 TCP 80、443；不得开放 9527。`--replace-caddyfile` 会替换现有 Caddy
-配置，因此服务器已有其他 Caddy 站点时先停止，改为合并站点块后再安装。
+安全组仅开放 TCP 80、443；不得开放 9527。安装脚本只写入 `/etc/nginx/sites-available/docxtool`
+及其启用链接，不替换默认站点或其他 Nginx 站点。Certbot 通过 Nginx 集成管理
+`origin.toolpp.cn` 的 Let's Encrypt 证书和自动续期。
 
 ## Cloudflare Pages
 
-浏览器和 WPS 客户端只访问 `https://docx.toolpp.cn`。Pages Worker 回源到 Caddy 的 HTTPS
+浏览器和 WPS 客户端只访问 `https://docx.toolpp.cn`。Pages Worker 回源到 Nginx 的 HTTPS
 Origin `https://origin.toolpp.cn`（DNS A 记录为 `43.130.232.115`）；不要公开或使用服务器 IP、
 `8080` 或 `9527`。不使用 Cloudflare Tunnel、Quick Tunnel 或 `trycloudflare.com`。
+`origin.toolpp.cn` 只配置 IPv4 A 记录 `43.130.232.115`，不配置 AAAA。
 
 Pages 只配置两个 Secret：
 

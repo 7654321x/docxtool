@@ -3,7 +3,7 @@
 ## 目标
 
 将 WPS 与浏览器的正式公网入口统一为 `https://docx.toolpp.cn`，由 Pages Worker 使用唯一的
-`BACKEND_BASE_URL=https://origin.toolpp.cn` 回源到 Caddy。`origin.toolpp.cn` 的 DNS A 记录指向
+`BACKEND_BASE_URL=https://origin.toolpp.cn` 回源到 Nginx。`origin.toolpp.cn` 的 DNS A 记录指向
 `43.130.232.115`；Python 服务继续只监听 `127.0.0.1:9527`。
 
 ```text
@@ -11,7 +11,7 @@ WPS / Browser
   -> https://docx.toolpp.cn
   -> Cloudflare Pages Worker
   -> https://origin.toolpp.cn (DNS -> 43.130.232.115)
-  -> Caddy :443
+  -> Nginx :443
   -> 127.0.0.1:9527
   -> DocxTool
 ```
@@ -33,7 +33,7 @@ WPS / Browser
    `local_account` 表，保留账号、设备、DPAPI 密文、会话、偏好和待上报结果。
 3. 保持 Worker 的唯一 Origin 变量 `BACKEND_BASE_URL`，新增窄测试保证 WPS Bearer 转发、
    代理密钥重写和禁止硬编码 Origin IP。
-4. 将服务器诊断、部署说明和正式产品文档切换到 Pages Worker -> Caddy HTTPS Origin 拓扑，
+4. 将服务器诊断、部署说明和正式产品文档切换到 Pages Worker -> Nginx HTTPS Origin 拓扑，
    删除 Tunnel、nip.io 和历史 Pages 生产路径。
 5. 增加架构测试，限制 WPS 生产运行时代码只使用公共网关概念，禁止包含 Origin 域名、服务器 IP、
    nip.io、Tunnel URL 和公网 `:9527`。
@@ -43,7 +43,7 @@ WPS / Browser
 - 不修改 WPS 本地 Control Server、Importer、Recognition、Normalization、Engine 或 DOCX 处理协议。
 - 不上传 DOCX 至公网服务，不变更 WPS 公共 API 路径、请求体或 Bearer 会话协议。
 - 不新增直连、备用 Origin、裸 IP、Tunnel、重试到其他主机或高可用抽象。
-- 不执行 Cloudflare Secret、DNS、Caddy 或服务器上的外部配置变更；这些由部署步骤完成。
+- 不执行 Cloudflare Secret、DNS、Nginx 或服务器上的外部配置变更；这些由部署步骤完成。
 
 ## 契约与迁移
 
@@ -71,5 +71,5 @@ WPS 的 `client-config.json` 从 `server_origin` 改为只含 `public_api_base_u
 - WPS 公共 API、账户存储/迁移、登录、心跳、授权与结果上报聚焦 pytest；WPS Node 入口。
 - Worker 路由测试、Web/Pages 包装测试、服务器安装脚本语法检查、文档架构测试与
   `verify_changed.ps1`。
-- 真实 WPS、Pages Secret、DNS、Caddy 证书和 Ubuntu 连通性均为独立线上验证，不由本地测试宣称通过。
+- 真实 WPS、Pages Secret、DNS、Nginx/Certbot 证书和 Ubuntu 连通性均为独立线上验证，不由本地测试宣称通过。
 - 若发现现有 WPS 路由无法经 Worker 转发，或 `origin.toolpp.cn` 已被其他生产服务占用，停止实施并报告。

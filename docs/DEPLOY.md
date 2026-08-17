@@ -7,7 +7,7 @@ Browser / WPS
   -> https://docx.toolpp.cn
   -> Cloudflare Pages + Worker
   -> https://origin.toolpp.cn (DNS A -> 43.130.232.115)
-  -> Caddy :443
+  -> Nginx :443
   -> http://127.0.0.1:9527
   -> DocxTool Python
 ```
@@ -30,15 +30,15 @@ BIND_HOST=127.0.0.1
 PORT=9527
 ```
 
-Caddy 是唯一的公网 TLS 终点：`origin.toolpp.cn:443 -> 127.0.0.1:9527`。安全组仅开放 TCP
-80、443，不开放 `9527`。不使用 Cloudflare Tunnel、Quick Tunnel、`trycloudflare.com` 或
-Cloudflare Access。
+Nginx 是唯一的公网 TLS 终点：`origin.toolpp.cn:443 -> 127.0.0.1:9527`。Certbot 通过 Nginx
+集成申请、写入和续期 Let's Encrypt 证书。安全组仅开放 TCP 80、443，不开放 `9527`。不使用
+Cloudflare Tunnel、Quick Tunnel、`trycloudflare.com` 或 Cloudflare Access。
 
 首次部署包安装：
 
 ```bash
 chmod +x linux/install.sh
-sudo ./linux/install.sh --origin-host origin.toolpp.cn --replace-caddyfile
+sudo ./linux/install.sh --origin-host origin.toolpp.cn --certbot-email ops@example.com
 ```
 
 服务器 `/opt/docxtool/.env` 至少配置：
@@ -69,7 +69,10 @@ DNS 的唯一职责：
 | 记录 | 值 | 职责 |
 | --- | --- | --- |
 | `docx.toolpp.cn` | Pages 自定义域名 | 公共网关 |
-| `origin.toolpp.cn` A | `43.130.232.115` | Worker 回源定位 |
+| `origin.toolpp.cn` A | `43.130.232.115` | Worker IPv4 HTTPS 回源定位 |
+
+`origin.toolpp.cn` 当前不配置 AAAA 记录。Cloudflare 可以接受用户侧 IPv4 或 IPv6 请求，但回源
+固定使用 Origin 的 IPv4 A 记录；不得因 Origin IPv4-only 改写客户端网络策略。
 
 在 Pages 的 Production 环境只配置两个变量：
 
@@ -107,4 +110,4 @@ curl https://origin.toolpp.cn/health
 ```
 
 再通过 `https://docx.toolpp.cn` 验证网页、管理员登录与 WPS 登录/心跳/授权/结果上报。线上 DNS、
-Pages Secret、Caddy 证书和真实 WPS 冒烟不由本地自动化代替。
+Pages Secret、Nginx/Certbot 证书和真实 WPS 冒烟不由本地自动化代替。
