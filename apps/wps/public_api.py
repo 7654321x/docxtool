@@ -9,9 +9,12 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
+from docxtool.version import package_version
+
 API_PREFIX = "/wps-api/v1"
 API_VERSION = "wps-api-v1"
 DEFAULT_TIMEOUT_SECONDS = 8
+CLIENT_USER_AGENT = f"DocxToolWPS/{package_version()}"
 
 
 class PublicApiError(RuntimeError):
@@ -21,6 +24,11 @@ class PublicApiError(RuntimeError):
         self.status = status
         self.network = network
         super().__init__(code)
+
+
+def _cloudflare_client_blocked(raw: bytes, status: int) -> bool:
+    """Recognize Cloudflare's non-JSON browser-signature denial page."""
+    return status == 403 and b"error code: 1010" in raw.lower()
 
 
 def _config_path() -> Path:
@@ -64,7 +72,13 @@ class WpsPublicApi:
 
     def _request(self, method: str, path: str, payload=None, *, token: str = "", request_id: str = "") -> dict:
         body = None if payload is None else json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        headers = {"Accept": "application/json"}
+        headers = {
+            "Accept": "application/json",
+            # Cloudflare blocks the default Python-urllib signature before the
+            # Pages Worker can process a request. Keep an explicit, stable
+            # product identifier on every public WPS request instead.
+            "User-Agent": CLIENT_USER_AGENT,
+        }
         if body is not None:
             headers["Content-Type"] = "application/json"
         if token:
@@ -81,6 +95,12 @@ class WpsPublicApi:
             status = int(exc.code)
         except (URLError, TimeoutError, OSError) as exc:
             raise PublicApiError("WPS_PUBLIC_SERVER_UNAVAILABLE", "暂时无法连接 WPS 服务", network=True) from exc
+        if _cloudflare_client_blocked(raw, status):
+            raise PublicApiError(
+                "WPS_PUBLIC_CLIENT_BLOCKED",
+                "客户端请求被访问规则拦截，请更新客户端或联系管理员。",
+                status,
+            )
         try:
             envelope = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:

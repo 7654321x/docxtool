@@ -98,7 +98,7 @@ WPS 侧边栏
 ```text
 https://docxtool.pages.dev
 └─ Cloudflare Pages Worker
-   └─ Cloudflare Access → Cloudflare Tunnel
+   └─ Cloudflare Tunnel
       └─ 127.0.0.1:9527 DocxTool Python 后端
          ├─ 现有网页接口
          │  └─ var/data/stats.db
@@ -527,7 +527,7 @@ POST /wps-api/v1/format/result
 ### 15.1 第一阶段
 
 - 保留现有 Python 后端内部端口 `9527`。
-- Cloudflare Pages 是唯一公网入口；Worker 经 Cloudflare Access 和 Tunnel 回源到 loopback 后端。
+- Cloudflare Pages 是唯一公网入口；Worker 注入 `X-Proxy-Secret` 后经 Cloudflare Tunnel 回源到 loopback 后端，不启用 Cloudflare Access。
 - 新增 `/wps-api/v1/*` 路由，不开放新的公网端口。
 - 网页业务继续使用 `stats.db`。
 - WPS 业务使用 `wps_plugin.db`。

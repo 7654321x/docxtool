@@ -10,6 +10,7 @@ from apps.wps.account_runtime import (
     merge_account_snapshot,
 )
 from apps.wps.public_api import PublicApiError, WpsPublicApi
+from apps.wps.public_api import CLIENT_USER_AGENT
 
 
 class _Store:
@@ -311,6 +312,7 @@ def test_public_api_sends_bearer_and_request_id():
                 path=self.path,
                 authorization=self.headers.get("Authorization"),
                 request_id=self.headers.get("X-DocxTool-Request-Id"),
+                user_agent=self.headers.get("User-Agent"),
                 body=json.loads(self.rfile.read(length)),
             )
             body = json.dumps(
@@ -349,6 +351,7 @@ def test_public_api_sends_bearer_and_request_id():
     assert observed["path"] == "/wps-api/v1/format/authorize"
     assert observed["authorization"] == "Bearer session-token"
     assert observed["request_id"] == "pane-request-001"
+    assert observed["user_agent"] == CLIENT_USER_AGENT
 
 
 def test_public_api_rejects_a_mismatched_response_request_id(monkeypatch):
@@ -424,6 +427,24 @@ def test_public_api_network_failure_is_distinct():
         api.current_user("session-token")
     assert exc_info.value.code == "WPS_PUBLIC_SERVER_UNAVAILABLE"
     assert exc_info.value.network is True
+
+
+def test_public_api_names_cloudflare_browser_signature_denial(monkeypatch):
+    class Response:
+        status = 403
+
+        @staticmethod
+        def read():
+            return b"error code: 1010"
+
+    monkeypatch.setattr("apps.wps.public_api.urlopen", lambda *_args, **_kwargs: Response())
+    api = WpsPublicApi("http://127.0.0.1:9527")
+
+    with pytest.raises(PublicApiError) as exc_info:
+        api.current_user("session-token")
+
+    assert exc_info.value.code == "WPS_PUBLIC_CLIENT_BLOCKED"
+    assert exc_info.value.status == 403
 
 
 def test_public_api_rejects_insecure_public_origin():

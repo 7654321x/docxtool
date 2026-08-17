@@ -11,23 +11,71 @@ import winreg
 
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 VALUE_NAME = "DocxToolWps"
+STARTUP_ARGUMENT = "--startup"
+
+
+def _source_windowless_python() -> Path:
+    """Return the source-runtime executable that never allocates a console."""
+    executable = Path(sys.executable).resolve()
+    windowless = executable.with_name("pythonw.exe")
+    if not windowless.is_file():
+        raise OSError("WPS_STARTUP_PYTHONW_MISSING")
+    return windowless
+
+
+def _registered_startup_value():
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as key:
+            return winreg.QueryValueEx(key, VALUE_NAME)
+    except FileNotFoundError:
+        return None
+
+
+def _is_legacy_source_command(value: object) -> bool:
+    """Recognize only the older source launcher stored under our own Run value."""
+    if not isinstance(value, str):
+        return False
+    normalized = value.replace("/", "\\").casefold()
+    return "\\apps\\wps\\main.py" in normalized and STARTUP_ARGUMENT in normalized
 
 
 def launcher_command() -> str:
     if bool(getattr(sys, "frozen", False)):
-        parts = [str(Path(sys.executable).resolve()), "--startup"]
+        parts = [str(Path(sys.executable).resolve()), STARTUP_ARGUMENT]
     else:
-        parts = [str(Path(sys.executable).resolve()), str(Path(__file__).with_name("main.py")), "--startup"]
+        parts = [
+            str(_source_windowless_python()),
+            str(Path(__file__).with_name("main.py")),
+            STARTUP_ARGUMENT,
+        ]
     return subprocess.list2cmdline(parts)
 
 
 def is_enabled() -> bool:
-    try:
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as key:
-            value, value_type = winreg.QueryValueEx(key, VALUE_NAME)
-    except FileNotFoundError:
+    registered = _registered_startup_value()
+    if registered is None:
         return False
-    return value_type == winreg.REG_SZ and value == launcher_command()
+    value, value_type = registered
+    if value_type != winreg.REG_SZ or not isinstance(value, str):
+        return False
+    try:
+        return value == launcher_command() or _is_legacy_source_command(value)
+    except OSError:
+        return _is_legacy_source_command(value)
+
+
+def migrate_legacy_registration() -> bool:
+    """Replace the recognized Python-console startup value with the current launcher."""
+    registered = _registered_startup_value()
+    if registered is None:
+        return False
+    value, value_type = registered
+    if value_type != winreg.REG_SZ or not _is_legacy_source_command(value):
+        return False
+    if value == launcher_command():
+        return False
+    set_enabled(True)
+    return True
 
 
 def set_enabled(enabled: bool) -> None:

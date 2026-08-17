@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "docxtool"
+version = "5.5.0"
+description = "DOCX official-document formatting web service"
+requires-python = ">=3.8,<3.11"
+dependencies = [
+    "argon2-cffi==25.1.0",
+    "argon2-cffi-bindings==21.2.0",
+    "cffi==1.17.1",
+    "importlib-resources==6.4.5; python_version < '3.9'",
+    "jsonschema==4.23.0",
+    "lxml==6.1.1",
+    "pycparser==2.23",
+    "python-docx==1.1.2",
+    "typing-extensions==4.13.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "build==1.2.2.post1",
+    "pip-tools==7.4.1",
+    "PyMuPDF==1.24.11",
+    "pytest==8.3.5",
+    "ruff==0.11.0",
+]
+
+[project.scripts]
+docxtool-recognize = "docxtool.sdk.cli:recognize_main"
+docxtool-sdk = "docxtool.sdk.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+docxtool = ["resources/config/*.json", "resources/schemas/*.json"]

@@ -720,7 +720,7 @@ function makeTaskpaneHarness(initialState, {
       { name: "主标题", font: "方正小标宋简体", size: "二号", bold: false, pattern: "", indent: 0, align: "居中" },
       { name: "一级标题", font: "黑体", size: "三号", bold: false, pattern: "{a}、", indent: 2, align: "左对齐" },
       { name: "二级标题", font: "楷体_GB2312", size: "三号", bold: true, pattern: "（{b}）", indent: 2, align: "左对齐" },
-      { name: "三级标题", font: "仿宋_GB2312", size: "三号", bold: false, pattern: "{c}.", indent: 2, align: "左对齐" },
+      { name: "三级标题", font: "仿宋_GB2312", size: "三号", bold: true, pattern: "{c}.", indent: 2, align: "左对齐" },
       { name: "四级标题", font: "仿宋_GB2312", size: "三号", bold: false, pattern: "（{d}）", indent: 2, align: "左对齐" },
       { name: "正文", font: "仿宋_GB2312", size: "三号", bold: false, pattern: "", indent: 2, align: "两端对齐" },
       { name: "数字", font: "Times New Roman", bold: false },
@@ -771,7 +771,12 @@ function makeTaskpaneHarness(initialState, {
       logs.push(body);
       return response({ ok: true });
     }
-    bridgeCalls.push({ path, body, headers: options.headers || {} });
+    bridgeCalls.push({
+      path,
+      body,
+      cache: options.cache,
+      headers: options.headers || {},
+    });
     if (path === invalidJsonPath) {
       return { ok: true, status: 200, json: async () => { throw new Error("INVALID_JSON"); } };
     }

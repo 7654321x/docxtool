@@ -24,7 +24,6 @@ from PySide2.QtWidgets import (
 )
 
 from docxtool.wps_server.validation import (
-    WpsValidationError,
     validate_password,
     validate_username,
 )
@@ -32,6 +31,7 @@ from docxtool.wps_server.validation import (
 from .account_runtime import account_from_response, device_payload
 from .control.logging_adapter import log_event
 from .public_api import PublicApiError
+from .user_messages import user_message_for_error
 from . import windows_startup
 
 
@@ -101,18 +101,7 @@ def password_mask(visible: bool) -> str:
 
 
 def _friendly_error(exc: BaseException) -> str:
-    if isinstance(exc, PublicApiError):
-        messages = {
-            "INVALID_CREDENTIALS": "账号或密码错误",
-            "SESSION_EXPIRED": "登录已过期，请重新登录",
-            "ACCOUNT_DISABLED": "账号已停用",
-            "DEVICE_DISABLED": "当前设备已停用",
-            "WPS_PUBLIC_SERVER_UNAVAILABLE": "服务器暂时无法连接，请检查网络后重试。",
-        }
-        return messages.get(exc.code, "登录失败，请稍后重试。")
-    if isinstance(exc, (WpsValidationError, ValueError)):
-        return str(exc)
-    return "登录失败，请稍后重试。"
+    return user_message_for_error(exc)
 
 
 def submit_account(

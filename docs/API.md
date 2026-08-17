@@ -692,8 +692,8 @@ Worker 还会代理管理页面直接使用的后端路径：
 
 1. 生产环境必须设置不同的随机 `ADMIN_TOKEN` 和 `PROXY_SECRET`；缺失、弱密钥或示例值会拒绝启动。
 2. Python 只监听 `127.0.0.1:9527`。网页、管理后台和 WPS 公网 API 的唯一入口是 `https://docxtool.pages.dev`；不要对公网开放 DocxTool `8080` 或 `9527`，也不要保留服务器 IP 或 HTTP 管理入口。
-3. Cloudflare Pages 前端访问同源 `/api/*`、`/admin/*` 与 `/wps-api/v1/*`。Worker 通过 HTTPS `BACKEND_BASE_URL=https://<PRIVATE_ORIGIN_HOST>` 注入 Cloudflare Access Service Token 和 `X-Proxy-Secret`，再经 Cloudflare Tunnel 访问本机后端。
-4. `BACKEND_BASE_URL`、`PROXY_SECRET`、`CF_ACCESS_CLIENT_ID` 和 `CF_ACCESS_CLIENT_SECRET` 只配置为 Pages Secret；浏览器、WPS 客户端和仓库源码都不能持有这些服务间凭据。
+3. Cloudflare Pages 前端访问同源 `/api/*`、`/admin/*` 与 `/wps-api/v1/*`。Worker 通过 HTTPS `BACKEND_BASE_URL` 注入 `X-Proxy-Secret`，再经 Cloudflare Tunnel 访问本机后端。`BACKEND_BASE_URL` 必须是实际可用的 HTTPS hostname，但不要求用户拥有自有域名。
+4. Pages 只配置 `BACKEND_BASE_URL` 与 `PROXY_SECRET` 两个 Secret；后者必须与后端环境变量 `PROXY_SECRET` 完全一致。浏览器、WPS 客户端和仓库源码都不能持有这些服务间凭据，也不启用 Cloudflare Access Service Token。
 5. 推荐部署细节见 [`DEPLOY.md`](DEPLOY.md)。
 6. `var/logs/` 和 `var/outputs/` 是运行时目录，仓库中只保留 `.gitkeep`，实际日志和生成文件不应提交。
 7. `var/data/stats.db` 是源码树运行时 SQLite 数据库位置，不应提交到仓库。若根目录已有旧版 `stats.db` 且未设置 `DATABASE_PATH`，后端会继续使用旧库，迁移需人工停服务后执行。仅解析默认路径不会创建数据库目录，首次实际连接时才会创建父目录；wheel 安装后默认运行数据根不在 `site-packages`。

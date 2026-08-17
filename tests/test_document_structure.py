@@ -123,6 +123,23 @@ def test_no_letterhead_and_title_date_is_not_signature():
     assert structure.signature is None
 
 
+def test_meeting_title_metadata_belongs_to_document_title_structure():
+    data = DocumentData(paragraphs=[
+        paragraph("年度重点工作报告", "title"),
+        paragraph("（2026年8月27日）", "meeting_title_meta"),
+        paragraph("在全市重点工作会议上", "meeting_title_meta"),
+        paragraph("正文", "body"),
+    ])
+
+    structure = analyze_document_structure(data)
+
+    assert structure.title is not None
+    assert [item.kind for item in structure.title.metadata_elements] == [
+        ElementKind.TITLE_METADATA,
+        ElementKind.TITLE_METADATA,
+    ]
+
+
 def test_body_date_does_not_form_signature_and_unknown_is_preserved():
     data = DocumentData(paragraphs=[
         paragraph("标题", "title"),

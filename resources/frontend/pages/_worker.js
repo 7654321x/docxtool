@@ -170,19 +170,11 @@ async function proxyApi(request, env, url) {
 
     const backendBase = String(env.BACKEND_BASE_URL || "").trim().replace(/\/+$/, "");
     const proxySecret = String(env.PROXY_SECRET || "").trim();
-    const accessClientId = String(env.CF_ACCESS_CLIENT_ID || "").trim();
-    const accessClientSecret = String(env.CF_ACCESS_CLIENT_SECRET || "").trim();
     if (!backendBase) {
       return jsonError("BACKEND_NOT_CONFIGURED", "Cloudflare Pages env BACKEND_BASE_URL is not configured", 500);
     }
     if (!proxySecret) {
       return jsonError("PROXY_SECRET_NOT_CONFIGURED", "Cloudflare Pages env PROXY_SECRET is not configured", 500);
-    }
-    if (!accessClientId) {
-      return jsonError("CF_ACCESS_CLIENT_ID_NOT_CONFIGURED", "Cloudflare Pages env CF_ACCESS_CLIENT_ID is not configured", 500);
-    }
-    if (!accessClientSecret) {
-      return jsonError("CF_ACCESS_CLIENT_SECRET_NOT_CONFIGURED", "Cloudflare Pages env CF_ACCESS_CLIENT_SECRET is not configured", 500);
     }
 
     let backendOrigin;
@@ -241,8 +233,6 @@ async function proxyApi(request, env, url) {
     }
     headers.set("X-Proxy-Secret", proxySecret);
     headers.set("X-Docxtool-Proxy", "cloudflare-pages");
-    headers.set("CF-Access-Client-Id", accessClientId);
-    headers.set("CF-Access-Client-Secret", accessClientSecret);
     headers.set("X-Forwarded-Host", url.host);
     headers.set("X-Forwarded-Proto", "https");
     if (clientIp) {

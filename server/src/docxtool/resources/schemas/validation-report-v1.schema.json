@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docxtool.local/schemas/validation-report-v1.schema.json",
+  "title": "DocxTool ValidationReport v1",
+  "description": "Text-free schema and semantic validation result.",
+  "type": "object",
+  "required": ["valid", "errors", "warnings"],
+  "properties": {
+    "valid": { "type": "boolean" },
+    "errors": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/issue" }
+    },
+    "warnings": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/issue" }
+    }
+  },
+  "$defs": {
+    "issue": {
+      "type": "object",
+      "required": ["code", "path", "severity", "detail"],
+      "properties": {
+        "code": { "type": "string", "minLength": 1 },
+        "path": { "type": "string", "minLength": 1 },
+        "severity": { "enum": ["error", "warning"] },
+        "detail": {
+          "type": "object",
+          "additionalProperties": {
+            "type": ["string", "number", "integer", "boolean", "null", "array"]
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

@@ -41,6 +41,7 @@ def test_verify_files_requires_new_bootstrap_files(monkeypatch, tmp_path):
         "account_runtime.py",
         "format_profile_store.py",
         "public_api.py",
+        "user_messages.py",
         "login_window.py",
         "desktop_runtime.py",
         "windows_startup.py",
@@ -85,7 +86,7 @@ def test_taskpane_scrolls_content_without_moving_header():
     assert 'load("./reader/reader-client.js?v=2")' in source
     assert 'load("./reader/reader-ui.js?v=7")' in source
     assert 'load("./format-config.js?v=2")' in source
-    assert 'load("./taskpane.js?v=24")' in source
+    assert 'load("./taskpane.js?v=25")' in source
 
 def test_taskpane_format_settings_opens_the_central_dialog():
     root = Path(__file__).resolve().parents[1]
@@ -589,6 +590,7 @@ def test_publish_addin_updates_only_docxtool_entry(tmp_path, monkeypatch):
     publish_path.write_text(
         "<jsplugins>"
         '<jspluginonline name="another-addin" type="wps" url="http://example.test/" />'
+        '<jspluginonline name="docxtool-wps-trial" type="wps" url="http://127.0.0.1:3890/" />'
         '<jspluginonline name="docxtool-wps-app" type="wps" url="http://127.0.0.1:3999/" />'
         '<jspluginonline name="docxtool-wps-app" type="wps" url="http://127.0.0.1:4000/" />'
         "</jsplugins>",
@@ -602,6 +604,7 @@ def test_publish_addin_updates_only_docxtool_entry(tmp_path, monkeypatch):
     root = ElementTree.parse(publish_path).getroot()
     entries = list(root)
     assert any(node.get("name") == "another-addin" for node in entries)
+    assert not any(node.get("name") == "docxtool-wps-trial" for node in entries)
     docxtool = [node for node in entries if node.get("name") == "docxtool-wps-app"]
     assert len(docxtool) == 1
     assert docxtool[0].attrib == {
@@ -618,6 +621,7 @@ def test_unpublish_addin_removes_only_docxtool_entries(tmp_path, monkeypatch):
     publish_path.write_text(
         "<jsplugins>"
         '<jspluginonline name="another-addin" type="wps" url="http://example.test/" />'
+        '<jspluginonline name="docxtool-wps-trial" type="wps" url="http://127.0.0.1:3890/" />'
         '<jspluginonline name="docxtool-wps-app" type="wps" url="http://127.0.0.1:3889/" />'
         '<jspluginonline name="docxtool-wps-app" type="wps" url="http://127.0.0.1:3999/" />'
         "</jsplugins>",
@@ -707,6 +711,48 @@ def test_main_closing_login_window_stops_before_start(monkeypatch):
 
     assert wps_main.run_desktop(wps_main.DEFAULT_PORT) == 0
     assert calls == ["unpublish"]
+
+
+def test_single_instance_conflict_is_shown_without_an_unhandled_exception(monkeypatch):
+    application = type("Application", (), {})()
+    calls = []
+
+    class Instance:
+        def acquire(self):
+            raise RuntimeError("WPS_SINGLE_INSTANCE_LISTEN_FAILED")
+
+    monkeypatch.setattr("apps.wps.desktop_runtime.ensure_application", lambda: application)
+    monkeypatch.setattr("apps.wps.desktop_runtime.SingleInstance", Instance)
+    monkeypatch.setattr(
+        "apps.wps.desktop_runtime.show_startup_error",
+        lambda exc: calls.append(str(exc)),
+    )
+
+    assert wps_main.run_desktop(wps_main.DEFAULT_PORT) == 1
+    assert calls == ["WPS_SINGLE_INSTANCE_LISTEN_FAILED"]
+
+
+def test_frozen_launcher_migrates_legacy_startup_before_login(monkeypatch):
+    application = type("Application", (), {})()
+    instance = type("Instance", (), {"acquire": lambda self: True})()
+    calls = []
+    monkeypatch.setattr("apps.wps.desktop_runtime.ensure_application", lambda: application)
+    monkeypatch.setattr("apps.wps.desktop_runtime.SingleInstance", lambda: instance)
+    monkeypatch.setattr(wps_main, "FROZEN", True)
+    monkeypatch.setattr(wps_main, "configure_wps_logging", lambda _root: calls.append("logging"))
+    monkeypatch.setattr(
+        wps_main.windows_startup,
+        "migrate_legacy_registration",
+        lambda: calls.append("migrate") or True,
+    )
+    monkeypatch.setattr(wps_main, "log_event", lambda *_args, **_kwargs: calls.append("log"))
+    monkeypatch.setattr(wps_main, "_unpublish_addin", lambda: calls.append("unpublish"))
+    monkeypatch.setattr(wps_main, "WpsPublicApi", lambda: "api")
+    monkeypatch.setattr(wps_main, "resolve_startup_account", lambda *_args, **_kwargs: {})
+
+    assert wps_main.run_desktop(wps_main.DEFAULT_PORT) == 0
+    assert calls[:4] == ["logging", "migrate", "log", "unpublish"]
+    assert calls[-1] == "log"  # 登录窗口关闭事件。
 
 def test_main_starts_services_only_after_login_returns_an_account(monkeypatch):
     calls = []

@@ -129,6 +129,20 @@ def test_soft_break_decision_uses_structural_evidence_without_final_type() -> No
     assert not _soft_break_decision(["普通正文第一行", "普通正文第二行"])
 
 
+def test_soft_break_splits_complete_front_meeting_metadata_profile() -> None:
+    """标题、括号日期和会议说明同时成立时才拆文首软换行。"""
+    assert _soft_break_decision([
+        "年度重点工作报告",
+        "（2026年8月27日）",
+        "在全市重点工作会议上",
+    ])
+    assert not _soft_break_decision([
+        "年度重点工作报告",
+        "（2026年8月27日）",
+        "后续正文已经开始并说明具体工作要求。",
+    ])
+
+
 def test_structural_key_value_line_uses_injected_boundary_evidence() -> None:
     """键值边界判断接收责任单位和冒号标签回调，只返回软换行边界事实。"""
     assert is_structural_key_value_line(
@@ -370,6 +384,36 @@ def test_inline_organization_label_and_body_is_not_split(tmp_path) -> None:
     assert len(blocks) == 1
     assert blocks[0].type_id == "body"
     assert blocks[0].recognized_text == text
+
+
+def test_soft_broken_front_meeting_metadata_is_not_downgraded_to_body(tmp_path) -> None:
+    source = tmp_path / "front-meeting-metadata.docx"
+    document = Document()
+    paragraph = document.add_paragraph()
+    paragraph.add_run("年度重点工作报告")
+    paragraph.add_run().add_break(WD_BREAK.LINE)
+    paragraph.add_run("（2026年8月27日）")
+    paragraph.add_run().add_break(WD_BREAK.LINE)
+    paragraph.add_run("在全市重点工作会议上")
+    document.add_paragraph("现将有关工作情况报告如下。")
+    document.save(source)
+
+    plan = recognize_docx(
+        source,
+        processing_mode="structural",
+        recognition_mode="authoritative",
+        include_text=True,
+    )
+    blocks = [block for block in plan.blocks if block.physical_paragraph_index == 0]
+
+    assert [block.type_id for block in blocks] == [
+        "title",
+        "meeting_title_meta",
+        "meeting_title_meta",
+    ]
+    assert [block.segment_index for block in blocks] == [0, 1, 2]
+    assert {block.segment_count_total for block in blocks} == {3}
+    assert all(block.locator_verified for block in blocks)
 
 
 def test_attachment_note_is_not_split_as_a_short_label() -> None:

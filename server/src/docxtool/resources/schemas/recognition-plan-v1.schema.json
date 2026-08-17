@@ -1,0 +1,207 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docxtool.local/schemas/recognition-plan-v1.schema.json",
+  "title": "DocxTool RecognitionPlan v1",
+  "description": "Text-optional, source-located recognition plan for host-neutral adapters.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "integration_contract_version",
+    "plan_id",
+    "producer",
+    "source",
+    "contracts",
+    "recognition",
+    "blocks",
+    "review_items"
+  ],
+  "properties": {
+    "schema_version": { "const": "recognition-plan-v1" },
+    "integration_contract_version": { "const": "integration-contract-v1" },
+    "plan_id": { "type": "string", "minLength": 1 },
+    "producer": {
+      "type": "object",
+      "required": ["package_version", "engine_version"],
+      "properties": {
+        "package_version": { "type": "string", "minLength": 1 },
+        "engine_version": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": true
+    },
+    "source": {
+      "type": "object",
+      "required": ["media_type", "sha256", "text_included", "raw_text_included"],
+      "properties": {
+        "media_type": { "const": "application/vnd.openxmlformats-officedocument.wordprocessingml.document" },
+        "sha256": { "type": "string", "minLength": 1 },
+        "text_included": { "type": "boolean" },
+        "raw_text_included": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    },
+    "contracts": {
+      "type": "object",
+      "required": ["source_locator_version", "host_text_contract_version", "offset_encoding"],
+      "properties": {
+        "source_locator_version": { "const": "source-locator-v2" },
+        "host_text_contract_version": { "const": "host-text-v1" },
+        "offset_encoding": { "const": "utf16_code_unit" }
+      },
+      "additionalProperties": true
+    },
+    "recognition": {
+      "type": "object",
+      "required": ["processing_mode", "recognition_mode", "document_mode", "document_mode_confidence"],
+      "properties": {
+        "processing_mode": { "enum": ["strict", "structural", "normalize"] },
+        "recognition_mode": { "enum": ["legacy", "shadow", "authoritative"] },
+        "document_mode": { "type": "string" },
+        "document_mode_confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "request_digest": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "blocks": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/recognitionBlock" }
+    },
+    "review_items": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/reviewItem" }
+    }
+  },
+  "$defs": {
+    "nullableInteger": { "type": ["integer", "null"], "minimum": 0 },
+    "span": {
+      "type": "object",
+      "required": ["start", "end", "coordinate_system", "encoding"],
+      "properties": {
+        "start": { "type": ["integer", "null"], "minimum": 0 },
+        "end": { "type": ["integer", "null"], "minimum": 0 },
+        "coordinate_system": { "enum": ["source_raw_text", "source_canonical_text"] },
+        "encoding": { "const": "utf16_code_unit" }
+      },
+      "additionalProperties": false
+    },
+    "recognitionBlock": {
+      "type": "object",
+      "required": [
+        "block_id",
+        "block_index",
+        "physical_group_id",
+        "semantic",
+        "classification",
+        "segment",
+        "source_locator",
+        "format_features",
+        "text"
+      ],
+      "properties": {
+        "block_id": { "type": "string", "minLength": 1 },
+        "block_index": { "type": "integer", "minimum": 0 },
+        "physical_group_id": { "type": "string", "minLength": 1 },
+        "semantic": {
+          "type": "object",
+          "required": ["kind", "type_id", "section", "format_role"],
+          "properties": {
+            "kind": { "type": "string", "minLength": 1 },
+            "type_id": { "type": "string", "minLength": 1 },
+            "section": { "type": "string", "minLength": 1 },
+            "format_role": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": true
+        },
+        "classification": {
+          "type": "object",
+          "required": ["status", "confidence", "evidence", "review_level", "review_reasons"],
+          "properties": {
+            "status": { "enum": ["confirmed", "review", "unresolved"] },
+            "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+            "evidence": { "type": "array", "items": { "type": "string" } },
+            "review_level": { "type": "string" },
+            "review_reasons": { "type": "array", "items": { "type": "string" } }
+          },
+          "additionalProperties": true
+        },
+        "segment": {
+          "type": "object",
+          "required": ["index", "count", "count_total", "count_located", "count_confirmed"],
+          "properties": {
+            "index": { "type": "integer", "minimum": 0 },
+            "count": { "type": "integer", "minimum": 0 },
+            "count_total": { "type": "integer", "minimum": 0 },
+            "count_located": { "type": "integer", "minimum": 0 },
+            "count_confirmed": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": true
+        },
+        "source_locator": {
+          "type": "object",
+          "required": [
+            "status",
+            "verified",
+            "version",
+            "physical_paragraph_index",
+            "physical_occurrence_index",
+            "physical_raw_text_sha256",
+            "physical_canonical_text_sha256",
+            "raw_span",
+            "canonical_span",
+            "raw_fragment_sha256",
+            "canonical_fragment_sha256",
+            "evidence",
+            "warnings"
+          ],
+          "properties": {
+            "status": { "enum": ["confirmed", "review", "unresolved"] },
+            "verified": { "type": "boolean" },
+            "version": { "const": "source-locator-v2" },
+            "physical_paragraph_index": { "$ref": "#/$defs/nullableInteger" },
+            "physical_occurrence_index": { "type": "integer", "minimum": 0 },
+            "physical_raw_text_sha256": { "type": "string" },
+            "physical_canonical_text_sha256": { "type": "string" },
+            "physical_text_length_utf16": { "type": "integer", "minimum": 0 },
+            "physical_canonical_text_length_utf16": { "type": "integer", "minimum": 0 },
+            "raw_span": { "$ref": "#/$defs/span" },
+            "canonical_span": { "$ref": "#/$defs/span" },
+            "raw_fragment_sha256": { "type": "string" },
+            "canonical_fragment_sha256": { "type": "string" },
+            "prefix_context_sha256": { "type": "string" },
+            "suffix_context_sha256": { "type": "string" },
+            "evidence": { "type": "array", "items": { "type": "string" } },
+            "warnings": { "type": "array", "items": { "type": "string" } }
+          },
+          "additionalProperties": true
+        },
+        "format_features": { "type": "object", "additionalProperties": true },
+        "text": {
+          "type": "object",
+          "required": ["recognized_text", "raw_fragment_text", "canonical_fragment_text"],
+          "properties": {
+            "recognized_text": { "type": ["string", "null"] },
+            "raw_fragment_text": { "type": ["string", "null"] },
+            "canonical_fragment_text": { "type": ["string", "null"] }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "reviewItem": {
+      "type": "object",
+      "required": ["block_id", "block_index", "final_type", "level", "confidence", "reasons", "evidence"],
+      "properties": {
+        "block_id": { "type": "string" },
+        "block_index": { "type": "integer", "minimum": 0 },
+        "source_paragraph_index": { "$ref": "#/$defs/nullableInteger" },
+        "final_type": { "type": "string", "minLength": 1 },
+        "level": { "type": "string", "minLength": 1 },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "reasons": { "type": "array", "items": { "type": "string" } },
+        "evidence": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

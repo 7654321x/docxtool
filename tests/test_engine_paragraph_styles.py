@@ -14,17 +14,21 @@ from docxtool.document.engine.paragraph_styles import (
     set_paragraph_style_id,
     style_id_for_type,
 )
+from docxtool.document.engine.render_types import rule_index_for_type
 
 
 def test_style_id_for_type_maps_known_types_and_falls_back_to_body() -> None:
     assert style_id_for_type("heading1") == "DCT-Heading1"
     assert style_id_for_type("attachment_note_item") == "DCT-AttachmentNoteItem"
+    assert style_id_for_type("meeting_title_meta") == "DCT-Author"
+    assert rule_index_for_type("meeting_title_meta") == 12
     assert style_id_for_type("unknown_type") == "DCT-Body"
 
 
 def test_wps_builtin_style_profile_maps_only_body_and_heading_types() -> None:
     assert style_id_for_type("body", "wps_builtin") == "Normal"
     assert style_id_for_type("meeting_meta", "wps_builtin") == "Normal"
+    assert style_id_for_type("meeting_title_meta", "wps_builtin") == "DCT-Author"
     assert style_id_for_type("heading1", "wps_builtin") == "Heading1"
     assert style_id_for_type("heading1_report", "wps_builtin") == "Heading1"
     assert style_id_for_type("heading2", "wps_builtin") == "Heading2"

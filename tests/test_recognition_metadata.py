@@ -22,7 +22,6 @@ def _enrich(
         heading_has_inline_body_func=lambda value: "。" in value and value.startswith(("一、", "（一）")),
         find_numbered_bold_pos_func=lambda value: 0 if value.startswith(("一是", "一要")) else -1,
         colon_bold_match_func=lambda value: value.find("：") if "：" in value and not value.endswith("：") else -1,
-        starts_report_heading_or_addressing_func=lambda value: value.startswith("各单位"),
     )
 
 
@@ -56,13 +55,18 @@ def test_enrich_legacy_type_metadata_marks_body_inline_effects() -> None:
     assert no_indent["no_indent"] is True
 
 
-def test_enrich_legacy_type_metadata_marks_report_first_sentence() -> None:
-    """meta 补充接收报告正文上下文，返回报告首句加粗标记。"""
+def test_enrich_legacy_type_metadata_keeps_short_report_body_plain() -> None:
+    """报告模式不继承源文档的首句粗体作为正文引导句。"""
     ctx = DetectionContext(doc_mode="REPORT", current_level=1)
 
-    meta = _enrich("推动工作。后续正文保持普通格式。", "body", ctx)
+    meta = _enrich(
+        "推动工作。后续正文保持普通格式。",
+        "body",
+        ctx,
+        features=ParagraphFeatures(inline_lead_bold=True),
+    )
 
-    assert meta["report_first_sentence_bold"] is True
+    assert meta == {}
 
 
 def test_enrich_legacy_type_metadata_preserves_existing_meta_object() -> None:

@@ -17,7 +17,7 @@ class NumberedBoldDetectionTest(unittest.TestCase):
     def setUp(self):
         logger.setLevel(logging.ERROR)
 
-    def test_yishi_body_does_not_also_use_report_first_sentence_bold(self):
+    def test_yishi_body_uses_numbered_bold(self):
         with tempfile.TemporaryDirectory() as tmp:
             src = Path(tmp) / "source.docx"
             doc = Document()
@@ -33,7 +33,6 @@ class NumberedBoldDetectionTest(unittest.TestCase):
 
             self.assertTrue(body.meta.get("numbered_bold"))
             self.assertNotIn("inline_lead_bold", body.meta)
-            self.assertNotIn("report_first_sentence_bold", body.meta)
 
     def test_date_after_role_name_is_detected_as_date_line(self):
         with tempfile.TemporaryDirectory() as tmp:

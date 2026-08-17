@@ -197,15 +197,15 @@ WPS 外部接口统一位于 `/wps-api/v1/*`。注册、登录、当前账号、
         ↓ HTTPS
 https://docxtool.pages.dev
         ↓ Cloudflare Pages Worker
-        ↓ HTTPS + Access Service Token + X-Proxy-Secret
-https://<PRIVATE_ORIGIN_HOST>
-        ↓ Cloudflare Access → Cloudflare Tunnel
+        ↓ HTTPS + X-Proxy-Secret
+BACKEND_BASE_URL（实际可用的 HTTPS hostname）
+        ↓ Cloudflare Tunnel
 http://127.0.0.1:9527
         ↓
 DocxTool Python
 ```
 
-`<PRIVATE_ORIGIN_HOST>` 仅为文档占位符，不记录真实服务器 IP、域名或密钥。Python
+`BACKEND_BASE_URL` 必须是实际可用的 HTTPS hostname，但不要求用户拥有自有域名；文档不记录真实服务器 IP、域名或密钥。Python
 始终绑定 `127.0.0.1:9527`；DocxTool 不公开监听 `8080` 或 `9527`。本轮不改动
 Recognition、Normalization、Engine、WPS 本机 Control 协议，也不新建第二个 Worker、
 独立管理后台或直连 Origin fallback。
@@ -213,8 +213,8 @@ Recognition、Normalization、Engine、WPS 本机 Control 协议，也不新建�
 ### 已核实基线与设计决策
 
 - Pages Worker 已按 allowlist 代理 Web、管理员和 WPS 管理后台路由，并注入
-  `X-Proxy-Secret` 与 `X-Docxtool-Proxy`；本轮在同一代理实现中加入 Access Service
-  Token，不复制代理逻辑。
+  `X-Proxy-Secret` 与 `X-Docxtool-Proxy`；本轮在同一代理实现中收敛为两变量回源，
+  不复制代理逻辑。
 - WPS 公网协议固定为 `/wps-api/v1/*`。其客户端只要求无路径的 HTTPS Origin，并在
   登录后以 `Authorization: Bearer <session>` 认证；服务端已有固定路由和 Bearer
   校验，不依赖独立公网域名。
@@ -224,15 +224,13 @@ Recognition、Normalization、Engine、WPS 本机 Control 协议，也不新建�
 - 管理登录与所有管理写操作继续使用同源相对跳转、Cookie、CSRF 和 Worker allowlist；
   后端当前生成相对 `Location`，不会把浏览器重定向到 Private Origin。
 
-### Worker 服务间认证
+### Worker 回源认证
 
-Pages 环境变量只由 Pages Secret 保存：
+Pages 只配置两个 Secret：
 
 ```text
-BACKEND_BASE_URL=https://<PRIVATE_ORIGIN_HOST>
+BACKEND_BASE_URL=<实际可用的 HTTPS 后端 hostname>
 PROXY_SECRET=<same-as-backend>
-CF_ACCESS_CLIENT_ID=<Cloudflare Access service token id>
-CF_ACCESS_CLIENT_SECRET=<Cloudflare Access service token secret>
 ```
 
 Worker 对每个实际回源请求先删除客户端提交的 `CF-Access-Client-Id`、
@@ -240,15 +238,15 @@ Worker 对每个实际回源请求先删除客户端提交的 `CF-Access-Client-
 Pages 环境变量注入：
 
 ```text
-CF-Access-Client-Id
-CF-Access-Client-Secret
 X-Proxy-Secret
 X-Docxtool-Proxy: cloudflare-pages
 ```
 
 缺少任一回源配置、使用非 HTTPS 回源或把 `BACKEND_BASE_URL` 配置为 IP 字面量时，
-Worker 返回明确的 5xx 配置错误，不回退到裸服务器地址。Service Token、Proxy Secret
-和浏览器 Bearer Token 不写入响应、日志、文档示例或客户端源码。
+Worker 返回明确的 5xx 配置错误，不回退到裸服务器地址。HTTPS hostname 可以由部署环境提供，
+不要求用户拥有自有域名。`CF-Access-*` Header 仅作为客户端伪造值的剥离对象，不代表
+Worker 仍支持或生成 Cloudflare Access 凭据。`PROXY_SECRET` 和浏览器 Bearer Token 不写入响应、
+日志、文档示例或客户端源码。
 
 ### 后端生产配置与 Fail Fast
 
@@ -282,14 +280,14 @@ TRUSTED_PROXY_IPS=127.0.0.1,::1
 `deploy/nginx-docxtool.conf` 已删除，发布脚本同步允许该删除。运维侧需自行：
 
 1. 让 `cloudflared` 将 Private Origin 的 Tunnel 服务指向 `http://127.0.0.1:9527`；
-2. 用 Cloudflare Access 的 Service Auth 保护 Private Origin；
-3. 将上述四个 Pages 变量配置为 Secret，并按后端配置重启服务；
+2. 在 Pages 中只配置 `BACKEND_BASE_URL` 与 `PROXY_SECRET` 两个 Secret，并按后端配置重启服务；
+3. 不启用 Cloudflare Zero Trust / Access，也不创建 Access Service Token；
 4. 关闭服务器对 DocxTool `8080` 与 `9527` 的公网入站规则；
 5. 用 Pages HTTPS 路径验证用户、管理员登录/登出、会话、管理写操作和 WPS 公网 API。
 
-代码验收覆盖 Worker 注入/覆盖 Token、缺失配置、管理员 Cookie/相对跳转、WPS Bearer
+代码验收覆盖 Worker 覆盖 `X-Proxy-Secret`、缺失两项配置、管理员 Cookie/相对跳转、WPS Bearer
 透传及 allowlist；后端覆盖严格布尔解析、HTTPS 同源管理员配置和生产文件 API 边界。
-完整自动化验证不等同于真实 Tunnel、Access 或 Pages 线上联通；后者必须在配置完成后
+完整自动化验证不等同于真实 Tunnel 或 Pages 线上联通；后者必须在配置完成后
 人工验证。
 
 ## 非目标

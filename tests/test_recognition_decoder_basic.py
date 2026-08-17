@@ -98,14 +98,6 @@ def test_embedded_document_title_after_signature_note():
     assert "embedded_document_title" in [item["type"] for item in trace["candidates"]]
     assert data.recognition_diagnostics["paragraphs"][2]["provider"].startswith("embedded-document:")
 
-def test_report_bold_metadata_removed_outside_report_mode():
-    paragraph = _paragraph("这是正文。后续内容。", "body", 0, report_first_sentence_bold=True)
-    data = _document(paragraph, mode="NORMAL")
-
-    apply_recognition(data)
-
-    assert "report_first_sentence_bold" not in paragraph.meta
-
 def test_shared_features_preserve_raw_text_and_extract_numbered_key_value():
     paragraph = _paragraph("（一）缺  席：无", "heading2", 0)
     data = _document(paragraph)

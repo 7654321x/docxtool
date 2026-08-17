@@ -79,7 +79,7 @@ function Assert-NoForbiddenFiles {
             if ($relative -match '^var/(data|logs|outputs|runtime)/\.gitkeep$') {
                 return $false
             }
-            if ($relative -eq '.env.example') {
+            if ($relative -eq '.env.example' -or $relative -eq 'server/.env.example') {
                 return $false
             }
             $relative -match '(^|/)\.env(\.|$)' -or
@@ -144,6 +144,7 @@ $requiredFiles = @(
     "apps/wps/package-lock.json",
     "apps/wps/package.json",
     "apps/wps/public_api.py",
+    "apps/wps/user_messages.py",
     "apps/wps/windows_startup.py",
     "apps/wps/requirements-build.txt",
     "apps/wps/ribbon.xml",
@@ -200,6 +201,8 @@ $requiredFiles = @(
     "docs/design/WPS_BUILTIN_STYLE_GALLERY_TECHNICAL_DESIGN.md",
     "docs/design/GIT_BASELINE_RELEASE_WORKFLOW.md",
     "docs/design/CODEX_WORKFLOW_OPTIMIZATION.md",
+    "docs/design/MEETING_TITLE_METADATA_RECOGNITION.md",
+    "docs/design/UBUNTU_DIRECT_ORIGIN_DEPLOYMENT.md",
     "docs/design/ADMIN_WORKSPACE_WPS_TECHNICAL_DESIGN.md",
     "docs/design/wps-format-settings.md",
     "docs/WPS_REGRESSION_CHECKLIST.md",
@@ -439,6 +442,7 @@ $requiredFiles = @(
     "src/docxtool/document/analysis/layout_policy.py",
     "src/docxtool/document/analysis/letterhead.py",
     "src/docxtool/document/text/__init__.py",
+    "src/docxtool/document/text/front_matter.py",
     "src/docxtool/document/text/punctuation.py",
     "src/docxtool/document/engine/__init__.py",
     "src/docxtool/document/engine/cleanup.py",
@@ -488,6 +492,7 @@ $requiredFiles = @(
     "scripts/phase_a_equivalence_snapshot.py",
     "scripts/phase_a_web_contract_snapshot.py",
     "scripts/check_public_metadata.py",
+    "scripts/wps_protocol_load_test.py",
     "scripts/generate_005_format_fixtures.py",
     "scripts/generate_wps_validation_fixtures.py",
     "scripts/normalize_correct_template_role_spacing.py",
@@ -505,7 +510,16 @@ $requiredFiles = @(
 $testFiles = Get-ChildItem -LiteralPath (Join-Path $SourceRoot "tests") -File -Recurse |
     Where-Object { $_.Name -like "test_*.py" -or $_.Name -like "*.test.mjs" } |
     ForEach-Object { [System.IO.Path]::GetRelativePath($SourceRoot, $_.FullName).Replace("\", "/") }
-$requiredPublishFiles = @($requiredFiles + $testFiles | Sort-Object -Unique)
+$serverFiles = Get-ChildItem -LiteralPath (Join-Path $SourceRoot "server") -File -Recurse -Force |
+    ForEach-Object { [System.IO.Path]::GetRelativePath($SourceRoot, $_.FullName).Replace("\", "/") } |
+    Where-Object {
+        $_ -eq "server/.env.example" -or (
+            $_ -notmatch '(^|/)\.env(\.|$)' -and
+            $_ -notmatch '(^|/)(__pycache__|logs|outputs|runtime|build|dist|tmp_wheels|\.venv|\.pytest_cache|\.ruff_cache)(/|$)' -and
+            $_ -notmatch '\.(pyc|log|db|sqlite|sqlite3|zip)$'
+        )
+    }
+$requiredPublishFiles = @($requiredFiles + $testFiles + $serverFiles | Sort-Object -Unique)
 $publishDeletionRoots = @(
     "apps/reader/",
     "apps/wps/",
@@ -513,6 +527,7 @@ $publishDeletionRoots = @(
     "docs/",
     "resources/frontend/pages/",
     "scripts/",
+    "server/",
     "src/docxtool/",
     "tests/"
 )
@@ -621,8 +636,18 @@ try {
         return
     }
 
-    $addArguments = @("add", "--") + $publishFiles
-    Invoke-Checked git $addArguments
+    $pathspecFile = [System.IO.Path]::GetTempFileName()
+    try {
+        [System.IO.File]::WriteAllLines(
+            $pathspecFile,
+            $publishFiles,
+            [System.Text.UTF8Encoding]::new($false)
+        )
+        Invoke-Checked git @("add", "--pathspec-from-file=$pathspecFile")
+    }
+    finally {
+        Remove-Item -LiteralPath $pathspecFile -Force -ErrorAction SilentlyContinue
+    }
     $stagedByScript = $true
     Invoke-Checked git @("diff", "--cached", "--check")
 

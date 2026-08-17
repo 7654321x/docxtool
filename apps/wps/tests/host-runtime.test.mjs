@@ -858,8 +858,8 @@ test("Panel action starts one Host bridge when OnAddinLoad was not observed", as
   assert.equal(harness.bridgeWaiterCount, 1);
   assert.equal(harness.taskpaneCreateCalls.length, 1);
   assert.equal(harness.taskpaneCreateCalls[0].length, 1);
-  assert.match(harness.taskpaneCreateCalls[0][0], /taskpane\.html\?v=26$/);
-  assert.equal(harness.values.get(TASKPANE_VERSION_KEY), "26");
+  assert.match(harness.taskpaneCreateCalls[0][0], /taskpane\.html\?v=27$/);
+  assert.equal(harness.values.get(TASKPANE_VERSION_KEY), "27");
   assert.ok(harness.events().includes("host.start.lazy.enter"));
   assert.ok(harness.events().includes("host.start.lazy.scheduled"));
 
@@ -1063,8 +1063,8 @@ test("Panel replaces a stale TaskPane page before showing it", () => {
 
   assert.equal(stalePane.Visible, false);
   assert.equal(harness.taskpaneCreateCalls.length, 2);
-  assert.match(harness.taskpaneCreateCalls[1][0], /taskpane\.html\?v=26$/);
-  assert.equal(harness.values.get(TASKPANE_VERSION_KEY), "26");
+  assert.match(harness.taskpaneCreateCalls[1][0], /taskpane\.html\?v=27$/);
+  assert.equal(harness.values.get(TASKPANE_VERSION_KEY), "27");
   assert.ok(harness.events().includes("taskpane.page_version.mismatch"));
 });
 

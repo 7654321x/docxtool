@@ -74,6 +74,7 @@
     const requestMethod = method || "POST";
     const response = await fetch(`${runtimeConfig.controlBaseUrl}${path}`, {
       method: requestMethod,
+      cache: "no-store",
       headers: {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${runtimeConfig.sessionToken}`

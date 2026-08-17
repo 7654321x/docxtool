@@ -45,6 +45,8 @@ EXPECTED_WPSJS_VERSION = "2.2.3"
 EXPECTED_RPC_VERSION = "1.1.0"
 DEFAULT_WEB_PORT = 3889
 WPS_ADDIN_NAME = "docxtool-wps-app"
+WPS_LEGACY_ADDIN_NAMES = frozenset({"docxtool-wps-trial"})
+WPS_OWNED_ADDIN_NAMES = WPS_LEGACY_ADDIN_NAMES | frozenset({WPS_ADDIN_NAME})
 
 
 def write_runtime_config(port: int, token: str) -> None:
@@ -327,15 +329,19 @@ def _publish_addin(web_port: int) -> None:
         node
         for node in list(root)
         if node.tag.rsplit("}", 1)[-1] == "jspluginonline"
-        and node.get("name") == WPS_ADDIN_NAME
+        and node.get("name") in WPS_OWNED_ADDIN_NAMES
     ]
-    if matches:
-        addin = matches[0]
-        for duplicate in matches[1:]:
-            root.remove(duplicate)
+    current_matches = [
+        node for node in matches if node.get("name") == WPS_ADDIN_NAME
+    ]
+    if current_matches:
+        addin = current_matches[0]
     else:
         namespace = root.tag[:-len("jsplugins")]
         addin = ElementTree.SubElement(root, f"{namespace}jspluginonline")
+    for duplicate in matches:
+        if duplicate is not addin:
+            root.remove(duplicate)
     addin.attrib.clear()
     addin.attrib.update(
         {
@@ -400,7 +406,7 @@ def _unpublish_addin() -> None:
         node
         for node in list(root)
         if node.tag.rsplit("}", 1)[-1] == "jspluginonline"
-        and node.get("name") == WPS_ADDIN_NAME
+        and node.get("name") in WPS_OWNED_ADDIN_NAMES
     ]
     if not matches:
         log_event(
@@ -754,19 +760,52 @@ def run_desktop(port: int, *, force_login: bool = False) -> int:
         DesktopController,
         SingleInstance,
         ensure_application,
+        show_startup_error,
         shift_pressed,
     )
 
     application = ensure_application()
+    if FROZEN:
+        configure_wps_logging(CONTROL_RUNTIME_ROOT)
+        try:
+            if windows_startup.migrate_legacy_registration():
+                log_event(
+                    "INFO",
+                    "launcher",
+                    "launcher.startup.migration.success",
+                    "已将旧 Python 启动项迁移为无控制台 EXE 启动项",
+                    {"reason": "legacy_source_command"},
+                )
+        except OSError as exc:
+            log_event(
+                "WARNING",
+                "launcher",
+                "launcher.startup.migration.error",
+                "旧启动项迁移失败，将在下次手动启用开机自启时重试",
+                {
+                    "error_code": "WPS_STARTUP_MIGRATION_FAILED",
+                    "error_type": type(exc).__name__,
+                },
+            )
     instance = SingleInstance()
-    if not instance.acquire():
+    try:
+        acquired = instance.acquire()
+    except Exception as exc:
+        show_startup_error(exc)
+        return 1
+    if not acquired:
         return 0
-    _unpublish_addin()
-    api = WpsPublicApi()
-    account = resolve_startup_account(
-        api,
-        force_login=force_login or shift_pressed(),
-    )
+    try:
+        _unpublish_addin()
+        api = WpsPublicApi()
+        account = resolve_startup_account(
+            api,
+            force_login=force_login or shift_pressed(),
+        )
+    except Exception as exc:
+        instance.close()
+        show_startup_error(exc)
+        return 1
     if not account:
         log_event("INFO", "launcher", "launcher.account.window.closed", "登录注册窗口已关闭，停止启动")
         return 0
@@ -778,9 +817,19 @@ def run_desktop(port: int, *, force_login: bool = False) -> int:
         api=api,
     )
     instance.show_requested.connect(controller.show_settings)
-    controller.start()
+    try:
+        controller.start()
+    except Exception as exc:
+        instance.close()
+        show_startup_error(exc)
+        return 1
     exit_code = application.exec_()
-    controller.shutdown()
+    try:
+        controller.shutdown()
+    except Exception as exc:
+        if not controller.service_failure_reported:
+            show_startup_error(exc)
+        return 1
     if controller.restart_login_requested:
         _unpublish_addin()
         instance.close()

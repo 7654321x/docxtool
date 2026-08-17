@@ -297,6 +297,13 @@ def test_wps_one_click_format_rebuilds_heading_numbering_by_default(tmp_path):
         "1.第三层",
         "（1）第四层",
     ]
+    heading3 = next(
+        paragraph
+        for paragraph in Document(target).paragraphs
+        if paragraph.style.style_id == "Heading3"
+    )
+    assert heading3.text == "1.第三层"
+    assert all(run.font.bold is True for run in heading3.runs)
 
 def test_wps_page_scope_recognizes_only_selected_source_paragraphs(tmp_path):
     source = tmp_path / "scoped-source.docx"

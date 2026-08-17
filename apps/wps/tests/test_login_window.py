@@ -20,6 +20,7 @@ from apps.wps.login_window import (
     window_geometry,
 )
 from apps.wps.public_api import PublicApiError
+from apps.wps.user_messages import user_message_for_error
 
 
 class _Api:
@@ -173,6 +174,124 @@ def test_required_window_height_includes_visible_form_and_bottom_padding():
 def test_password_mask_tracks_eye_button_visibility():
     assert password_mask(False) == "*"
     assert password_mask(True) == ""
+
+
+@pytest.mark.parametrize(
+    ("code", "status", "expected"),
+    [
+        ("INVALID_CREDENTIALS", 401, "账号或密码不正确；若尚未注册，请先注册账号。"),
+        ("USERNAME_TAKEN", 409, "该账号已注册，请直接登录。"),
+        ("WPS_PUBLIC_SERVER_UNAVAILABLE", 0, "无法连接服务器，请检查网络后重试。"),
+        ("WPS_PUBLIC_CLIENT_BLOCKED", 403, "客户端请求被访问规则拦截，请更新客户端或联系管理员。"),
+        ("WPS_PUBLIC_RESPONSE_INVALID", 200, "服务器响应异常，请稍后重试。"),
+        ("INTERNAL_ERROR", 500, "服务器处理异常，请稍后重试。"),
+    ],
+)
+def test_user_messages_explain_public_api_failures(code, status, expected):
+    assert user_message_for_error(PublicApiError(code, "internal detail", status)) == expected
+
+
+def test_user_messages_explain_existing_login_window_conflict():
+    assert user_message_for_error(RuntimeError("WPS_SINGLE_INSTANCE_LISTEN_FAILED")) == (
+        "已有登录窗口或 DocxTool WPS 后台程序正在运行。"
+        "请从任务栏或系统托盘打开它；若没有窗口，请退出旧程序后重试。"
+    )
+
+
+def test_user_messages_explain_when_an_old_instance_cannot_be_stopped():
+    assert user_message_for_error(RuntimeError("WPS_SINGLE_INSTANCE_STOP_FAILED")) == (
+        "检测到旧的 DocxTool WPS 进程，但无法自动结束。"
+        "请从任务栏或系统托盘退出旧程序后重试。"
+    )
+
+
+def test_frozen_instance_cleanup_excludes_the_current_pyinstaller_pair(monkeypatch):
+    output = (
+        '"DocxToolWps.exe","99","Console","1","1 K"\n'
+        '"DocxToolWps.exe","100","Console","1","1 K"\n'
+        '"DocxToolWps.exe","301","Console","1","1 K"\n'
+        '"DocxToolWps.exe","302","Console","1","1 K"\n'
+    )
+    monkeypatch.setattr(desktop_runtime, "_is_frozen_wps_executable", lambda: True)
+    monkeypatch.setattr(desktop_runtime.sys, "executable", r"C:\Apps\DocxToolWps.exe")
+    monkeypatch.setattr(desktop_runtime.os, "getpid", lambda: 100)
+    monkeypatch.setattr(desktop_runtime.os, "getppid", lambda: 99)
+    monkeypatch.setattr(
+        desktop_runtime.subprocess,
+        "run",
+        lambda *_args, **_kwargs: type("Result", (), {"returncode": 0, "stdout": output})(),
+    )
+
+    assert desktop_runtime._other_frozen_wps_process_ids() == [301, 302]
+
+
+def test_frozen_instance_cleanup_stops_only_verified_old_processes(monkeypatch):
+    stopped = []
+    events = []
+    states = iter([True, False])
+    monkeypatch.setattr(desktop_runtime, "_other_frozen_wps_process_ids", lambda: [301, 302])
+    monkeypatch.setattr(desktop_runtime, "_running_single_instance", lambda: next(states))
+    monkeypatch.setattr(desktop_runtime.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        desktop_runtime.subprocess,
+        "run",
+        lambda args, **_kwargs: stopped.append(args) or type("Result", (), {"returncode": 0})(),
+    )
+    monkeypatch.setattr(
+        desktop_runtime,
+        "log_event",
+        lambda _level, _component, event, _message, fields=None: events.append((event, fields or {})),
+    )
+
+    desktop_runtime._stop_previous_frozen_instance()
+
+    assert stopped == [
+        ["taskkill", "/PID", "301", "/T", "/F"],
+        ["taskkill", "/PID", "302", "/T", "/F"],
+    ]
+    assert events[-1] == (
+        "launcher.desktop.previous_instance.stop.completed",
+        {"instance_count": 2},
+    )
+
+
+def test_single_instance_replaces_a_confirmed_old_frozen_instance(qt_app, monkeypatch):
+    calls = []
+
+    class Signal:
+        @staticmethod
+        def connect(_callback):
+            return None
+
+    class Server:
+        def __init__(self, _parent):
+            self.newConnection = Signal()
+
+        @staticmethod
+        def removeServer(name):
+            calls.append(("remove", name))
+
+        def listen(self, name):
+            calls.append(("listen", name))
+            return True
+
+    monkeypatch.setattr(desktop_runtime, "QLocalServer", Server)
+    monkeypatch.setattr(desktop_runtime, "_running_single_instance", lambda: True)
+    monkeypatch.setattr(desktop_runtime, "_is_frozen_wps_executable", lambda: True)
+    monkeypatch.setattr(
+        desktop_runtime,
+        "_stop_previous_frozen_instance",
+        lambda: calls.append(("stop",)),
+    )
+
+    instance = desktop_runtime.SingleInstance()
+
+    assert instance.acquire() is True
+    assert calls == [
+        ("stop",),
+        ("remove", desktop_runtime.INSTANCE_NAME),
+        ("listen", desktop_runtime.INSTANCE_NAME),
+    ]
 
 
 @pytest.fixture(scope="module")
@@ -407,11 +526,11 @@ def test_dialog_failure_is_shown_only_after_thread_finishes(qt_app):
     dialog._set_busy(True)
 
     dialog._authentication_failed(error)
-    assert dialog.status_label.text() != "账号或密码错误"
+    assert dialog.status_label.text() != "账号或密码不正确；若尚未注册，请先注册账号。"
 
     dialog._thread_finished()
 
-    assert dialog.status_label.text() == "账号或密码错误"
+    assert dialog.status_label.text() == "账号或密码不正确；若尚未注册，请先注册账号。"
     assert dialog.status_label.property("error") is True
     assert dialog._submitting is False
 

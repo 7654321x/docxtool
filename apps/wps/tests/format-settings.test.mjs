@@ -32,7 +32,7 @@ function dialogConfig() {
       { name: "主标题", font: "方正小标宋简体", size: "二号", bold: false, pattern: "", indent: 0, align: "居中" },
       { name: "一级标题", font: "黑体", size: "三号", bold: false, pattern: "{a}、", indent: 2, align: "左对齐" },
       { name: "二级标题", font: "楷体_GB2312", size: "三号", bold: true, pattern: "（{b}）", indent: 2, align: "左对齐" },
-      { name: "三级标题", font: "仿宋_GB2312", size: "三号", bold: false, pattern: "{c}.", indent: 2, align: "左对齐" },
+      { name: "三级标题", font: "仿宋_GB2312", size: "三号", bold: true, pattern: "{c}.", indent: 2, align: "左对齐" },
       { name: "四级标题", font: "仿宋_GB2312", size: "三号", bold: false, pattern: "（{d}）", indent: 2, align: "左对齐" },
       { name: "正文", font: "仿宋_GB2312", size: "三号", bold: false, pattern: "", indent: 2, align: "两端对齐" },
       { name: "数字", font: "Times New Roman", bold: false },
@@ -132,7 +132,7 @@ function makeDialogHarness({ activeCustom = false, confirmResult = true } = {}) 
     const path = parsed.pathname;
     const body = options.body ? JSON.parse(options.body) : {};
     if (path === "/v1/log") return response({ ok: true });
-    calls.push({ path, body, method: options.method || "GET" });
+    calls.push({ path, body, method: options.method || "GET", cache: options.cache });
     if (path === "/v1/format/profiles") return response({ ok: true, data: responseData() });
     if (path === "/v1/format/profiles/detail") {
       const id = parsed.searchParams.get("profile_id");
@@ -206,7 +206,7 @@ test("format settings page keeps the four sections, template manager, and six st
   }
   assert.match(htmlSource, /format-config\.js\?v=2/);
   assert.match(htmlSource, /format-settings\.css\?v=2/);
-  assert.match(htmlSource, /format-settings\.js\?v=2/);
+  assert.match(htmlSource, /format-settings\.js\?v=3/);
 });
 
 test("format config current, draft and revision storage use validated envelopes", () => {
@@ -255,12 +255,20 @@ test("format dialog adds a named template and saves the full current config", as
   assert.equal(harness.closed, true);
 });
 
-test("system default leaves the heading 3 bold control unchecked", async () => {
+test("format dialog reads current templates without using a stale browser cache", async () => {
+  const harness = makeDialogHarness();
+  await harness.flush();
+
+  const profilesRead = harness.calls.find((item) => item.path === "/v1/format/profiles");
+  assert.equal(profilesRead.cache, "no-store");
+});
+
+test("system default keeps the heading 3 bold control checked", async () => {
   const harness = makeDialogHarness();
   await harness.flush();
 
   const heading3 = harness.elements.get("format_style_rows").querySelector('[data-index="3"]');
-  assert.equal(heading3.querySelector('[data-field="bold"]').checked, false);
+  assert.equal(heading3.querySelector('[data-field="bold"]').checked, true);
 });
 
 test("format dialog deletes only a custom template and falls back to system default", async () => {

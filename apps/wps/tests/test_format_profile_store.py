@@ -15,11 +15,11 @@ def _config() -> dict:
     return deepcopy(load_active_format_profile()["format_config"])
 
 
-def test_system_default_profile_keeps_heading3_not_bold():
+def test_system_default_profile_makes_heading3_bold():
     styles = load_active_format_profile()["format_config"]["styles"]
     heading3 = next(style for style in styles if style["name"] == "三级标题")
 
-    assert heading3["bold"] is False
+    assert heading3["bold"] is True
 
 
 def test_profiles_are_isolated_by_account_and_restore_after_relogin(tmp_path):

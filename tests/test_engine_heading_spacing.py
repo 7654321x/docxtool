@@ -130,15 +130,13 @@ class EngineHeadingSpacingTest(unittest.TestCase):
                 "numbered_bold": True,
                 "colon_bold": True,
                 "inline_lead_bold": True,
-                "report_first_sentence_bold": True,
             },
         )
 
         with patch.object(engine_core, "_apply_special_bold") as special, \
                 patch.object(engine_core, "_apply_colon_bold") as colon, \
                 patch.object(engine_core, "_apply_key_value_line_format") as key_value, \
-                patch.object(engine_core, "_apply_inline_lead_bold") as lead, \
-                patch.object(engine_core, "_apply_report_first_sentence") as report:
+                patch.object(engine_core, "_apply_inline_lead_bold") as lead:
             doc = self._export([paragraph], processing_strategy="structural")
 
         self.assertEqual(doc.paragraphs[0].text, "（一）工作安排： 正文内容")
@@ -146,7 +144,6 @@ class EngineHeadingSpacingTest(unittest.TestCase):
         colon.assert_not_called()
         key_value.assert_not_called()
         lead.assert_not_called()
-        report.assert_not_called()
 
     def test_heading1_period_splits_one_complete_body_paragraph(self):
         doc = self._export([
@@ -492,7 +489,7 @@ class EngineHeadingSpacingTest(unittest.TestCase):
             ],
         )
 
-    def test_author_and_role_name_use_kaiti_gb2312_16pt_bold(self):
+    def test_author_role_and_meeting_title_metadata_use_kaiti_gb2312_16pt_bold(self):
         doc = self._export([
             ParagraphData(
                 text="张三",
@@ -508,6 +505,13 @@ class EngineHeadingSpacingTest(unittest.TestCase):
                 features=ParagraphFeatures(),
                 meta={},
             ),
+            ParagraphData(
+                text="在全市重点工作会议上",
+                type_id="meeting_title_meta",
+                original_text="在全市重点工作会议上",
+                features=ParagraphFeatures(),
+                meta={},
+            ),
         ])
 
         for paragraph in doc.paragraphs:
@@ -517,7 +521,7 @@ class EngineHeadingSpacingTest(unittest.TestCase):
                 self.assertEqual(_font_size_half_points(run), "32")
                 self.assertTrue(_has_bold(run))
 
-    def test_overlapping_numbered_and_report_bold_does_not_duplicate_text(self):
+    def test_numbered_bold_does_not_duplicate_text(self):
         text = (
             "一是加强理论武装，把牢正确履职方向。"
             "坚持把学习贯彻习近平总书记关于树立和践行正确政绩观的重要论述作为重要政治任务。"
@@ -529,7 +533,7 @@ class EngineHeadingSpacingTest(unittest.TestCase):
                 type_id="body",
                 original_text=text,
                 features=ParagraphFeatures(),
-                meta={"numbered_bold": True, "report_first_sentence_bold": True},
+                meta={"numbered_bold": True},
             )
         ])
 

@@ -65,7 +65,7 @@ export PROXY_SECRET='换成正式长随机密钥'
 ./run.sh
 ```
 
-Web 服务默认监听 `127.0.0.1:9527`。生产环境通过 Cloudflare Tunnel 与 Cloudflare Access 回源，浏览器与 WPS 客户端只访问 Cloudflare Pages，不直接把 `8080` 或 `9527` 暴露到公网。完整部署说明见 [`docs/DEPLOY.md`](docs/DEPLOY.md)。
+Web 服务默认监听 `127.0.0.1:9527`。生产环境通过 Cloudflare Pages Worker 注入 `X-Proxy-Secret` 并经 Cloudflare Tunnel 回源；浏览器与 WPS 客户端只访问 Cloudflare Pages，不直接把 `8080` 或 `9527` 暴露到公网，也不启用 Cloudflare Access。完整部署说明见 [`docs/DEPLOY.md`](docs/DEPLOY.md)。
 
 ## 运行数据
 

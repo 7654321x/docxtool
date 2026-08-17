@@ -34,6 +34,9 @@ client_config.write_text(
     json.dumps({"server_origin": server_origin.rstrip("/")}, ensure_ascii=False, indent=2) + "\n",
     encoding="utf-8",
 )
+icon_path = generated_root / "docxtool-wps.ico"
+if not icon_path.is_file():
+    raise RuntimeError("WPS_BUILD_ICON_MISSING")
 
 datas = collect_data_files("docxtool.resources", include_py_files=False)
 for filename in (
@@ -91,6 +94,7 @@ exe = EXE(
     a.datas,
     [],
     name="DocxToolWps",
+    icon=str(icon_path),
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

@@ -348,6 +348,7 @@
     const requestMethod = method || "POST";
     const response = await fetch(`${config.controlBaseUrl}${path}`, {
       method: requestMethod,
+      cache: "no-store",
       headers: {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${config.sessionToken}`,
@@ -406,7 +407,7 @@
   }
 
   function formatSettingsDialogUrl() {
-    return new URL("format-settings.html?v=2", window.location.href).href;
+    return new URL("format-settings.html?v=3", window.location.href).href;
   }
 
   function clearLegacyFormatStorage() {

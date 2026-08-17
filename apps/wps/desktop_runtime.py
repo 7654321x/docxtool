@@ -2,8 +2,15 @@
 
 from __future__ import annotations
 
+import csv
 import ctypes
+from io import StringIO
+import os
+from pathlib import Path
+import subprocess
+import sys
 import threading
+import time
 
 from PySide2.QtCore import QObject, Signal
 from PySide2.QtNetwork import QLocalServer, QLocalSocket
@@ -17,9 +24,12 @@ from .login_window import (
     show_login_register_window,
     show_preferences_window,
 )
+from .user_messages import error_code_for, user_message_for_error
 
 
 INSTANCE_NAME = "DocxToolWps-5.2"
+_FROZEN_EXECUTABLE_NAME = "docxtoolwps.exe"
+_OLD_INSTANCE_STOP_TIMEOUT_SECONDS = 3
 
 
 def shift_pressed() -> bool:
@@ -34,6 +44,120 @@ def ensure_application() -> QApplication:
     return application
 
 
+def _is_frozen_wps_executable() -> bool:
+    """Limit automatic process termination to the packaged WPS client."""
+    return (
+        bool(getattr(sys, "frozen", False))
+        and sys.platform == "win32"
+        and Path(sys.executable).name.casefold() == _FROZEN_EXECUTABLE_NAME
+    )
+
+
+def _other_frozen_wps_process_ids() -> list[int]:
+    """Return older DocxTool WPS process IDs, excluding this PyInstaller chain."""
+    if not _is_frozen_wps_executable():
+        return []
+    try:
+        result = subprocess.run(
+            [
+                "tasklist",
+                "/FI",
+                f"IMAGENAME eq {Path(sys.executable).name}",
+                "/FO",
+                "CSV",
+                "/NH",
+            ],
+            capture_output=True,
+            check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            text=True,
+        )
+    except OSError:
+        return []
+    if result.returncode != 0:
+        return []
+
+    protected = {os.getpid(), os.getppid()}
+    process_ids: list[int] = []
+    for row in csv.reader(StringIO(result.stdout)):
+        if len(row) < 2 or row[0].casefold() != Path(sys.executable).name.casefold():
+            continue
+        try:
+            process_id = int(row[1])
+        except ValueError:
+            continue
+        if process_id not in protected:
+            process_ids.append(process_id)
+    return sorted(set(process_ids))
+
+
+def _running_single_instance() -> bool:
+    """Return whether another process currently owns our local instance channel."""
+    probe = QLocalSocket()
+    probe.connectToServer(INSTANCE_NAME)
+    connected = probe.waitForConnected(250)
+    if connected:
+        probe.disconnectFromServer()
+    return connected
+
+
+def _stop_previous_frozen_instance() -> None:
+    """Force-stop a confirmed older packaged instance before a new one takes over."""
+    process_ids = _other_frozen_wps_process_ids()
+    if not process_ids:
+        raise RuntimeError("WPS_SINGLE_INSTANCE_STOP_FAILED")
+    log_event(
+        "WARNING",
+        "launcher",
+        "launcher.desktop.previous_instance.detected",
+        "检测到旧的 DocxTool WPS 实例，准备自动结束后重新启动",
+        {"error_code": "WPS_SINGLE_INSTANCE_PREVIOUS", "instance_count": len(process_ids)},
+    )
+    stop_errors: list[str] = []
+    for process_id in process_ids:
+        try:
+            result = subprocess.run(
+                ["taskkill", "/PID", str(process_id), "/T", "/F"],
+                capture_output=True,
+                check=False,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                text=True,
+            )
+        except OSError as exc:
+            stop_errors.append(type(exc).__name__)
+            continue
+        if result.returncode != 0:
+            stop_errors.append("TASKKILL_FAILED")
+
+    deadline = time.monotonic() + _OLD_INSTANCE_STOP_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        if not _running_single_instance():
+            log_event(
+                "INFO",
+                "launcher",
+                "launcher.desktop.previous_instance.stop.completed",
+                "旧的 DocxTool WPS 实例已结束，继续启动新实例",
+                {"instance_count": len(process_ids)},
+            )
+            return
+        time.sleep(0.05)
+
+    error = RuntimeError("WPS_SINGLE_INSTANCE_STOP_FAILED")
+    log_event(
+        "ERROR",
+        "launcher",
+        "launcher.desktop.previous_instance.stop.failed",
+        "旧的 DocxTool WPS 实例自动结束失败",
+        {
+            "error_code": "WPS_SINGLE_INSTANCE_STOP_FAILED",
+            "error_type": type(error).__name__,
+            "instance_count": len(process_ids),
+            "taskkill_error_count": len(stop_errors),
+        },
+    )
+    raise error
+
+
 class SingleInstance(QObject):
     show_requested = Signal()
 
@@ -43,15 +167,23 @@ class SingleInstance(QObject):
         self._server.newConnection.connect(self._read_messages)
 
     def acquire(self) -> bool:
-        probe = QLocalSocket()
-        probe.connectToServer(INSTANCE_NAME)
-        if probe.waitForConnected(300):
-            probe.write(b"show-settings")
-            probe.waitForBytesWritten(300)
-            probe.disconnectFromServer()
-            return False
+        if _running_single_instance():
+            if _is_frozen_wps_executable():
+                _stop_previous_frozen_instance()
+            else:
+                probe = QLocalSocket()
+                probe.connectToServer(INSTANCE_NAME)
+                if probe.waitForConnected(300):
+                    probe.write(b"show-settings")
+                    probe.waitForBytesWritten(300)
+                    probe.disconnectFromServer()
+                return False
         QLocalServer.removeServer(INSTANCE_NAME)
         if not self._server.listen(INSTANCE_NAME):
+            # A simultaneous launch may have acquired the channel after its
+            # stale-instance cleanup. Leave that live instance alone.
+            if _running_single_instance():
+                return False
             raise RuntimeError("WPS_SINGLE_INSTANCE_LISTEN_FAILED")
         return True
 
@@ -68,6 +200,19 @@ class SingleInstance(QObject):
         QLocalServer.removeServer(INSTANCE_NAME)
 
 
+def show_startup_error(exc: BaseException) -> None:
+    """Log and present a safe explanation for a desktop startup failure."""
+    error_code = error_code_for(exc) or "WPS_DESKTOP_START_FAILED"
+    log_event(
+        "ERROR",
+        "launcher",
+        "launcher.desktop.startup.failed",
+        "DocxTool WPS 启动失败",
+        {"error_code": error_code, "error_type": type(exc).__name__},
+    )
+    QMessageBox.critical(None, "DocxTool WPS", user_message_for_error(exc))
+
+
 class DesktopController(QObject):
     service_failed = Signal(object)
     reauth_requested = Signal()
@@ -81,6 +226,7 @@ class DesktopController(QObject):
         self._api = api
         self._stop = threading.Event()
         self._service_error = None
+        self._service_failure_reported = False
         self.restart_login_requested = False
         self._settings_open = False
         self._reauth_open = False
@@ -126,20 +272,13 @@ class DesktopController(QObject):
             self.service_failed.emit(exc)
 
     def _handle_service_failure(self, exc: BaseException) -> None:
-        error_code = str(exc)
+        error_code = error_code_for(exc)
         if error_code not in {
             "WPS_WEB_SERVER_PORT_IN_USE",
             "WPS_WEB_SERVER_OLD_SERVICE_STOP_FAILED",
         }:
             error_code = "WPS_DESKTOP_SERVICE_FAILED"
-        message = (
-            "检测到已有 DocxTool WPS 本地服务正在运行。请从系统托盘退出旧服务后重新启动；"
-            "为保护当前任务，程序未自动结束它。"
-            if error_code == "WPS_WEB_SERVER_PORT_IN_USE"
-            else "旧 DocxTool WPS 本地服务自动停止失败，请从系统托盘退出旧服务后重新启动。"
-            if error_code == "WPS_WEB_SERVER_OLD_SERVICE_STOP_FAILED"
-            else "后台服务启动失败，请查看日志。"
-        )
+        message = user_message_for_error(RuntimeError(error_code))
         log_event(
             "ERROR",
             "launcher",
@@ -147,8 +286,13 @@ class DesktopController(QObject):
             "DocxTool WPS 后台服务异常退出",
             {"error_code": error_code, "error_type": type(exc).__name__},
         )
+        self._service_failure_reported = True
         QMessageBox.critical(None, "DocxTool WPS", message)
         self._application.quit()
+
+    @property
+    def service_failure_reported(self) -> bool:
+        return self._service_failure_reported
 
     def _tray_activated(self, reason) -> None:
         if reason == QSystemTrayIcon.DoubleClick:
@@ -197,7 +341,7 @@ class DesktopController(QObject):
                     "error_type": type(exc).__name__,
                 },
             )
-            QMessageBox.warning(None, "DocxTool WPS", "重新认证失败，请从托盘再次打开登录与账号设置。")
+            QMessageBox.warning(None, "DocxTool WPS", user_message_for_error(exc))
         finally:
             self._reauth_open = False
 
@@ -232,7 +376,7 @@ class DesktopController(QObject):
                 "WPS 账号退出失败",
                 {"error_code": type(exc).__name__, "error_type": type(exc).__name__},
             )
-            QMessageBox.warning(None, "DocxTool WPS", "退出登录失败，请检查网络后重试。")
+            QMessageBox.warning(None, "DocxTool WPS", user_message_for_error(exc))
             return
         log_event("INFO", "login", "login.logout.completed", "WPS 账号已退出")
         self.restart_login_requested = True
@@ -246,7 +390,11 @@ class DesktopController(QObject):
             self._startup_action.blockSignals(True)
             self._startup_action.setChecked(not checked)
             self._startup_action.blockSignals(False)
-            QMessageBox.warning(None, "DocxTool WPS", "无法修改 Windows 启动设置。")
+            QMessageBox.warning(
+                None,
+                "DocxTool WPS",
+                user_message_for_error(RuntimeError("WPS_STARTUP_PREFERENCE_FAILED")),
+            )
             log_event(
                 "WARNING",
                 "launcher",

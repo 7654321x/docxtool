@@ -34,8 +34,8 @@ class PagesProxyPackagingTest(unittest.TestCase):
         text = worker.read_text(encoding="utf-8")
         self.assertIn("BACKEND_BASE_URL", text)
         self.assertIn("PROXY_SECRET", text)
-        self.assertIn("CF_ACCESS_CLIENT_ID", text)
-        self.assertIn("CF_ACCESS_CLIENT_SECRET", text)
+        self.assertNotIn("CF_ACCESS_CLIENT_ID", text)
+        self.assertNotIn("CF_ACCESS_CLIENT_SECRET", text)
         self.assertIn("shouldProxyPath", text)
         self.assertIn("isAdminProxyPath", text)
         self.assertIn("/api/upload", text)
@@ -47,6 +47,10 @@ class PagesProxyPackagingTest(unittest.TestCase):
         self.assertIn('"X-Admin-Token"', text)
         self.assertIn('"CF-Connecting-IP"', text)
         self.assertIn('"X-Forwarded-For"', text)
+        self.assertIn('"CF-Access-Client-Id"', text)
+        self.assertIn('"CF-Access-Client-Secret"', text)
+        self.assertNotIn('headers.set("CF-Access-Client-Id"', text)
+        self.assertNotIn('headers.set("CF-Access-Client-Secret"', text)
 
     def test_pages_frontend_uses_same_origin_api(self):
         html = (ROOT / "resources" / "frontend" / "pages" / "index.html").read_text(encoding="utf-8")

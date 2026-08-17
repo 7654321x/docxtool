@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docxtool.local/schemas/sdk-manifest-v1.schema.json",
+  "title": "DocxTool SDK Manifest v1",
+  "description": "Text-free capability manifest for host adapter negotiation.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "package_version",
+    "integration_contract_versions",
+    "recognition_plan_versions",
+    "host_snapshot_versions",
+    "recognition_binding_versions",
+    "validation_report_versions",
+    "host_snapshot_summary_versions",
+    "source_locator_versions",
+    "host_text_contract_versions",
+    "offset_encodings",
+    "capabilities",
+    "binding_scope"
+  ],
+  "properties": {
+    "schema_version": { "const": "sdk-manifest-v1" },
+    "package_version": { "type": "string", "minLength": 1 },
+    "integration_contract_versions": {
+      "type": "array",
+      "items": { "const": "integration-contract-v1" },
+      "minItems": 1
+    },
+    "recognition_plan_versions": {
+      "type": "array",
+      "items": { "const": "recognition-plan-v1" },
+      "minItems": 1
+    },
+    "host_snapshot_versions": {
+      "type": "array",
+      "items": { "const": "host-snapshot-v1" },
+      "minItems": 1
+    },
+    "recognition_binding_versions": {
+      "type": "array",
+      "items": { "const": "recognition-binding-v1" },
+      "minItems": 1
+    },
+    "validation_report_versions": {
+      "type": "array",
+      "items": { "const": "validation-report-v1" },
+      "minItems": 1
+    },
+    "host_snapshot_summary_versions": {
+      "type": "array",
+      "items": { "const": "host-snapshot-summary-v1" },
+      "minItems": 1
+    },
+    "source_locator_versions": {
+      "type": "array",
+      "items": { "const": "source-locator-v2" },
+      "minItems": 1
+    },
+    "host_text_contract_versions": {
+      "type": "array",
+      "items": { "const": "host-text-v1" },
+      "minItems": 1
+    },
+    "offset_encodings": {
+      "type": "array",
+      "items": { "const": "utf16_code_unit" },
+      "minItems": 1
+    },
+    "capabilities": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "binding_scope": {
+      "type": "object",
+      "required": ["supported_story_types", "tables", "requires_raw_text", "range_execution"],
+      "properties": {
+        "supported_story_types": {
+          "type": "array",
+          "items": { "const": "main" },
+          "minItems": 1
+        },
+        "excluded_story_types": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "tables": { "const": "excluded" },
+        "requires_raw_text": { "type": "boolean" },
+        "range_execution": { "const": "host_must_verify" }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

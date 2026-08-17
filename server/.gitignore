@@ -1,0 +1,15 @@
+.env
+.venv/
+__pycache__/
+*.py[cod]
+
+var/data/*
+!var/data/.gitkeep
+var/logs/*
+!var/logs/.gitkeep
+var/outputs/*
+!var/outputs/.gitkeep
+var/runtime/*
+!var/runtime/.gitkeep
+var/uploads/*
+!var/uploads/.gitkeep

@@ -81,7 +81,7 @@ fetch("./runtime/config", {cache:"no-store", credentials:"same-origin"}).then(fu
 }).then(function(config){
   window.DocxToolWpsConfig=Object.freeze(config);
   function load(source){return new Promise(function(resolve,reject){var script=document.createElement("script");script.src=source;script.onload=resolve;script.onerror=reject;document.body.appendChild(script);});}
-  return load("./format-config.js?v=2").then(function(){return load("./reader/reader-client.js?v=2");}).then(function(){return load("./reader/reader-ui.js?v=7");}).then(function(){return load("./taskpane.js?v=24");});
+  return load("./format-config.js?v=2").then(function(){return load("./reader/reader-client.js?v=2");}).then(function(){return load("./reader/reader-ui.js?v=7");}).then(function(){return load("./taskpane.js?v=25");});
 }).catch(function(error){
   document.getElementById("status").textContent="错误";
   document.getElementById("message").textContent="运行配置加载失败，请重新打开状态面板。";

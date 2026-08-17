@@ -13,6 +13,29 @@ from docxtool.document.recognition.document_mode import (
     starts_report_heading,
     starts_report_heading_or_addressing,
 )
+from docxtool.document.recognition.features import (
+    BlockKind,
+    DocumentBlock,
+    detect_mode,
+    extract_features,
+)
+from docxtool.document.recognition.model import DocumentMode
+
+
+def _authoritative_mode_for_title(title: str) -> DocumentMode:
+    """构造具备标题证据的文首段，返回权威识别的文种。"""
+    feature = extract_features(
+        DocumentBlock(
+            index=0,
+            kind=BlockKind.PARAGRAPH,
+            text=title,
+            style_name="Title",
+            alignment="center",
+            bold=True,
+            font_size_pt=22,
+        )
+    )
+    return detect_mode([feature]).mode
 
 
 def test_title_keyword_keeps_legacy_title_scorer_evidence() -> None:
@@ -47,7 +70,15 @@ def test_detect_legacy_doc_type_preserves_importer_mode_strings() -> None:
     """旧文种检测接收标题文本列表，返回 importer 兼容的文种字符串。"""
     assert detect_legacy_doc_type(["年度工作报告"]) == "REPORT"
     assert detect_legacy_doc_type(["工作回顾"]) == "REPORT"
+    assert detect_legacy_doc_type(["情况报告"]) == "NORMAL"
     assert detect_legacy_doc_type(["会议通知"]) == "NORMAL"
+
+
+def test_authoritative_report_mode_requires_work_report_or_review_title() -> None:
+    """权威文种识别只将工作报告或工作回顾识别为报告模式。"""
+    assert _authoritative_mode_for_title("年度工作报告") is DocumentMode.REPORT
+    assert _authoritative_mode_for_title("年度工作回顾") is DocumentMode.REPORT
+    assert _authoritative_mode_for_title("情况报告") is DocumentMode.UNKNOWN
 
 
 def test_report_heading_score_returns_split_fact_and_score() -> None:

@@ -108,7 +108,7 @@ test("TaskPane opens the central format settings dialog without hiding the main 
   await harness.flushAsync();
   assert.equal(harness.elements.get("format_main_panel").hidden, false);
   assert.equal(harness.dialogCalls.length, 1, JSON.stringify({ events: harness.events(), error: harness.elements.get("error").textContent, message: harness.elements.get("message").textContent }));
-  assert.match(harness.dialogCalls[0][0], /format-settings\.html\?v=2$/);
+  assert.match(harness.dialogCalls[0][0], /format-settings\.html\?v=3$/);
   assert.equal(harness.dialogCalls[0][1], "格式设置");
   assert.equal(harness.dialogCalls[0][4], true);
   assert.equal(harness.dialogCalls[0][5], false);
@@ -117,22 +117,50 @@ test("TaskPane opens the central format settings dialog without hiding the main 
   assert.equal(harness.storage.getItem("docxtool_wps_format_config_draft_v1"), "");
 });
 
-test("TaskPane uses the Dialog's shared current config for Preview and Apply", async () => {
+test("TaskPane refreshes the active template after settings are saved before Preview and Apply", async () => {
   const harness = makeTaskpaneHarness({ host_ready: true, status: "READY", updated_at: "1" });
   await harness.flushAsync();
-  harness.click("format_settings");
-  await harness.flushAsync();
+
   const updated = harness.getActiveFormatConfig();
   updated.page.margin_top_cm = 4;
   harness.setActiveFormatConfig(updated);
   harness.click("preview");
   await harness.flushAsync();
+
   const preview = harness.commandRequests.find((item) => item.command === "preview");
   assert.equal(preview.format_config.page.margin_top_cm, 4);
   assert.equal(preview.format_config.page.lines_per_page, 22);
   assert.equal(preview.format_config.page.grid_alignment, "文字对齐字符网络");
-  assert.equal(preview.format_config.page.margin_top_cm, 4);
   assert.equal(preview.format_config.page_number.first_page, true);
+  assert.equal(
+    harness.bridgeCalls.filter((item) => item.path === "/v1/format/profiles/active").at(-1).cache,
+    "no-store",
+  );
+
+  harness.pushState({
+    host_ready: true,
+    status: "PASS",
+    active_request: {
+      request_id: preview.request_id,
+      command: "preview",
+      request_status: "PASS",
+    },
+  });
+  await harness.flushAsync();
+
+  const updatedAgain = harness.getActiveFormatConfig();
+  updatedAgain.page.margin_bottom_cm = 4.2;
+  harness.setActiveFormatConfig(updatedAgain);
+  harness.click("apply");
+  await harness.flushAsync();
+
+  const apply = harness.commandRequests.find((item) => item.command === "apply");
+  assert.equal(apply.format_config.page.margin_top_cm, 4);
+  assert.equal(apply.format_config.page.margin_bottom_cm, 4.2);
+  assert.equal(
+    harness.bridgeCalls.filter((item) => item.path === "/v1/format/profiles/active").at(-1).cache,
+    "no-store",
+  );
 });
 
 test("TaskPane submits panel_ready once after READY and load_settled", async () => {
