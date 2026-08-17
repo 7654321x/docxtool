@@ -229,8 +229,6 @@ $requiredFiles = @(
     "requirements.txt",
     "requirements.lock",
     "requirements-dev.lock",
-    "run.sh",
-    "run.ps1",
     "pyproject.toml",
     "src/docxtool/resources/__init__.py",
     "src/docxtool/resources/config/default-format.json",
@@ -532,6 +530,10 @@ $publishDeletionRoots = @(
     "src/docxtool/",
     "tests/"
 )
+$publishDeletionFiles = @(
+    "run.ps1",
+    "run.sh"
+)
 $stagedByScript = $false
 $commitCreated = $false
 
@@ -574,7 +576,8 @@ try {
         $_.Replace("\", "/")
     } | Where-Object {
         $relative = $_
-        $publishDeletionRoots | Where-Object { $relative.StartsWith($_, [System.StringComparison]::Ordinal) }
+        $relative -in $publishDeletionFiles -or
+        ($publishDeletionRoots | Where-Object { $relative.StartsWith($_, [System.StringComparison]::Ordinal) })
     })
     if ($LASTEXITCODE -ne 0) {
         throw "Unable to inspect deleted publish files."

@@ -4,6 +4,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
+from apps.wps import public_api
 from apps.wps.account_runtime import (
     AccountRuntime,
     account_from_response,
@@ -422,6 +423,99 @@ def test_public_api_network_failure_is_distinct():
         api.current_user("session-token")
     assert exc_info.value.code == "WPS_PUBLIC_SERVER_UNAVAILABLE"
     assert exc_info.value.network is True
+
+
+def test_public_api_https_requests_use_the_ipv4_connection(monkeypatch):
+    observed = {}
+
+    class Response:
+        status = 401
+
+        @staticmethod
+        def read():
+            return json.dumps(
+                {
+                    "ok": False,
+                    "api_version": "wps-api-v1",
+                    "error": {"code": "SESSION_REQUIRED", "message": "请先登录"},
+                }
+            ).encode("utf-8")
+
+    class Connection:
+        def __init__(self, host, *, port, timeout):
+            observed["host"] = host
+            observed["port"] = port
+            observed["timeout"] = timeout
+
+        def request(self, method, path, *, body, headers):
+            observed["method"] = method
+            observed["path"] = path
+            observed["headers"] = headers
+
+        @staticmethod
+        def getresponse():
+            return Response()
+
+        @staticmethod
+        def close():
+            return None
+
+    monkeypatch.setattr(public_api, "_IPv4HTTPSConnection", Connection)
+    api = WpsPublicApi("https://docx.toolpp.cn", timeout=3)
+
+    with pytest.raises(PublicApiError, match="SESSION_REQUIRED"):
+        api.current_user("session-token")
+
+    assert observed == {
+        "host": "docx.toolpp.cn",
+        "port": 443,
+        "timeout": 3,
+        "method": "GET",
+        "path": "/wps-api/v1/auth/me",
+        "headers": {
+            "Accept": "application/json",
+            "User-Agent": CLIENT_USER_AGENT,
+            "Authorization": "Bearer session-token",
+        },
+    }
+
+
+def test_ipv4_https_connection_resolves_only_ipv4(monkeypatch):
+    observed = {}
+
+    class Socket:
+        def settimeout(self, value):
+            observed["timeout"] = value
+
+        def connect(self, address):
+            observed["address"] = address
+
+        def close(self):
+            observed["closed"] = True
+
+    class Context:
+        def wrap_socket(self, sock, *, server_hostname):
+            observed["server_hostname"] = server_hostname
+            return "tls-socket"
+
+    def getaddrinfo(host, port, *, family, type):
+        observed["lookup"] = (host, port, family, type)
+        return [(family, type, 6, "", ("104.18.0.1", port))]
+
+    monkeypatch.setattr(public_api.socket, "getaddrinfo", getaddrinfo)
+    monkeypatch.setattr(public_api.socket, "socket", lambda *_args: Socket())
+    connection = public_api._IPv4HTTPSConnection("docx.toolpp.cn", timeout=4)
+    connection._context = Context()
+
+    connection.connect()
+
+    assert observed == {
+        "lookup": ("docx.toolpp.cn", 443, public_api.socket.AF_INET, public_api.socket.SOCK_STREAM),
+        "timeout": 4,
+        "address": ("104.18.0.1", 443),
+        "server_hostname": "docx.toolpp.cn",
+    }
+    assert connection.sock == "tls-socket"
 
 
 def test_public_api_names_cloudflare_browser_signature_denial(monkeypatch):

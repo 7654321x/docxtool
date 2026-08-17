@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 from pathlib import Path
+import socket
 import sys
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
@@ -15,6 +17,32 @@ API_PREFIX = "/wps-api/v1"
 API_VERSION = "wps-api-v1"
 DEFAULT_TIMEOUT_SECONDS = 8
 CLIENT_USER_AGENT = f"DocxToolWPS/{package_version()}"
+
+
+class _IPv4HTTPSConnection(http.client.HTTPSConnection):
+    """HTTPS connection that resolves the public gateway to IPv4 addresses only."""
+
+    def connect(self) -> None:
+        last_error: OSError | None = None
+        addresses = socket.getaddrinfo(
+            self.host,
+            self.port,
+            family=socket.AF_INET,
+            type=socket.SOCK_STREAM,
+        )
+        for family, sock_type, protocol, _canonical_name, sockaddr in addresses:
+            sock = socket.socket(family, sock_type, protocol)
+            try:
+                sock.settimeout(self.timeout)
+                sock.connect(sockaddr)
+                self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
+                return
+            except OSError as exc:
+                last_error = exc
+                sock.close()
+        if last_error is not None:
+            raise last_error
+        raise OSError("WPS_PUBLIC_IPV4_ADDRESS_UNAVAILABLE")
 
 
 class PublicApiError(RuntimeError):
@@ -74,6 +102,20 @@ class WpsPublicApi:
         )
         self.timeout = timeout
 
+    def _open_https_over_ipv4(self, method: str, path: str, body: bytes | None, headers: dict[str, str]) -> tuple[bytes, int]:
+        parsed = urlparse(self.public_api_base_url)
+        connection = _IPv4HTTPSConnection(
+            parsed.hostname,
+            port=parsed.port or 443,
+            timeout=self.timeout,
+        )
+        try:
+            connection.request(method, API_PREFIX + path, body=body, headers=headers)
+            response = connection.getresponse()
+            return response.read(), int(response.status)
+        finally:
+            connection.close()
+
     def _request(self, method: str, path: str, payload=None, *, token: str = "", request_id: str = "") -> dict:
         body = None if payload is None else json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         headers = {
@@ -89,15 +131,18 @@ class WpsPublicApi:
             headers["Authorization"] = f"Bearer {token}"
         if request_id:
             headers["X-DocxTool-Request-Id"] = request_id
-        request = Request(self.public_api_base_url + API_PREFIX + path, data=body, headers=headers, method=method)
         try:
-            response = urlopen(request, timeout=self.timeout)
-            raw = response.read()
-            status = int(response.status)
+            if self.public_api_base_url.startswith("https://"):
+                raw, status = self._open_https_over_ipv4(method, path, body, headers)
+            else:
+                request = Request(self.public_api_base_url + API_PREFIX + path, data=body, headers=headers, method=method)
+                response = urlopen(request, timeout=self.timeout)
+                raw = response.read()
+                status = int(response.status)
         except HTTPError as exc:
             raw = exc.read()
             status = int(exc.code)
-        except (URLError, TimeoutError, OSError) as exc:
+        except (URLError, TimeoutError, OSError, http.client.HTTPException) as exc:
             raise PublicApiError("WPS_PUBLIC_SERVER_UNAVAILABLE", "暂时无法连接 WPS 服务", network=True) from exc
         if _cloudflare_client_blocked(raw, status):
             raise PublicApiError(
