@@ -27,7 +27,6 @@ def test_select_legacy_scored_type_prefers_allowed_highest_structure_score() -> 
             ("title", _scorer(90, {"title": True})),
             ("heading1", _scorer(100, {"heading": True}, "一、")),
         ],
-        mode_scorers={},
         fallback_scorers=[("body", _scorer(10))],
         flow_allows_func=lambda candidate, _ctx: candidate != "heading1",
     )
@@ -38,24 +37,6 @@ def test_select_legacy_scored_type_prefers_allowed_highest_structure_score() -> 
     assert score_log == ["title:90", "heading1:100"]
 
 
-def test_select_legacy_scored_type_uses_mode_scorer_when_score_is_higher() -> None:
-    """选择器接收文种 scorer 表，返回高于结构层的文种候选。"""
-    type_id, meta, prefix, score_log = select_legacy_scored_type(
-        "测试",
-        None,
-        SimpleNamespace(doc_mode="REPORT"),
-        structure_scorers=[("body", _scorer(20))],
-        mode_scorers={"REPORT": [("heading1", _scorer(80, {"heading": True}))]},
-        fallback_scorers=[("body", _scorer(10))],
-        flow_allows_func=lambda _candidate, _ctx: True,
-    )
-
-    assert type_id == "heading1"
-    assert meta == {"heading": True}
-    assert prefix == ""
-    assert score_log == ["body:20"]
-
-
 def test_select_legacy_scored_type_runs_fallback_only_without_positive_score() -> None:
     """选择器接收无正分 scorer 时，返回兜底层候选。"""
     type_id, meta, prefix, score_log = select_legacy_scored_type(
@@ -63,7 +44,6 @@ def test_select_legacy_scored_type_runs_fallback_only_without_positive_score() -
         None,
         SimpleNamespace(doc_mode=""),
         structure_scorers=[("title", _scorer(0))],
-        mode_scorers={},
         fallback_scorers=[("body", _scorer(10, {"fallback": True}))],
         flow_allows_func=lambda _candidate, _ctx: True,
     )
@@ -74,25 +54,9 @@ def test_select_legacy_scored_type_runs_fallback_only_without_positive_score() -
     assert score_log == []
 
 
-def test_select_legacy_scored_type_uses_explicit_mode_context() -> None:
-    ctx = SimpleNamespace(doc_mode="MEETING")
-
-    type_id, _, _, _ = select_legacy_scored_type(
-        "测试",
-        None,
-        ctx,
-        structure_scorers=[("body", _scorer(1))],
-        mode_scorers={"MEETING": [("meeting_meta", _scorer(50))]},
-        fallback_scorers=[("body", _scorer(10))],
-        flow_allows_func=lambda _candidate, _ctx: True,
-    )
-
-    assert type_id == "meeting_meta"
-
-
 def test_build_legacy_scorer_registry_keeps_title_role_and_heading_scores() -> None:
     """旧 scorer registry 接收基础回调，返回可直接用于 importer 的三层评分表。"""
-    structure_scorers, mode_scorers, fallback_scorers = build_legacy_scorer_registry(
+    structure_scorers, fallback_scorers = build_legacy_scorer_registry(
         match_numbering_func=lambda text: ("heading1", "一、") if text.startswith("一、") else ("", ""),
         contains_colon_func=lambda text: "：" in text or ":" in text,
     )
@@ -105,11 +69,9 @@ def test_build_legacy_scorer_registry_keeps_title_role_and_heading_scores() -> N
             has_seen_body=False,
             has_seen_real_body=False,
             title_texts=[],
-            doc_mode="",
             glossary_mode=False,
         ),
         structure_scorers=structure_scorers,
-        mode_scorers=mode_scorers,
         fallback_scorers=fallback_scorers,
         flow_allows_func=lambda _candidate, _ctx: True,
     )
@@ -124,11 +86,9 @@ def test_build_legacy_scorer_registry_keeps_title_role_and_heading_scores() -> N
             has_seen_body=False,
             has_seen_real_body=False,
             title_texts=["在测试会议上的讲话"],
-            doc_mode="",
             glossary_mode=False,
         ),
         structure_scorers=structure_scorers,
-        mode_scorers=mode_scorers,
         fallback_scorers=fallback_scorers,
         flow_allows_func=lambda _candidate, _ctx: True,
     )
@@ -142,11 +102,9 @@ def test_build_legacy_scorer_registry_keeps_title_role_and_heading_scores() -> N
             has_seen_body=True,
             has_seen_real_body=True,
             title_texts=["关于测试工作的报告"],
-            doc_mode="NORMAL",
             glossary_mode=False,
         ),
         structure_scorers=structure_scorers,
-        mode_scorers=mode_scorers,
         fallback_scorers=fallback_scorers,
         flow_allows_func=lambda _candidate, _ctx: True,
     )

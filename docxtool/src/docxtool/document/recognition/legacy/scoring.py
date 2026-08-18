@@ -85,7 +85,6 @@ class DetectionContext:
     has_seen_heading: bool = False
     has_seen_body: bool = False
     current_level: int = 0
-    doc_mode: str = ""
     glossary_mode: bool = False
     title_texts: list = field(default_factory=list)
     has_seen_real_body: bool = False

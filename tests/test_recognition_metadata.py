@@ -32,13 +32,11 @@ def test_enrich_legacy_type_metadata_marks_heading_inline_body() -> None:
     assert meta["heading_inline_body"] is True
 
 
-def test_enrich_legacy_type_metadata_keeps_scheme_heading2_unsplit() -> None:
-    """meta 补充接收方案模式二级标题，返回不设置 heading_inline_body。"""
-    ctx = DetectionContext(doc_mode="SCHEME")
+def test_enrich_legacy_type_metadata_does_not_branch_on_document_mode() -> None:
+    """旧 meta 补充不再按已删除的文种上下文分支。"""
+    meta = _enrich("（一）标题。正文不少于五字", "heading2")
 
-    meta = _enrich("（一）标题。正文不少于五字", "heading2", ctx)
-
-    assert "heading_inline_body" not in meta
+    assert meta["heading_inline_body"] is True
 
 
 def test_enrich_legacy_type_metadata_marks_body_inline_effects() -> None:
@@ -55,18 +53,15 @@ def test_enrich_legacy_type_metadata_marks_body_inline_effects() -> None:
     assert no_indent["no_indent"] is True
 
 
-def test_enrich_legacy_type_metadata_keeps_short_report_body_plain() -> None:
-    """报告模式不继承源文档的首句粗体作为正文引导句。"""
-    ctx = DetectionContext(doc_mode="REPORT", current_level=1)
-
+def test_enrich_legacy_type_metadata_keeps_short_body_inline_effect() -> None:
+    """旧 meta 补充不再按已删除的报告模式抑制正文引导句。"""
     meta = _enrich(
         "推动工作。后续正文保持普通格式。",
         "body",
-        ctx,
         features=ParagraphFeatures(inline_lead_bold=True),
     )
 
-    assert meta == {}
+    assert meta == {"inline_lead_bold": True}
 
 
 def test_enrich_legacy_type_metadata_preserves_existing_meta_object() -> None:

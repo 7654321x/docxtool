@@ -36,17 +36,13 @@ def enrich_legacy_type_metadata(
         metadata["numbered_heading2_period_inline_body"] = True
 
     if type_id in ("heading1", "heading2") and heading_has_inline_body_func(text):
-        if not (type_id == "heading2" and ctx.doc_mode == "SCHEME"):
-            metadata["heading_inline_body"] = True
+        metadata["heading_inline_body"] = True
 
     if type_id == "body":
         numbered_bold = find_numbered_bold_pos_func(text) >= 0
         if numbered_bold:
             metadata["numbered_bold"] = True
-        elif (
-            getattr(features, "inline_lead_bold", False)
-            and ctx.doc_mode != "REPORT"
-        ):
+        elif getattr(features, "inline_lead_bold", False):
             metadata["inline_lead_bold"] = True
 
         colon_position = colon_bold_match_func(text)

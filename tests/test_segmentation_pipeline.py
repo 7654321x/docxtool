@@ -15,6 +15,7 @@ def _identity_split(
     end: int,
     features: Optional[ParagraphFeatures] = None,
     *,
+    document_mode=None,
     allow_visual_boundary: bool = True,
 ) -> list[Tuple[int, int]]:
     """测试辅助：传入源范围，返回未拆分的原范围。"""
@@ -68,6 +69,7 @@ def test_pipeline_uses_heading_body_split_and_suppresses_inline_token_preservati
         end: int,
         features: Optional[ParagraphFeatures] = None,
         *,
+        document_mode=None,
         allow_visual_boundary: bool = True,
     ) -> list[Tuple[int, int]]:
         """测试辅助：传入源范围，返回标题和正文两个范围。"""

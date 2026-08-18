@@ -8,6 +8,7 @@ import re
 from typing import Any, List
 
 from docxtool.document.recognition.config import DEFAULT_CONFIG
+from docxtool.document.recognition.features import BlockKind, DocumentBlock, detect_mode, extract_features
 from docxtool.document.configuration.models import StyleRule
 
 
@@ -95,8 +96,41 @@ def run_document_pipeline(
     )
 
     assign_pre_normalization_layout_hints(raw_blocks)
+    mode_features = []
+    for block_index, block in enumerate(raw_blocks):
+        if block[0] != "paragraph":
+            continue
+        _, paragraph, paragraph_features, _inline_tokens, _sect_pr = block
+        source_text = paragraph_features.source_physical_text or paragraph.text
+        mode_features.append(DocumentBlock(
+            index=block_index,
+            kind=BlockKind.PARAGRAPH,
+            text=source_text,
+            paragraph_index=len(mode_features),
+            style_name=paragraph_features.style_name,
+            alignment=paragraph_features.alignment,
+            bold=paragraph_features.bold,
+            font_size_pt=paragraph_features.weighted_font_size or paragraph_features.font_size_pt,
+            weighted_font_size=paragraph_features.weighted_font_size,
+            max_font_size=paragraph_features.max_font_size,
+            min_font_size=paragraph_features.min_font_size,
+            bold_char_ratio=paragraph_features.bold_char_ratio,
+            italic_char_ratio=paragraph_features.italic_char_ratio,
+            explicitly_formatted_char_ratio=paragraph_features.explicitly_formatted_char_ratio,
+            raw_reference=paragraph,
+        ))
+    mode_features = [
+        extract_features(
+            block,
+            mode_features[index - 1] if index else None,
+            mode_features[index + 1] if index + 1 < len(mode_features) else None,
+        )
+        for index, block in enumerate(mode_features)
+    ]
+    document_mode = detect_mode(mode_features).mode
     flat_lines = compatibility._build_logical_lines(
         raw_blocks,
+        document_mode=document_mode,
         strict_preservation=strict_preservation,
         structural_preservation=structural_preservation,
         split_inline_heading_body_enabled=resolved_options.split_inline_heading_body,
@@ -201,7 +235,7 @@ def run_document_pipeline(
         )
         data.paragraphs.append(paragraph)
 
-    data.doc_mode = ctx.doc_mode
+    data.doc_mode = document_mode.value
     before_normalization = compatibility._normalization_capture_pre_normalization_snapshot(
         data,
         source_visible_texts,

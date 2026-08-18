@@ -125,7 +125,6 @@ def test_legacy_update_context_starts_body_without_a_second_mode_detector() -> N
     assert ctx.prev_type_id == "body"
     assert ctx.has_seen_body
     assert ctx.has_seen_real_body
-    assert ctx.doc_mode == ""
     assert ctx.last_structural_type == "body"
 
 

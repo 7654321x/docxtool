@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ..model import ParagraphType, SectionKind
+from ..model import DocumentMode, ParagraphType, SectionKind
 from .base import Candidate
 
 
@@ -15,7 +15,10 @@ class InlineHeadingCandidateProvider:
     name = "inline-heading"
 
     def propose(self, block, features, context):
-        if features.compact_text not in _ANNUAL_REVIEW_HEADINGS:
+        if (
+            context.mode is not DocumentMode.REPORT
+            or features.compact_text not in _ANNUAL_REVIEW_HEADINGS
+        ):
             return []
         return [Candidate(
             ParagraphType.HEADING_1,

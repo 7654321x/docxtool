@@ -25,20 +25,3 @@ def has_title_keyword(text: str) -> bool:
 def has_doc_type_keyword(text: str) -> bool:
     """传入文首标题文本，返回是否包含可支撑职务姓名行的文种关键词。"""
     return bool(_DOC_TYPE_KEYWORD_RE.search(text or ""))
-
-
-def legacy_heading_addressing_score(
-    text: str,
-    previous_type: str | None,
-    *,
-    has_seen_real_body: bool,
-) -> int:
-    """传入正文开始前称呼文本和上一类型，返回旧 importer 主送机关候选分。"""
-    value = text or ""
-    if has_seen_real_body:
-        return 0
-    if not (previous_type or "").startswith("heading"):
-        return 0
-    if not value.rstrip().endswith(("：", ":")):
-        return 0
-    return 110

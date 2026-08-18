@@ -52,7 +52,9 @@ def test_report_salutations_use_the_ordinary_structural_provider() -> None:
 def test_annual_review_inline_heading_is_segmented_into_heading1_and_body(tmp_path) -> None:
     source = tmp_path / "report-inline-heading.docx"
     document = Document()
-    document.add_paragraph("政府工作报告")
+    title = document.add_paragraph()
+    title.alignment = 1
+    title.add_run("政府工作报告").bold = True
     document.add_paragraph("五年来。我们持续推进重点工作并取得新的明显成效。")
     document.save(source)
 
@@ -63,6 +65,86 @@ def test_annual_review_inline_heading_is_segmented_into_heading1_and_body(tmp_pa
     assert [block.recognized_text for block in blocks] == [
         "五年来。", "我们持续推进重点工作并取得新的明显成效。",
     ]
+
+
+def test_annual_review_one_year_is_segmented_only_for_report_mode(tmp_path) -> None:
+    report_source = tmp_path / "report-one-year.docx"
+    report = Document()
+    title = report.add_paragraph()
+    title.alignment = 1
+    title.add_run("政府工作报告").bold = True
+    report.add_paragraph("一年来。我们持续推进重点工作并取得新的明显成效。")
+    report.save(report_source)
+
+    report_plan = recognize_docx(report_source, recognition_mode="authoritative", include_text=True)
+    report_blocks = [block for block in report_plan.blocks if block.physical_paragraph_index == 1]
+    assert [block.type_id for block in report_blocks] == ["heading1", "body"]
+
+    normal_source = tmp_path / "normal-one-year.docx"
+    normal = Document()
+    normal.add_paragraph("普通材料")
+    normal.add_paragraph("一年来。我们持续推进重点工作并取得新的明显成效。")
+    normal.add_paragraph("五年来。我们持续推进重点工作并取得新的明显成效。")
+    normal.save(normal_source)
+
+    normal_plan = recognize_docx(normal_source, recognition_mode="authoritative", include_text=True)
+    for paragraph_index in (1, 2):
+        normal_blocks = [
+            block for block in normal_plan.blocks
+            if block.physical_paragraph_index == paragraph_index
+        ]
+        assert len(normal_blocks) == 1
+
+
+def test_report_front_short_titles_restore_title2_and_glossary_title() -> None:
+    title2 = _paragraph("工作安排", "body", 1)
+    glossary_title = _paragraph("名词解释", "body", 2)
+    data = _document(
+        _paragraph("政府工作报告", "title", 0, alignment="CENTER", bold_char_ratio=1.0),
+        title2,
+        glossary_title,
+    )
+
+    apply_recognition(
+        data,
+        RecognitionConfig(enable_core_candidates=False, enable_legacy_candidates=False),
+    )
+
+    assert [title2.type_id, glossary_title.type_id] == ["title2", "glossary_title"]
+
+
+def test_normal_front_short_title_does_not_use_report_title2_exception() -> None:
+    title2 = _paragraph("工作安排", "body", 1)
+    data = _document(
+        _paragraph("普通材料", "title", 0, alignment="CENTER", bold_char_ratio=1.0),
+        title2,
+    )
+
+    apply_recognition(
+        data,
+        RecognitionConfig(enable_core_candidates=False, enable_legacy_candidates=False),
+    )
+
+    assert title2.type_id != "title2"
+
+
+def test_numbered_glossary_item_without_colon_preserves_missing_colon_metadata() -> None:
+    glossary_title = _paragraph("名词解释", "body", 0)
+    glossary_item = _paragraph("1.术语", "body", 1, numbering_prefix="1.")
+    data = _document(
+        _paragraph("普通公文", "title", 0, alignment="CENTER", bold_char_ratio=1.0),
+        _paragraph("正文已经开始并完整说明工作背景和基本情况。", "body", 1),
+        glossary_title,
+        glossary_item,
+    )
+
+    apply_recognition(
+        data,
+        RecognitionConfig(enable_core_candidates=False, enable_legacy_candidates=False),
+    )
+
+    assert glossary_item.type_id == "glossary_item"
+    assert glossary_item.meta["colon_pos"] == -1
 
 
 def test_title2_and_glossary_are_mode_independent() -> None:

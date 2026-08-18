@@ -6,6 +6,7 @@ import re
 from typing import Any, Callable, Optional, Tuple
 
 from docxtool.document.models import ParagraphFeatures, SegmentBoundaryCandidate
+from docxtool.document.recognition.model import DocumentMode
 from docxtool.document.segmentation import conservation as conservation_module
 from docxtool.document.segmentation.source_locator import (
     source_line_spans,
@@ -105,6 +106,7 @@ def segment_boundary_candidates(
     end: int,
     features: Optional[ParagraphFeatures] = None,
     *,
+    document_mode: DocumentMode = DocumentMode.UNKNOWN,
     analyze_colon_structure_func: Callable[[str], Any],
     detect_numbering_prefix_func: Callable[[str], str],
 ) -> Tuple[SegmentBoundaryCandidate, ...]:
@@ -151,8 +153,9 @@ def segment_boundary_candidates(
         native_list_heading = (
             source_numbering.startswith("@lvl_") and visual_transition
         )
-        annual_review_heading = _is_annual_review_inline_heading(
-            text, period_index, body_count
+        annual_review_heading = (
+            document_mode is DocumentMode.REPORT
+            and _is_annual_review_inline_heading(text, period_index, body_count)
         )
         numbered = literal_numbered or native_list_heading
         if literal_numbered:
@@ -183,6 +186,7 @@ def split_inline_heading_body_spans(
     end: int,
     features: Optional[ParagraphFeatures] = None,
     *,
+    document_mode: DocumentMode = DocumentMode.UNKNOWN,
     allow_visual_boundary: bool = True,
     analyze_colon_structure_func: Callable[[str], Any],
     detect_numbering_prefix_func: Callable[[str], str],
@@ -200,6 +204,7 @@ def split_inline_heading_body_spans(
         start,
         end,
         features,
+        document_mode=document_mode,
         analyze_colon_structure_func=analyze_colon_structure_func,
         detect_numbering_prefix_func=detect_numbering_prefix_func,
     )
@@ -220,6 +225,7 @@ def split_inline_heading_body_spans(
                 current_start,
                 current_end,
                 features,
+                document_mode=document_mode,
                 analyze_colon_structure_func=analyze_colon_structure_func,
                 detect_numbering_prefix_func=detect_numbering_prefix_func,
             )
@@ -431,6 +437,7 @@ def validate_numbered_heading_body_split(
     spans: list[Tuple[int, int]],
     features: Optional[ParagraphFeatures] = None,
     *,
+    document_mode: DocumentMode = DocumentMode.UNKNOWN,
     analyze_colon_structure_func: Callable[[str], Any],
     detect_numbering_prefix_func: Callable[[str], str],
 ) -> None:
@@ -447,6 +454,7 @@ def validate_numbered_heading_body_split(
         start,
         end,
         features,
+        document_mode=document_mode,
         analyze_colon_structure_func=analyze_colon_structure_func,
         detect_numbering_prefix_func=detect_numbering_prefix_func,
     )

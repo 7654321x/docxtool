@@ -6,6 +6,7 @@ from typing import Callable, List, Optional, Tuple
 
 from docxtool.document.importing.inline_tokens import inline_tokens_text
 from docxtool.document.models import ParagraphFeatures
+from docxtool.document.recognition.model import DocumentMode
 from docxtool.document.segmentation import partition as partition_module
 from docxtool.document.segmentation.source_locator import (
     assign_segment_ordinals,
@@ -22,6 +23,7 @@ def build_logical_span_plan(
     source: str,
     source_spans: list[Tuple[int, int]],
     *,
+    document_mode: DocumentMode = DocumentMode.UNKNOWN,
     body_region_started: bool,
     has_structural_inline: bool,
     has_page_break: bool,
@@ -40,6 +42,7 @@ def build_logical_span_plan(
     return partition_module.build_logical_span_plan(
         source,
         source_spans,
+        document_mode=document_mode,
         body_region_started=body_region_started,
         has_structural_inline=has_structural_inline,
         has_page_break=has_page_break,
@@ -65,6 +68,7 @@ def build_logical_span_plan(
 def build_logical_lines(
     raw_blocks: List[tuple],
     *,
+    document_mode: DocumentMode = DocumentMode.UNKNOWN,
     strict_preservation: bool,
     structural_preservation: bool,
     split_inline_heading_body_enabled: bool,
@@ -129,6 +133,7 @@ def build_logical_lines(
         span_plan = build_logical_span_plan(
             source,
             spans_from_lines,
+            document_mode=document_mode,
             body_region_started=body_region_started,
             has_structural_inline=has_structural_inline,
             has_page_break=has_page_break,

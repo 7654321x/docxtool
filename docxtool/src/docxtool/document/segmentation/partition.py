@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Callable, Optional, Tuple
 
 from docxtool.document.models import ParagraphFeatures
+from docxtool.document.recognition.model import DocumentMode
 from docxtool.document.segmentation.source_locator import trim_source_span
 
 
@@ -26,6 +27,7 @@ def build_logical_span_plan(
     source: str,
     source_spans: list[Tuple[int, int]],
     *,
+    document_mode: DocumentMode = DocumentMode.UNKNOWN,
     body_region_started: bool,
     has_structural_inline: bool,
     has_page_break: bool,
@@ -59,6 +61,7 @@ def build_logical_span_plan(
             whole_start,
             whole_end,
             features,
+            document_mode=document_mode,
             allow_visual_boundary=not current_body_region,
         )
         if should_split_inline_heading_body else [(whole_start, whole_end)]
@@ -90,6 +93,7 @@ def build_logical_span_plan(
                     start,
                     end,
                     features,
+                    document_mode=document_mode,
                     allow_visual_boundary=not current_body_region,
                 ))
             else:

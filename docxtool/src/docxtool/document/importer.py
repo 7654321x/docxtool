@@ -94,6 +94,7 @@ from docxtool.document.importing.reader import (
 )
 from docxtool.document.importing.relationships import repair_broken_rels as _repair_broken_rels
 from docxtool.document.recognition import apply_recognition
+from docxtool.document.recognition.model import DocumentMode
 from docxtool.document.recognition.core_adapter import (
     apply_core_classification as _recognition_apply_core_classification,
 )
@@ -258,6 +259,8 @@ def _segment_boundary_candidates(
     start: int,
     end: int,
     features: Optional[ParagraphFeatures] = None,
+    *,
+    document_mode: DocumentMode = DocumentMode.UNKNOWN,
 ) -> Tuple[SegmentBoundaryCandidate, ...]:
     """兼容旧私有入口，传入源范围和特征，返回候选逻辑边界。"""
     return _seg_segment_boundary_candidates(
@@ -265,6 +268,7 @@ def _segment_boundary_candidates(
         start,
         end,
         features,
+        document_mode=document_mode,
         analyze_colon_structure_func=analyze_colon_structure,
         detect_numbering_prefix_func=_detect_numbering_prefix,
     )
@@ -276,6 +280,7 @@ def _split_inline_heading_body_spans(
     end: int,
     features: Optional[ParagraphFeatures] = None,
     *,
+    document_mode: DocumentMode = DocumentMode.UNKNOWN,
     allow_visual_boundary: bool = True,
 ) -> List[Tuple[int, int]]:
     """兼容旧私有入口，传入源范围和特征，返回标题正文拆分范围。"""
@@ -284,6 +289,7 @@ def _split_inline_heading_body_spans(
         start,
         end,
         features,
+        document_mode=document_mode,
         allow_visual_boundary=allow_visual_boundary,
         analyze_colon_structure_func=analyze_colon_structure,
         detect_numbering_prefix_func=_detect_numbering_prefix,
@@ -355,12 +361,15 @@ def _validate_numbered_heading_body_split(
     source: str,
     spans: List[Tuple[int, int]],
     features: Optional[ParagraphFeatures] = None,
+    *,
+    document_mode: DocumentMode = DocumentMode.UNKNOWN,
 ) -> None:
     """兼容旧私有入口，传入源文本和范围列表，校验编号标题正文拆分契约。"""
     return _seg_validate_numbered_heading_body_split(
         source,
         spans,
         features,
+        document_mode=document_mode,
         analyze_colon_structure_func=analyze_colon_structure,
         detect_numbering_prefix_func=_detect_numbering_prefix,
     )
@@ -635,7 +644,7 @@ def _match_style_or_lvl(text: str, feats):
     return _recognition_match_style_or_level(text, feats, normalize_text=_normalize_text)
 
 
-_STRUCTURE_SCORERS, _MODE_SCORERS, _FALLBACK_SCORERS = _recognition_build_legacy_scorer_registry(
+_STRUCTURE_SCORERS, _FALLBACK_SCORERS = _recognition_build_legacy_scorer_registry(
     match_numbering_func=_match_numbering,
     contains_colon_func=_contains_colon,
 )
@@ -691,7 +700,6 @@ def detect_paragraph_type(text: str, feats: ParagraphFeatures,
         match_style_or_level_func=_match_style_or_lvl,
         select_scored_type_func=_recognition_select_legacy_scored_type,
         structure_scorers=_STRUCTURE_SCORERS,
-        mode_scorers=_MODE_SCORERS,
         fallback_scorers=_FALLBACK_SCORERS,
         flow_allows_func=_flow_allows,
         repair_heading4_colon_func=_repair_heading4_colon,
@@ -830,7 +838,6 @@ class DocxImporter:
 
 if __name__ == "__main__":
     ctx = DetectionContext()
-    ctx.doc_mode = "NORMAL"
     pf = ParagraphFeatures()
     tid, _, _ = detect_paragraph_type("一、加强政治建设", pf, ctx, [])
     assert tid == "heading1", f"一、→ heading1: got {tid}"

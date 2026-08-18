@@ -20,7 +20,6 @@ def classify_legacy_paragraph(
     match_style_or_level_func: Callable[[str, ParagraphFeatures], tuple],
     select_scored_type_func: Callable[..., tuple],
     structure_scorers: tuple,
-    mode_scorers: tuple,
     fallback_scorers: tuple,
     flow_allows_func: Callable[[str, Any], bool],
     repair_heading4_colon_func: Callable[[str, str, ParagraphFeatures, Any], str],
@@ -65,7 +64,6 @@ def classify_legacy_paragraph(
                 feats,
                 ctx,
                 structure_scorers=structure_scorers,
-                mode_scorers=mode_scorers,
                 fallback_scorers=fallback_scorers,
                 flow_allows_func=flow_allows_func,
             )

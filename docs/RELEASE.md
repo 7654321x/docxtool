@@ -26,6 +26,8 @@ pwsh -NoProfile -Command "git ls-remote git@github.com:7654321x/docxtool.git ref
 - 当前 `docs/` 主文件、`docs/design/`、`docs/examples/` 和 `docs/migration/`；
 - `WPS_SERVER_PRD.md`、`WPS_SERVER_TECHNICAL_DESIGN.md`、`WPS_READER_PRD.md` 和 `公文格式规范.md`。
 
+`docxtool/` 是部署包镜像，不属于普通发布范围。只有用户明确要求“发布新版本”时，才同步并将其纳入发布。
+
 禁止发布：
 
 ```text
@@ -64,6 +66,12 @@ pwsh -NoProfile -File .\scripts\publish_to_github.ps1 -DryRun
 
 ```pwsh
 pwsh -NoProfile -File .\scripts\publish_to_github.ps1 -Quick -CommitMessage "说明本次修改"
+```
+
+发布新版本并同步部署包：
+
+```pwsh
+pwsh -NoProfile -File .\scripts\publish_to_github.ps1 -Quick -IncludeDeploymentPackage -CommitMessage "发布 vX.Y.Z"
 ```
 
 完整验收发布（仅用户明确要求时使用）：

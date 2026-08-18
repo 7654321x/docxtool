@@ -5,6 +5,7 @@ param(
     [switch]$DryRun,
     [switch]$Quick,
     [switch]$Verify,
+    [switch]$IncludeDeploymentPackage,
     [string]$Repository = "git@github.com:7654321x/docxtool.git",
     [string]$Branch = "main",
     [string]$SourceRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path,
@@ -513,15 +514,18 @@ $requiredFiles = @(
 $testFiles = Get-ChildItem -LiteralPath (Join-Path $SourceRoot "tests") -File -Recurse |
     Where-Object { $_.Name -like "test_*.py" -or $_.Name -like "*.test.mjs" } |
     ForEach-Object { [System.IO.Path]::GetRelativePath($SourceRoot, $_.FullName).Replace("\", "/") }
-$deploymentFiles = Get-ChildItem -LiteralPath (Join-Path $SourceRoot "docxtool") -File -Recurse -Force |
-    ForEach-Object { [System.IO.Path]::GetRelativePath($SourceRoot, $_.FullName).Replace("\", "/") } |
-    Where-Object {
-        $_ -eq "docxtool/.env.example" -or (
-            $_ -notmatch '(^|/)\.env(\.|$)' -and
-            $_ -notmatch '(^|/)(__pycache__|logs|outputs|runtime|build|dist|tmp_wheels|\.venv|\.pytest_cache|\.ruff_cache)(/|$)' -and
-            $_ -notmatch '\.(pyc|log|db|sqlite|sqlite3|zip)$'
-        )
-    }
+$deploymentFiles = @()
+if ($IncludeDeploymentPackage) {
+    $deploymentFiles = Get-ChildItem -LiteralPath (Join-Path $SourceRoot "docxtool") -File -Recurse -Force |
+        ForEach-Object { [System.IO.Path]::GetRelativePath($SourceRoot, $_.FullName).Replace("\", "/") } |
+        Where-Object {
+            $_ -eq "docxtool/.env.example" -or (
+                $_ -notmatch '(^|/)\.env(\.|$)' -and
+                $_ -notmatch '(^|/)(__pycache__|logs|outputs|runtime|build|dist|tmp_wheels|\.venv|\.pytest_cache|\.ruff_cache)(/|$)' -and
+                $_ -notmatch '\.(pyc|log|db|sqlite|sqlite3|zip)$'
+            )
+        }
+}
 $requiredPublishFiles = @($requiredFiles + $testFiles + $deploymentFiles | Sort-Object -Unique)
 $publishDeletionRoots = @(
     "apps/reader/",
@@ -532,10 +536,12 @@ $publishDeletionRoots = @(
     "scripts/",
     # Keep the retired path only so this migration can publish its deletions.
     "server/",
-    "docxtool/",
     "src/docxtool/",
     "tests/"
 )
+if ($IncludeDeploymentPackage) {
+    $publishDeletionRoots += "docxtool/"
+}
 $publishDeletionFiles = @(
     "run.ps1",
     "run.sh"
@@ -546,6 +552,7 @@ $commitCreated = $false
 Write-Host "Source: $SourceRoot"
 Write-Host "Repository: $Repository"
 Write-Host "Branch: $Branch"
+Write-Host "Deployment package: $(if ($IncludeDeploymentPackage) { 'included' } else { 'excluded' })"
 $verificationMode = if ($Verify) { "full" } else { "quick" }
 Write-Host "Mode: $(if ($DryRun) { 'dry-run' } else { 'push' }) | Verification: $verificationMode"
 

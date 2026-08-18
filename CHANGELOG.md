@@ -1,5 +1,11 @@
 # Changelog
 
+## 5.6.1 - 2026-08-18
+
+- Restricted annual-review inline heading segmentation to report documents.
+- Restored report front-matter short-title and glossary recognition, including numbered glossary items without colons.
+- Removed the obsolete legacy mode scorer path and its dedicated scorers.
+
 ## 5.6.0 - 2026-08-18
 
 - Made WPS executable builds use Python 3.8 and a Windows 7-compatible JSON Schema dependency set, while retaining schema validation.
