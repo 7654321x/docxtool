@@ -119,3 +119,28 @@ def test_apply_page_settings_writes_defaults_compat_and_grid() -> None:
 
     sect_pr = document.sections[0]._sectPr
     assert sect_pr.find(qn("w:docGrid")).get(qn("w:charsPerLine")) == "28"
+
+
+def test_wps_docxtool_page_settings_preserve_builtin_styles() -> None:
+    document = Document()
+    builtin_style_ids = ("Normal", "Heading1", "Heading2", "Heading3", "Heading4")
+    before = {
+        style_id: next(
+            style.xml
+            for style in document.styles._element.findall(qn("w:style"))
+            if style.get(qn("w:styleId")) == style_id
+        )
+        for style_id in builtin_style_ids
+    }
+
+    apply_page_settings(document, _settings(), style_profile="wps_docxtool")
+
+    after = {
+        style_id: next(
+            style.xml
+            for style in document.styles._element.findall(qn("w:style"))
+            if style.get(qn("w:styleId")) == style_id
+        )
+        for style_id in builtin_style_ids
+    }
+    assert after == before

@@ -15,7 +15,12 @@ from docxtool.document.diagnostics.logging import logger
 
 STYLE_PROFILE_DOCXTOOL = "docxtool"
 STYLE_PROFILE_WPS_BUILTIN = "wps_builtin"
-_STYLE_PROFILES = {STYLE_PROFILE_DOCXTOOL, STYLE_PROFILE_WPS_BUILTIN}
+STYLE_PROFILE_WPS_DOCXTOOL = "wps_docxtool"
+_STYLE_PROFILES = {
+    STYLE_PROFILE_DOCXTOOL,
+    STYLE_PROFILE_WPS_BUILTIN,
+    STYLE_PROFILE_WPS_DOCXTOOL,
+}
 
 
 TYPE_TO_STYLE_ID: dict[str, str] = {
@@ -168,7 +173,7 @@ def enforce_body_paragraph_invariants(
 
 def _is_managed_style_id(style_id: str, style_profile: str) -> bool:
     """判断输出样式是否属于当前 profile；传入 ID 和 profile，返回布尔值。"""
-    if style_profile == STYLE_PROFILE_DOCXTOOL:
+    if style_profile in {STYLE_PROFILE_DOCXTOOL, STYLE_PROFILE_WPS_DOCXTOOL}:
         return style_id.startswith("DCT-")
     if style_id in {"Normal", "Heading1", "Heading2", "Heading3", "Heading4"}:
         return True

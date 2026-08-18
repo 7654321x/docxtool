@@ -217,7 +217,7 @@ def test_format_pipeline_failure_logs_exact_stage(
     assert failure["request_id"] == "request-format-fail"
     assert failure["error_code"] == expected_code
 
-def test_wps_one_click_passes_builtin_style_profile_to_engine(tmp_path, monkeypatch):
+def test_wps_one_click_passes_isolated_docxtool_style_profile_to_engine(tmp_path, monkeypatch):
     source = tmp_path / "source.docx"
     target = tmp_path / "output.docx"
     source.write_bytes(b"source")
@@ -260,7 +260,7 @@ def test_wps_one_click_passes_builtin_style_profile_to_engine(tmp_path, monkeypa
         request_id="request-style-profile",
     )
 
-    assert captured["style_profile"] == "wps_builtin"
+    assert captured["style_profile"] == "wps_docxtool"
 
 def test_wps_one_click_format_rebuilds_heading_numbering_by_default(tmp_path):
     source = tmp_path / "source.docx"
@@ -289,7 +289,7 @@ def test_wps_one_click_format_rebuilds_heading_numbering_by_default(tmp_path):
         paragraph.text
         for paragraph in Document(target).paragraphs
         if paragraph.style.style_id
-        in {"Heading1", "Heading2", "Heading3", "Heading4"}
+        in {"DCT-Heading1", "DCT-Heading2", "DCT-Heading3", "DCT-Heading4"}
     ]
     assert headings == [
         "一、第一部分",
@@ -300,7 +300,7 @@ def test_wps_one_click_format_rebuilds_heading_numbering_by_default(tmp_path):
     heading3 = next(
         paragraph
         for paragraph in Document(target).paragraphs
-        if paragraph.style.style_id == "Heading3"
+        if paragraph.style.style_id == "DCT-Heading3"
     )
     assert heading3.text == "1.第三层"
     assert all(run.font.bold is True for run in heading3.runs)
@@ -341,7 +341,7 @@ def test_wps_page_scope_recognizes_only_selected_source_paragraphs(tmp_path):
         "范围外末段",
     ]
     assert output.paragraphs[0].style.name == "Caption"
-    assert output.paragraphs[1].style.style_id == "Heading1"
+    assert output.paragraphs[1].style.style_id == "DCT-Heading1"
     assert output.paragraphs[2].style.name == "Quote"
     assert output.tables[0].cell(0, 0).text == "范围外表格"
     assert output.sections[0].top_margin == source_top_margin
@@ -391,7 +391,7 @@ def test_wps_one_click_rebuilds_native_heading_numbering_from_server_config(tmp_
     heading = next(
         paragraph
         for paragraph in output.paragraphs
-        if paragraph.style.style_id == "Heading2"
+        if paragraph.style.style_id == "DCT-Heading2"
     )
     assert heading.text == "（一）自动编号二级标题"
     assert heading._p.get_or_add_pPr().find(qn("w:numPr")) is None
@@ -428,7 +428,7 @@ def test_wps_one_click_format_uses_safe_punctuation_by_default(tmp_path, monkeyp
     body_texts = [
         paragraph.text
         for paragraph in Document(target).paragraphs
-        if paragraph.style.style_id == "Normal"
+        if paragraph.style.style_id == "DCT-Body"
     ]
     assert captured["features"]["punctuation"]["enabled"] is True
     assert "请访问 https://example.com/a,b?x=1.2, 并说明：可以吗？" in body_texts
@@ -457,8 +457,8 @@ def test_wps_log_rejects_document_name_and_document_path():
     assert fields == {}
 
 def test_wps_log_accepts_style_profile_diagnostic():
-    assert sanitize_wps_log_fields({"style_profile": "wps_builtin"}) == {
-        "style_profile": "wps_builtin"
+    assert sanitize_wps_log_fields({"style_profile": "wps_docxtool"}) == {
+        "style_profile": "wps_docxtool"
     }
 def test_wps_log_accepts_taskpane_scroll_diagnostics():
     fields = sanitize_wps_log_fields(

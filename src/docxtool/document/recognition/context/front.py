@@ -13,7 +13,6 @@ from ...role_shape import (
 )
 from ...text.front_matter import (
     is_meeting_title_descriptor,
-    is_parenthesized_header_date_line,
 )
 from ..features import ParagraphFeatures
 
@@ -69,7 +68,7 @@ def _head_meeting_title_date(
         previous is not None
         and following is not None
         and _front_title_anchor(previous)
-        and is_parenthesized_header_date_line(feature.raw_text)
+        and _head_date_line(feature)
         and is_meeting_title_descriptor(following.raw_text)
     )
 

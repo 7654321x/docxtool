@@ -18,6 +18,7 @@ from docx.shared import Pt
 from docxtool.document.configuration.models import PageSettings
 from docxtool.document.engine.paragraph_styles import (
     STYLE_PROFILE_WPS_BUILTIN,
+    STYLE_PROFILE_WPS_DOCXTOOL,
     normalize_style_profile,
 )
 from docxtool.document.diagnostics.logging import logger
@@ -247,46 +248,51 @@ def apply_page_settings(
     documentDefaults、Normal 样式、各节 sectPr 和 settings 兼容项。
     """
     resolved_style_profile = normalize_style_profile(style_profile)
-    styles_element = doc.styles._element
-    docDefaults = styles_element.find(qn("w:docDefaults"))
-    if docDefaults is None:
-        docDefaults = OxmlElement("w:docDefaults")
-        styles_element.insert(0, docDefaults)
-    rPrDefault = docDefaults.find(qn("w:rPrDefault"))
-    if rPrDefault is None:
-        rPrDefault = OxmlElement("w:rPrDefault")
-        docDefaults.append(rPrDefault)
-    rPrDef = rPrDefault.find(qn("w:rPr"))
-    if rPrDef is None:
-        rPrDef = OxmlElement("w:rPr")
-        rPrDefault.append(rPrDef)
-    for old in rPrDef.findall(qn("w:rFonts")):
-        rPrDef.remove(old)
-    for old in rPrDef.findall(qn("w:sz")):
-        rPrDef.remove(old)
-    for old in rPrDef.findall(qn("w:szCs")):
-        rPrDef.remove(old)
-    for old_lang in rPrDef.findall(qn("w:lang")):
-        rPrDef.remove(old_lang)
-    lang = OxmlElement("w:lang")
-    lang.set(qn("w:val"), "en-US")
-    lang.set(qn("w:eastAsia"), "zh-CN")
-    lang.set(qn("w:bidi"), "ar-SA")
-    rPrDef.append(lang)
-    df = OxmlElement("w:rFonts")
-    df.set(qn("w:eastAsia"), "仿宋_GB2312")
-    df.set(qn("w:ascii"), "Times New Roman")
-    df.set(qn("w:hAnsi"), "Times New Roman")
-    rPrDef.append(df)
-    sz = OxmlElement("w:sz")
-    sz.set(qn("w:val"), "32")
-    rPrDef.append(sz)
-    szCs = OxmlElement("w:szCs")
-    szCs.set(qn("w:val"), "32")
-    rPrDef.append(szCs)
+    preserve_builtin_styles = resolved_style_profile in {
+        STYLE_PROFILE_WPS_BUILTIN,
+        STYLE_PROFILE_WPS_DOCXTOOL,
+    }
+    if not preserve_builtin_styles:
+        styles_element = doc.styles._element
+        docDefaults = styles_element.find(qn("w:docDefaults"))
+        if docDefaults is None:
+            docDefaults = OxmlElement("w:docDefaults")
+            styles_element.insert(0, docDefaults)
+        rPrDefault = docDefaults.find(qn("w:rPrDefault"))
+        if rPrDefault is None:
+            rPrDefault = OxmlElement("w:rPrDefault")
+            docDefaults.append(rPrDefault)
+        rPrDef = rPrDefault.find(qn("w:rPr"))
+        if rPrDef is None:
+            rPrDef = OxmlElement("w:rPr")
+            rPrDefault.append(rPrDef)
+        for old in rPrDef.findall(qn("w:rFonts")):
+            rPrDef.remove(old)
+        for old in rPrDef.findall(qn("w:sz")):
+            rPrDef.remove(old)
+        for old in rPrDef.findall(qn("w:szCs")):
+            rPrDef.remove(old)
+        for old_lang in rPrDef.findall(qn("w:lang")):
+            rPrDef.remove(old_lang)
+        lang = OxmlElement("w:lang")
+        lang.set(qn("w:val"), "en-US")
+        lang.set(qn("w:eastAsia"), "zh-CN")
+        lang.set(qn("w:bidi"), "ar-SA")
+        rPrDef.append(lang)
+        df = OxmlElement("w:rFonts")
+        df.set(qn("w:eastAsia"), "仿宋_GB2312")
+        df.set(qn("w:ascii"), "Times New Roman")
+        df.set(qn("w:hAnsi"), "Times New Roman")
+        rPrDef.append(df)
+        sz = OxmlElement("w:sz")
+        sz.set(qn("w:val"), "32")
+        rPrDef.append(sz)
+        szCs = OxmlElement("w:szCs")
+        szCs.set(qn("w:val"), "32")
+        rPrDef.append(szCs)
 
     style = None
-    if resolved_style_profile != STYLE_PROFILE_WPS_BUILTIN:
+    if not preserve_builtin_styles:
         style = doc.styles["Normal"]
         style.font.size = Pt(16)
         style.font.name = "Times New Roman"

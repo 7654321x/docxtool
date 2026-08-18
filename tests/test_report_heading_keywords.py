@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from docx import Document
+import pytest
 
 from docxtool.document.recognition import RecognitionConfig, apply_recognition
 from docxtool.sdk import recognize_docx
@@ -67,7 +68,7 @@ def test_annual_review_inline_heading_is_segmented_into_heading1_and_body(tmp_pa
     ]
 
 
-def test_annual_review_one_year_is_segmented_only_for_report_mode(tmp_path) -> None:
+def test_annual_review_is_segmented_from_local_evidence_in_any_mode(tmp_path) -> None:
     report_source = tmp_path / "report-one-year.docx"
     report = Document()
     title = report.add_paragraph()
@@ -93,7 +94,7 @@ def test_annual_review_one_year_is_segmented_only_for_report_mode(tmp_path) -> N
             block for block in normal_plan.blocks
             if block.physical_paragraph_index == paragraph_index
         ]
-        assert len(normal_blocks) == 1
+        assert [block.type_id for block in normal_blocks] == ["heading1", "body"]
 
 
 def test_report_front_short_titles_restore_title2_and_glossary_title() -> None:
@@ -111,9 +112,14 @@ def test_report_front_short_titles_restore_title2_and_glossary_title() -> None:
     )
 
     assert [title2.type_id, glossary_title.type_id] == ["title2", "glossary_title"]
+    title2_trace = data.recognition_diagnostics["candidate_trace"][1]
+    title2_candidate = next(
+        item for item in title2_trace["candidates"] if item["type"] == "title2"
+    )
+    assert "report-mode-prior" in title2_candidate["evidence"]
 
 
-def test_normal_front_short_title_does_not_use_report_title2_exception() -> None:
+def test_normal_front_short_title_gets_a_soft_title2_candidate() -> None:
     title2 = _paragraph("工作安排", "body", 1)
     data = _document(
         _paragraph("普通材料", "title", 0, alignment="CENTER", bold_char_ratio=1.0),
@@ -125,7 +131,72 @@ def test_normal_front_short_title_does_not_use_report_title2_exception() -> None
         RecognitionConfig(enable_core_candidates=False, enable_legacy_candidates=False),
     )
 
-    assert title2.type_id != "title2"
+    trace = data.recognition_diagnostics["candidate_trace"][1]
+    assert any(
+        item["type"] == "title2" and item["source"] == "body-title"
+        for item in trace["candidates"]
+    )
+
+
+def test_normal_front_glossary_title_is_not_report_gated() -> None:
+    glossary_title = _paragraph("名词解释", "body", 1)
+    data = _document(
+        _paragraph("普通材料", "title", 0, alignment="CENTER", bold_char_ratio=1.0),
+        glossary_title,
+    )
+
+    apply_recognition(
+        data,
+        RecognitionConfig(enable_core_candidates=False, enable_legacy_candidates=False),
+    )
+
+    assert glossary_title.type_id == "glossary_title"
+
+
+@pytest.mark.parametrize("numbered_text, expected_type", [
+    ("一、总体情况", "heading1"),
+    ("（一）总体情况", "heading2"),
+])
+def test_glossary_does_not_claim_non_level3_numbered_headings(
+    numbered_text: str,
+    expected_type: str,
+) -> None:
+    glossary_item = _paragraph(numbered_text, "body", 2, numbering_prefix=numbered_text.split("总体", 1)[0])
+    data = _document(
+        _paragraph("普通材料", "title", 0, alignment="CENTER", bold_char_ratio=1.0),
+        _paragraph("正文已经开始并完整说明工作背景和基本情况。", "body", 1),
+        _paragraph("名词解释", "body", 2),
+        glossary_item,
+    )
+
+    apply_recognition(
+        data,
+        RecognitionConfig(enable_core_candidates=False, enable_legacy_candidates=False),
+    )
+
+    assert glossary_item.type_id == expected_type
+    assert glossary_item.type_id != "glossary_item"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "五年来，我们持续推进重点工作并取得新的明显成效。",
+        "过去五年来。我们持续推进重点工作并取得新的明显成效。",
+        "五年来。",
+    ],
+)
+def test_annual_review_requires_exact_lead_period_and_body(text, tmp_path) -> None:
+    source = tmp_path / "normal-annual-review-negative.docx"
+    document = Document()
+    document.add_paragraph("普通材料")
+    document.add_paragraph(text)
+    document.save(source)
+
+    plan = recognize_docx(source, recognition_mode="authoritative", include_text=True)
+    blocks = [block for block in plan.blocks if block.physical_paragraph_index == 1]
+
+    assert len(blocks) == 1
 
 
 def test_numbered_glossary_item_without_colon_preserves_missing_colon_metadata() -> None:

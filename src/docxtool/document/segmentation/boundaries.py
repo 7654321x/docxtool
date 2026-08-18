@@ -153,9 +153,8 @@ def segment_boundary_candidates(
         native_list_heading = (
             source_numbering.startswith("@lvl_") and visual_transition
         )
-        annual_review_heading = (
-            document_mode is DocumentMode.REPORT
-            and _is_annual_review_inline_heading(text, period_index, body_count)
+        annual_review_heading = _is_annual_review_inline_heading(
+            text, period_index, body_count
         )
         numbered = literal_numbered or native_list_heading
         if literal_numbered:
@@ -165,16 +164,21 @@ def segment_boundary_candidates(
         else:
             boundary_evidence = "VISUAL_TITLE_TERMINATOR"
         if body_count >= 5 and (numbered or visual_transition or annual_review_heading):
+            evidence = [
+                "ANNUAL_REVIEW_HEADING_TERMINATOR"
+                if annual_review_heading
+                else boundary_evidence,
+                "VISIBLE_BODY_AFTER_TERMINATOR",
+            ]
+            if annual_review_heading and document_mode is DocumentMode.REPORT:
+                evidence.append("REPORT_MODE_PRIOR")
             candidates.append(SegmentBoundaryCandidate(
                 raw_start=start,
                 raw_end=boundary,
                 left_type_hint="heading" if numbered or annual_review_heading else "title_or_heading",
                 right_type_hint="body",
                 confidence=0.99 if numbered else 0.84,
-                evidence=(
-                    "ANNUAL_REVIEW_HEADING_TERMINATOR" if annual_review_heading else boundary_evidence,
-                    "VISIBLE_BODY_AFTER_TERMINATOR",
-                ),
+                evidence=tuple(evidence),
             ))
 
     return tuple(sorted(candidates, key=lambda item: (-item.confidence, item.raw_end)))

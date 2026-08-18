@@ -26,6 +26,8 @@ def _noop_validate(
     source: str,
     spans: list[Tuple[int, int]],
     features: Optional[ParagraphFeatures] = None,
+    *,
+    document_mode=None,
 ) -> None:
     """测试辅助：传入源文本和范围，不做额外校验并返回 None。"""
     return None

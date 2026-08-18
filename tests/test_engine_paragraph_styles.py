@@ -38,6 +38,13 @@ def test_wps_builtin_style_profile_maps_only_body_and_heading_types() -> None:
     assert style_id_for_type("unknown_type", "wps_builtin") == "Normal"
 
 
+def test_wps_docxtool_style_profile_keeps_structural_styles_out_of_builtin_slots() -> None:
+    assert style_id_for_type("body", "wps_docxtool") == "DCT-Body"
+    assert style_id_for_type("heading1", "wps_docxtool") == "DCT-Heading1"
+    assert style_id_for_type("heading4", "wps_docxtool") == "DCT-Heading4"
+    assert style_id_for_type("unknown_type", "wps_docxtool") == "DCT-Body"
+
+
 def test_unknown_style_profile_fails_fast() -> None:
     with pytest.raises(ValueError, match="WPS_STYLE_PROFILE_INVALID"):
         style_id_for_type("body", "unknown-profile")

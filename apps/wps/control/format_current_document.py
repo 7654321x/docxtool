@@ -17,6 +17,9 @@ from docxtool.security import validate_docx_integrity
 from .logging_adapter import document_log_context, log_event
 
 
+WPS_STYLE_PROFILE = "wps_docxtool"
+
+
 @dataclass(frozen=True)
 class FormatResult:
     output_path: Path
@@ -163,7 +166,7 @@ def format_current_document(
                 "request_id": request_id,
                 "duration_ms": int((time.monotonic() - stage_started) * 1000),
                 "processing_strategy": processing["strategy"],
-                "style_profile": "wps_builtin",
+                "style_profile": WPS_STYLE_PROFILE,
                 "numbering_enabled": bool(features["numbering"]["enabled"]),
                 "punctuation_safe_enabled": bool(
                     features["punctuation"]["enabled"]
@@ -221,7 +224,7 @@ def format_current_document(
                 table_format_options=features.get("table_format"),
                 cleanup_options=features.get("cleanup"),
                 letterhead_options=features.get("letterhead"),
-                style_profile="wps_builtin",
+                style_profile=WPS_STYLE_PROFILE,
             ) or {}
         except Exception as exc:
             log_event("ERROR", "format", "engine.export.failed", "DocxTool Engine 导出失败", {"operation_id_short": operation_id[:12], "request_id": request_id, "stage": "engine_export", "error_type": type(exc).__name__, "error_code": "WPS_FORMAT_EXPORT_FAILED", "duration_ms": int((time.monotonic() - stage_started) * 1000)})

@@ -37,7 +37,7 @@ def build_logical_span_plan(
     features: Optional[ParagraphFeatures],
     source_starts_body_region_func: Callable[[str], bool],
     split_inline_heading_body_spans_func: Callable[..., list[Tuple[int, int]]],
-    validate_numbered_heading_body_split_func: Callable[[str, list[Tuple[int, int]], Optional[ParagraphFeatures]], None],
+    validate_numbered_heading_body_split_func: Callable[..., None],
     should_split_structural_line_breaks_func: Callable[[list[str], str], bool],
     split_structural_tail_after_numbered_heading_func: Callable[[str, list[Tuple[int, int]], str], list[Tuple[int, int]]],
     validate_source_span_partition_func: Callable[[str, list[Tuple[int, int]]], None],
@@ -67,7 +67,12 @@ def build_logical_span_plan(
         if should_split_inline_heading_body else [(whole_start, whole_end)]
     )
     if should_split_inline_heading_body:
-        validate_numbered_heading_body_split_func(source, whole_heading_spans, features)
+        validate_numbered_heading_body_split_func(
+            source,
+            whole_heading_spans,
+            features,
+            document_mode=document_mode,
+        )
 
     split_soft_lines = (
         len(source_spans) > 1

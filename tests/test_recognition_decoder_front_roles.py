@@ -94,10 +94,11 @@ def test_front_report_briefing_suffix_supports_multiline_title_group() -> None:
     assert "document-type-title-suffix" in diagnostics[1]["title_context_evidence"]
 
 
-def test_front_meeting_date_and_context_are_distinct_from_title() -> None:
+@pytest.mark.parametrize("date_text", ["（2026年8月27日）", "2026年8月27日"])
+def test_front_meeting_date_and_context_are_distinct_from_title(date_text: str) -> None:
     data = _document(
         _paragraph("年度重点工作报告", "body", 0, alignment="CENTER"),
-        _paragraph("（2026年8月27日）", "body", 1, alignment="CENTER"),
+        _paragraph(date_text, "body", 1, alignment="CENTER"),
         _paragraph("在全市重点工作会议上", "body", 2, alignment="CENTER"),
         _paragraph("各有关单位：", "body", 3),
         _paragraph("现将有关工作情况报告如下。", "body", 4),

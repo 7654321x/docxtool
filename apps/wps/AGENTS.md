@@ -18,7 +18,7 @@
 14. 自动登录只能在登录窗口已经显示后触发与用户点击“登录”相同的提交函数，不得后台复用会话或跳过窗口。
 15. 端口冲突只允许确认占用者是本项目旧服务后自动停止并重试；其他进程不得自动结束，也不得回退随机端口。
 16. WPS 一键排版继续使用现有 Core、Recognition、Normalization、Engine 和公网授权链，不在 WPS 端复制算法。
-17. WPS 入口传入 `style_profile=wps_builtin` 时，正文和一至四级标题使用 OOXML 内置 `Normal`、`Heading1`—`Heading4`；WPS 顶部显示仍为“正文、标题1、标题2、标题3、标题4”。
+17. WPS 一键排版固定传入 `style_profile=wps_docxtool`：正文和一至四级标题使用 `DCT-*` 自定义样式，不改写 OOXML 内置 `Normal`、`Heading1`—`Heading4`，使 WPS“清除格式”可恢复内置正文样式。
 18. WPS 指定页码范围必须在保存、转换和 Engine 调用前按原始分页固定；范围外内容原样复制，不能改写全局页面设置、版头或尾部顺序。
 19. “添加版头”必须走独立文档事务，不调用 Recognition、一键排版或公网授权；当前界面只支持单机关。
 20. 默认只运行相关源码测试和 `apps/wps/scripts/verify.ps1`，不自动构建 EXE。真实 WPS 未验证时必须报告对应 `*_SMOKE = NOT_RUN`。
