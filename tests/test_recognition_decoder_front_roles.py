@@ -119,6 +119,26 @@ def test_front_meeting_date_and_context_are_distinct_from_title(date_text: str) 
         {"position": 2, "kind": "meeting_title_meta"},
     ]
 
+
+def test_front_prosecutor_role_name_uses_generic_role_shape() -> None:
+    role = _paragraph(
+        "人民检察院副检察长  李测试",
+        "body",
+        3,
+        alignment="CENTER",
+    )
+    data = _document(
+        _paragraph("人民检察院工作报告", "title", 0, alignment="CENTER"),
+        _paragraph("2026年8月25日", "date_line", 1, alignment="CENTER"),
+        _paragraph("在市人民代表大会会议上", "meeting_title_meta", 2, alignment="CENTER"),
+        role,
+        _paragraph("各位代表：", "addressing", 4),
+    )
+
+    apply_recognition(data)
+
+    assert role.type_id == "role_name"
+
 def test_short_body_before_recipient_is_rechecked_as_title() -> None:
     title = _paragraph("基层治理重点工作安排", "body", 0, style_name="DCT-Body")
     data = _document(

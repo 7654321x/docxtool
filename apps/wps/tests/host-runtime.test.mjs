@@ -205,6 +205,21 @@ test("Host writes confirmed and review comments but skips unresolved blocks", as
   assert.equal(state.preview_confirmed_count, 1);
   assert.equal(state.preview_review_count, 1);
   assert.equal(state.recognition.unresolved_count, 1);
+ });
+
+test("Host labels a same-paragraph heading and body as inline body", async () => {
+  const harness = makeHostHarness({
+    bindingItems: [bindingItem("ABCD", 0, 4, 0, { type_id: "heading2", inline_body: true })],
+  });
+  harness.runtime.start();
+
+  await harness.runtime.runCommand(
+    "preview",
+    requestContext("preview", "request-inline-body-label"),
+  );
+
+  assert.equal(harness.comments.created.length, 1);
+  assert.match(harness.comments.created[0].Text, /二级标题\+行内正文/);
 });
 
 test("Host logs paragraph-change Range failure before command summary", async () => {

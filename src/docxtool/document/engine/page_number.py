@@ -16,6 +16,14 @@ from docx.shared import Cm, Pt
 _PAGE_INSTRUCTION_RE = re.compile(r"\b(?:PAGE|NUMPAGES)\b", re.IGNORECASE)
 _PAGE_ONLY_TEXT_RE = re.compile(r"[\s\d/\\\-–—第页共总计：:PagePAGEofNUMPAGES]+", re.IGNORECASE)
 _PAGE_DECORATION_TEXT_RE = re.compile(r"[\s\d/\\\-–—第页共总计：:Pageof]+", re.IGNORECASE)
+_STATIC_PAGE_NUMBER_RE = re.compile(
+    r"(?:"
+    r"[—–-]\s*\d+\s*[—–-]"
+    r"|\d+"
+    r"|第\s*\d+\s*页(?:\s*(?:共|/)\s*\d+\s*页?)?"
+    r"|\d+\s*/\s*\d+"
+    r")"
+)
 
 
 def apply_page_number(document, options: Mapping[str, Any] | None = None):
@@ -176,15 +184,21 @@ def _set_page_number_indent(
             ppr.remove(indent)
         return
 
-    # Footer paragraphs may inherit the body Normal style. Override its
-    # first-line indent so the outside page number keeps exactly one
-    # character of inner-page spacing.
+    # Footer paragraphs may inherit the body Normal style. Use an explicit
+    # twip indent instead of leftChars/rightChars: WPS interprets character
+    # indents differently between inherited footer styles.
     indent.set(qn("w:firstLine"), "0")
     indent.set(qn("w:firstLineChars"), "0")
+    try:
+        one_character_twips = max(
+            1, int(round(float(options.get("font_size_pt", 14)) * 20))
+        )
+    except (TypeError, ValueError):
+        one_character_twips = 280
     if footer_kind == "even":
-        indent.set(qn("w:leftChars"), "100")
+        indent.set(qn("w:left"), str(one_character_twips))
     else:
-        indent.set(qn("w:rightChars"), "100")
+        indent.set(qn("w:right"), str(one_character_twips))
 
 
 def _is_reusable_empty_paragraph(paragraph) -> bool:
@@ -353,10 +367,10 @@ def _clear_pg_num_start(section) -> None:
 
 def _remove_existing_page_numbers(footer) -> None:
     for paragraph in list(footer.paragraphs):
-        if not _paragraph_has_page_number(paragraph):
-            continue
         if _is_page_number_only_paragraph(paragraph):
             paragraph._element.getparent().remove(paragraph._element)
+            continue
+        if not _paragraph_has_page_number(paragraph):
             continue
         _remove_page_field_runs(paragraph)
         _remove_literal_page_tokens(paragraph)
@@ -372,8 +386,14 @@ def _field_instruction_text(paragraph) -> str:
 
 def _is_page_number_only_paragraph(paragraph) -> bool:
     visible_text = "".join(text.text or "" for text in paragraph._element.findall(".//" + qn("w:t")))
-    visible_text = _PAGE_ONLY_TEXT_RE.sub("", visible_text)
-    return not visible_text.strip()
+    normalized = re.sub(r"\s+", "", visible_text)
+    if not normalized:
+        return _paragraph_has_page_number(paragraph)
+    if _STATIC_PAGE_NUMBER_RE.fullmatch(normalized):
+        return True
+    if _paragraph_has_page_number(paragraph):
+        return not _PAGE_ONLY_TEXT_RE.sub("", visible_text).strip()
+    return False
 
 
 def _remove_page_field_runs(paragraph) -> None:

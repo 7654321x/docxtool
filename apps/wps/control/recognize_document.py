@@ -199,12 +199,23 @@ def bind_preview(
             )
             raise ValueError("WPS_PREVIEW_BINDING_BLOCK_MISSING")
         preconditions = dict(bound.preconditions or {})
+        inline_body = (
+            source.type_id == "heading2"
+            and any(
+                evidence in {
+                    "numbered-heading2-period-inline-body",
+                    "numbered-heading2-colon-inline-body",
+                }
+                for evidence in source.classification_evidence
+            )
+        )
         items.append(
             {
                 "block_id": bound.block_id,
                 "block_index": bound.block_index,
                 "type_id": source.type_id,
                 "format_role": source.format_role,
+                "inline_body": inline_body,
                 "review_level": source.review_level,
                 "confidence": source.classification_confidence,
                 "segment_index": source.segment_index,

@@ -10,6 +10,7 @@ from typing import Any, Dict, Optional
 from docxtool.document.engine import export_doc
 from docxtool.document.importer import DocxImporter
 from docxtool.document.models import FormatScope
+from docxtool.document.configuration.models import PageSettings
 from docxtool.sdk.binding import bind_physical_paragraphs
 from docxtool.document.configuration.validation import load_rules_and_settings
 from docxtool.security import validate_docx_integrity
@@ -18,6 +19,25 @@ from .logging_adapter import document_log_context, log_event
 
 
 WPS_STYLE_PROFILE = "wps_docxtool"
+
+
+def _apply_official_page_grid(settings: PageSettings) -> tuple[int, int, bool]:
+    """Apply the hidden WPS document-grid values from the package defaults.
+
+    The WPS settings window intentionally does not expose characters-per-line
+    or lines-per-page. Older local profiles can still contain stale values,
+    so accepting those values would make the same official document render
+    with a different grid. The default-format JSON remains the canonical
+    source for the official 28-character/22-line grid.
+    """
+    default_settings = PageSettings.from_config()
+    previous = (settings.chars_per_line, settings.lines_per_page)
+    settings.chars_per_line = default_settings.chars_per_line
+    settings.lines_per_page = default_settings.lines_per_page
+    return previous[0], previous[1], previous != (
+        settings.chars_per_line,
+        settings.lines_per_page,
+    )
 
 
 @dataclass(frozen=True)
@@ -136,6 +156,23 @@ def format_current_document(
         except Exception as exc:
             log_event("ERROR", "format", "config.load.failed", "正式排版配置加载失败", {"operation_id_short": operation_id[:12], "request_id": request_id, "stage": "config_load", "error_type": type(exc).__name__, "error_code": "WPS_FORMAT_CONFIG_FAILED", "duration_ms": int((time.monotonic() - stage_started) * 1000)})
             raise RuntimeError("WPS_FORMAT_CONFIG_FAILED") from exc
+        previous_chars, previous_lines, grid_changed = _apply_official_page_grid(settings)
+        if grid_changed:
+            log_event(
+                "INFO",
+                "format",
+                "config.page_grid.standardized",
+                "WPS 正式排版已统一使用公文文档网格",
+                {
+                    "operation_id_short": operation_id[:12],
+                    "request_id": request_id,
+                    "source_chars_per_line": previous_chars,
+                    "source_lines_per_page": previous_lines,
+                    "chars_per_line": settings.chars_per_line,
+                    "lines_per_page": settings.lines_per_page,
+                    "source": "default-format.json",
+                },
+            )
         # WPS one-click formatting always rebuilds recognized heading
         # numbering as editable text. This removes source automatic heading
         # numbering while leaving native body lists under Core's existing

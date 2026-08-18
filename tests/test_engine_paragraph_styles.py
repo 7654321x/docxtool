@@ -20,6 +20,7 @@ from docxtool.document.engine.render_types import rule_index_for_type
 def test_style_id_for_type_maps_known_types_and_falls_back_to_body() -> None:
     assert style_id_for_type("heading1") == "DCT-Heading1"
     assert style_id_for_type("attachment_note_item") == "DCT-AttachmentNoteItem"
+    assert style_id_for_type("glossary_item") == "DCT-Body"
     assert style_id_for_type("meeting_title_meta") == "DCT-Author"
     assert rule_index_for_type("meeting_title_meta") == 12
     assert style_id_for_type("unknown_type") == "DCT-Body"

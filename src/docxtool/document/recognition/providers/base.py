@@ -33,6 +33,8 @@ class Candidate:
 class CandidateContext(Protocol):
     mode: DocumentMode
     previous_type: ParagraphType | None
+    previous_types: tuple[ParagraphType, ...]
+    following_features: tuple[ParagraphFeatures, ...]
     index: int
     boundary_before: bool
     document_context: DocumentContext
@@ -78,6 +80,31 @@ def _body_like_candidate(features: ParagraphFeatures) -> bool:
         (features.ends_with_sentence_punctuation and features.text_length >= 12)
         or features.text_length >= 34
     )
+
+
+def _glossary_context_active(context: CandidateContext) -> bool:
+    """Return whether a glossary item may continue across one body paragraph."""
+    if context.previous_type in {
+        ParagraphType.GLOSSARY_TITLE,
+        ParagraphType.GLOSSARY_ITEM,
+    }:
+        return True
+    if context.previous_type != ParagraphType.BODY:
+        return False
+    history = tuple(getattr(context, "previous_types", ()) or ())
+    last_glossary = max(
+        (
+            position
+            for position, paragraph_type in enumerate(history)
+            if paragraph_type
+            in {ParagraphType.GLOSSARY_TITLE, ParagraphType.GLOSSARY_ITEM}
+        ),
+        default=-1,
+    )
+    if last_glossary < 0:
+        return False
+    gap = history[last_glossary + 1 :]
+    return len(gap) == 1 and gap[0] == ParagraphType.BODY
 
 
 def _context_evidence_for(

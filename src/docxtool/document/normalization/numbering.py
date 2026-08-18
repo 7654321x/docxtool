@@ -110,6 +110,12 @@ def assign_heading_numbering(
         if reset_on_attach and paragraph.type_id == "attachment_page_mark":
             counters = {"a": 0, "b": 0, "c": 0, "d": 0}
             continue
+        if paragraph.type_id == "title2":
+            # 报告中的“过去五年主要工作”“今后五年工作建议”等短标题
+            # 开启新的一级标题编号组；短标题本身不占用一级至四级编号。
+            counters = {"a": 0, "b": 0, "c": 0, "d": 0}
+            paragraph.meta.pop("numbering", None)
+            continue
         if paragraph.meta.get("heading2_cont"):
             continue
         key = level_map.get(paragraph.type_id)

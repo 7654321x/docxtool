@@ -41,6 +41,19 @@ def test_apply_superscript_split_converts_bracket_markers() -> None:
     assert superscripts == ["[1]", "[2]"]
 
 
+def test_apply_superscript_split_preserves_direct_chinese_font() -> None:
+    """拆分脚注标记时不得丢失正文 run 的中文字体。"""
+    document = Document()
+    paragraph = document.add_paragraph("正文[1]继续")
+    set_run_fonts(paragraph.runs[0], cn_font="仿宋_GB2312")
+
+    apply_superscript_split(paragraph)
+
+    fonts = _run_fonts(paragraph.runs[0])
+    assert fonts.get(qn("w:eastAsia")) == "仿宋_GB2312"
+    assert paragraph.text == "正文[1]继续"
+
+
 def test_apply_digit_latin_font_splits_digits_and_letters_only() -> None:
     """数字和拉丁字母应拆成独立 run 并使用 Times New Roman。"""
     document = Document()

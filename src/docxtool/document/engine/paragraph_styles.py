@@ -41,6 +41,7 @@ TYPE_TO_STYLE_ID: dict[str, str] = {
     "addressing": "DCT-Recipient",
     "responsibility_line": "DCT-Responsibility",
     "title2": "DCT-Heading2",
+    "glossary_item": "DCT-Body",
     "sign_org": "DCT-Signature",
     "sign_date": "DCT-Date",
     "attachment_note": "DCT-AttachmentNote",

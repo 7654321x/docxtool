@@ -6,7 +6,7 @@ import re
 
 from ..colon import is_standalone_addressing_text
 from ..model import ParagraphType, SectionKind
-from .base import Candidate, _body_like_candidate
+from .base import Candidate, _body_like_candidate, _glossary_context_active
 
 
 _ATTACHMENT_PAGE_MARK_RE = re.compile(r"^附件\s*[0-9一二三四五六七八九十百千]*$")
@@ -158,6 +158,7 @@ class StructuralCandidateProvider:
             (
                 features.colon_explanatory_body
                 and not features.numbered_heading2_colon_inline_body
+                and not _glossary_context_active(context)
             )
             or (
                 features.colon_body_label_candidate

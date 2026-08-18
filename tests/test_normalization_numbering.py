@@ -94,6 +94,22 @@ def test_assign_heading_numbering_resets_after_attachment_page_mark() -> None:
     assert [paragraph.meta.get("numbering", "") for paragraph in paragraphs] == ["一、", "", "一、"]
 
 
+def test_assign_heading_numbering_resets_after_report_short_title() -> None:
+    """报告短标题后的一级标题应重新从“一、”开始编号。"""
+    paragraphs = [
+        _paragraph("heading1"),
+        _paragraph("title2"),
+        _paragraph("heading1"),
+        _paragraph("heading2"),
+    ]
+
+    assign_heading_numbering(paragraphs, _rules())
+
+    assert [paragraph.meta.get("numbering", "") for paragraph in paragraphs] == [
+        "一、", "", "一、", "（一）",
+    ]
+
+
 def test_fix_heading_numbering_gaps_preserves_old_repair_behavior() -> None:
     """跳号修复接收已编号标题列表，原地修正一至四级编号 meta。"""
     paragraphs = [

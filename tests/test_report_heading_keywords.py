@@ -3,7 +3,9 @@ from __future__ import annotations
 from docx import Document
 import pytest
 
+from docxtool.document.importer import DocxImporter
 from docxtool.document.recognition import RecognitionConfig, apply_recognition
+from docxtool.document.style_config import StyleRule
 from docxtool.sdk import recognize_docx
 from tests.support.recognition_helpers import _document, _paragraph
 
@@ -138,8 +140,9 @@ def test_normal_front_short_title_gets_a_soft_title2_candidate() -> None:
     )
 
 
-def test_normal_front_glossary_title_is_not_report_gated() -> None:
-    glossary_title = _paragraph("名词解释", "body", 1)
+@pytest.mark.parametrize("glossary_text", ["名词解释", "名词解释与说明", "名词解释及说明"])
+def test_normal_front_glossary_title_uses_fuzzy_marker(glossary_text: str) -> None:
+    glossary_title = _paragraph(glossary_text, "body", 1)
     data = _document(
         _paragraph("普通材料", "title", 0, alignment="CENTER", bold_char_ratio=1.0),
         glossary_title,
@@ -151,6 +154,94 @@ def test_normal_front_glossary_title_is_not_report_gated() -> None:
     )
 
     assert glossary_title.type_id == "glossary_title"
+
+
+def test_body_title2_between_body_paragraphs_uses_centered_subtitle_semantics() -> None:
+    title2 = _paragraph("今后五年工作建议", "body", 1, bold_char_ratio=1.0)
+    data = _document(
+        _paragraph("前一段正文已经完整说明工作情况和阶段性成效。", "body", 0),
+        title2,
+        _paragraph("后一段正文继续说明下一阶段的重点任务和工作安排。", "body", 2),
+    )
+
+    apply_recognition(
+        data,
+        RecognitionConfig(enable_core_candidates=False, enable_legacy_candidates=False),
+    )
+
+    assert title2.type_id == "title2"
+    assert title2.meta["recognition_provider"].startswith("body-title:")
+
+
+def test_report_short_section_titles_do_not_require_source_bold() -> None:
+    first_title = _paragraph("过去五年主要工作", "body", 2)
+    second_title = _paragraph("今后五年工作建议", "body", 4)
+    data = _document(
+        _paragraph("人民检察院工作报告", "title", 0, alignment="CENTER", bold_char_ratio=1.0),
+        _paragraph("正文开头已经完整说明报告背景和总体工作情况。", "body", 1),
+        first_title,
+        _paragraph("过去五年工作正文已经完整说明主要成绩和具体做法。", "body", 3),
+        second_title,
+        _paragraph("今后五年工作正文已经完整说明总体思路和重点任务。", "body", 5),
+    )
+
+    apply_recognition(
+        data,
+        RecognitionConfig(enable_core_candidates=False, enable_legacy_candidates=False),
+    )
+
+    assert [first_title.type_id, second_title.type_id] == ["title2", "title2"]
+    assert all(
+        "report-middle-body-position" in item.meta["recognition_evidence"]
+        for item in (first_title, second_title)
+    )
+
+
+def test_production_recognition_keeps_report_short_title_over_core_body_candidate(tmp_path) -> None:
+    source = tmp_path / "report-production-short-title.docx"
+    document = Document()
+    title = document.add_paragraph("人民检察院工作报告")
+    title.alignment = 1
+    title.runs[0].bold = True
+    document.add_paragraph("前一段正文已经完整说明工作情况和阶段性成效。")
+    document.add_paragraph("今后五年工作建议")
+    document.add_paragraph("后一段正文继续说明下一阶段的重点任务和工作安排，内容足够长以形成正文上下文。")
+    document.save(source)
+
+    data = DocxImporter().load(
+        str(source),
+        [StyleRule.default_for_row(index) for index in range(10)],
+        strict_preservation=False,
+    )
+
+    short_title = data.paragraphs[2]
+    assert short_title.type_id == "title2"
+    assert short_title.meta["recognition_provider"].startswith("body-title:")
+
+
+@pytest.mark.parametrize("title_text", ["名词解释", "名词解释与说明", "注释及说明"])
+def test_production_recognition_keeps_fuzzy_glossary_title_over_core_body_candidate(
+    tmp_path, title_text: str,
+) -> None:
+    source = tmp_path / "report-production-glossary-title.docx"
+    document = Document()
+    title = document.add_paragraph("人民检察院工作报告")
+    title.alignment = 1
+    title.runs[0].bold = True
+    document.add_paragraph("正文已经开始并完整说明工作背景和基本情况。")
+    glossary_title = document.add_paragraph(title_text)
+    glossary_title.paragraph_format.page_break_before = True
+    document.add_paragraph("1.术语：这是名词解释条目的正文说明。")
+    document.save(source)
+
+    data = DocxImporter().load(
+        str(source),
+        [StyleRule.default_for_row(index) for index in range(10)],
+        strict_preservation=False,
+    )
+
+    assert data.paragraphs[2].type_id == "glossary_title"
+    assert data.paragraphs[3].type_id == "glossary_item"
 
 
 @pytest.mark.parametrize("numbered_text, expected_type", [
@@ -241,3 +332,58 @@ def test_title2_and_glossary_are_mode_independent() -> None:
     assert title2.meta["recognition_provider"].startswith("body-title:")
     assert glossary_title.meta["recognition_provider"].startswith("glossary:")
     assert glossary_item.meta["recognition_provider"].startswith("glossary:")
+
+
+def test_long_colon_glossary_item_is_not_claimed_by_body_structure() -> None:
+    glossary_title = _paragraph("名词解释与说明", "body", 2)
+    glossary_item = _paragraph(
+        "1.术语：这是一个较长的解释内容，用于验证名词解释条目在冒号解释结构下不会被普通正文候选抢占。",
+        "body",
+        3,
+        numbering_prefix="1.",
+    )
+    data = _document(
+        _paragraph("普通公文", "title", 0, alignment="CENTER", bold_char_ratio=1.0),
+        _paragraph("正文已经开始并完整说明工作背景和基本情况。", "body", 1),
+        glossary_title,
+        glossary_item,
+    )
+
+    apply_recognition(
+        data,
+        RecognitionConfig(enable_core_candidates=False, enable_legacy_candidates=False),
+    )
+
+    assert glossary_item.type_id == "glossary_item"
+    assert glossary_item.meta["recognition_provider"].startswith("glossary:")
+
+
+def test_glossary_items_continue_after_one_body_continuation() -> None:
+    first_item = _paragraph("三个规定：解释正文内容。", "body", 3)
+    continuation = _paragraph(
+        "上一条名词解释的续行内容继续说明适用范围和具体工作要求。",
+        "body",
+        4,
+    )
+    second_item = _paragraph(
+        "帮教模式：解释正文内容继续说明具体组成和工作方式。",
+        "body",
+        5,
+    )
+    data = _document(
+        _paragraph("人民检察院工作报告", "title", 0, alignment="CENTER", bold_char_ratio=1.0),
+        _paragraph("正文已经开始并完整说明工作背景和基本情况。", "body", 1),
+        _paragraph("名词解释与说明", "body", 2),
+        first_item,
+        continuation,
+        second_item,
+    )
+
+    apply_recognition(
+        data,
+        RecognitionConfig(enable_core_candidates=False, enable_legacy_candidates=False),
+    )
+
+    assert [first_item.type_id, continuation.type_id, second_item.type_id] == [
+        "glossary_item", "body", "glossary_item",
+    ]

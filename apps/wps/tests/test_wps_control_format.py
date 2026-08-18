@@ -3,8 +3,11 @@
 # ruff: noqa: F405
 
 
+from copy import deepcopy
+
 
 from apps.wps.tests.support.wps_app_support import *  # noqa: F401,F403,F405
+from docxtool.document.configuration.models import PageSettings
 
 
 
@@ -23,6 +26,54 @@ def test_preview_binding_uses_sdk_confirmed_host_range(tmp_path):
     assert all(item["binding_status"] == "confirmed" for item in eligible)
     assert all(item["host_paragraph_index"] == 0 for item in eligible)
     assert all(item["raw_fragment_sha256"] for item in eligible)
+
+
+def test_wps_official_page_grid_replaces_stale_hidden_profile_values():
+    settings = PageSettings(chars_per_line=40, lines_per_page=24)
+
+    previous_chars, previous_lines, changed = format_module._apply_official_page_grid(
+        settings
+    )
+
+    assert (previous_chars, previous_lines) == (40, 24)
+    assert changed is True
+    assert settings.chars_per_line == 28
+    assert settings.lines_per_page == 22
+
+
+def test_wps_one_click_writes_official_grid_for_stale_source_and_profile(tmp_path):
+    source = tmp_path / "stale-grid-source.docx"
+    target = tmp_path / "stale-grid-output.docx"
+    document = Document()
+    document.add_paragraph("普通正文内容")
+    sect_pr = document.sections[0]._sectPr
+    for old in sect_pr.findall(qn("w:docGrid")):
+        sect_pr.remove(old)
+    source_grid = OxmlElement("w:docGrid")
+    source_grid.set(qn("w:type"), "linesAndChars")
+    source_grid.set(qn("w:charSpace"), "-842")
+    source_grid.set(qn("w:linePitch"), "560")
+    sect_pr.append(source_grid)
+    document.save(source)
+
+    stale_config = deepcopy(load_active_format_profile()["format_config"])
+    stale_config["page"]["chars_per_line"] = 40
+    stale_config["page"]["lines_per_page"] = 24
+    format_module.format_current_document(
+        str(source),
+        str(target),
+        operation_id="operation-page-grid",
+        log_dir=tmp_path / "logs",
+        format_config=stale_config,
+        request_id="request-page-grid",
+    )
+
+    output_grid = Document(target).sections[0]._sectPr.find(qn("w:docGrid"))
+    assert output_grid.get(qn("w:charsPerLine")) == "28"
+    assert output_grid.get(qn("w:linesPerPage")) == "22"
+    assert output_grid.get(qn("w:charSpace")) == "-842"
+    assert output_grid.get(qn("w:linePitch")) == "560"
+
 
 def test_preview_binding_marks_canonical_review_range_as_preview_eligible(
     tmp_path, monkeypatch
@@ -83,6 +134,23 @@ def test_preview_binding_keeps_ambiguous_range_unresolved_and_ineligible(tmp_pat
     assert result["unresolved_count"] >= 1
     assert result["preview_eligible_count"] == 0
     assert not any(item["preview_eligible"] for item in result["items"])
+
+
+def test_preview_binding_labels_inline_heading_body_without_splitting_physical_paragraph(tmp_path):
+    source = tmp_path / "inline-heading-body.docx"
+    document = Document()
+    title = document.add_paragraph("人民检察院工作报告")
+    title.alignment = 1
+    title.runs[0].bold = True
+    document.add_paragraph("（一）工作开展情况。这里是同一物理段落中的正文说明。")
+    document.save(source)
+
+    plan = recognize_docx(source, recognition_mode="authoritative")
+    result = bind_preview(plan, _snapshot("（一）工作开展情况。这里是同一物理段落中的正文说明。"))
+
+    heading = next(item for item in result["items"] if item["type_id"] == "heading2")
+    assert heading["inline_body"] is True
+    assert heading["segment_count"] == 1
 
 def test_preview_binding_sdk_failure_logs_exact_boundary(tmp_path, monkeypatch):
     source = tmp_path / "source.docx"
@@ -163,7 +231,7 @@ def test_format_pipeline_failure_logs_exact_stage(
         "load_rules_and_settings",
         lambda _config: (
             {},
-            {},
+            PageSettings(),
             {
                 "processing": {},
                 "numbering": {"enabled": False},
@@ -240,7 +308,7 @@ def test_wps_one_click_passes_isolated_docxtool_style_profile_to_engine(tmp_path
         "load_rules_and_settings",
         lambda _config: (
             {},
-            {},
+            PageSettings(),
             {
                 "processing": {},
                 "numbering": {"enabled": False},

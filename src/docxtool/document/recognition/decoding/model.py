@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ..candidates import Candidate, CandidateContext
+from ..features import ParagraphFeatures
 from ..global_context import DocumentContext
 from ..model import DocumentMode, ParagraphType, SectionKind
 
@@ -14,6 +15,8 @@ class _Context(CandidateContext):
     mode: DocumentMode
     previous_type: ParagraphType | None
     index: int
+    previous_types: tuple[ParagraphType, ...] = ()
+    following_features: tuple[ParagraphFeatures, ...] = ()
     boundary_before: bool = False
     document_context: DocumentContext | None = None
 

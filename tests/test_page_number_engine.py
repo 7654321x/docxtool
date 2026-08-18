@@ -334,16 +334,14 @@ def test_standard_page_number_has_explicit_font_size_and_outside_indents(tmp_pat
         alignments.append(alignment)
         assert indent is not None
         if alignment == "left":
-            assert indent.get(qn("w:leftChars")) == "100"
-            assert indent.get(qn("w:rightChars")) is None
-            assert indent.get(qn("w:left")) is None
+            assert indent.get(qn("w:left")) == "280"
             assert indent.get(qn("w:right")) is None
+            assert indent.get(qn("w:leftChars")) is None
         else:
             assert alignment == "right"
-            assert indent.get(qn("w:rightChars")) == "100"
-            assert indent.get(qn("w:leftChars")) is None
+            assert indent.get(qn("w:right")) == "280"
             assert indent.get(qn("w:left")) is None
-            assert indent.get(qn("w:right")) is None
+            assert indent.get(qn("w:rightChars")) is None
         assert indent.get(qn("w:firstLineChars")) == "0"
         assert indent.get(qn("w:firstLine")) == "0"
         runs = paragraph.findall(qn("w:r"))
@@ -358,6 +356,26 @@ def test_standard_page_number_has_explicit_font_size_and_outside_indents(tmp_pat
             assert properties.find(qn("w:szCs")).get(qn("w:val")) == "28"
     assert alignments.count("right") == 2
     assert alignments.count("left") == 1
+
+
+def test_page_number_removes_static_page_number_paragraphs_before_relayout(tmp_path: Path) -> None:
+    document = Document()
+    footer = document.sections[0].footer
+    footer.paragraphs[0].text = "1"
+    footer.add_paragraph("— 1 —")
+    footer.add_paragraph("Confidential footer")
+    document.add_paragraph("body")
+
+    apply_page_numbers(document, {"style": "dash", "position": "center"})
+    output = tmp_path / "static-page-number-reset.docx"
+    document.save(output)
+
+    root = next(iter(_footer_roots(output).values()))
+    paragraphs = root.findall(f".//{{{W_NS}}}p")
+    assert len(paragraphs) == 2
+    assert _field_instructions(root) == ["PAGE"]
+    assert _visible_text(root).count("1") == 0
+    assert "Confidential footer" in _visible_text(root)
 
 
 def test_non_outside_page_numbers_clear_character_indents(tmp_path: Path) -> None:

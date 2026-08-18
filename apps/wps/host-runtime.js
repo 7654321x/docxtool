@@ -66,6 +66,10 @@
     attachment_title: "附件正文标题", attachment_page_mark: "附件正文标记", attachment_body: "附件正文",
     signature_org: "落款署名", signature_date: "落款日期", caption: "对象题注", unknown: "未知"
   };
+  function displayRole(item) {
+    const role = roleNames[item.type_id] || item.type_id || "未知";
+    return item.inline_body ? `${role}+行内正文` : role;
+  }
 
   function storage() {
     if (!app || !app.PluginStorage) throw new Error("WPS_PLUGIN_STORAGE_UNAVAILABLE");
@@ -1267,7 +1271,7 @@
           host_paragraph_index: item.host_paragraph_index,
           start_utf16: item.host_raw_start_utf16, end_utf16: item.host_raw_end_utf16
         });
-        const role = roleNames[item.type_id] || item.type_id || "未知";
+        const role = displayRole(item);
         const confidence = Math.round(Number(item.confidence || 0) * 100);
         const requiresReview = item.binding_status === "review"
           || item.review_level === "review"
@@ -1726,7 +1730,7 @@
     const previewReviewCount = validatedRanges.filter((item) => item.binding_status === "review").length;
     const rows = (result.items || []).map((item) => ({
       block_index: item.block_index, paragraph_index: item.host_paragraph_index,
-      type_id: item.type_id, role_name: roleNames[item.type_id] || "未知",
+      type_id: item.type_id, role_name: displayRole(item),
       confidence: item.confidence, review_level: item.review_level,
       locator_verified: item.preview_eligible, binding_status: item.binding_status,
       segment_index: item.segment_index, segment_count: item.segment_count

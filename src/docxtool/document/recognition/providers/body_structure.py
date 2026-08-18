@@ -3,7 +3,20 @@
 from __future__ import annotations
 
 from ..model import DocumentMode, ParagraphType, SectionKind
-from .base import Candidate
+from .base import Candidate, _glossary_context_active
+
+
+def _looks_like_glossary_heading(features) -> bool:
+    """Return whether a short heading contains a glossary marker."""
+    text = str(features.compact_text or "")
+    return bool(
+        text
+        and len(text) <= 20
+        and not features.numbering_prefix
+        and not features.contains_colon
+        and not features.ends_with_sentence_punctuation
+        and ("名词解释" in text or "注释" in text)
+    )
 
 
 class Title2CandidateProvider:
@@ -12,6 +25,25 @@ class Title2CandidateProvider:
     name = "body-title"
 
     def propose(self, block, features, context):
+        following = (
+            context.following_features[0]
+            if context.following_features
+            else None
+        )
+        report_middle_body_title = bool(
+            context.mode is DocumentMode.REPORT
+            and context.previous_type == ParagraphType.BODY
+            and following is not None
+            and following.compact_text
+            and not following.heading_shape_level
+            and (
+                following.text_length >= 34
+                or (
+                    following.ends_with_sentence_punctuation
+                    and following.text_length >= 12
+                )
+            )
+        )
         before_body = (
             context.document_context is not None
             and context.document_context.before_body(context.index)
@@ -47,6 +79,7 @@ class Title2CandidateProvider:
             or features.recipient_match
             or (
                 not front_title_candidate
+                and not report_middle_body_title
                 and not (features.is_bold or features.is_docxtool_style)
             )
         ):
@@ -65,6 +98,9 @@ class Title2CandidateProvider:
         if context.mode is DocumentMode.REPORT:
             score += 0.08
             evidence.append("report-mode-prior")
+        if report_middle_body_title:
+            score += 0.10
+            evidence.append("report-middle-body-position")
         if features.is_bold or features.is_docxtool_style:
             score += 0.08
         return [Candidate(
@@ -93,7 +129,7 @@ class GlossaryCandidateProvider:
                 ParagraphType.TITLE_CONTINUATION,
             }
         )
-        if features.compact_text in {"名词解释", "注释"} and context.previous_type in {
+        if _looks_like_glossary_heading(features) and context.previous_type in {
             ParagraphType.HEADING_1,
             ParagraphType.HEADING_2,
             ParagraphType.HEADING_3,
@@ -109,10 +145,7 @@ class GlossaryCandidateProvider:
                 hard=True,
                 section_hint=SectionKind.BODY,
             )]
-        if context.previous_type not in {
-            ParagraphType.GLOSSARY_TITLE,
-            ParagraphType.GLOSSARY_ITEM,
-        }:
+        if not _glossary_context_active(context):
             return []
         numbered_item = features.heading_shape_level == 3
         if features.text_length < 4 or not (features.contains_colon or numbered_item):

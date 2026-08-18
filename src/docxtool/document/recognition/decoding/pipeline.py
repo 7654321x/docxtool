@@ -66,7 +66,13 @@ def apply_recognition(
         lookahead = extracted[pos + 1 : pos + 9]
         for beam in beams:
             context = _Context(
-                mode, beam.types[-1] if beam.types else None, pos, boundary_before, document_context
+                mode,
+                beam.types[-1] if beam.types else None,
+                pos,
+                previous_types=beam.types[-8:],
+                following_features=tuple(lookahead),
+                boundary_before=boundary_before,
+                document_context=document_context,
             )
             options = tuple(
                 _limit_candidates(

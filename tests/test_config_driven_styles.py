@@ -163,6 +163,35 @@ class ConfigDrivenStylesTest(unittest.TestCase):
         self.assertEqual(_xml_attr(sign_org_indent, "w:rightChars"), "200")
         self.assertEqual(_xml_attr(sign_indent, "w:rightChars"), "400")
 
+    def test_glossary_item_splits_single_run_into_label_and_body(self):
+        source = "1.三个规定：指中央办公厅、国务院办公厅《领导干部干预司法活动、插手具体案件处理的记录、通报和责任追究规定》。"
+        doc = self._export([
+            ParagraphData(
+                source,
+                "glossary_item",
+                source,
+                ParagraphFeatures(),
+                meta={"glossary_item": True},
+            ),
+        ])
+
+        paragraph = doc.paragraphs[0]
+        runs = [run for run in paragraph.runs if run.text]
+
+        self.assertEqual(
+            [run.text for run in runs],
+            [
+                "1",
+                ".三个规定：",
+                "指中央办公厅、国务院办公厅《领导干部干预司法活动、插手具体案件处理的记录、通报和责任追究规定》。",
+            ],
+        )
+        self.assertEqual(
+            [_xml_attr(run._element.rPr.rFonts, "w:eastAsia") for run in runs],
+            ["黑体", "黑体", "仿宋_GB2312"],
+        )
+        self.assertTrue(all(run.bold is False for run in runs))
+
     def test_line_spacing_setting_controls_paragraph_and_doc_grid_pitch(self):
         doc = self._export([
             ParagraphData("正文内容", "body", "正文内容", ParagraphFeatures()),
