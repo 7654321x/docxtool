@@ -35,19 +35,3 @@ def test_user_data_root_stays_out_of_site_packages(monkeypatch, tmp_path: Path) 
 
     assert root == tmp_path / "docxtool-home"
     assert site_packages not in root.resolve().parents
-
-
-def test_windows_launcher_accepts_supported_python_versions() -> None:
-    script = PROJECT_ROOT.joinpath("server", "run.ps1").read_text(encoding="utf-8")
-
-    assert "(3, 8) <= sys.version_info[:2] < (3, 11)" in script
-    assert 'foreach ($selector in @("-3.8", "-3.9", "-3.10"))' in script
-    assert "DOCXTOOL_PYTHON_EXE" in script
-
-
-def test_windows_launcher_has_windows_7_schtasks_fallback() -> None:
-    script = PROJECT_ROOT.joinpath("server", "run.ps1").read_text(encoding="utf-8")
-
-    assert "Test-ModernScheduledTaskSupport" in script
-    assert "schtasks.exe /Create" in script
-    assert "schtasks.exe /Delete" in script

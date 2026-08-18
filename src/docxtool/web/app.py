@@ -363,6 +363,7 @@ from docxtool.web.responses import (
 )
 from docxtool.web.server_runtime import run_http_service as _runtime_run_http_service
 from docxtool.web.secrets import (
+    WEAK_SECRETS as _SECRETS_WEAK_SECRETS,
     load_secret as _secrets_load_secret,
     validate_required_secrets as _secrets_validate_required,
 )
@@ -483,16 +484,7 @@ UPLOAD_DIR = _RUNTIME_PATHS.upload_dir
 USER_SESSION_MAX_AGE = 30 * 24 * 60 * 60
 USER_SESSION_DAYS = 30
 
-_WEAK_SECRETS = {
-    "",
-    "123456",
-    "admin",
-    "change-me-admin-token",
-    "change-me-proxy-secret",
-    "change-me-in-production",
-    DEFAULT_ADMIN_TOKEN,
-    DEFAULT_PROXY_SECRET,
-}
+_WEAK_SECRETS = _SECRETS_WEAK_SECRETS
 
 
 

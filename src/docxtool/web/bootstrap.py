@@ -18,10 +18,8 @@ from docxtool.web.config import (
     resolve_admin_cookie_secure,
     resolve_cookie_secure,
 )
+from docxtool.web.secrets import DEFAULT_ADMIN_TOKEN, DEFAULT_PROXY_SECRET
 
-
-DEFAULT_ADMIN_TOKEN = "7654321xxx"
-DEFAULT_PROXY_SECRET = "docxtool-proxy-20260601-9ec0d6e2443a4f5f9784f0f04bb62917"
 ADMIN_SESSION_COOKIE = "docxtool_admin_session"
 ANONYMOUS_USER_COOKIE = "docxtool_anon_user"
 ANONYMOUS_USER_COOKIE_MAX_AGE = 2 * 365 * 24 * 60 * 60

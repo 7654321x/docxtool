@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import pytest
 
-from docxtool.web.secrets import load_secret, validate_required_secrets
+from docxtool.web.secrets import (
+    DEFAULT_ADMIN_TOKEN,
+    DEFAULT_PROXY_SECRET,
+    load_secret,
+    validate_environment_secrets,
+    validate_required_secrets,
+)
 
 
 def test_load_secret_reads_environment_value_and_strips_whitespace() -> None:
@@ -37,3 +43,28 @@ def test_validate_required_secrets_rejects_equal_values() -> None:
 
 def test_validate_required_secrets_accepts_distinct_strong_values() -> None:
     validate_required_secrets("admin-secret-123456", "proxy-secret-123456", set())
+
+
+def test_validate_environment_secrets_uses_the_canonical_defaults_and_rules() -> None:
+    with pytest.raises(SystemExit, match="ADMIN_TOKEN 使用了示例/弱密钥"):
+        validate_environment_secrets(
+            {
+                "ADMIN_TOKEN": DEFAULT_ADMIN_TOKEN,
+                "PROXY_SECRET": "proxy-secret-123456",
+            }
+        )
+
+    validate_environment_secrets(
+        {
+            "ADMIN_TOKEN": "admin-secret-123456",
+            "PROXY_SECRET": "proxy-secret-123456",
+        }
+    )
+
+    with pytest.raises(SystemExit, match="PROXY_SECRET 使用了示例/弱密钥"):
+        validate_environment_secrets(
+            {
+                "ADMIN_TOKEN": "admin-secret-123456",
+                "PROXY_SECRET": DEFAULT_PROXY_SECRET,
+            }
+        )

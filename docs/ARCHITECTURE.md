@@ -14,6 +14,7 @@ docxtool/
 ├─ scripts/                  构建、发布、迁移和批量验证
 ├─ docs/                     当前文档、设计、迁移记录和协议示例
 ├─ server.py                 Web 服务兼容入口
+├─ docxtool/                 唯一正式 Ubuntu 上传部署包
 └─ pyproject.toml            包、依赖、入口和版本配置
 ```
 
@@ -107,7 +108,8 @@ Web 服务使用内存任务队列、daemon worker 和 spawn 子进程。数据�
 `public_api_base_url=https://docx.toolpp.cn`，不会了解 Origin、服务器 IP、Tunnel 或公网 `:9527`。
 终端用户到 Public Gateway 可使用 IPv4 或 IPv6；Backend 生产模式下只有 `/health` 和 `/ready` 可直连
 Origin 检查，所有其他 HTTP 请求必须携带 Worker 注入的 `X-Proxy-Secret`。Nginx 不复制上传业务限制，
-使用 `client_max_body_size 0`，`MAX_UPLOAD_SIZE_MB` 是唯一上传大小配置。
+`docxtool/setup.sh` 将唯一配置 `MAX_UPLOAD_SIZE_MB` 渲染为 Nginx 的 `client_max_body_size`；Backend
+继续执行应用层上传限制。
 
 ## SDK 与宿主适配链
 

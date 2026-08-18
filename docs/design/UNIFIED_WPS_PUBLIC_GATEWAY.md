@@ -23,7 +23,7 @@ WPS / Browser
 - Pages Worker 已以 `BACKEND_BASE_URL` 作为唯一 Origin 环境变量，保留 WPS Bearer
   `Authorization`，并在回源时重写 `X-Proxy-Secret` 与 `X-Docxtool-Proxy`。
 - 本地文档识别、预览、事务保存和排版均通过 WPS loopback Control Server 完成，不依赖公网地址。
-- `server/1.ps1`、README 和 WPS PRD/技术设计仍含 nip.io、Pages 默认域名或 Tunnel 的历史生产描述。
+- 正式文档和部署包已统一为 Pages Worker -> Nginx HTTPS Origin，不保留 nip.io、Pages 默认域名或 Tunnel 的生产路径。
 
 ## 范围
 
@@ -90,10 +90,12 @@ WPS 的 `client-config.json` 从 `server_origin` 改为只含 `public_api_base_u
 
 ### 部署包
 
-Nginx 只负责反向代理，因此使用 `client_max_body_size 0`；唯一上传大小策略仍是 Backend 的
-`MAX_UPLOAD_SIZE_MB`。Ubuntu 应用目录固定为 `/opt/docxtool`，安装器不提供与 systemd
-路径冲突的自定义目录参数。根 `.env.example` 保持本地开发语义；`server/.env.example` 是必须
-明确填写密钥后才能启动的生产配置。根包和 `server/` 部署包的项目版本及本轮 Gateway 源码必须一致。
+`docxtool/` 是唯一受 Git 跟踪的 Ubuntu 正式上传包。它在 `~/docxtool` 目录中由腾讯云托管会话
+以前台方式运行 Python；Nginx + Certbot 是唯一常驻反向代理和 TLS 方案，不创建 Python
+systemd 服务。根 `src/docxtool/` 是源码权威，`docxtool/src/docxtool/` 必须通过 parity 测试保持一致。
+根 `.env.example` 保持本地开发语义；`docxtool/.env.example` 是生产配置模板，密钥替换完成前
+`setup.sh` 不会启动 Backend。`MAX_UPLOAD_SIZE_MB` 经 setup 渲染为 Nginx 的
+`client_max_body_size`，Backend 继续执行应用层限制。
 
 ### WPS 本地账户迁移
 

@@ -79,7 +79,8 @@ function Assert-NoForbiddenFiles {
             if ($relative -match '^var/(data|logs|outputs|runtime)/\.gitkeep$') {
                 return $false
             }
-            if ($relative -eq '.env.example' -or $relative -eq 'server/.env.example') {
+            # server/.env.example is allowed only while this migration deletes the retired package.
+            if ($relative -in @('.env.example', 'docxtool/.env.example', 'server/.env.example')) {
                 return $false
             }
             $relative -match '(^|/)\.env(\.|$)' -or
@@ -510,16 +511,16 @@ $requiredFiles = @(
 $testFiles = Get-ChildItem -LiteralPath (Join-Path $SourceRoot "tests") -File -Recurse |
     Where-Object { $_.Name -like "test_*.py" -or $_.Name -like "*.test.mjs" } |
     ForEach-Object { [System.IO.Path]::GetRelativePath($SourceRoot, $_.FullName).Replace("\", "/") }
-$serverFiles = Get-ChildItem -LiteralPath (Join-Path $SourceRoot "server") -File -Recurse -Force |
+$deploymentFiles = Get-ChildItem -LiteralPath (Join-Path $SourceRoot "docxtool") -File -Recurse -Force |
     ForEach-Object { [System.IO.Path]::GetRelativePath($SourceRoot, $_.FullName).Replace("\", "/") } |
     Where-Object {
-        $_ -eq "server/.env.example" -or (
+        $_ -eq "docxtool/.env.example" -or (
             $_ -notmatch '(^|/)\.env(\.|$)' -and
             $_ -notmatch '(^|/)(__pycache__|logs|outputs|runtime|build|dist|tmp_wheels|\.venv|\.pytest_cache|\.ruff_cache)(/|$)' -and
             $_ -notmatch '\.(pyc|log|db|sqlite|sqlite3|zip)$'
         )
     }
-$requiredPublishFiles = @($requiredFiles + $testFiles + $serverFiles | Sort-Object -Unique)
+$requiredPublishFiles = @($requiredFiles + $testFiles + $deploymentFiles | Sort-Object -Unique)
 $publishDeletionRoots = @(
     "apps/reader/",
     "apps/wps/",
@@ -527,7 +528,9 @@ $publishDeletionRoots = @(
     "docs/",
     "resources/frontend/pages/",
     "scripts/",
+    # Keep the retired path only so this migration can publish its deletions.
     "server/",
+    "docxtool/",
     "src/docxtool/",
     "tests/"
 )

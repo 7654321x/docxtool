@@ -8,6 +8,7 @@
 | --- | --- |
 | Web HTTP 接口、鉴权和错误码 | [`API.md`](API.md) |
 | 生产部署和环境变量 | [`DEPLOY.md`](DEPLOY.md) |
+| Ubuntu 正式上传包操作 | [`../docxtool/README.md`](../docxtool/README.md) |
 | 项目结构、文档主链、Web 与 SDK 数据流 | [`ARCHITECTURE.md`](ARCHITECTURE.md) |
 | SDK 使用、来源定位和宿主适配 | [`SDK.md`](SDK.md) |
 | SDK 正式 JSON 协议 | [`INTEGRATION_CONTRACT_V1.md`](INTEGRATION_CONTRACT_V1.md) |

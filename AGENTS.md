@@ -97,7 +97,7 @@ pwsh -NoProfile -File .\scripts\verify_changed.ps1
 - Origin DNS 仅使用 A 记录 `43.130.232.115`，当前不配置 AAAA。
 - 浏览器和 WPS 到 `https://docx.toolpp.cn` 可使用 IPv4 或 IPv6；WPS 不得因 Origin IPv4-only 而强制 IPv4。
 - `PRODUCTION_MODE=true` 时，除 `/health`、`/ready` 外的所有 Backend HTTP 业务请求必须由 Worker 注入正确的 `X-Proxy-Secret`；Origin 直连不提供业务旁路。
-- Nginx 使用 `client_max_body_size 0`，上传大小只由 Backend 的 `MAX_UPLOAD_SIZE_MB` 决定。
+- `docxtool/setup.sh` 从唯一配置 `MAX_UPLOAD_SIZE_MB` 渲染 Nginx 的 `client_max_body_size`；Backend 仍执行应用层上传校验。
 
 ## 重复问题处理
 

@@ -39,14 +39,15 @@ Nginx 是唯一的公网 TLS 终点：`origin.toolpp.cn:443 -> 127.0.0.1:9527`�
 集成申请、写入和续期 Let's Encrypt 证书。安全组仅开放 TCP 80、443，不开放 `9527`。不使用
 Cloudflare Tunnel、Quick Tunnel、`trycloudflare.com` 或 Cloudflare Access。
 
-首次部署包安装：
+正式部署包是仓库根目录的 `docxtool/`，在腾讯云托管会话中以前台方式运行 Python：
 
 ```bash
-chmod +x linux/install.sh
-sudo ./linux/install.sh --origin-host origin.toolpp.cn --certbot-email ops@example.com
+cd ~/docxtool
+chmod +x setup.sh start.sh
+./setup.sh --certbot-email ops@example.com
 ```
 
-服务器 `/opt/docxtool/.env` 至少配置：
+首次运行会生成 `~/docxtool/.env` 并停止；替换两个密钥后再次运行 setup。服务器 `~/docxtool/.env` 至少配置：
 
 ```text
 BIND_HOST=127.0.0.1
@@ -64,8 +65,15 @@ DATABASE_PATH=var/data/stats.db
 WPS_DATABASE_PATH=var/data/wps_plugin.db
 ```
 
-`ADMIN_TOKEN` 与 `PROXY_SECRET` 必须不同。修改 `.env` 后重启 `docxtool`；Python 不承担
-公网 TLS，也不直接暴露管理后台。
+`ADMIN_TOKEN` 与 `PROXY_SECRET` 必须不同。`setup.sh` 会复用 Python 的密钥校验器，读取
+`MAX_UPLOAD_SIZE_MB` 渲染 Nginx 的 `client_max_body_size`，然后通过 Certbot 配置 HTTPS。
+配置更新前必须先停止托管会话；配置失败时不会启动 Backend。最后在托管会话运行：
+
+```bash
+./start.sh
+```
+
+Python 不承担公网 TLS，也不直接暴露管理后台；Nginx 由 systemd 常驻运行。
 
 ## DNS 与 Cloudflare Pages
 
@@ -83,7 +91,7 @@ DNS 的唯一职责：
 
 ```text
 BACKEND_BASE_URL=https://origin.toolpp.cn
-PROXY_SECRET=<与 /opt/docxtool/.env 完全相同的值>
+PROXY_SECRET=<与 ~/docxtool/.env 完全相同的值>
 ```
 
 `BACKEND_BASE_URL` 必须是无路径、无凭据、非 IP 字面量的 HTTPS hostname。Worker 删除客户端

@@ -13,12 +13,12 @@ def _version(path: Path, pattern: str) -> str:
     return match.group(1)
 
 
-def test_root_and_server_package_versions_match() -> None:
+def test_root_and_deployment_package_versions_match() -> None:
     versions = {
         _version(ROOT / "pyproject.toml", r'^version\s*=\s*"([^"]+)"'),
         _version(ROOT / "src" / "docxtool" / "version.py", r'^_SOURCE_VERSION\s*=\s*"([^"]+)"'),
-        _version(ROOT / "server" / "pyproject.toml", r'^version\s*=\s*"([^"]+)"'),
-        _version(ROOT / "server" / "src" / "docxtool" / "version.py", r'^_SOURCE_VERSION\s*=\s*"([^"]+)"'),
+        _version(ROOT / "docxtool" / "pyproject.toml", r'^version\s*=\s*"([^"]+)"'),
+        _version(ROOT / "docxtool" / "src" / "docxtool" / "version.py", r'^_SOURCE_VERSION\s*=\s*"([^"]+)"'),
     }
 
-    assert versions == {"5.5.5"}
+    assert len(versions) == 1

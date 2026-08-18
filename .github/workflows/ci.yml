@@ -172,29 +172,14 @@ jobs:
       - name: Run frontend format configuration tests
         run: node --test tests/frontend-format-config.test.mjs
 
-  windows-startup:
-    runs-on: windows-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.8", "3.10"]
+  ubuntu-deployment-package:
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Create server package virtual environment
-        working-directory: server
-        run: python -m venv .venv
-
-      - name: Check Windows server package startup entry point
-        shell: pwsh
-        working-directory: server
-        run: pwsh -NoProfile -File .\run.ps1 -CheckOnly
+      - name: Check managed-session deployment scripts
+        run: bash -n docxtool/setup.sh docxtool/start.sh
 
   windows-wps-release:
     runs-on: windows-latest

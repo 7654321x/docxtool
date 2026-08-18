@@ -90,6 +90,7 @@ try {
     $hasRelease = $false
     $hasApplication = $false
     $hasWpsServer = $false
+    $hasDeployment = $false
 
     foreach ($path in $changed) {
         if ($path -match '^(AGENTS\.md|apps/.+/AGENTS\.md|docs/|.*\.md$)') { $hasDocs = $true }
@@ -129,6 +130,10 @@ try {
         }
         if ($path -match '^src/docxtool/application/' -or $path -match '^tests/test_application_') { $hasApplication = $true }
         if ($path -match '^src/docxtool/wps_server/' -or $path -match '^tests/test_wps_server_') { $hasWpsServer = $true }
+        if ($path -match '^docxtool/' -or $path -match '^tests/test_deployment_') {
+            $hasDeployment = $true
+            $hasRelease = $true
+        }
         if ($path -match '^apps/wps/.*\.py$' -and $path -notmatch '^apps/wps/tests/') {
             if ($path -match '^apps/wps/control/(document_transaction\.py|transactions/)') { $hasWpsTransaction = $true }
             elseif ($path -match '^apps/wps/control/(server|format_current_document|recognize_document|add_letterhead)\.py$') {
@@ -306,6 +311,16 @@ try {
             Add-Unique -List $pytestTargets -Value $_.FullName.Replace("$repoRoot\", "").Replace("\", "/")
         }
         Add-Unique -List $selected -Value "WPS server focused pytest targets"
+    }
+    if ($hasDeployment) {
+        foreach ($target in @(
+            "tests/test_deployment_package.py",
+            "tests/test_deployment_package_version.py",
+            "tests/test_deployment_source_parity.py"
+        )) {
+            Add-Unique -List $pytestTargets -Value $target
+        }
+        Add-Unique -List $selected -Value "deployment package focused pytest targets"
     }
     if ($hasWpsTransaction -or $hasWpsPythonBroad) {
         Add-Unique -List $pytestTargets -Value "apps/wps/tests/test_wps_transactions.py"

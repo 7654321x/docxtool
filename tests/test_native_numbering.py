@@ -162,7 +162,7 @@ def test_native_heading_numbering_is_rebuilt_once_when_enabled(tmp_path: Path) -
         document_xml = etree.fromstring(archive.read("word/document.xml"))
     assert headings == ["一、第20项工作", "（一）第21项工作", "1.第22项工作", "（1）第23项工作"]
     prefixes = ("一、", "（一）", "1.", "（1）")
-    expected_bold = (False, True, False, False)
+    expected_bold = (False, True, True, False)
     for paragraph, prefix, bold in zip(
         heading_paragraphs, prefixes, expected_bold
     ):
@@ -178,6 +178,12 @@ def test_native_heading_numbering_is_rebuilt_once_when_enabled(tmp_path: Path) -
             assert all(run.bold is True for run in prefix_runs)
         else:
             assert all(run.bold is not True for run in prefix_runs)
+        body_runs = [run for run in paragraph.runs if run.text and not run.text.startswith(prefix)]
+        assert body_runs
+        if bold:
+            assert all(run.bold is True for run in body_runs)
+        else:
+            assert all(run.bold is not True for run in body_runs)
     assert document_xml.findall(".//w:numPr", W_NS) == []
     assert stats["native_numbering_preserved"] == 0
 

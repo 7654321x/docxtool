@@ -19,6 +19,7 @@ WPS 和 Web 复用同一套 Recognition、Normalization 和 Engine，不维护�
 
 - Web 服务：`server.py`
 - Python 包：`src/docxtool/`
+- Ubuntu 正式部署包：`docxtool/`（Nginx + Certbot + 腾讯云托管会话）
 - Web 前端：`resources/frontend/pages/`
 - WPS 客户端：`apps/wps/main.py`
 - 本地 TXT Reader：`apps/reader/`
@@ -57,7 +58,7 @@ export PROXY_SECRET='换成正式长随机密钥'
 python3 server.py
 ```
 
-Web 服务默认监听 `127.0.0.1:9527`。生产环境中浏览器与 WPS 客户端只访问 `https://docx.toolpp.cn`，客户端可使用 IPv4 或 IPv6；Cloudflare Pages Worker 注入 `X-Proxy-Secret` 后经 `https://origin.toolpp.cn`（仅配置 IPv4 A 记录 `43.130.232.115`）回源到 Nginx，再反向代理到 loopback 后端。生产 Backend 除 `/health`、`/ready` 外的业务请求没有 Origin 直连旁路，必须带正确的 `X-Proxy-Secret`。Nginx 通过 Certbot 管理 Let's Encrypt HTTPS 证书，并使用 `client_max_body_size 0`，上传大小只由 `MAX_UPLOAD_SIZE_MB` 决定。不开放 `8080` 或 `9527`，也不使用 Cloudflare Tunnel 或 Access。完整部署说明见 [`docs/DEPLOY.md`](docs/DEPLOY.md)。
+Web 服务默认监听 `127.0.0.1:9527`。生产环境中浏览器与 WPS 客户端只访问 `https://docx.toolpp.cn`，客户端可使用 IPv4 或 IPv6；Cloudflare Pages Worker 注入 `X-Proxy-Secret` 后经 `https://origin.toolpp.cn`（仅配置 IPv4 A 记录 `43.130.232.115`）回源到 Nginx，再反向代理到 loopback 后端。生产 Backend 除 `/health`、`/ready` 外的业务请求没有 Origin 直连旁路，必须带正确的 `X-Proxy-Secret`。Nginx 通过 Certbot 管理 Let's Encrypt HTTPS 证书，`docxtool/setup.sh` 将唯一的 `MAX_UPLOAD_SIZE_MB` 渲染为 Nginx 限制。不开放 `8080` 或 `9527`，也不使用 Cloudflare Tunnel 或 Access。完整部署说明见 [`docs/DEPLOY.md`](docs/DEPLOY.md) 和 [`docxtool/README.md`](docxtool/README.md)。
 
 ## 运行数据
 
