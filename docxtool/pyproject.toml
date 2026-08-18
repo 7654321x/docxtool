@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "docxtool"
-version = "5.5.5"
+version = "5.6.0"
 description = "DOCX official-document formatting web service"
 requires-python = ">=3.8,<3.11"
 dependencies = [
@@ -12,7 +12,9 @@ dependencies = [
     "argon2-cffi-bindings==21.2.0",
     "cffi==1.17.1",
     "importlib-resources==6.4.5; python_version < '3.9'",
-    "jsonschema==4.23.0",
+    # 4.17.3 keeps the SDK's Draft 2020-12 validator while avoiding the
+    # rpds-py native extension, which cannot load on Windows 7.
+    "jsonschema==4.17.3",
     "lxml==6.1.1",
     "pycparser==2.23",
     "python-docx==1.1.2",

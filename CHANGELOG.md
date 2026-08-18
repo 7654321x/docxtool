@@ -1,5 +1,11 @@
 # Changelog
 
+## 5.6.0 - 2026-08-18
+
+- Made WPS executable builds use Python 3.8 and a Windows 7-compatible JSON Schema dependency set, while retaining schema validation.
+- Corrected outside page-number spacing by overriding inherited body first-line indentation, preserving exactly one inner-page character on even and odd pages.
+- Added focused regression coverage for the Windows 7 build contract and inherited footer indentation, and synchronized the deployment package.
+
 ## 5.5.5 - 2026-08-17
 
 - Removed WPS's manual IPv4 resolver so the public gateway can use the system's IPv4/IPv6 selection.

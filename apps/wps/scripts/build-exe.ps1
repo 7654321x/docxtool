@@ -16,6 +16,13 @@ if (-not (Test-Path -LiteralPath $Python -PathType Leaf)) {
     throw "Python executable not found: $Python"
 }
 
+# Windows 7 support is a build contract: use Python 3.8 and the lockfile that
+# excludes the rpds-py native extension before freezing the executable.
+$pythonVersion = (& $Python -c "import sys; print('%d.%d' % sys.version_info[:2])").Trim()
+if ($LASTEXITCODE -ne 0 -or $pythonVersion -ne "3.8") {
+    throw "Win7-compatible WPS builds require Python 3.8; detected $pythonVersion."
+}
+
 $origin = $null
 if (-not [Uri]::TryCreate($PublicApiBaseUrl, [UriKind]::Absolute, [ref]$origin) -or
     $origin.Scheme -ne "https" -or

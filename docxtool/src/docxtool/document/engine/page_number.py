@@ -159,7 +159,16 @@ def _set_page_number_indent(
     if indent is None:
         indent = OxmlElement("w:ind")
         ppr.append(indent)
-    for name in ("w:left", "w:right", "w:leftChars", "w:rightChars"):
+    for name in (
+        "w:left",
+        "w:right",
+        "w:leftChars",
+        "w:rightChars",
+        "w:firstLine",
+        "w:firstLineChars",
+        "w:hanging",
+        "w:hangingChars",
+    ):
         indent.attrib.pop(qn(name), None)
 
     if position != "outside":
@@ -167,14 +176,15 @@ def _set_page_number_indent(
             ppr.remove(indent)
         return
 
-    font_size_pt = float(options.get("font_size_pt", 14))
-    twips = str(max(1, round(font_size_pt * 20)))
+    # Footer paragraphs may inherit the body Normal style. Override its
+    # first-line indent so the outside page number keeps exactly one
+    # character of inner-page spacing.
+    indent.set(qn("w:firstLine"), "0")
+    indent.set(qn("w:firstLineChars"), "0")
     if footer_kind == "even":
         indent.set(qn("w:leftChars"), "100")
-        indent.set(qn("w:left"), twips)
     else:
         indent.set(qn("w:rightChars"), "100")
-        indent.set(qn("w:right"), twips)
 
 
 def _is_reusable_empty_paragraph(paragraph) -> bool:

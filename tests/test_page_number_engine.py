@@ -297,6 +297,13 @@ def test_page_number_can_apply_first_and_even_centered_footers(tmp_path: Path) -
 def test_standard_page_number_has_explicit_font_size_and_outside_indents(tmp_path: Path) -> None:
     document = Document()
     document.sections[0].bottom_margin = Cm(3.5)
+    normal_ppr = document.styles["Normal"]._element.get_or_add_pPr()
+    normal_indent = normal_ppr.find(qn("w:ind"))
+    if normal_indent is None:
+        normal_indent = OxmlElement("w:ind")
+        normal_ppr.append(normal_indent)
+    normal_indent.set(qn("w:firstLineChars"), "200")
+    normal_indent.set(qn("w:firstLine"), "640")
     document.add_paragraph("body")
 
     options = {
@@ -329,10 +336,16 @@ def test_standard_page_number_has_explicit_font_size_and_outside_indents(tmp_pat
         if alignment == "left":
             assert indent.get(qn("w:leftChars")) == "100"
             assert indent.get(qn("w:rightChars")) is None
+            assert indent.get(qn("w:left")) is None
+            assert indent.get(qn("w:right")) is None
         else:
             assert alignment == "right"
             assert indent.get(qn("w:rightChars")) == "100"
             assert indent.get(qn("w:leftChars")) is None
+            assert indent.get(qn("w:left")) is None
+            assert indent.get(qn("w:right")) is None
+        assert indent.get(qn("w:firstLineChars")) == "0"
+        assert indent.get(qn("w:firstLine")) == "0"
         runs = paragraph.findall(qn("w:r"))
         assert len(runs) == 6
         for run in runs:
