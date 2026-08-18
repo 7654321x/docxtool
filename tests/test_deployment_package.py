@@ -100,3 +100,4 @@ def test_publish_script_allows_retired_server_deletions_and_new_package_files() 
     assert '"server/"' in script
     assert '"docxtool/"' in script
     assert "Get-ChildItem -LiteralPath (Join-Path $SourceRoot \"docxtool\")" in script
+    assert '"update-index", "--chmod=+x"' in script

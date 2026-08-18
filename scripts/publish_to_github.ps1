@@ -664,6 +664,7 @@ try {
     finally {
         Remove-Item -LiteralPath $pathspecFile -Force -ErrorAction SilentlyContinue
     }
+    Invoke-Checked git @("update-index", "--chmod=+x", "--", "docxtool/setup.sh", "docxtool/start.sh")
     $stagedByScript = $true
     Invoke-Checked git @("diff", "--cached", "--check")
 
