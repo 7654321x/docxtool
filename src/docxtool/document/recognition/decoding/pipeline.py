@@ -54,8 +54,7 @@ def apply_recognition(
         extracted.append(extract_features(block, previous, following))
     extracted = resolve_native_numbering_levels(extracted)
     document_context = analyze_document_context(extracted)
-    legacy_document_mode = getattr(data, "doc_mode", "")
-    decision = detect_mode(extracted, legacy_document_mode)
+    decision = detect_mode(extracted)
     mode = decision.mode
     beams = [_Beam(0.0, (), (), ())]
     candidate_trace: list[dict[str, Any]] = []
@@ -260,6 +259,13 @@ def apply_recognition(
                 meta["numbered_heading2_colon_inline_body"] = True
             if features.numbered_heading2_period_inline_body and final_type_id == "heading2":
                 meta["numbered_heading2_period_inline_body"] = True
+            if final_type_id == "glossary_item":
+                content = features.content_without_numbering
+                colon_pos = next(
+                    (content.find(mark) for mark in ("：", ":") if content.find(mark) > 0),
+                    -1,
+                )
+                meta.update({"glossary_item": True, "colon_pos": colon_pos})
             paragraph.meta = meta
             diagnostics.append(
                 {

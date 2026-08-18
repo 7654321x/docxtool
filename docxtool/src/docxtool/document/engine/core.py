@@ -22,7 +22,7 @@ from docxtool.document.engine.normal import resolve as _resolve_rule
 from docxtool.document.engine.cleanup import cleanup_styles
 from docxtool.document.engine.header_footer import apply_header_footer
 from docxtool.document.engine.heading_body_split import (
-    apply_heading1_report_split as _apply_heading1_report_split,
+    apply_inline_heading_body_split as _apply_inline_heading_body_split,
     verify_inline_heading_body_pair as _verify_inline_heading_body_pair,
 )
 from docxtool.document.engine.inline_effects import (

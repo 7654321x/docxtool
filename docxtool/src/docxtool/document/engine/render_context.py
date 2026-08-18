@@ -74,7 +74,7 @@ def prepare_render_context(
     section_part_copier = relationship_part_copier if section_relationship_parts else None
     stats = {
         "total": len(doc_data.paragraphs),
-        "heading1": 0, "heading1_report": 0, "heading2": 0, "heading3": 0, "heading4": 0,
+        "heading1": 0, "heading2": 0, "heading3": 0, "heading4": 0,
         "body": 0, "fallback_count": 0, "style_fallback_count": 0, "numpr_removed": 0,
         "output_path": output_path,
         "removed_external_relationships": removed_external_relationships,

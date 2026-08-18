@@ -283,7 +283,7 @@ def render_document_items(
                 full_text = para.text
                 expected_body_text = full_text.split("。", 1)[1].strip()
                 body_rule = rules[5] if len(rules) > 5 else StyleRule.default_for_row(5)
-                body_para = _apply_heading1_report_split(
+                body_para = _apply_inline_heading_body_split(
                     para, full_text, resolved, body_rule, line_twips,
                     remove_heading_period=True,
                     body_style_id=_style_id_for_type("body", style_profile),
@@ -355,27 +355,6 @@ def render_document_items(
             ):
                 _apply_key_value_line_format(para)
 
-            # Legacy report metadata still reaches this compatibility branch
-            # when the generic structural split did not already consume it.
-            if (
-                normalization_processing
-                and pd.meta.get("heading1_report_split")
-                and para.runs
-                and "。" in para.text
-            ):
-                body_rule = rules[5] if len(rules) > 5 else StyleRule.default_for_row(5)
-                expected_body_text = pd.text.split("。", 1)[1].strip()
-                body_para = _apply_heading1_report_split(
-                    para,
-                    pd.text,
-                    resolved,
-                    body_rule,
-                    line_twips,
-                    body_style_id=_style_id_for_type("body", style_profile),
-                )
-                if body_para is not None:
-                    inline_heading_body_pairs.append((para, body_para, expected_body_text))
-                    stats["body"] += 1
 
             # Source-backed inline emphasis keeps one physical body paragraph.
             if (

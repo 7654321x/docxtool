@@ -1,6 +1,8 @@
 """Built-in recognition candidate providers in stable registration order."""
 
 from .base import Candidate, CandidateContext, CandidateProvider
+from .body_structure import GlossaryCandidateProvider, Title2CandidateProvider
+from .inline_heading import InlineHeadingCandidateProvider
 from .compatibility import CoreCandidateProvider, LegacyCandidateProvider, StyleCandidateProvider
 from .key_value import KeyValueCandidateProvider
 from .numbering import NumberingCandidateProvider
@@ -15,6 +17,9 @@ DEFAULT_PROVIDERS = (
     SemanticCandidateProvider(),
     FrontMatterMetadataCandidateProvider(),
     SourceListNumberingCandidateProvider(),
+    Title2CandidateProvider(),
+    GlossaryCandidateProvider(),
+    InlineHeadingCandidateProvider(),
     CoreCandidateProvider(),
     LegacyCandidateProvider(),
     StyleCandidateProvider(),
@@ -24,6 +29,8 @@ __all__ = [
     "Candidate",
     "CandidateContext",
     "CandidateProvider",
+    "GlossaryCandidateProvider",
+    "InlineHeadingCandidateProvider",
     "CoreCandidateProvider",
     "DEFAULT_PROVIDERS",
     "FrontMatterMetadataCandidateProvider",
@@ -34,4 +41,5 @@ __all__ = [
     "SourceListNumberingCandidateProvider",
     "StructuralCandidateProvider",
     "StyleCandidateProvider",
+    "Title2CandidateProvider",
 ]

@@ -61,14 +61,13 @@ def test_find_numbered_bold_pos_and_damaged_heading_are_structure_facts() -> Non
 
 def test_legacy_numbered_heading_score_preserves_importer_scores() -> None:
     """编号标题评分接收编号类型和文种事实，返回旧 importer 候选分。"""
-    assert legacy_numbered_heading_score("一、工作安排", "heading1", "一、", document_mode="NORMAL", contains_colon=False) == 100
-    assert legacy_numbered_heading_score("（一）工作安排", "heading2", "（一）", document_mode="NORMAL", contains_colon=False) == 100
-    assert legacy_numbered_heading_score("1.工作安排", "heading3", "1.", document_mode="NORMAL", contains_colon=False) == 90
-    assert legacy_numbered_heading_score("（1）工作安排", "heading4", "（1）", document_mode="NORMAL", contains_colon=False) == 90
+    assert legacy_numbered_heading_score("一、工作安排", "heading1", "一、", contains_colon=False) == 100
+    assert legacy_numbered_heading_score("（一）工作安排", "heading2", "（一）", contains_colon=False) == 100
+    assert legacy_numbered_heading_score("1.工作安排", "heading3", "1.", contains_colon=False) == 90
+    assert legacy_numbered_heading_score("（1）工作安排", "heading4", "（1）", contains_colon=False) == 90
 
 
-def test_legacy_numbered_heading_score_keeps_report_and_colon_exceptions() -> None:
-    """编号标题评分接收 REPORT 和冒号事实，返回回顾类避让或四级降级结果。"""
-    assert legacy_numbered_heading_score("一、一年来。正文", "heading1", "一、", document_mode="REPORT", contains_colon=False) == 0
-    assert legacy_numbered_heading_score("（1）责任单位：办公室", "heading4", "（1）", document_mode="NORMAL", contains_colon=True) == 0
-    assert legacy_numbered_heading_score("普通正文", None, None, document_mode="NORMAL", contains_colon=False) == 0
+def test_legacy_numbered_heading_score_has_no_report_exception() -> None:
+    assert legacy_numbered_heading_score("一、一年来。正文", "heading1", "一、", contains_colon=False) == 100
+    assert legacy_numbered_heading_score("（1）责任单位：办公室", "heading4", "（1）", contains_colon=True) == 0
+    assert legacy_numbered_heading_score("普通正文", None, None, contains_colon=False) == 0

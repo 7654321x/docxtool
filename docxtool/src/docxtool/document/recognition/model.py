@@ -57,7 +57,6 @@ class ParagraphType(str, Enum):
     ATTACHMENT_NOTE_ITEM = "attachment_note_item"
     ATTACHMENT_PAGE_MARK = "attachment_page_mark"
     ATTACHMENT_BODY = "attachment_body"
-    HEADING_1_REPORT = "heading1_report"
     LIST = "list"
     LIST_ITEM = "list_item"
     QUOTE = "quote"

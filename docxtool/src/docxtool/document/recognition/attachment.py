@@ -58,6 +58,6 @@ def can_start_attachment_note(
         return False
     return last_structural_type in (
         "body", "addressing", "heading1", "heading2", "heading3", "heading4",
-        "heading1_report", "title2", "glossary_item", "sign_date",
+        "title2", "glossary_item", "sign_date",
         "attachment_note_item",
     )

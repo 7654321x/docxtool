@@ -15,7 +15,7 @@ def advance_legacy_context(
 ) -> str:
     """Apply the importer Legacy heading cap and structural state updates."""
 
-    if type_id.startswith("heading") and type_id != "heading1_report":
+    if type_id.startswith("heading"):
         level = int(type_id[-1])
         previous_level = ctx.current_level
         if level == getattr(ctx, "_last_detected_lvl", 0):
@@ -26,8 +26,6 @@ def advance_legacy_context(
             type_id = "heading{0}".format(capped)
         ctx.current_level = capped
         ctx._last_detected_lvl = level
-    elif type_id == "heading1_report":
-        ctx.current_level = 1
     ctx.prev_type_id = type_id
 
     if type_id in ("body", "addressing", "responsibility_line"):

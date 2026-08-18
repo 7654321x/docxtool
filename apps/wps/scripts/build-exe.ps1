@@ -113,6 +113,24 @@ if (-not $SkipInstall) {
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller installation failed." }
 }
 
+$pyprojectPath = Join-Path $ProjectRoot "pyproject.toml"
+$projectToml = Get-Content -LiteralPath $pyprojectPath -Raw -Encoding utf8
+$projectVersionMatch = [regex]::Match($projectToml, '(?m)^version\s*=\s*"(?<version>[^"]+)"\s*$')
+if (-not $projectVersionMatch.Success) {
+    throw "WPS_BUILD_PROJECT_VERSION_INVALID"
+}
+$projectVersion = $projectVersionMatch.Groups["version"].Value
+
+# Always refresh the local distribution metadata from the current source.
+# -SkipInstall only skips the PyInstaller tool installation; it must not allow
+# a frozen executable to retain a previous DocxTool package version.
+& $Python -m pip install --disable-pip-version-check --no-deps --no-build-isolation --force-reinstall $ProjectRoot
+if ($LASTEXITCODE -ne 0) { throw "WPS_BUILD_PROJECT_INSTALL_FAILED" }
+$installedPackageVersion = (& $Python -c "from importlib import metadata; print(metadata.version('docxtool'))").Trim()
+if ($LASTEXITCODE -ne 0 -or $installedPackageVersion -ne $projectVersion) {
+    throw "WPS_BUILD_PACKAGE_VERSION_MISMATCH: expected $projectVersion, installed $installedPackageVersion."
+}
+
 $env:DOCXTOOL_WPS_PUBLIC_API_BASE_URL = $PublicApiBaseUrl.TrimEnd("/")
 $spec = Join-Path $ProjectRoot "apps\wps\DocxToolWps.spec"
 $dist = Join-Path $ProjectRoot "dist\wps"

@@ -2,7 +2,7 @@ import pytest
 from docx import Document
 
 from docxtool.document.engine.heading_body_split import (
-    apply_heading1_report_split,
+    apply_inline_heading_body_split,
     insert_paragraph_after,
     verify_inline_heading_body_pair,
 )
@@ -19,14 +19,14 @@ def test_insert_paragraph_after_places_new_paragraph_next_to_source() -> None:
     assert [paragraph.text for paragraph in doc.paragraphs] == ["第一段", "第二段"]
 
 
-def test_apply_heading1_report_split_outputs_heading_and_single_body_paragraph() -> None:
+def test_apply_inline_heading_body_split_outputs_heading_and_single_body_paragraph() -> None:
     doc = Document()
     ensure_document_styles(doc, [StyleRule.default_for_row(i) for i in range(24)], PageSettings())
     paragraph = doc.add_paragraph("一、提高认识。这里是完整正文")
     heading_rule = StyleRule.default_for_row(1)
     body_rule = StyleRule.default_for_row(5)
 
-    body_paragraph = apply_heading1_report_split(
+    body_paragraph = apply_inline_heading_body_split(
         paragraph,
         paragraph.text,
         heading_rule,
@@ -40,11 +40,11 @@ def test_apply_heading1_report_split_outputs_heading_and_single_body_paragraph()
     assert body_paragraph.style.style_id == "DCT-Body"
 
 
-def test_apply_heading1_report_split_ignores_short_or_missing_body() -> None:
+def test_apply_inline_heading_body_split_ignores_short_or_missing_body() -> None:
     doc = Document()
     paragraph = doc.add_paragraph("一、提高认识。短")
 
-    result = apply_heading1_report_split(
+    result = apply_inline_heading_body_split(
         paragraph,
         paragraph.text,
         StyleRule.default_for_row(1),
@@ -56,11 +56,11 @@ def test_apply_heading1_report_split_ignores_short_or_missing_body() -> None:
     assert [item.text for item in doc.paragraphs] == ["一、提高认识。短"]
 
 
-def test_apply_heading1_report_split_uses_requested_body_style() -> None:
+def test_apply_inline_heading_body_split_uses_requested_body_style() -> None:
     doc = Document()
     paragraph = doc.add_paragraph("一、提高认识。这里是完整正文")
 
-    body = apply_heading1_report_split(
+    body = apply_inline_heading_body_split(
         paragraph,
         paragraph.text,
         StyleRule.default_for_row(1),

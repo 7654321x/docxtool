@@ -8,7 +8,6 @@ TYPE_TO_RULE_INDEX: dict[str, int] = {
     "title_cont": 0,
     "embedded_document_title": 0,
     "heading1": 1,
-    "heading1_report": 1,
     "heading2": 2,
     "heading3": 3,
     "heading4": 4,
@@ -44,7 +43,6 @@ HEAD_GAP_FOLLOW_TYPES = ("body", "attachment_body", "heading1")
 BODY_FLOW_TYPES = frozenset({
     "body",
     "heading1",
-    "heading1_report",
     "heading2",
     "heading3",
     "heading4",
@@ -60,7 +58,7 @@ BODY_FLOW_TYPES = frozenset({
 })
 STRUCTURE_SENSITIVE_TYPES = frozenset({
     "title", "title_cont", "embedded_document_title",
-    "heading1", "heading1_report", "heading2", "heading3", "heading4",
+    "heading1", "heading2", "heading3", "heading4",
     "attachment_note", "attachment_note_item", "attachment_page_mark",
     "attachment_title", "attachment_body", "sign_org", "sign_date",
 })

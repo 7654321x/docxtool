@@ -186,7 +186,7 @@ def classify_context_candidate(
         return _candidate(current, ElementKind.DOCUMENT_TITLE, 0.90, evidence)
 
     for heading_kind, pattern in _HEADING_PATTERNS:
-        if pattern.match(text) and current.type_id in {f"heading{_heading_level(heading_kind)}", "heading1_report"}:
+        if pattern.match(text) and current.type_id == f"heading{_heading_level(heading_kind)}":
             evidence.extend((
                 ContextEvidence("text", f"numbering:heading_{_heading_level(heading_kind)}", 0.35),
                 ContextEvidence("context", "raw_heading_type_support", 0.25),

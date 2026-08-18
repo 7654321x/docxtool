@@ -22,7 +22,6 @@ def classify_legacy_paragraph(
     structure_scorers: tuple,
     mode_scorers: tuple,
     fallback_scorers: tuple,
-    detect_doc_type_func: Callable[[Any], str],
     flow_allows_func: Callable[[str, Any], bool],
     repair_heading4_colon_func: Callable[[str, str, ParagraphFeatures, Any], str],
     repair_level_func: Callable[[str, ParagraphFeatures, Any], str],
@@ -68,7 +67,6 @@ def classify_legacy_paragraph(
                 structure_scorers=structure_scorers,
                 mode_scorers=mode_scorers,
                 fallback_scorers=fallback_scorers,
-                detect_doc_type_func=detect_doc_type_func,
                 flow_allows_func=flow_allows_func,
             )
 
@@ -121,7 +119,6 @@ def classify_legacy_paragraph(
         type_id,
         text,
         meta,
-        detect_doc_type_func=detect_doc_type_func,
     )
     logger.debug("[决策] para=%s → %s meta=%s", ctx.para_index, type_id, meta)
     return type_id, meta, prefix

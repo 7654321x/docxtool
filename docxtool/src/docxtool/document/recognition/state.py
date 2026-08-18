@@ -13,7 +13,6 @@ LEGACY_FLOW: dict[str | None, tuple[str, ...]] = {
     "author_line": ("addressing", "heading1", "heading2", "title2", "body"),
     "role_name": ("date_line", "addressing", "heading1", "heading2", "title2", "body"),
     "heading1": ("heading1", "heading2", "heading3", "body", "addressing", "title2"),
-    "heading1_report": ("heading2", "heading3", "body", "addressing", "title2"),
     "heading2": ("heading1", "heading2", "heading3", "heading4", "body", "addressing", "title2", "glossary_title"),
     "heading3": ("heading1", "heading2", "heading3", "heading4", "body", "addressing", "title2", "glossary_title"),
     "heading4": ("heading1", "heading2", "heading3", "heading4", "body", "addressing", "title2", "glossary_title"),
@@ -51,14 +50,12 @@ def legacy_flow_allows(candidate: str, previous_type: str | None) -> bool:
         return True
     if candidate in allowed:
         return True
-    return candidate in ("heading1", "heading1_report") and "heading1" in allowed
+    return False
 
 
 def legacy_repair_heading_level(type_id: str, current_level: int) -> str:
     """传入候选类型和当前标题层级，返回旧 importer 跳级修复后的类型。"""
     if not type_id.startswith("heading"):
-        return type_id
-    if type_id == "heading1_report":
         return type_id
     level = int(type_id[-1])
     expected = current_level + 1
@@ -132,8 +129,6 @@ def legacy_update_context_after_type(
     type_id: str,
     text: str,
     meta: dict | None,
-    *,
-    detect_doc_type_func: Any,
 ) -> None:
     """按旧 importer 规则推进识别上下文。
 
@@ -171,11 +166,7 @@ def legacy_update_context_after_type(
         ctx.has_seen_heading = True
         if not ctx.has_seen_body:
             ctx.has_seen_body = True
-            ctx.doc_mode = detect_doc_type_func(ctx)
-        if type_id == "heading1_report":
-            ctx.current_level = 1
-        else:
-            ctx.current_level = int(type_id[-1])
+        ctx.current_level = int(type_id[-1])
     elif type_id == "title2":
         ctx.has_seen_heading = True
     elif type_id == "glossary_title":
@@ -186,4 +177,3 @@ def legacy_update_context_after_type(
     elif type_id in ("body", "addressing", "responsibility_line"):
         if not ctx.has_seen_body:
             ctx.has_seen_body = True
-            ctx.doc_mode = detect_doc_type_func(ctx)

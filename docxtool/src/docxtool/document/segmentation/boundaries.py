@@ -14,6 +14,19 @@ from docxtool.document.segmentation.source_locator import (
 )
 
 
+_ANNUAL_REVIEW_HEADING_PREFIXES = ("一年来", "五年来")
+
+
+def _is_annual_review_inline_heading(text: str, period_index: int, body_count: int) -> bool:
+    """Return whether a narrow annual-review lead is a heading/body boundary."""
+    heading = text[:period_index].strip()
+    return (
+        heading in _ANNUAL_REVIEW_HEADING_PREFIXES
+        and 0 < period_index <= 50
+        and body_count >= 5
+    )
+
+
 def has_format_transition(
     features: Optional[ParagraphFeatures],
     start: int,
@@ -138,6 +151,9 @@ def segment_boundary_candidates(
         native_list_heading = (
             source_numbering.startswith("@lvl_") and visual_transition
         )
+        annual_review_heading = _is_annual_review_inline_heading(
+            text, period_index, body_count
+        )
         numbered = literal_numbered or native_list_heading
         if literal_numbered:
             boundary_evidence = "NUMBERED_HEADING_TERMINATOR"
@@ -145,15 +161,15 @@ def segment_boundary_candidates(
             boundary_evidence = "SOURCE_LIST_HEADING_TERMINATOR"
         else:
             boundary_evidence = "VISUAL_TITLE_TERMINATOR"
-        if body_count >= 5 and (numbered or visual_transition):
+        if body_count >= 5 and (numbered or visual_transition or annual_review_heading):
             candidates.append(SegmentBoundaryCandidate(
                 raw_start=start,
                 raw_end=boundary,
-                left_type_hint="heading" if numbered else "title_or_heading",
+                left_type_hint="heading" if numbered or annual_review_heading else "title_or_heading",
                 right_type_hint="body",
                 confidence=0.99 if numbered else 0.84,
                 evidence=(
-                    boundary_evidence,
+                    "ANNUAL_REVIEW_HEADING_TERMINATOR" if annual_review_heading else boundary_evidence,
                     "VISIBLE_BODY_AFTER_TERMINATOR",
                 ),
             ))

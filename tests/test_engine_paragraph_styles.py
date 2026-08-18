@@ -30,7 +30,6 @@ def test_wps_builtin_style_profile_maps_only_body_and_heading_types() -> None:
     assert style_id_for_type("meeting_meta", "wps_builtin") == "Normal"
     assert style_id_for_type("meeting_title_meta", "wps_builtin") == "DCT-Author"
     assert style_id_for_type("heading1", "wps_builtin") == "Heading1"
-    assert style_id_for_type("heading1_report", "wps_builtin") == "Heading1"
     assert style_id_for_type("heading2", "wps_builtin") == "Heading2"
     assert style_id_for_type("title2", "wps_builtin") == "Heading2"
     assert style_id_for_type("heading3", "wps_builtin") == "Heading3"

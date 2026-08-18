@@ -29,7 +29,6 @@ TYPE_TO_STYLE_ID: dict[str, str] = {
     "author_line": "DCT-Author",
     "role_name": "DCT-RoleName",
     "heading1": "DCT-Heading1",
-    "heading1_report": "DCT-Heading1",
     "heading2": "DCT-Heading2",
     "heading3": "DCT-Heading3",
     "heading4": "DCT-Heading4",
@@ -49,7 +48,6 @@ TYPE_TO_STYLE_ID: dict[str, str] = {
 _WPS_BUILTIN_TYPE_TO_STYLE_ID: dict[str, str] = {
     "meeting_meta": "Normal",
     "heading1": "Heading1",
-    "heading1_report": "Heading1",
     "heading2": "Heading2",
     "title2": "Heading2",
     "heading3": "Heading3",

@@ -10,6 +10,8 @@ from .providers import (
     Candidate,
     CandidateContext,
     CandidateProvider,
+    GlossaryCandidateProvider,
+    InlineHeadingCandidateProvider,
     CoreCandidateProvider,
     DEFAULT_PROVIDERS,
     FrontMatterMetadataCandidateProvider,
@@ -20,6 +22,7 @@ from .providers import (
     SourceListNumberingCandidateProvider,
     StructuralCandidateProvider,
     StyleCandidateProvider,
+    Title2CandidateProvider,
 )
 from .providers.base import (
     _body_like_candidate,
@@ -43,6 +46,8 @@ __all__ = [
     "Candidate",
     "CandidateContext",
     "CandidateProvider",
+    "GlossaryCandidateProvider",
+    "InlineHeadingCandidateProvider",
     "CoreCandidateProvider",
     "DEFAULT_PROVIDERS",
     "FrontMatterMetadataCandidateProvider",
@@ -53,4 +58,5 @@ __all__ = [
     "SourceListNumberingCandidateProvider",
     "StructuralCandidateProvider",
     "StyleCandidateProvider",
+    "Title2CandidateProvider",
 ]

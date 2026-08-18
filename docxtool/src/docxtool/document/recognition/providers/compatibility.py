@@ -25,7 +25,6 @@ class CoreCandidateProvider:
             "dispatch_number": ParagraphType.DISPATCH_NUMBER,
             "recipient": ParagraphType.RECIPIENT,
             "heading_level_1": ParagraphType.HEADING_1,
-            "heading1_report": ParagraphType.HEADING_1_REPORT,
             "heading_level_2": ParagraphType.HEADING_2,
             "heading_level_3": ParagraphType.HEADING_3,
             "heading_level_4": ParagraphType.HEADING_4,
@@ -107,7 +106,6 @@ class LegacyCandidateProvider:
             ParagraphType.HEADING_2,
             ParagraphType.HEADING_3,
             ParagraphType.HEADING_4,
-            ParagraphType.HEADING_1_REPORT,
         }
         score = 0.55 if paragraph_type in weak else 0.88
         evidence = "legacy-importer-weak" if paragraph_type in weak else "legacy-importer"
@@ -136,7 +134,6 @@ def _legacy_type(paragraph) -> ParagraphType:
         "title": ParagraphType.MAIN_TITLE,
         "title_cont": ParagraphType.TITLE_CONTINUATION,
         "heading1": ParagraphType.HEADING_1,
-        "heading1_report": ParagraphType.HEADING_1_REPORT,
         "heading2": ParagraphType.HEADING_2,
         "heading3": ParagraphType.HEADING_3,
         "heading4": ParagraphType.HEADING_4,

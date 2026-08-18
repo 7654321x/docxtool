@@ -5,12 +5,7 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, List, Mapping, Sequence, Tuple
 
 from docxtool.document.recognition.document_mode import (
-    legacy_glossary_item_score,
-    legacy_glossary_title_score,
     legacy_heading_addressing_score,
-    legacy_report_addressing_score,
-    legacy_report_heading_score,
-    legacy_title2_score,
 )
 from docxtool.document.recognition.front_matter import (
     legacy_author_line_score,
@@ -30,7 +25,6 @@ def build_legacy_scorer_registry(
     *,
     match_numbering_func: Callable[[str], Tuple[str, str]],
     contains_colon_func: Callable[[str], bool],
-    detect_doc_type_func: Callable[[Any], str],
 ) -> ScorerRegistry:
     """构建旧 importer scorer 表。
 
@@ -98,12 +92,10 @@ def build_legacy_scorer_registry(
     def score_heading1(text: str, _features: Any, ctx: Any) -> Tuple[int, dict, str]:
         """传入段落文本、特征和上下文，返回一级标题候选评分。"""
         tid, prefix = match_numbering_func(text)
-        mode = ctx.doc_mode or detect_doc_type_func(ctx)
         score = legacy_numbered_heading_score(
             text,
             tid,
             prefix,
-            document_mode=mode,
             contains_colon=contains_colon_func(text),
         )
         return (score, {}, prefix) if score and tid == "heading1" else (0, {}, "")
@@ -115,7 +107,6 @@ def build_legacy_scorer_registry(
             text,
             tid,
             prefix,
-            document_mode=ctx.doc_mode or detect_doc_type_func(ctx),
             contains_colon=contains_colon_func(text),
         )
         return (score, {}, prefix) if score and tid == "heading2" else (0, {}, "")
@@ -127,7 +118,6 @@ def build_legacy_scorer_registry(
             text,
             tid,
             prefix,
-            document_mode=ctx.doc_mode or detect_doc_type_func(ctx),
             contains_colon=contains_colon_func(text),
         )
         return (score, {}, prefix) if score and tid == "heading3" else (0, {}, "")
@@ -139,54 +129,42 @@ def build_legacy_scorer_registry(
             text,
             tid,
             prefix,
-            document_mode=ctx.doc_mode or detect_doc_type_func(ctx),
             contains_colon=contains_colon_func(text),
         )
         return (score, {}, prefix) if score and tid == "heading4" else (0, {}, "")
 
-    def score_report_heading1(text: str, _features: Any, _ctx: Any) -> Tuple[int, dict, str]:
-        """传入段落文本、特征和上下文，返回报告回顾类一级标题评分。"""
-        _tid, prefix = match_numbering_func(text)
-        score, should_split = legacy_report_heading_score(text, prefix)
-        if not score:
-            return 0, {}, ""
-        return score, {"heading1_report_split": should_split}, prefix if prefix else ""
-
     def score_title2(text: str, _features: Any, ctx: Any) -> Tuple[int, dict, str]:
-        """传入段落文本、特征和上下文，返回正文小标题候选评分。"""
-        doc_mode = ctx.doc_mode or detect_doc_type_func(ctx)
+        """传入正文上下文和文本形态，返回通用正文小标题候选评分。"""
+        value = text or ""
         tid, _ = match_numbering_func(text)
-        score = legacy_title2_score(
-            text,
-            document_mode=doc_mode,
-            has_seen_body=ctx.has_seen_body,
-            previous_type=ctx.prev_type_id,
-            contains_colon=contains_colon_func(text),
-            has_numbering=bool(tid),
-        )
+        score = 95 if (
+            (ctx.has_seen_body or ctx.prev_type_id in ("heading1", "heading2", "heading3", "heading4"))
+            and len(value) < 28
+            and not contains_colon_func(value)
+            and not bool(tid)
+            and ctx.prev_type_id != "date_line"
+            and "。" not in value
+        ) else 0
         return (score, {}, "") if score else (0, {}, "")
 
     def score_glossary_title(text: str, features: Any, ctx: Any) -> Tuple[int, dict, str]:
         """传入段落文本、特征和上下文，返回名词解释标题候选评分。"""
         score, meta, prefix = score_title2(text, features, ctx)
-        glossary_score = legacy_glossary_title_score(text, title2_score=score)
-        return (glossary_score, meta, prefix) if glossary_score else (0, {}, "")
+        if score and ("名词解释" in (text or "") or "注释" in (text or "")):
+            return score, meta, prefix
+        return 0, {}, ""
 
     def score_glossary_item(text: str, _features: Any, ctx: Any) -> Tuple[int, dict, str]:
         """传入段落文本、特征和上下文，返回名词解释条目候选评分。"""
         tid, prefix = match_numbering_func(text)
-        return legacy_glossary_item_score(
-            text,
-            glossary_mode=ctx.glossary_mode,
-            numbering_type=tid,
-            prefix=prefix,
-            contains_colon=contains_colon_func(text),
-        )
-
-    def score_report_addressing(text: str, _features: Any, _ctx: Any) -> Tuple[int, dict, str]:
-        """传入段落文本、特征和上下文，返回报告类称呼候选评分。"""
-        score = legacy_report_addressing_score(text)
-        return (score, {"no_indent": False}, "") if score else (0, {}, "")
+        value = text or ""
+        if not ctx.glossary_mode:
+            return 0, {}, ""
+        body = value[len(prefix):].lstrip() if tid == "heading3" and prefix else value
+        if tid != "heading3" and (not contains_colon_func(value) or len(value) < 4):
+            return 0, {}, ""
+        colon_pos = next((body.find(mark) for mark in ("：", ":") if body.find(mark) > 0), -1)
+        return 90, {"glossary_item": True, "colon_pos": colon_pos}, prefix if tid == "heading3" else ""
 
     def score_heading_addressing(text: str, _features: Any, ctx: Any) -> Tuple[int, dict, str]:
         """传入段落文本、特征和上下文，返回标题后主送机关候选评分。"""
@@ -215,12 +193,8 @@ def build_legacy_scorer_registry(
     mode_scorers: Dict[str, List[ScorerEntry]] = {
         "NORMAL": [
             ("addressing", score_heading_addressing),
-        ],
-        "REPORT": [
-            ("heading1_report", score_report_heading1),
             ("glossary_title", score_glossary_title),
             ("title2", score_title2),
-            ("addressing", score_report_addressing),
             ("glossary_item", score_glossary_item),
         ],
     }
@@ -238,13 +212,12 @@ def select_legacy_scored_type(
     structure_scorers: Sequence[ScorerEntry],
     mode_scorers: Mapping[str, Sequence[ScorerEntry]],
     fallback_scorers: Sequence[ScorerEntry],
-    detect_doc_type_func: Callable[[Any], str],
     flow_allows_func: Callable[[str, Any], bool],
 ) -> Tuple[str, dict, str, List[str]]:
     """按旧 importer 三阶段 scorer 选择段落类型。
 
     传入段落文本、段落特征、旧上下文、骨架 scorer、文种 scorer、兜底
-    scorer、文种检测回调和 Flow 判断回调。返回最终候选类型、meta、
+    scorer 和 Flow 判断回调。返回最终候选类型、meta、
     编号前缀和用于日志的得分摘要；不执行 Repair、不推进上下文。
     """
     type_id = "body"
@@ -260,7 +233,7 @@ def select_legacy_scored_type(
         if score > best_score and score > 0 and flow_allows_func(candidate, ctx):
             best_score, type_id, meta, prefix = score, candidate, candidate_meta, candidate_prefix
 
-    mode = ctx.doc_mode or detect_doc_type_func(ctx)
+    mode = ctx.doc_mode
     if mode:
         for candidate, scorer in mode_scorers.get(mode, ()):
             score, candidate_meta, candidate_prefix = scorer(text, features, ctx)

@@ -109,9 +109,6 @@ from docxtool.document.recognition.colon import (
     contains_colon as _recognition_contains_colon,
     is_standalone_addressing_text,
 )
-from docxtool.document.recognition.document_mode import (
-    detect_legacy_doc_type as _recognition_detect_legacy_doc_type,
-)
 from docxtool.document.recognition.metadata import (
     enrich_legacy_type_metadata as _recognition_enrich_legacy_type_metadata,
 )
@@ -638,15 +635,9 @@ def _match_style_or_lvl(text: str, feats):
     return _recognition_match_style_or_level(text, feats, normalize_text=_normalize_text)
 
 
-def _detect_doc_type(ctx) -> str:
-    """从头部标题文字检测文种。仅在 has_seen_body 首次变为 True 时调用一次。"""
-    return _recognition_detect_legacy_doc_type(ctx.title_texts)
-
-
 _STRUCTURE_SCORERS, _MODE_SCORERS, _FALLBACK_SCORERS = _recognition_build_legacy_scorer_registry(
     match_numbering_func=_match_numbering,
     contains_colon_func=_contains_colon,
-    detect_doc_type_func=_detect_doc_type,
 )
 
 
@@ -702,7 +693,6 @@ def detect_paragraph_type(text: str, feats: ParagraphFeatures,
         structure_scorers=_STRUCTURE_SCORERS,
         mode_scorers=_MODE_SCORERS,
         fallback_scorers=_FALLBACK_SCORERS,
-        detect_doc_type_func=_detect_doc_type,
         flow_allows_func=_flow_allows,
         repair_heading4_colon_func=_repair_heading4_colon,
         repair_level_func=_repair_level,

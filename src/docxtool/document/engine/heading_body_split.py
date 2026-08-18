@@ -26,7 +26,7 @@ def insert_paragraph_after(paragraph) -> Paragraph:
     return Paragraph(new_element, paragraph._parent)
 
 
-def apply_heading1_report_split(
+def apply_inline_heading_body_split(
     paragraph,
     text: str,
     rule,

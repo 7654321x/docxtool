@@ -20,11 +20,10 @@ def test_legacy_flow_allows_document_opening_candidates() -> None:
     assert not legacy_flow_allows("sign_date", None)
 
 
-def test_legacy_flow_keeps_heading1_report_alias() -> None:
-    """旧 Flow 判断接收报告标题候选，返回与 heading1 相同的兼容放行结果。"""
-    assert legacy_flow_allows("heading1_report", "title")
-    assert legacy_flow_allows("heading1_report", "body")
-    assert not legacy_flow_allows("heading1_report", "sign_org")
+def test_legacy_flow_uses_one_heading1_type() -> None:
+    assert legacy_flow_allows("heading1", "title")
+    assert legacy_flow_allows("heading1", "body")
+    assert not legacy_flow_allows("legacy_heading", "body")
 
 
 def test_legacy_flow_rejects_disallowed_known_transition() -> None:
@@ -47,9 +46,8 @@ def test_legacy_repair_heading_level_caps_skipped_levels() -> None:
     assert legacy_repair_heading_level("body", 1) == "body"
 
 
-def test_legacy_repair_heading_level_keeps_report_heading() -> None:
-    """标题层级修复接收报告标题类型，返回不参与普通跳级修复的原类型。"""
-    assert legacy_repair_heading_level("heading1_report", 0) == "heading1_report"
+def test_legacy_repair_heading_level_uses_normal_heading_rules() -> None:
+    assert legacy_repair_heading_level("heading1", 0) == "heading1"
 
 
 def test_legacy_repair_heading4_colon_demotes_only_colon_heading4() -> None:
@@ -111,7 +109,7 @@ def test_legacy_update_context_collects_front_titles_before_body() -> None:
     """上下文推进接收文首标题类型，返回 None 并只缓存标题文本。"""
     ctx = DetectionContext()
 
-    legacy_update_context_after_type(ctx, "title", "测试标题", {}, detect_doc_type_func=lambda _ctx: "NORMAL")
+    legacy_update_context_after_type(ctx, "title", "测试标题", {})
 
     assert ctx.prev_type_id == "title"
     assert ctx.title_texts == ["测试标题"]
@@ -119,16 +117,15 @@ def test_legacy_update_context_collects_front_titles_before_body() -> None:
     assert not ctx.has_seen_body
 
 
-def test_legacy_update_context_starts_body_and_locks_doc_mode() -> None:
-    """上下文推进接收正文类型，返回 None 并启动正文区及文种锁定。"""
+def test_legacy_update_context_starts_body_without_a_second_mode_detector() -> None:
     ctx = DetectionContext(title_texts=["测试工作报告"])
 
-    legacy_update_context_after_type(ctx, "body", "正文内容", {}, detect_doc_type_func=lambda _ctx: "REPORT")
+    legacy_update_context_after_type(ctx, "body", "正文内容", {})
 
     assert ctx.prev_type_id == "body"
     assert ctx.has_seen_body
     assert ctx.has_seen_real_body
-    assert ctx.doc_mode == "REPORT"
+    assert ctx.doc_mode == ""
     assert ctx.last_structural_type == "body"
 
 
@@ -137,13 +134,12 @@ def test_legacy_update_context_tracks_heading_level_and_inline_body() -> None:
     heading_ctx = DetectionContext()
     inline_ctx = DetectionContext(has_seen_body=True)
 
-    legacy_update_context_after_type(heading_ctx, "heading2", "（一）标题", {}, detect_doc_type_func=lambda _ctx: "NORMAL")
+    legacy_update_context_after_type(heading_ctx, "heading2", "（一）标题", {})
     legacy_update_context_after_type(
         inline_ctx,
         "heading1",
         "一、标题。正文内容",
         {"heading_inline_body": True},
-        detect_doc_type_func=lambda _ctx: "NORMAL",
     )
 
     assert heading_ctx.has_seen_heading
@@ -156,7 +152,7 @@ def test_legacy_update_context_resets_attachment_page_after_sign_date() -> None:
     """上下文推进接收成文日期类型，返回 None 并完成落款日期状态。"""
     ctx = DetectionContext(attachment_page_mode=True)
 
-    legacy_update_context_after_type(ctx, "sign_date", "2026年8月2日", {}, detect_doc_type_func=lambda _ctx: "NORMAL")
+    legacy_update_context_after_type(ctx, "sign_date", "2026年8月2日", {})
 
     assert ctx.signature_complete
     assert not ctx.attachment_page_mode

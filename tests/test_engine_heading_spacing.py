@@ -184,7 +184,7 @@ class EngineHeadingSpacingTest(unittest.TestCase):
         self.assertFalse(doc.paragraphs[1].runs[-1].bold)
 
     def test_inline_heading_body_verification_blocks_truncated_output(self):
-        original = engine_core._apply_heading1_report_split
+        original = engine_core._apply_inline_heading_body_split
 
         def corrupt_body(*args, **kwargs):
             body = original(*args, **kwargs)
@@ -201,7 +201,7 @@ class EngineHeadingSpacingTest(unittest.TestCase):
                 meta={"numbering": "一、"},
             )
         ]
-        with patch.object(engine_core, "_apply_heading1_report_split", corrupt_body):
+        with patch.object(engine_core, "_apply_inline_heading_body_split", corrupt_body):
             with self.assertRaisesRegex(ExportError, "正文未完整保留"):
                 self._export(paragraphs)
 

@@ -274,7 +274,7 @@ def extract_features(block: DocumentBlock, previous: DocumentBlock | None = None
     )
 
 
-def detect_mode(features: list[ParagraphFeatures], legacy: str = "") -> DocumentModeDecision:
+def detect_mode(features: list[ParagraphFeatures]) -> DocumentModeDecision:
     visible = [item for item in features if item.compact_text]
     meeting_count = sum(1 for item in features[:40] if item.key_value_label in MEETING_LABELS)
     title_region = visible[:8]

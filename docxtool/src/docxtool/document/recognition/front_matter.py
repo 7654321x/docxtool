@@ -7,8 +7,8 @@ import re
 from docxtool.document.recognition.document_mode import (
     has_doc_type_keyword,
     has_title_keyword,
-    starts_report_heading_or_addressing,
 )
+from docxtool.document.recognition.colon import is_standalone_addressing_text
 
 _ROLE_KEYWORD_RE = re.compile(
     r"局长|主任|书记|主席|部长|处长|科长|司长|厅长|市长|县长"
@@ -125,7 +125,7 @@ def legacy_author_line_score(
         return 0
     if contains_colon or has_numbering:
         return 0
-    if value.startswith("（") or starts_report_heading_or_addressing(value):
+    if value.startswith("（") or is_standalone_addressing_text(value):
         return 0
     if _SPACED_TEXT_RE.search(value):
         return 0

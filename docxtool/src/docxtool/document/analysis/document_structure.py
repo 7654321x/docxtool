@@ -145,7 +145,6 @@ _TYPE_KINDS = {
     "meeting_meta": ElementKind.MEETING_METADATA,
     "embedded_document_title": ElementKind.EMBEDDED_DOCUMENT_TITLE,
     "heading1": ElementKind.HEADING_1,
-    "heading1_report": ElementKind.HEADING_1,
     "heading2": ElementKind.HEADING_2,
     "heading3": ElementKind.HEADING_3,
     "heading4": ElementKind.HEADING_4,

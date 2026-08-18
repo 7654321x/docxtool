@@ -218,16 +218,15 @@ def test_responsibility_renderer_is_idempotent() -> None:
     assert paragraph.text == "责任单位：区政府\n责任单位：区政府"
 
 
-def test_heading1_report_split_body_has_dct_body_and_structural_invariants(tmp_path: Path) -> None:
+def test_heading1_inline_body_has_dct_body_and_structural_invariants(tmp_path: Path) -> None:
     output = tmp_path / "heading1-report.docx"
     data = DocumentData(
         paragraphs=[
             ParagraphData(
                 "政协报告标题。正文内容正文内容正文内容",
-                "heading1_report",
+                "heading1",
                 "政协报告标题。正文内容正文内容正文内容",
                 ParagraphFeatures(),
-                meta={"heading1_report_split": True},
             ),
             ParagraphData("责任单位：区政府责任单位：商务局", "responsibility_line", "责任单位：区政府责任单位：商务局", ParagraphFeatures()),
             ParagraphData("附件 1", "attachment_page_mark", "附件 1", ParagraphFeatures()),
@@ -243,7 +242,7 @@ def test_heading1_report_split_body_has_dct_body_and_structural_invariants(tmp_p
     paragraphs = [paragraph for paragraph in _paragraphs(root) if _text(paragraph).strip()]
     style_by_text = {_text(paragraph): _pstyle(paragraph) for paragraph in paragraphs}
 
-    assert style_by_text["政协报告标题。"] == "DCT-Heading1"
+    assert style_by_text["政协报告标题"] == "DCT-Heading1"
     assert style_by_text["正文内容正文内容正文内容"] == "DCT-Body"
     assert style_by_text["责任单位：区政府责任单位：商务局"] == "DCT-Responsibility"
     assert style_by_text["附件 1"] == "DCT-AttachmentMark"

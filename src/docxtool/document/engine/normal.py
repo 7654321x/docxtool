@@ -26,8 +26,6 @@ def resolve(pd, raw_rule, rules, meta=None):
         return _copy(r)
     if pd.type_id == "role_name":
         return _copy(r)
-    if pd.type_id == "heading1_report":
-        return _copy(r)
     if pd.type_id == "attachment_page_mark":
         return _copy(r)
     if pd.type_id == "attachment_title":

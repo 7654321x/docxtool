@@ -29,7 +29,6 @@ def test_select_legacy_scored_type_prefers_allowed_highest_structure_score() -> 
         ],
         mode_scorers={},
         fallback_scorers=[("body", _scorer(10))],
-        detect_doc_type_func=lambda _ctx: "",
         flow_allows_func=lambda candidate, _ctx: candidate != "heading1",
     )
 
@@ -46,14 +45,13 @@ def test_select_legacy_scored_type_uses_mode_scorer_when_score_is_higher() -> No
         None,
         SimpleNamespace(doc_mode="REPORT"),
         structure_scorers=[("body", _scorer(20))],
-        mode_scorers={"REPORT": [("heading1_report", _scorer(80, {"report": True}))]},
+        mode_scorers={"REPORT": [("heading1", _scorer(80, {"heading": True}))]},
         fallback_scorers=[("body", _scorer(10))],
-        detect_doc_type_func=lambda _ctx: "",
         flow_allows_func=lambda _candidate, _ctx: True,
     )
 
-    assert type_id == "heading1_report"
-    assert meta == {"report": True}
+    assert type_id == "heading1"
+    assert meta == {"heading": True}
     assert prefix == ""
     assert score_log == ["body:20"]
 
@@ -67,7 +65,6 @@ def test_select_legacy_scored_type_runs_fallback_only_without_positive_score() -
         structure_scorers=[("title", _scorer(0))],
         mode_scorers={},
         fallback_scorers=[("body", _scorer(10, {"fallback": True}))],
-        detect_doc_type_func=lambda _ctx: "",
         flow_allows_func=lambda _candidate, _ctx: True,
     )
 
@@ -77,9 +74,8 @@ def test_select_legacy_scored_type_runs_fallback_only_without_positive_score() -
     assert score_log == []
 
 
-def test_select_legacy_scored_type_detects_doc_mode_when_context_empty() -> None:
-    """选择器接收空文种上下文时，通过回调检测文种并使用对应 scorer。"""
-    ctx = SimpleNamespace(doc_mode="")
+def test_select_legacy_scored_type_uses_explicit_mode_context() -> None:
+    ctx = SimpleNamespace(doc_mode="MEETING")
 
     type_id, _, _, _ = select_legacy_scored_type(
         "测试",
@@ -88,7 +84,6 @@ def test_select_legacy_scored_type_detects_doc_mode_when_context_empty() -> None
         structure_scorers=[("body", _scorer(1))],
         mode_scorers={"MEETING": [("meeting_meta", _scorer(50))]},
         fallback_scorers=[("body", _scorer(10))],
-        detect_doc_type_func=lambda _ctx: "MEETING",
         flow_allows_func=lambda _candidate, _ctx: True,
     )
 
@@ -100,7 +95,6 @@ def test_build_legacy_scorer_registry_keeps_title_role_and_heading_scores() -> N
     structure_scorers, mode_scorers, fallback_scorers = build_legacy_scorer_registry(
         match_numbering_func=lambda text: ("heading1", "一、") if text.startswith("一、") else ("", ""),
         contains_colon_func=lambda text: "：" in text or ":" in text,
-        detect_doc_type_func=lambda _ctx: "NORMAL",
     )
 
     title_type, title_meta, _, _ = select_legacy_scored_type(
@@ -117,7 +111,6 @@ def test_build_legacy_scorer_registry_keeps_title_role_and_heading_scores() -> N
         structure_scorers=structure_scorers,
         mode_scorers=mode_scorers,
         fallback_scorers=fallback_scorers,
-        detect_doc_type_func=lambda _ctx: "NORMAL",
         flow_allows_func=lambda _candidate, _ctx: True,
     )
     assert title_type == "title"
@@ -137,7 +130,6 @@ def test_build_legacy_scorer_registry_keeps_title_role_and_heading_scores() -> N
         structure_scorers=structure_scorers,
         mode_scorers=mode_scorers,
         fallback_scorers=fallback_scorers,
-        detect_doc_type_func=lambda _ctx: "NORMAL",
         flow_allows_func=lambda _candidate, _ctx: True,
     )
     assert role_type == "role_name"
@@ -156,7 +148,6 @@ def test_build_legacy_scorer_registry_keeps_title_role_and_heading_scores() -> N
         structure_scorers=structure_scorers,
         mode_scorers=mode_scorers,
         fallback_scorers=fallback_scorers,
-        detect_doc_type_func=lambda _ctx: "NORMAL",
         flow_allows_func=lambda _candidate, _ctx: True,
     )
     assert heading_type == "heading1"
