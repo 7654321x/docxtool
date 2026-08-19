@@ -1,41 +1,11 @@
-# Global Codex Agent Rules
+# DocxTool Project Agent Rules
 
-本文件适用于整个仓库，只保存跨任务强制规则。公文回归、WPS 宿主和 Reader 的具体规则分别见专项文档，不在此重复维护。
+全局 Codex 工程规则由全局 `AGENTS.md` 统一继承，本文件只保存 DocxTool 项目专属的架构、验证、发布和生产环境事实。
 
-## 基本原则
+## 项目技能路由
 
-1. 先阅读相关源码、配置、测试和专项文档，再修改代码或文档。
-2. 保持改动范围最小，不做与当前任务无关的重构、依赖升级或格式化。
-3. 不为了通过测试删除测试、降低安全限制或绕过鉴权逻辑。
-4. 不修改真实密钥、生产配置或用户私有数据。
-5. 不执行 `git commit` 或 `git push`，除非用户明确要求。
-6. 用户工作树已有修改属于用户内容，必须保留；不得使用破坏性恢复命令覆盖它们。
-7. 任务按 S/M/L 分级：S 级单文件小修复使用短计划和聚焦测试；M 级模块功能先写短设计；L 级识别、排版、账号、鉴权、协议、数据库、发布或架构变更必须先写正式技术设计，再修改源码。分级规则和模板见 `docs/design/CODEX_WORKFLOW_OPTIMIZATION.md`。
-
-## 需求与错误边界
-
-1. 根据源码、配置、测试和实际运行结果核实需求前提；区分已验证事实、合理推断和建议。
-2. 必需条件不成立时立即失败并保留真实异常链；不得用空结果、默认值、静默跳过或假成功掩盖失败。
-3. 不增加未经要求的缓存、重试、降级、自动修复、兼容 fallback、自动封禁或重复状态。
-4. 外部 API 和库函数按当前依赖版本的官方签名调用；不猜测字段、异常类型或返回结构。
-5. 数据库失败只回滚当前必要事务后抛错；只有能增加业务上下文时才包装异常。
-
-## Windows 与验证
-
-Windows 显式命令固定使用 PowerShell 7：
-
-```pwsh
-pwsh -NoProfile -Command "..."
-```
-
-修改后按任务范围运行最小必要测试。跨模块、发布或用户明确要求完整验证时，再执行相应专项门禁。未运行真实 WPS 时不得声称真实宿主 PASS，必须明确标记 `NOT_RUN`。
-
-## 技能路由
-
-1. DOCX 识别、规范化和排版使用 `docxtool-recognition-layout`；普通 WPS UI、Reader、Agent 文档和发布任务不触发该技能。
-2. Codex 设置、技能和工作流问题使用 `openai-docs`；网页调研使用一个网络检索路由，避免同一问题重复搜索。
-3. GitHub 发布直接使用项目 Quick 发布流程；只有用户明确要求完整验收时才进入 `-Verify` 门禁。
-4. 复杂审阅、重构和方案评估才使用通用代码审阅准则；单文件小修复不加载无关技能。
+1. DOCX 识别、规范化和排版使用 `docxtool-recognition-layout`。
+2. GitHub 发布使用 `scripts/publish_to_github.ps1` 的 Quick 流程；仅在用户明确要求完整验收时使用 `-Verify`。
 
 ## 任务验证入口
 
@@ -54,7 +24,6 @@ pwsh -NoProfile -File .\scripts\verify_changed.ps1
 3. 公文结构回归见 `docs/DOCX_REGRESSION_CHECKLIST.md`；WPS 宿主回归见 `docs/WPS_REGRESSION_CHECKLIST.md`；Reader 局部规则见 `apps/reader/AGENTS.md`。
 4. `docs/API.md` 是 HTTP 外部契约；`docs/RELEASE.md` 是发布范围、SSH 操作和安全边界。
 5. 规范、PRD、技术设计、API、回归清单和验收记录保持分立，不复制同一事实。
-6. 用户正文、真实路径、密钥、Token、完整哈希和完整运行日志不得写入长期文档。
 
 ## 迁移专项
 
@@ -70,19 +39,18 @@ pwsh -NoProfile -File .\scripts\verify_changed.ps1
 
 1. 文档层保持 `models/analysis/text → importing/segmentation → recognition → normalization → engine` 单向依赖。
 2. `document/pipeline`、`document/recognition` 不得导入 `document/engine`；`document/engine` 不得从 importer facade 获取共享模型。
-3. 可替换导出器执行前通过签名或明确 adapter 适配参数；不得捕获导出器内部任意 `TypeError` 后重试。
+3. 可替换导出器执行前必须通过签名或明确 adapter 适配参数。
 4. `web.handler` 和 `web.compatibility` 必须能在全新解释器中独立导入，并保持旧 `web.app` monkeypatch 边界。
 5. SDK 协议模型、校验器和清单必须保持无循环导入。
 
 ## 本地回收站与发布
 
 1. `local_recycle/` 仅用于本机临时补丁、快照、备份和可重新生成产物，不得提交。
-2. 已被 Git 跟踪的修改必须保留在原路径，不能移动到回收站制造干净工作树。
-3. 发布前阅读 `docs/RELEASE.md`，使用 `scripts/publish_to_github.ps1`，不得直接把整棵工作树推送到 GitHub。
-4. 发布必须先同步并核验本地分支基线，再在当前本地仓库按允许清单暂存并创建提交，最后通过 SSH 推送；禁止只在临时克隆中生成远端提交。
-5. 普通发布使用脚本默认流程；只有用户明确要求时才使用 `-Verify` 完整验收。版本以 `src/docxtool/version.py`、`pyproject.toml` 和 `CHANGELOG.md` 为准。
-6. 新增或移动正式源码、资源、测试和文档时，第一时间同步写入 `scripts/publish_to_github.ps1` 的允许清单；新增长期文档还必须立即登记到 `docs/README.md`，不得等到发布前再补。
-7. `src/docxtool/` 是日常开发与 GitHub 发布的唯一权威源码。`docxtool/` 是部署包镜像：日常修改、测试和普通发布均忽略该目录；只有用户明确下达“发布新版本”命令时，才同步并发布该部署包。
+2. 发布前阅读 `docs/RELEASE.md`，使用 `scripts/publish_to_github.ps1`，不得直接把整棵工作树推送到 GitHub。
+3. 发布必须先同步并核验本地分支基线，再在当前本地仓库按允许清单暂存并创建提交，最后通过 SSH 推送；禁止只在临时克隆中生成远端提交。
+4. 普通发布使用脚本默认流程；只有用户明确要求时才使用 `-Verify` 完整验收。版本以 `src/docxtool/version.py`、`pyproject.toml` 和 `CHANGELOG.md` 为准。
+5. 新增或移动正式源码、资源、测试和文档时，第一时间同步写入 `scripts/publish_to_github.ps1` 的允许清单；新增长期文档还必须立即登记到 `docs/README.md`，不得等到发布前再补。
+6. `src/docxtool/` 是日常开发与 GitHub 发布的唯一权威源码。`docxtool/` 是部署包镜像：日常修改、测试和普通发布均忽略该目录；只有用户明确下达“发布新版本”命令时，才同步并发布该部署包。
 
 ## 当前生产回源事实
 
@@ -103,7 +71,7 @@ pwsh -NoProfile -File .\scripts\verify_changed.ps1
 ## 重复问题处理
 
 1. 先查阅相关专项回归清单和文档唯一职责表，避免重复实现或重复记录。
-2. 可复用规则写入对应的唯一专项文档，不写入用户正文、真实路径或完整日志。
+2. 可复用规则写入对应的唯一专项文档，不在多个文档重复维护同一事实。
 3. 修改公文、OOXML、页眉页脚、分节、字段、关系或样式时，优先依据官方文档和现有回归测试。
 
 ## 常用检查

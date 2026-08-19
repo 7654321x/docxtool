@@ -16,6 +16,7 @@ from docxtool.document.segmentation.source_locator import (
 
 
 _ANNUAL_REVIEW_HEADING_PREFIXES = ("一年来", "五年来")
+_ZERO_WIDTH_RE = re.compile(r"[\u200b\u200c\u200d\u2060\ufeff]")
 
 
 def _is_annual_review_inline_heading(text: str, period_index: int, body_count: int) -> bool:
@@ -41,26 +42,49 @@ def has_format_transition(
     """
     if not features or not features.source_run_spans:
         return False
-    left = []
-    right = []
-    for run in features.source_run_spans:
-        if min(boundary, run.end) > max(start, run.start):
-            left.append(run)
-        if min(end, run.end) > max(boundary, run.start):
-            right.append(run)
-    if not left or not right:
+    source = str(getattr(features, "source_physical_text", "") or "")
+
+    def nearest_run(*, left_side: bool):
+        nearest = None
+        nearest_distance = None
+        for run in features.source_run_spans:
+            overlap_start = max(start, run.start)
+            overlap_end = min(boundary, run.end) if left_side else min(end, run.end)
+            if not left_side:
+                overlap_start = max(boundary, run.start)
+            if overlap_start >= overlap_end:
+                continue
+            positions = (
+                range(overlap_end - 1, overlap_start - 1, -1)
+                if left_side
+                else range(overlap_start, overlap_end)
+            )
+            for position in positions:
+                character = source[position] if position < len(source) else ""
+                if character.isspace() or _ZERO_WIDTH_RE.fullmatch(character):
+                    continue
+                distance = boundary - position if left_side else position - boundary
+                if nearest_distance is None or distance < nearest_distance:
+                    nearest = run
+                    nearest_distance = distance
+                break
+        return nearest
+
+    left = nearest_run(left_side=True)
+    right = nearest_run(left_side=False)
+    if left is None or right is None:
         return False
-    left_bold = any(run.bold is True for run in left)
-    right_bold = any(run.bold is True for run in right)
+    left_bold = left.bold is True
+    right_bold = right.bold is True
     if left_bold != right_bold:
         return True
-    left_sizes = [run.font_size_pt for run in left if run.font_size_pt is not None]
-    right_sizes = [run.font_size_pt for run in right if run.font_size_pt is not None]
-    if left_sizes and right_sizes and max(left_sizes) >= max(right_sizes) + 1.0:
+    if (
+        left.font_size_pt is not None
+        and right.font_size_pt is not None
+        and left.font_size_pt >= right.font_size_pt + 1.0
+    ):
         return True
-    left_fonts = {run.font_name for run in left if run.font_name}
-    right_fonts = {run.font_name for run in right if run.font_name}
-    return bool(left_fonts and right_fonts and left_fonts != right_fonts)
+    return bool(left.font_name and right.font_name and left.font_name != right.font_name)
 
 
 def heading_has_inline_body(text: str) -> bool:

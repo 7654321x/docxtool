@@ -1,5 +1,10 @@
 # Changelog
 
+## 5.6.4 - 2026-08-19
+
+- Added the latest Recognition front-role and boundary refinements with focused regression coverage.
+- Preserved the existing Recognition lifecycle and diagnostic contracts while tightening front-matter decisions.
+
 ## 5.6.3 - 2026-08-19
 
 - Finalized the v1.0 Recognition diagnostic contract by preserving legacy limited/pre-veto fields and adding explicit competitive metrics.

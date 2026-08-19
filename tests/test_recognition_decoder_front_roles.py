@@ -94,6 +94,107 @@ def test_front_report_briefing_suffix_supports_multiline_title_group() -> None:
     assert "document-type-title-suffix" in diagnostics[1]["title_context_evidence"]
 
 
+def test_multiline_main_title_closes_before_date_role_and_recipient() -> None:
+    data = _document(
+        _paragraph("关于推进重点工作的通知", "body", 0, alignment="CENTER"),
+        _paragraph("阶段性安排", "body", 1, alignment="CENTER"),
+        _paragraph("重点任务说明", "body", 2, alignment="CENTER"),
+        _paragraph("2026年8月24日", "body", 3, alignment="CENTER"),
+        _paragraph("韩双林", "body", 4, alignment="CENTER"),
+        _paragraph("各位委员、各位同志：", "body", 5),
+        _paragraph("现将有关情况说明如下，请结合实际抓好落实。", "body", 6),
+    )
+
+    apply_recognition(data)
+
+    assert [item.type_id for item in data.paragraphs] == [
+        "title",
+        "title_cont",
+        "title_cont",
+        "date_line",
+        "role_name",
+        "addressing",
+        "body",
+    ]
+
+
+def test_main_title_cannot_restart_after_front_metadata() -> None:
+    reopened = _paragraph(
+        "补充说明",
+        "title",
+        2,
+        alignment="CENTER",
+        classification_kind="main_title",
+        classification_confidence=0.95,
+    )
+    data = _document(
+        _paragraph("关于推进重点工作的通知", "title", 0, alignment="CENTER"),
+        _paragraph("2026年8月24日", "date_line", 1, alignment="CENTER"),
+        reopened,
+        _paragraph("各有关单位：", "addressing", 3),
+        _paragraph("现将有关情况说明如下，请结合实际抓好落实。", "body", 4),
+    )
+
+    apply_recognition(data)
+
+    assert reopened.type_id != "title"
+    trace = data.recognition_diagnostics["candidate_trace"][2]
+    assert "main_title" in [item["type"] for item in trace["vetoed_candidates"]]
+
+
+def test_title2_remains_available_after_body_and_does_not_close_title2_sequence() -> None:
+    data = _document(
+        _paragraph("关于推进重点工作的通知", "title", 0, alignment="CENTER"),
+        _paragraph("正文已经开始并完整说明相关工作安排。", "body", 1),
+        _paragraph(
+            "第一部分",
+            "title2",
+            2,
+            classification_kind="title2",
+            classification_confidence=0.95,
+        ),
+        _paragraph("第一部分正文继续说明具体任务。", "body", 3),
+        _paragraph(
+            "第二部分",
+            "title2",
+            4,
+            classification_kind="title2",
+            classification_confidence=0.95,
+        ),
+        _paragraph("第二部分正文继续说明具体任务。", "body", 5),
+    )
+
+    apply_recognition(data)
+
+    assert [item.type_id for item in data.paragraphs] == [
+        "title",
+        "body",
+        "title2",
+        "body",
+        "title2",
+        "body",
+    ]
+
+
+def test_front_role_name_uses_neighbors_across_empty_and_zero_width_lines() -> None:
+    role = _paragraph("韩双林", "body", 5, alignment="CENTER")
+    data = _document(
+        _paragraph("关于推进重点工作的通知", "title", 0, alignment="CENTER"),
+        _paragraph("2026年8月24日", "date_line", 1, alignment="CENTER"),
+        _paragraph("", "body", 2),
+        _paragraph("\u200b", "body", 3),
+        role,
+        _paragraph("\ufeff", "body", 6),
+        _paragraph("", "body", 7),
+        _paragraph("各位委员、各位同志：", "addressing", 8),
+        _paragraph("现将有关情况说明如下，请结合实际抓好落实。", "body", 9),
+    )
+
+    apply_recognition(data)
+
+    assert role.type_id == "role_name"
+
+
 @pytest.mark.parametrize("date_text", ["（2026年8月27日）", "2026年8月27日"])
 def test_front_meeting_date_and_context_are_distinct_from_title(date_text: str) -> None:
     data = _document(

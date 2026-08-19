@@ -75,6 +75,7 @@ def apply_recognition(
                 following_features=tuple(lookahead),
                 boundary_before=boundary_before,
                 document_context=document_context,
+                main_title_started=beam.main_title_started,
             )
             raw_candidates = tuple(
                 _candidates(
@@ -131,6 +132,7 @@ def apply_recognition(
                         beam.vetoed_candidate_options + (tuple(vetoed_candidates),),
                         beam.eligible_candidate_options + (eligible_candidates,),
                         beam.competitive_candidate_options + (competitive_candidates,),
+                        beam.main_title_started or candidate.paragraph_type == ParagraphType.MAIN_TITLE,
                     )
                 )
         if not next_beams:
@@ -159,6 +161,7 @@ def apply_recognition(
                     beam.vetoed_candidate_options + (vetoed_candidates,),
                     beam.eligible_candidate_options + (eligible_candidates,),
                     beam.competitive_candidate_options + ((fallback,),),
+                    beam.main_title_started,
                 )
                 for beam, (
                     raw_candidates,

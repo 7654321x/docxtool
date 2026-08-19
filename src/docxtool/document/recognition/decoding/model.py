@@ -19,6 +19,7 @@ class _Context(CandidateContext):
     following_features: tuple[ParagraphFeatures, ...] = ()
     boundary_before: bool = False
     document_context: DocumentContext | None = None
+    main_title_started: bool = False
 
 
 @dataclass(frozen=True)
@@ -35,3 +36,4 @@ class _Beam:
     vetoed_candidate_options: tuple[tuple[Candidate, ...], ...] = ()
     eligible_candidate_options: tuple[tuple[Candidate, ...], ...] = ()
     competitive_candidate_options: tuple[tuple[Candidate, ...], ...] = ()
+    main_title_started: bool = False

@@ -41,6 +41,11 @@ def _transition(previous: ParagraphType | None, current: Candidate, previous_sec
 def _hard_veto(candidate: Candidate, features, mode: DocumentMode, context: _Context, block: DocumentBlock) -> bool:
     # Structural facts veto visually plausible headings before scoring.
     if (
+        candidate.paragraph_type == ParagraphType.MAIN_TITLE
+        and context.main_title_started
+    ):
+        return True
+    if (
         candidate.paragraph_type == ParagraphType.TITLE2
         and ends_with_unicode_punctuation(features.compact_text)
     ):

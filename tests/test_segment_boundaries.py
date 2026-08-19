@@ -66,6 +66,26 @@ def _features_for_visual_boundary(source: str, boundary: int) -> ParagraphFeatur
     )
 
 
+def _features_for_bold_prefix(source: str, bold_end: int) -> ParagraphFeatures:
+    return ParagraphFeatures(
+        source_physical_text=source,
+        source_run_spans=(
+            SourceRun(
+                start=0, end=bold_end, font_name="FangSong", east_asia_font_name="FangSong",
+                ascii_font_name="Times New Roman", font_size_pt=16.0, bold=True,
+                italic=False, underline=False, explicit=True, inherited=False, known=True,
+                format_sources=("direct_run",),
+            ),
+            SourceRun(
+                start=bold_end, end=len(source), font_name="FangSong",
+                east_asia_font_name="FangSong", ascii_font_name="Times New Roman",
+                font_size_pt=16.0, bold=False, italic=False, underline=False,
+                explicit=True, inherited=False, known=True, format_sources=("direct_run",),
+            ),
+        ),
+    )
+
+
 def test_source_span_conservation_facades_call_new_module(monkeypatch) -> None:
     """boundaries 与 importer 旧入口都应调用唯一的守恒实现。"""
     conservation_module = importlib.import_module(
@@ -152,6 +172,25 @@ def test_visual_title_terminator_can_split_without_numbering() -> None:
     assert [source[start:end] for start, end in spans] == [
         "关于推进工作的要求。", "各单位应当结合实际认真执行。",
     ]
+
+
+def test_bold_glossary_prefix_does_not_split_later_sentences() -> None:
+    source = "【加粗术语：】普通解释第一句。普通解释第二句。普通解释第三句。"
+    features = _features_for_bold_prefix(source, source.index("】") + 1)
+    first_sentence_end = source.index("。") + 1
+
+    assert not boundaries_module.has_format_transition(
+        features,
+        0,
+        first_sentence_end,
+        len(source),
+    )
+    assert _split_inline_heading_body_spans(
+        source,
+        0,
+        len(source),
+        features,
+    ) == [(0, len(source))]
 
 
 def test_heading_has_inline_body_shared_boundary_helper() -> None:

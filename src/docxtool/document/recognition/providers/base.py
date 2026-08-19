@@ -38,6 +38,7 @@ class CandidateContext(Protocol):
     index: int
     boundary_before: bool
     document_context: DocumentContext
+    main_title_started: bool
 
 
 class CandidateProvider(Protocol):

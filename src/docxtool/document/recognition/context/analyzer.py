@@ -20,6 +20,7 @@ from .front import (
     _body_like,
     _front_scan_positions,
     _front_semantic_item,
+    _front_recipient_line,
     _head_date_line,
     _head_meeting_title_date,
     _head_role_name,
@@ -116,7 +117,7 @@ def _front_titles_before_body_and_first_heading(
         if 4 <= features[position].text_length <= 60
         and not features[position].dispatch_number_match
         and not features[position].date_match
-        and not features[position].recipient_match
+        and not _front_recipient_line(features[position])
         and not features[position].key_value_label
         and not features[position].attachment_note_match
         and not features[position].heading_shape_level
@@ -170,7 +171,8 @@ def analyze_document_context(features: list[ParagraphFeatures]) -> DocumentConte
 
     for position in front_scan_positions:
         item = features[position]
-        following = features[position + 1] if position + 1 < count else None
+        following_position = _next_semantic_position(features, position + 1)
+        following = features[following_position] if following_position is not None else None
         previous_position = _previous_semantic_position(features, position - 1)
         previous = features[previous_position] if previous_position is not None else None
         if not item.compact_text or item.dispatch_number_match or item.recipient_match:
@@ -247,7 +249,12 @@ def analyze_document_context(features: list[ParagraphFeatures]) -> DocumentConte
         ][:4]
         for candidate in following_positions:
             following = features[candidate]
-            following_next = features[candidate + 1] if candidate + 1 < count else None
+            following_next_position = _next_semantic_position(features, candidate + 1)
+            following_next = (
+                features[following_next_position]
+                if following_next_position is not None
+                else None
+            )
             if following.dispatch_number_match:
                 score += 0.14
                 evidence.append("following-dispatch-number")
@@ -305,7 +312,8 @@ def analyze_document_context(features: list[ParagraphFeatures]) -> DocumentConte
         while cursor_index < len(following_front_positions):
             cursor = following_front_positions[cursor_index]
             item = features[cursor]
-            following = features[cursor + 1] if cursor + 1 < count else None
+            following_position = _next_semantic_position(features, cursor + 1)
+            following = features[following_position] if following_position is not None else None
             previous_position = _previous_semantic_position(features, cursor - 1)
             previous = features[previous_position] if previous_position is not None else None
             if _title_metadata(item, previous, following) or title_scores[cursor] >= 0.48:

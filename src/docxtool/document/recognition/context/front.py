@@ -31,10 +31,19 @@ _HEAD_DATE_RE = re.compile(
 _TITLE_STYLE_NAMES = frozenset({"title", "标题", "subtitle", "副标题"})
 _HEADING_STYLE_NAMES = frozenset({"heading1", "标题1", "heading2", "标题2", "heading3", "标题3", "heading4", "标题4"})
 _FRONT_SCAN_SOFT_THRESHOLD = 12
+_ZERO_WIDTH_RE = re.compile(r"[\u200b\u200c\u200d\u2060\ufeff]")
 
 
 def _style_name(value: str) -> str:
     return re.sub(r"\s+", "", str(value or "").casefold())
+
+
+def _front_visible_text(feature: ParagraphFeatures) -> str:
+    return _ZERO_WIDTH_RE.sub("", re.sub(r"\s+", "", feature.compact_text or ""))
+
+
+def _front_recipient_line(feature: ParagraphFeatures) -> bool:
+    return bool(feature.recipient_match or feature.colon_standalone_addressing)
 
 
 def _body_like(feature: ParagraphFeatures) -> bool:
@@ -115,8 +124,15 @@ def _head_role_name(
     ):
         return False
     previous_title_anchor = previous is not None and _front_title_anchor(previous)
+    previous_front_metadata_anchor = previous_title_anchor or bool(
+        previous is not None
+        and (
+            _head_date_line(previous)
+            or previous.legacy_type_id in {"date_line", "meeting_title_meta", "author_line", "role_name"}
+        )
+    )
     following_metadata = following is not None and (
-        _head_date_line(following) or following.recipient_match
+        _head_date_line(following) or _front_recipient_line(following)
     )
     parsed = parse_role_name_shape(text)
     if parsed is not None:
@@ -136,7 +152,7 @@ def _head_role_name(
             if is_person_name_suffix(compact)
             else None
         )
-        if previous_title_anchor and following_metadata:
+        if previous_front_metadata_anchor and following_metadata:
             if strength == "strong":
                 return True
             style = _style_name(feature.style_name)
@@ -161,7 +177,7 @@ def _title_metadata(
 
 
 def _front_semantic_item(feature: ParagraphFeatures) -> bool:
-    if not feature.compact_text:
+    if not _front_visible_text(feature):
         return False
     return feature.legacy_type_id != "__object_caption__"
 
