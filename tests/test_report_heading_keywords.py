@@ -288,7 +288,7 @@ def test_legacy_heading_family_remains_diagnostic_without_semantic_upgrade() -> 
             for candidate in trace["candidates"]
         )
     families = data.recognition_diagnostics["document_context"]["heading_families"]
-    assert any(family.get("source_family") == "legacy-heading" for family in families)
+    assert not any(family.get("source_family") == "legacy-heading" for family in families)
 
 
 def test_fuzzy_glossary_marker_is_soft_and_does_not_clear_competitors() -> None:

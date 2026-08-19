@@ -55,11 +55,10 @@ _BODY_FIRST_HEADING_LOOKAHEAD = 4
 
 
 def _context_heading_level(item: ParagraphFeatures) -> int | None:
-    """Return explicit numbering level or the observed legacy heading level."""
+    """Return the canonical heading level used by hierarchy analysis."""
     if item.heading_shape_level is not None:
         return item.heading_shape_level
-    match = re.fullmatch(r"heading([1-4])", str(item.legacy_type_id or ""))
-    return int(match.group(1)) if match else None
+    return item.native_numbering_level
 
 
 def _document_type_title_suffix(item: ParagraphFeatures) -> bool:
@@ -364,8 +363,6 @@ def analyze_document_context(features: list[ParagraphFeatures]) -> DocumentConte
             active_heading_stack.get(parent_level, -1) for parent_level in range(1, level)
         )
         source_family = item.native_numbering_family
-        if item.heading_shape_level is None:
-            source_family = "legacy-heading"
         family_key = (level, parent_scope, source_family)
         by_family.setdefault(family_key, []).append(position)
         next_item = features[position + 1] if position + 1 < count else None

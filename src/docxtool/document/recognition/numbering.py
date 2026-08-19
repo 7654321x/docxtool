@@ -228,9 +228,6 @@ def _native_heading_anchor(features: Any) -> tuple[int | None, str]:
     style_match = re.fullmatch(r"(?:heading|标题)\s*([1-4])", style)
     if style_match is not None:
         return int(style_match.group(1)), "word-style"
-    legacy_match = re.fullmatch(r"heading([1-4])", str(features.legacy_type_id or ""))
-    if legacy_match is not None:
-        return int(legacy_match.group(1)), "legacy"
     return None, ""
 
 

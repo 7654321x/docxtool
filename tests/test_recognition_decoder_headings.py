@@ -364,12 +364,38 @@ def test_uniform_legacy_heading_siblings_are_not_upgraded_without_structure() ->
         "heading1", "body", "body",
     ]
     families = data.recognition_diagnostics["document_context"]["heading_families"]
-    assert any(
-        family.get("source_family") == "legacy-heading"
-        and family["level"] == 3
-        and family["count"] == 2
-        for family in families
+    assert not any(family["level"] == 3 for family in families)
+
+
+def test_legacy_heading_cannot_become_canonical_parent() -> None:
+    legacy_parent = _paragraph("阶段工作情况", "heading1", 0)
+    real_child = _paragraph("（一）重点任务", "body", 1)
+    data = _document(
+        legacy_parent,
+        real_child,
+        _paragraph("正文内容继续说明重点任务和具体工作安排。", "body", 2),
     )
+
+    apply_recognition(data)
+
+    child_diagnostic = data.recognition_diagnostics["paragraphs"][1]
+    assert "missing-parent-heading" in child_diagnostic["heading_context_evidence"]
+    assert child_diagnostic["legacy_type"] == "body"
+    assert data.recognition_diagnostics["paragraphs"][0]["legacy_type"] == "heading1"
+
+
+def test_canonical_heading1_remains_parent_of_heading2() -> None:
+    data = _document(
+        _paragraph("一、总体要求", "body", 0),
+        _paragraph("（一）重点任务", "body", 1),
+        _paragraph("正文内容继续说明重点任务和具体工作安排。", "body", 2),
+    )
+
+    apply_recognition(data)
+
+    child_diagnostic = data.recognition_diagnostics["paragraphs"][1]
+    assert "missing-parent-heading" not in child_diagnostic["heading_context_evidence"]
+    assert "parent-scope" in child_diagnostic["heading_context_evidence"]
 
 def test_single_numbered_heading_is_applied_but_marked_for_review():
     data = _document(

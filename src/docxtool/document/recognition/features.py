@@ -130,6 +130,12 @@ def normalize_text(value: str) -> str:
     return re.sub(r"[ \t\u00a0]+", " ", value).strip()
 
 
+def ends_with_unicode_punctuation(value: str) -> bool:
+    """Return whether the last visible character is Unicode punctuation."""
+    visible = (value or "").rstrip()
+    return bool(visible and unicodedata.category(visible[-1]).startswith("P"))
+
+
 def _paragraph_blocks(data: Any) -> list[DocumentBlock]:
     blocks: list[DocumentBlock] = []
     table_index = 0
@@ -306,8 +312,6 @@ def detect_mode(features: list[ParagraphFeatures]) -> DocumentModeDecision:
         }.intersection(evidence)
         if item.compact_text.endswith(meeting_titles) and (len(evidence) >= 3 and strong or index == 0 and "title-length" in evidence):
             return DocumentModeDecision(DocumentMode.MEETING_MINUTES, min(0.99, 0.72 + meeting_count * 0.06), evidence + ("meeting-title-suffix",))
-    if meeting_count >= 2:
-        return DocumentModeDecision(DocumentMode.MEETING_MINUTES, min(0.99, 0.75 + meeting_count * 0.06), ("meeting-title-or-metadata",))
     suffixes = (
         (DocumentMode.REPORT, REPORT_DOCUMENT_TITLE_MARKERS, "report-title-suffix"),
         (DocumentMode.NOTICE, ("通知",), "notice-title-suffix"),

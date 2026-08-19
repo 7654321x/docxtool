@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import io
 import zipfile
 from pathlib import Path
 from xml.etree import ElementTree as ET
@@ -8,12 +10,16 @@ from docx import Document
 from docx.enum.section import WD_SECTION
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
+from docx.opc.constants import RELATIONSHIP_TYPE as RT
 from docx.shared import Cm
 
 from docxtool.document.engine.page_number import apply_page_number, apply_page_numbers
 from docxtool.security.docx_integrity import validate_docx_integrity
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+_TINY_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+)
 
 
 def _add_field(paragraph, instruction: str, display_text: str = "1") -> None:
@@ -42,6 +48,38 @@ def _add_simple_field(paragraph, instruction: str, display_text: str = "1") -> N
     run.append(text)
     field.append(run)
     paragraph._element.append(field)
+
+
+def _add_split_field(
+    paragraph, instruction_parts: tuple[str, ...], display_text: str = "1"
+) -> None:
+    begin = OxmlElement("w:fldChar")
+    begin.set(qn("w:fldCharType"), "begin")
+    paragraph.add_run()._r.append(begin)
+    for part in instruction_parts:
+        instruction = OxmlElement("w:instrText")
+        instruction.set(qn("xml:space"), "preserve")
+        instruction.text = part
+        paragraph.add_run()._r.append(instruction)
+    separate = OxmlElement("w:fldChar")
+    separate.set(qn("w:fldCharType"), "separate")
+    paragraph.add_run()._r.append(separate)
+    paragraph.add_run(display_text)
+    end = OxmlElement("w:fldChar")
+    end.set(qn("w:fldCharType"), "end")
+    paragraph.add_run()._r.append(end)
+
+
+def _add_hyperlink(paragraph, text: str, url: str) -> None:
+    relationship_id = paragraph.part.relate_to(url, RT.HYPERLINK, is_external=True)
+    hyperlink = OxmlElement("w:hyperlink")
+    hyperlink.set(qn("r:id"), relationship_id)
+    run = OxmlElement("w:r")
+    visible = OxmlElement("w:t")
+    visible.text = text
+    run.append(visible)
+    hyperlink.append(run)
+    paragraph._element.append(hyperlink)
 
 
 def _footer_xml(path: Path) -> dict[str, str]:
@@ -356,6 +394,93 @@ def test_linked_footer_materializes_inherited_content_before_page_replacement(tm
     assert "Prepared by office" in _visible_text(second_root)
     assert any(item.startswith("DATE") for item in _field_instructions(second_root))
     assert _field_instructions(second_root).count("PAGE") == 1
+
+
+def test_linked_footer_preserves_image_relationship_when_materialized(tmp_path: Path) -> None:
+    document = Document()
+    first = document.sections[0]
+    first.footer.is_linked_to_previous = False
+    first.footer.paragraphs[0].text = "Confidential footer"
+    image_paragraph = first.footer.add_paragraph()
+    image_paragraph.add_run().add_picture(io.BytesIO(_TINY_PNG))
+    old_page = first.footer.add_paragraph()
+    _add_field(old_page, "PAGE")
+    document.add_paragraph("section one")
+    second = document.add_section(WD_SECTION.NEW_PAGE)
+    assert second.footer.is_linked_to_previous is True
+    document.add_paragraph("section two")
+
+    options = {"style": "dash", "position": "center"}
+    apply_page_number(document, options)
+    apply_page_number(document, options)
+    output = tmp_path / "linked-footer-image.docx"
+    document.save(output)
+
+    assert validate_docx_integrity(output).ok is True
+    reopened = Document(output)
+    second_footer = reopened.sections[1].footer
+    assert second_footer.is_linked_to_previous is False
+    blips = second_footer._element.findall(".//" + qn("a:blip"))
+    assert len(blips) == 1
+    relationship_id = blips[0].get(qn("r:embed"))
+    assert relationship_id in second_footer.part.rels
+    assert second_footer.part.rels[relationship_id].target_part.blob
+    assert _field_instructions(second_footer._element).count("PAGE") == 1
+
+
+def test_linked_footer_preserves_hyperlink_relationship_when_materialized(
+    tmp_path: Path,
+) -> None:
+    document = Document()
+    first = document.sections[0]
+    first.footer.is_linked_to_previous = False
+    paragraph = first.footer.paragraphs[0]
+    paragraph.add_run("Reference: ")
+    _add_hyperlink(paragraph, "public site", "https://example.com/footer")
+    _add_field(first.footer.add_paragraph(), "PAGE")
+    document.add_paragraph("section one")
+    second = document.add_section(WD_SECTION.NEW_PAGE)
+    assert second.footer.is_linked_to_previous is True
+    document.add_paragraph("section two")
+
+    apply_page_number(document, {"style": "dash", "position": "center"})
+    output = tmp_path / "linked-footer-hyperlink.docx"
+    document.save(output)
+
+    assert validate_docx_integrity(output).ok is True
+    reopened = Document(output)
+    second_footer = reopened.sections[1].footer
+    hyperlinks = second_footer._element.findall(".//" + qn("w:hyperlink"))
+    assert len(hyperlinks) == 1
+    relationship_id = hyperlinks[0].get(qn("r:id"))
+    relationship = second_footer.part.rels[relationship_id]
+    assert relationship.is_external is True
+    assert relationship.target_ref == "https://example.com/footer"
+
+
+def test_split_complex_page_field_is_replaced_without_removing_split_date(
+    tmp_path: Path,
+) -> None:
+    document = Document()
+    footer = document.sections[0].footer
+    footer.is_linked_to_previous = False
+    paragraph = footer.paragraphs[0]
+    _add_split_field(paragraph, (" DA", "TE \\@ yyyy-MM-dd "), "2026-08-19")
+    paragraph.add_run(" ")
+    _add_split_field(paragraph, (" PA", "GE "), "7")
+
+    apply_page_number(document, {"style": "plain", "position": "center"})
+    output = tmp_path / "split-complex-fields.docx"
+    document.save(output)
+
+    assert validate_docx_integrity(output).ok is True
+    root = next(iter(_footer_roots(output).values()))
+    instructions = _field_instructions(root)
+    assert "".join(instructions[:2]).startswith("DATE")
+    assert sum("PAGE" in instruction for instruction in instructions) == 1
+    assert "2026-08-19" in _visible_text(root)
+    assert "7" not in _visible_text(root)
+    _assert_complex_fields_are_paired(root)
 
 
 def test_outside_page_numbers_preserve_default_and_even_headers(tmp_path: Path) -> None:

@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import unicodedata
-
+from ..features import ends_with_unicode_punctuation
 from ..model import DocumentMode, ParagraphType, SectionKind
 from .base import Candidate, _glossary_context_active
 
@@ -19,11 +18,6 @@ def _looks_like_glossary_heading(features) -> bool:
         and not features.ends_with_sentence_punctuation
         and ("名词解释" in text or "注释" in text)
     )
-
-
-def _ends_with_punctuation(text: str) -> bool:
-    """Return whether the final visible character is Unicode punctuation."""
-    return bool(text and unicodedata.category(text[-1]).startswith("P"))
 
 
 class Title2CandidateProvider:
@@ -81,7 +75,7 @@ class Title2CandidateProvider:
             or features.numbering_prefix
             or features.contains_colon
             or features.ends_with_sentence_punctuation
-            or _ends_with_punctuation(features.compact_text)
+            or ends_with_unicode_punctuation(features.compact_text)
             or features.date_match
             or features.recipient_match
             or (

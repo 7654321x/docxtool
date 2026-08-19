@@ -11,6 +11,10 @@ _EMPTY_KEY_VALUE_LABELS = frozenset({
     "责任单位", "责任人", "联系人", "联系电话", "联系地址",
     "承办单位", "牵头单位", "配合单位", "时间", "地点",
 })
+_MEETING_LABELS = frozenset({
+    "时间", "地点", "主持", "记录", "出席", "缺席", "列席", "参会", "参加",
+    "议题", "议定事项", "会议名称", "会议时间", "会议地点",
+})
 
 
 class KeyValueCandidateProvider:
@@ -26,8 +30,23 @@ class KeyValueCandidateProvider:
             return []
         if not str(features.key_value_value or "").strip() and label not in _EMPTY_KEY_VALUE_LABELS:
             return []
-        if label in {"时间", "地点", "主持", "记录", "出席", "缺席", "列席", "参会", "参加", "议题", "议定事项", "会议名称", "会议时间", "会议地点"}:
-            return [Candidate(ParagraphType.MEETING_META, 0.99, self.name, ("meeting-label",), section_hint=SectionKind.MEETING_META)]
+        if label in _MEETING_LABELS:
+            return [
+                Candidate(
+                    ParagraphType.KEY_VALUE,
+                    0.92,
+                    self.name,
+                    ("explicit-label",),
+                    section_hint=SectionKind.BODY,
+                ),
+                Candidate(
+                    ParagraphType.MEETING_META,
+                    0.91,
+                    self.name,
+                    ("meeting-label",),
+                    section_hint=SectionKind.MEETING_META,
+                ),
+            ]
         if (
             any(char.isdigit() for char in label)
             or any(mark in label for mark in "。！？；;（）()[]〔〕")

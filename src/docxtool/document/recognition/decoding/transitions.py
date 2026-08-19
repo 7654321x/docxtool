@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 
 from ..candidates import Candidate
-from ..features import DocumentBlock
+from ..features import DocumentBlock, ends_with_unicode_punctuation
 from ..model import DocumentMode, ParagraphType, SectionKind
 from .candidate_selection import _MEETING_LABELS
 from .model import _Context
@@ -40,6 +40,11 @@ def _transition(previous: ParagraphType | None, current: Candidate, previous_sec
 
 def _hard_veto(candidate: Candidate, features, mode: DocumentMode, context: _Context, block: DocumentBlock) -> bool:
     # Structural facts veto visually plausible headings before scoring.
+    if (
+        candidate.paragraph_type == ParagraphType.TITLE2
+        and ends_with_unicode_punctuation(features.compact_text)
+    ):
+        return True
     front_metadata_kind = (
         context.document_context.front_metadata_kind(context.index)
         if context.document_context is not None

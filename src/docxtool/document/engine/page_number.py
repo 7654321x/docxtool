@@ -164,8 +164,39 @@ def _materialize_linked_footer(footer) -> None:
     """Copy the effective inherited footer before breaking its section link."""
     if not footer.is_linked_to_previous:
         return
+    source_part = footer.part
     inherited = copy.deepcopy(footer._element)
+    footer.is_linked_to_previous = False
+    _remap_footer_relationships(inherited, source_part, footer.part)
     _replace_footer_content(footer, inherited)
+
+
+def _remap_footer_relationships(element, source_part, target_part) -> None:
+    """Recreate relationships referenced by copied footer XML in its new part."""
+    relationship_attributes = {qn("r:id"), qn("r:embed"), qn("r:link")}
+    remapped: dict[str, str] = {}
+    for node in element.iter():
+        for attribute in relationship_attributes:
+            old_rid = node.get(attribute)
+            if not old_rid:
+                continue
+            if old_rid not in source_part.rels:
+                raise ValueError(f"FOOTER_RELATIONSHIP_NOT_FOUND: {old_rid}")
+            if old_rid not in remapped:
+                relationship = source_part.rels[old_rid]
+                if relationship.is_external:
+                    new_rid = target_part.relate_to(
+                        relationship.target_ref,
+                        relationship.reltype,
+                        is_external=True,
+                    )
+                else:
+                    new_rid = target_part.relate_to(
+                        relationship.target_part,
+                        relationship.reltype,
+                    )
+                remapped[old_rid] = new_rid
+            node.set(attribute, remapped[old_rid])
 
 
 def _set_page_number_indent(
@@ -394,17 +425,44 @@ def _paragraph_has_page_number(paragraph) -> bool:
 
 def _iter_field_instructions(paragraph) -> Iterator[str]:
     """Yield complex and simple Word field instructions from one paragraph."""
-    for instruction in paragraph._element.findall(".//" + qn("w:instrText")):
-        yield instruction.text or ""
+    for _start, _end, instruction in _iter_complex_fields(paragraph):
+        yield instruction
     for field in paragraph._element.findall(".//" + qn("w:fldSimple")):
         yield field.get(qn("w:instr"), "")
 
 
+def _iter_complex_fields(paragraph) -> Iterator[tuple[int, int, str]]:
+    """Yield direct-run bounds and joined instructions for complex fields."""
+    runs = list(paragraph._element.findall(qn("w:r")))
+    field_start: int | None = None
+    instruction_parts: list[str] = []
+    for index, run in enumerate(runs):
+        if field_start is None and _has_field_char(run, "begin"):
+            field_start = index
+            instruction_parts = []
+        if field_start is None:
+            continue
+        instruction_parts.extend(
+            element.text or ""
+            for element in run.findall(".//" + qn("w:instrText"))
+        )
+        if _has_field_char(run, "end"):
+            yield field_start, index, "".join(instruction_parts)
+            field_start = None
+            instruction_parts = []
+
+
 def _is_page_number_only_paragraph(paragraph) -> bool:
+    instructions = tuple(_iter_field_instructions(paragraph))
+    if any(
+        instruction.strip() and not _PAGE_INSTRUCTION_RE.search(instruction)
+        for instruction in instructions
+    ):
+        return False
     visible_text = "".join(text.text or "" for text in paragraph._element.findall(".//" + qn("w:t")))
     normalized = re.sub(r"\s+", "", visible_text)
     if not normalized:
-        return _paragraph_has_page_number(paragraph)
+        return any(_PAGE_INSTRUCTION_RE.search(item) for item in instructions)
     if _STATIC_PAGE_NUMBER_RE.fullmatch(normalized):
         return True
     if _paragraph_has_page_number(paragraph):
@@ -415,16 +473,9 @@ def _is_page_number_only_paragraph(paragraph) -> bool:
 def _remove_page_field_runs(paragraph) -> None:
     runs = list(paragraph._element.findall(qn("w:r")))
     remove_indexes: set[int] = set()
-    for index, run in enumerate(runs):
-        instruction = " ".join(instr.text or "" for instr in run.findall(".//" + qn("w:instrText")))
+    for start, end, instruction in _iter_complex_fields(paragraph):
         if not _PAGE_INSTRUCTION_RE.search(instruction):
             continue
-        start = index
-        while start > 0 and not _has_field_char(runs[start], "begin"):
-            start -= 1
-        end = index
-        while end < len(runs) - 1 and not _has_field_char(runs[end], "end"):
-            end += 1
         while start > 0 and _is_page_decoration_run(runs[start - 1]):
             start -= 1
         while end < len(runs) - 1 and _is_page_decoration_run(runs[end + 1]):

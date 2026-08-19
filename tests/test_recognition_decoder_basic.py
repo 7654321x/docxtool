@@ -91,6 +91,52 @@ def test_unnumbered_meeting_metadata_keeps_existing_type():
     assert meeting["hard"] is False
 
 
+def test_meeting_label_competes_with_key_value_in_normal_document() -> None:
+    time = _paragraph("时间：8月20日上午", "body", 1)
+    place = _paragraph("地点：第一会议室", "body", 2)
+    data = _document(
+        _paragraph("活动安排", "title", 0),
+        time,
+        place,
+    )
+
+    apply_recognition(data)
+
+    assert data.doc_mode != "MEETING_MINUTES"
+    assert [time.type_id, place.type_id] == ["responsibility_line", "responsibility_line"]
+    for index in (1, 2):
+        candidate_types = {
+            item["type"]
+            for item in data.recognition_diagnostics["candidate_trace"][index]["candidates"]
+        }
+        assert {"key_value", "meeting_meta"} <= candidate_types
+
+
+def test_meeting_mode_prior_selects_meeting_meta_from_competing_candidates() -> None:
+    time = _paragraph("时间：8月20日上午", "body", 1)
+    place = _paragraph("地点：第一会议室", "body", 2)
+    host = _paragraph("主持：张某", "body", 3)
+    data = _document(
+        _paragraph("2026年第一次党委会会议纪要", "title", 0),
+        time,
+        place,
+        host,
+    )
+
+    apply_recognition(data)
+
+    assert data.doc_mode == "MEETING_MINUTES"
+    assert [time.type_id, place.type_id, host.type_id] == [
+        "meeting_meta", "meeting_meta", "meeting_meta",
+    ]
+    for index in (1, 2, 3):
+        candidate_types = {
+            item["type"]
+            for item in data.recognition_diagnostics["candidate_trace"][index]["candidates"]
+        }
+        assert {"key_value", "meeting_meta"} <= candidate_types
+
+
 def test_authoritative_recognition_fails_when_all_candidates_are_vetoed():
     class InvalidProvider:
         name = "invalid-provider"
@@ -243,6 +289,44 @@ def test_authoritative_can_disable_core_and_legacy_candidates() -> None:
     assert paragraph.type_id == "dispatch_number"
     trace = data.recognition_diagnostics["candidate_trace"][0]["candidates"]
     assert {item["source"] for item in trace}.isdisjoint({"core", "legacy"})
+
+
+def test_core_title2_with_trailing_punctuation_is_globally_vetoed() -> None:
+    paragraph = _paragraph(
+        "下一步工作安排；",
+        "body",
+        1,
+        classification_kind="title2",
+        classification_confidence=0.95,
+    )
+    data = _document(
+        _paragraph("前一段正文已经完整说明当前工作情况。", "body", 0),
+        paragraph,
+        _paragraph("后一段正文继续说明下一阶段重点任务。", "body", 2),
+    )
+
+    apply_recognition(data)
+
+    assert paragraph.type_id != "title2"
+
+
+def test_legacy_title2_with_trailing_punctuation_is_globally_vetoed() -> None:
+    paragraph = _paragraph(
+        "下一步工作安排）",
+        "title2",
+        1,
+        classification_kind="body",
+        classification_confidence=0.9,
+    )
+    data = _document(
+        _paragraph("前一段正文已经完整说明当前工作情况。", "body", 0),
+        paragraph,
+        _paragraph("后一段正文继续说明下一阶段重点任务。", "body", 2),
+    )
+
+    apply_recognition(data)
+
+    assert paragraph.type_id != "title2"
 
 def test_unverified_legacy_attachment_note_does_not_force_final_type() -> None:
     paragraph = _paragraph("相关附件另行发送，后续仍继续说明正文事项。", "attachment_note", 1)
