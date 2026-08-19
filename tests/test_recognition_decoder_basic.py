@@ -171,6 +171,68 @@ def test_vetoed_hard_candidate_does_not_hide_valid_soft_candidate():
     assert paragraph.meta["recognition_provider"].startswith("mixed-provider")
 
 
+def test_global_veto_runs_before_candidate_limit():
+    class DispatchProvider:
+        name = "dispatch-provider"
+
+        def propose(self, block, features, context):
+            return [
+                Candidate(ParagraphType.TITLE2, 0.99, self.name, hard=True),
+                Candidate(ParagraphType.HEADING_1, 0.98, self.name, hard=True),
+                Candidate(ParagraphType.DISPATCH_NUMBER, 0.20, self.name),
+            ]
+
+    paragraph = _paragraph("国发〔2026〕23号", "body", 0)
+    data = _document(paragraph)
+
+    apply_recognition_with_providers(
+        data,
+        RecognitionConfig(mode="authoritative", max_candidates_per_paragraph=2),
+        providers=(DispatchProvider(),),
+    )
+
+    assert paragraph.type_id == "dispatch_number"
+    diagnostic = data.recognition_diagnostics["paragraphs"][0]
+    assert diagnostic["vetoed_candidate_count"] == 2
+    assert diagnostic["eligible_candidate_types"] == ["dispatch_number"]
+    assert diagnostic["competitive_candidate_types"] == ["dispatch_number"]
+
+
+def test_vetoed_candidate_is_not_a_review_competitor_but_remains_raw_audit():
+    class MixedProvider:
+        name = "mixed-provider"
+
+        def propose(self, block, features, context):
+            return [
+                Candidate(ParagraphType.BODY, 0.85, self.name),
+                Candidate(ParagraphType.TITLE2, 0.98, self.name, hard=True),
+            ]
+
+    paragraph = _paragraph(
+        "下一步工作安排；",
+        "body",
+        0,
+        classification_kind="title2",
+        classification_confidence=0.95,
+    )
+    data = _document(paragraph)
+
+    apply_recognition_with_providers(
+        data,
+        RecognitionConfig(mode="authoritative"),
+        providers=(MixedProvider(),),
+    )
+
+    diagnostic = data.recognition_diagnostics["paragraphs"][0]
+    trace = data.recognition_diagnostics["candidate_trace"][0]
+    assert diagnostic["candidate_margin"] is None
+    assert diagnostic["competitive_candidate_types"] == ["body"]
+    assert {item["type"] for item in trace["candidates"]} == {"body", "title2"}
+    assert trace["vetoed_candidates"] == [
+        {"type": "title2", "score": 0.98, "source": "mixed-provider", "hard": True}
+    ]
+
+
 def test_valid_hard_candidate_still_has_priority_over_soft_candidate():
     class MixedProvider:
         name = "mixed-provider"

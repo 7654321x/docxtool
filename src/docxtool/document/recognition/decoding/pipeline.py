@@ -62,6 +62,7 @@ def apply_recognition(
     for pos, (block, features) in enumerate(zip(paragraph_blocks, extracted)):
         previous_features = extracted[pos - 1] if pos else None
         next_beams: list[_Beam] = []
+        beam_lifecycles = []
         boundary_start = paragraph_blocks[pos - 1].index + 1 if pos else 0
         boundary_before = boundary_prefix[block.index] > boundary_prefix[boundary_start]
         lookahead = extracted[pos + 1 : pos + 9]
@@ -75,23 +76,38 @@ def apply_recognition(
                 boundary_before=boundary_before,
                 document_context=document_context,
             )
-            options = tuple(
-                _limit_candidates(
-                    _candidates(
-                        block, features, context, previous_features, lookahead, config, providers
-                    ),
-                    config,
+            raw_candidates = tuple(
+                _candidates(
+                    block, features, context, previous_features, lookahead, config, providers
                 )
             )
-            survivors = [
+            vetoed_candidates = []
+            non_vetoed_candidates = []
+            for candidate in raw_candidates:
+                if _hard_veto(candidate, features, mode, context, block):
+                    vetoed_candidates.append(candidate)
+                else:
+                    non_vetoed_candidates.append(candidate)
+            eligible_candidates = tuple(
+                _limit_candidates(non_vetoed_candidates, config)
+            )
+            hard_types = {
+                item.paragraph_type for item in eligible_candidates if item.hard
+            }
+            competitive_candidates = tuple(
                 candidate
-                for candidate in options
-                if not _hard_veto(candidate, features, mode, context, block)
-            ]
-            hard_types = {item.paragraph_type for item in survivors if item.hard}
-            for candidate in survivors:
-                if hard_types and candidate.paragraph_type not in hard_types:
-                    continue
+                for candidate in eligible_candidates
+                if not hard_types or candidate.paragraph_type in hard_types
+            )
+            beam_lifecycles.append(
+                (
+                    raw_candidates,
+                    tuple(vetoed_candidates),
+                    eligible_candidates,
+                    competitive_candidates,
+                )
+            )
+            for candidate in competitive_candidates:
                 section = candidate.section_hint or SectionKind.BODY
                 next_beams.append(
                     _Beam(
@@ -107,8 +123,11 @@ def apply_recognition(
                         beam.types + (candidate.paragraph_type,),
                         beam.reasons + (f"{candidate.source}:{','.join(candidate.evidence)}",),
                         beam.sections + (section,),
-                        beam.candidate_options + (options,),
+                        beam.candidate_options + (raw_candidates,),
                         beam.selected_candidates + (candidate,),
+                        beam.vetoed_candidate_options + (tuple(vetoed_candidates),),
+                        beam.eligible_candidate_options + (eligible_candidates,),
+                        beam.competitive_candidate_options + (competitive_candidates,),
                     )
                 )
         if not next_beams:
@@ -131,10 +150,18 @@ def apply_recognition(
                     beam.types + (ParagraphType.BODY,),
                     beam.reasons + ("candidate-conflict:all-candidates-vetoed",),
                     beam.sections + (SectionKind.BODY,),
-                    beam.candidate_options + ((fallback,),),
+                    beam.candidate_options + (raw_candidates,),
                     beam.selected_candidates + (fallback,),
+                    beam.vetoed_candidate_options + (vetoed_candidates,),
+                    beam.eligible_candidate_options + (eligible_candidates,),
+                    beam.competitive_candidate_options + ((fallback,),),
                 )
-                for beam in beams
+                for beam, (
+                    raw_candidates,
+                    vetoed_candidates,
+                    eligible_candidates,
+                    _competitive_candidates,
+                ) in zip(beams, beam_lifecycles)
             ]
         next_beams.sort(
             key=lambda item: (-item.score, tuple(value.value for value in item.types), item.reasons)
@@ -145,15 +172,23 @@ def apply_recognition(
     if beams:
         best = beams[0]
         if config.enable_diagnostics:
-            for position, (block, features, options) in enumerate(
-                zip(paragraph_blocks, extracted, best.candidate_options)
+            for position, (block, features) in enumerate(
+                zip(paragraph_blocks, extracted)
             ):
+                options = best.candidate_options[position]
+                vetoed_options = best.vetoed_candidate_options[position]
+                eligible_options = best.eligible_candidate_options[position]
+                competitive_options = best.competitive_candidate_options[position]
                 boundary_start = paragraph_blocks[position - 1].index + 1 if position else 0
                 boundary_before = boundary_prefix[block.index] > boundary_prefix[boundary_start]
                 candidate_trace.append(
                     {
                         "paragraph_index": features.paragraph_index,
                         "candidate_count": len(options),
+                        "raw_candidate_count": len(options),
+                        "vetoed_candidate_count": len(vetoed_options),
+                        "eligible_candidate_count": len(eligible_options),
+                        "competitive_candidate_count": len(competitive_options),
                         "candidates": [
                             {
                                 "type": item.paragraph_type.value,
@@ -164,6 +199,21 @@ def apply_recognition(
                                 "vetoes": sorted(value.value for value in item.vetoes),
                             }
                             for item in options
+                        ],
+                        "vetoed_candidates": [
+                            {
+                                "type": item.paragraph_type.value,
+                                "score": item.score,
+                                "source": item.source,
+                                "hard": item.hard,
+                            }
+                            for item in vetoed_options
+                        ],
+                        "eligible_candidate_types": [
+                            item.paragraph_type.value for item in eligible_options
+                        ],
+                        "competitive_candidate_types": [
+                            item.paragraph_type.value for item in competitive_options
                         ],
                         "boundary_before": boundary_before,
                     }
@@ -195,7 +245,22 @@ def apply_recognition(
             options = (
                 best.candidate_options[position] if position < len(best.candidate_options) else ()
             )
-            candidate_summary[features.paragraph_index] = tuple(options)
+            vetoed_options = (
+                best.vetoed_candidate_options[position]
+                if position < len(best.vetoed_candidate_options)
+                else ()
+            )
+            eligible_options = (
+                best.eligible_candidate_options[position]
+                if position < len(best.eligible_candidate_options)
+                else ()
+            )
+            competitive_options = (
+                best.competitive_candidate_options[position]
+                if position < len(best.competitive_candidate_options)
+                else ()
+            )
+            candidate_summary[features.paragraph_index] = tuple(competitive_options)
             selected = (
                 best.selected_candidates[position]
                 if position < len(best.selected_candidates)
@@ -203,15 +268,15 @@ def apply_recognition(
             )
             if selected is not None and selected.paragraph_type != type_value:
                 selected = next(
-                    (item for item in options if item.paragraph_type == type_value), None
+                    (item for item in competitive_options if item.paragraph_type == type_value), None
                 )
             final_score = selected.score if selected else 0.0
-            scores = [item.score for item in options]
+            scores = [item.score for item in competitive_options]
             max_score = max(scores, default=0.0)
             weights = [math.exp(score - max_score) for score in scores]
             denominator = sum(weights)
             selected_index = next(
-                (index for index, item in enumerate(options) if item.paragraph_type == type_value),
+                (index for index, item in enumerate(competitive_options) if item.paragraph_type == type_value),
                 None,
             )
             local_confidence = (
@@ -220,7 +285,7 @@ def apply_recognition(
                 else 0.0
             )
             competing_scores = sorted(
-                (item.score for item in options if item.paragraph_type != type_value), reverse=True
+                (item.score for item in competitive_options if item.paragraph_type != type_value), reverse=True
             )
             margin = final_score - competing_scores[0] if competing_scores else None
             previous_type = best.types[position - 1] if position else None
@@ -309,7 +374,20 @@ def apply_recognition(
                     "title_context_evidence": list(document_context.title_reasons(position)),
                     "heading_context_evidence": list(document_context.heading_reasons(position)),
                     "candidate_count": len(options),
+                    "raw_candidate_count": len(options),
+                    "vetoed_candidate_count": len(vetoed_options),
+                    "eligible_candidate_count": len(eligible_options),
+                    "competitive_candidate_count": len(competitive_options),
                     "candidate_types": [item.paragraph_type.value for item in options],
+                    "vetoed_candidate_types": [
+                        item.paragraph_type.value for item in vetoed_options
+                    ],
+                    "eligible_candidate_types": [
+                        item.paragraph_type.value for item in eligible_options
+                    ],
+                    "competitive_candidate_types": [
+                        item.paragraph_type.value for item in competitive_options
+                    ],
                     "provider": reason,
                     "legacy_type": legacy_type_id,
                     "legacy_type_id": legacy_type_id,
@@ -360,7 +438,7 @@ def apply_recognition(
         "document_context": document_context.diagnostic_summary(),
     }
     report["validation"] = validate_diagnostics(report)
-    candidate_counts = [item["candidate_count"] for item in diagnostics]
+    candidate_counts = [item["competitive_candidate_count"] for item in diagnostics]
     hard_count = sum(
         any(candidate.hard for candidate in options) for options in candidate_summary.values()
     )
@@ -380,9 +458,7 @@ def apply_recognition(
         "provider_candidate_counts": provider_counts,
         "selected_provider_counts": selected_provider_counts,
         "veto_count": sum(
-            bool(candidate.vetoes)
-            for options in candidate_summary.values()
-            for candidate in options
+            len(options) for options in best.vetoed_candidate_options
         ),
     }
     summary = RecognitionSummary(

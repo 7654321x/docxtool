@@ -290,7 +290,8 @@ def test_local_confidence_is_separate_from_document_path_score() -> None:
     apply_recognition(data)
     first, second = data.recognition_diagnostics["paragraphs"]
 
-    assert first["recognition_confidence"] != second["recognition_confidence"]
+    assert first["recognition_confidence"] != first["document_path_score"]
+    assert second["recognition_confidence"] != second["document_path_score"]
     assert "document_path_score" in first
     assert "selected_candidate_score" in first
     assert "candidate_margin" in first

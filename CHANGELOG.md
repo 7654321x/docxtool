@@ -1,5 +1,11 @@
 # Changelog
 
+## 5.6.2 - 2026-08-19
+
+- Closed the Recognition candidate lifecycle so global veto precedes candidate limiting, hard priority, and beam expansion.
+- Kept raw candidate audit data while basing Review confidence, margins, and candidate quality on the actual competitive set.
+- Added regressions for veto-before-limit behavior, vetoed-candidate diagnostics, and hard-candidate priority.
+
 ## 5.6.1 - 2026-08-18
 
 - Restricted annual-review inline heading segmentation to report documents.

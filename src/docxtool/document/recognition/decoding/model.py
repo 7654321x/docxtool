@@ -29,3 +29,6 @@ class _Beam:
     sections: tuple[SectionKind, ...]
     candidate_options: tuple[tuple[Candidate, ...], ...] = ()
     selected_candidates: tuple[Candidate, ...] = ()
+    vetoed_candidate_options: tuple[tuple[Candidate, ...], ...] = ()
+    eligible_candidate_options: tuple[tuple[Candidate, ...], ...] = ()
+    competitive_candidate_options: tuple[tuple[Candidate, ...], ...] = ()
