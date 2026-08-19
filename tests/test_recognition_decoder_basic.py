@@ -137,6 +137,67 @@ def test_meeting_mode_prior_selects_meeting_meta_from_competing_candidates() -> 
         assert {"key_value", "meeting_meta"} <= candidate_types
 
 
+def test_vetoed_hard_candidate_does_not_hide_valid_soft_candidate():
+    class MixedProvider:
+        name = "mixed-provider"
+
+        def propose(self, block, features, context):
+            return [
+                Candidate(ParagraphType.BODY, 0.85, self.name),
+                Candidate(
+                    ParagraphType.TITLE2,
+                    0.98,
+                    self.name,
+                    hard=True,
+                ),
+            ]
+
+    paragraph = _paragraph(
+        "下一步工作安排；",
+        "body",
+        0,
+        classification_kind="title2",
+        classification_confidence=0.95,
+    )
+    data = _document(paragraph)
+
+    apply_recognition_with_providers(
+        data,
+        RecognitionConfig(mode="authoritative"),
+        providers=(MixedProvider(),),
+    )
+
+    assert paragraph.type_id == "body"
+    assert paragraph.meta["recognition_provider"].startswith("mixed-provider")
+
+
+def test_valid_hard_candidate_still_has_priority_over_soft_candidate():
+    class MixedProvider:
+        name = "mixed-provider"
+
+        def propose(self, block, features, context):
+            return [
+                Candidate(ParagraphType.BODY, 0.99, self.name),
+                Candidate(
+                    ParagraphType.SOURCE_NOTE,
+                    0.40,
+                    self.name,
+                    hard=True,
+                ),
+            ]
+
+    paragraph = _paragraph("来源：公开资料", "body", 0)
+    data = _document(paragraph)
+
+    apply_recognition_with_providers(
+        data,
+        RecognitionConfig(mode="authoritative"),
+        providers=(MixedProvider(),),
+    )
+
+    assert paragraph.type_id == "note"
+
+
 def test_authoritative_recognition_fails_when_all_candidates_are_vetoed():
     class InvalidProvider:
         name = "invalid-provider"

@@ -83,11 +83,14 @@ def apply_recognition(
                     config,
                 )
             )
-            hard_types = {item.paragraph_type for item in options if item.hard}
-            for candidate in options:
+            survivors = [
+                candidate
+                for candidate in options
+                if not _hard_veto(candidate, features, mode, context, block)
+            ]
+            hard_types = {item.paragraph_type for item in survivors if item.hard}
+            for candidate in survivors:
                 if hard_types and candidate.paragraph_type not in hard_types:
-                    continue
-                if _hard_veto(candidate, features, mode, context, block):
                     continue
                 section = candidate.section_hint or SectionKind.BODY
                 next_beams.append(

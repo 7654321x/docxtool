@@ -21,6 +21,7 @@ from docxtool.document.importer import (
     _validate_source_span_partition,
     _validate_numbered_heading_body_split,
 )
+from docxtool.document.recognition.model import DocumentMode
 from docxtool.document.segmentation.boundaries import heading_has_inline_body
 from docxtool.document.segmentation.soft_breaks import (
     is_structural_key_value_line,
@@ -85,6 +86,54 @@ def test_source_span_conservation_facades_call_new_module(monkeypatch) -> None:
     importer_module._validate_source_span_partition("标题", [(0, 2)])
 
     assert calls == [("正文", [(0, 2)]), ("标题", [(0, 2)])]
+
+
+@pytest.mark.parametrize("document_mode", [DocumentMode.REPORT])
+def test_annual_review_boundary_is_report_only(document_mode: DocumentMode) -> None:
+    source = "五年来。我们持续推进有关工作。"
+    spans = _split_inline_heading_body_spans(
+        source,
+        0,
+        len(source),
+        document_mode=document_mode,
+    )
+    assert [source[start:end] for start, end in spans] == [
+        "五年来。",
+        "我们持续推进有关工作。",
+    ]
+
+
+@pytest.mark.parametrize("document_mode", [DocumentMode.NORMAL, DocumentMode.UNKNOWN])
+def test_annual_review_boundary_is_not_used_outside_report(document_mode: DocumentMode) -> None:
+    source = "五年来。我们持续推进有关工作。"
+    spans = _split_inline_heading_body_spans(
+        source,
+        0,
+        len(source),
+        document_mode=document_mode,
+    )
+    assert spans == [(0, len(source))]
+
+
+def test_annual_review_boundary_covers_one_year_prefix() -> None:
+    source = "一年来。我们重点抓好了以下工作。"
+    report_spans = _split_inline_heading_body_spans(
+        source,
+        0,
+        len(source),
+        document_mode=DocumentMode.REPORT,
+    )
+    normal_spans = _split_inline_heading_body_spans(
+        source,
+        0,
+        len(source),
+        document_mode=DocumentMode.NORMAL,
+    )
+    assert [source[start:end] for start, end in report_spans] == [
+        "一年来。",
+        "我们重点抓好了以下工作。",
+    ]
+    assert normal_spans == [(0, len(source))]
 
 
 def test_visual_title_terminator_can_split_without_numbering() -> None:

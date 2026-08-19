@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from docx import Document
 import pytest
 
 from docxtool.document.importer import DocxImporter
 from docxtool.document.recognition import RecognitionConfig, apply_recognition
+from docxtool.document.recognition.features import extract_blocks, extract_features
+from docxtool.document.recognition.model import DocumentMode
+from docxtool.document.recognition.providers.inline_heading import InlineHeadingCandidateProvider
 from docxtool.document.style_config import StyleRule
 from docxtool.sdk import recognize_docx
 from tests.support.recognition_helpers import _document, _paragraph
@@ -70,7 +75,7 @@ def test_annual_review_inline_heading_is_segmented_into_heading1_and_body(tmp_pa
     ]
 
 
-def test_annual_review_is_segmented_from_local_evidence_in_any_mode(tmp_path) -> None:
+def test_annual_review_is_segmented_only_for_report_documents(tmp_path) -> None:
     report_source = tmp_path / "report-one-year.docx"
     report = Document()
     title = report.add_paragraph()
@@ -91,12 +96,45 @@ def test_annual_review_is_segmented_from_local_evidence_in_any_mode(tmp_path) ->
     normal.save(normal_source)
 
     normal_plan = recognize_docx(normal_source, recognition_mode="authoritative", include_text=True)
-    for paragraph_index in (1, 2):
+    for paragraph_index, text in (
+        (1, "一年来。我们持续推进重点工作并取得新的明显成效。"),
+        (2, "五年来。我们持续推进重点工作并取得新的明显成效。"),
+    ):
         normal_blocks = [
             block for block in normal_plan.blocks
             if block.physical_paragraph_index == paragraph_index
         ]
-        assert [block.type_id for block in normal_blocks] == ["heading1", "body"]
+        assert len(normal_blocks) == 1
+        assert normal_blocks[0].recognized_text == text
+        assert normal_blocks[0].type_id != "heading1"
+
+
+@pytest.mark.parametrize("document_mode", [DocumentMode.NORMAL, DocumentMode.UNKNOWN])
+def test_annual_review_provider_is_report_only(document_mode: DocumentMode) -> None:
+    paragraph = _paragraph("五年来。", "body", 0)
+    data = _document(paragraph)
+    block = extract_blocks(data)[0]
+    features = extract_features(block)
+    provider = InlineHeadingCandidateProvider()
+
+    assert provider.propose(block, features, SimpleNamespace(mode=document_mode)) == []
+
+
+def test_annual_review_provider_emits_existing_report_candidate() -> None:
+    paragraph = _paragraph("五年来。", "body", 0)
+    data = _document(paragraph)
+    block = extract_blocks(data)[0]
+    features = extract_features(block)
+    candidates = InlineHeadingCandidateProvider().propose(
+        block,
+        features,
+        SimpleNamespace(mode=DocumentMode.REPORT),
+    )
+
+    assert len(candidates) == 1
+    assert candidates[0].paragraph_type.value == "heading1"
+    assert candidates[0].hard is True
+    assert candidates[0].source == "inline-heading"
 
 
 def test_report_front_short_titles_restore_title2_and_glossary_title() -> None:

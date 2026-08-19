@@ -153,8 +153,9 @@ def segment_boundary_candidates(
         native_list_heading = (
             source_numbering.startswith("@lvl_") and visual_transition
         )
-        annual_review_heading = _is_annual_review_inline_heading(
-            text, period_index, body_count
+        annual_review_heading = (
+            document_mode is DocumentMode.REPORT
+            and _is_annual_review_inline_heading(text, period_index, body_count)
         )
         numbered = literal_numbered or native_list_heading
         if literal_numbered:
