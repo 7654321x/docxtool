@@ -343,7 +343,7 @@ def test_numbered_heading_family_confirms_parallel_body_headings():
     ]
     assert "parallel-heading-family" in data.recognition_diagnostics["paragraphs"][2]["heading_context_evidence"]
 
-def test_uniform_legacy_heading_siblings_are_finalized_by_recognition() -> None:
+def test_uniform_legacy_heading_siblings_are_not_upgraded_without_structure() -> None:
     data = _document(
         _paragraph("一、父级标题", "heading1", 0),
         _paragraph("第一项", "heading3", 1),
@@ -354,18 +354,21 @@ def test_uniform_legacy_heading_siblings_are_finalized_by_recognition() -> None:
     apply_recognition(data)
 
     assert [paragraph.type_id for paragraph in data.paragraphs[:3]] == [
-        "heading1", "heading2", "heading2",
+        "heading1", "body", "body",
     ]
     diagnostics = data.recognition_diagnostics["paragraphs"]
     assert [item["recognized_type"] for item in diagnostics[:3]] == [
-        "heading1", "heading2", "heading2",
+        "heading1", "body", "body",
     ]
     assert [item["final_type"] for item in diagnostics[:3]] == [
-        "heading1", "heading2", "heading2",
+        "heading1", "body", "body",
     ]
-    assert all(
-        "uniform-heading-sibling-family" in item["evidence_summary"]
-        for item in diagnostics[1:3]
+    families = data.recognition_diagnostics["document_context"]["heading_families"]
+    assert any(
+        family.get("source_family") == "legacy-heading"
+        and family["level"] == 3
+        and family["count"] == 2
+        for family in families
     )
 
 def test_single_numbered_heading_is_applied_but_marked_for_review():

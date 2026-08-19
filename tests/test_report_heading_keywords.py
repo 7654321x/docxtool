@@ -192,9 +192,122 @@ def test_report_short_section_titles_do_not_require_source_bold() -> None:
 
     assert [first_title.type_id, second_title.type_id] == ["title2", "title2"]
     assert all(
-        "report-middle-body-position" in item.meta["recognition_evidence"]
+        "middle-body-position" in item.meta["recognition_evidence"]
         for item in (first_title, second_title)
     )
+
+
+def test_normal_middle_body_title_does_not_require_report_mode_or_bold() -> None:
+    title2 = _paragraph("下一步工作安排", "body", 1)
+    data = _document(
+        _paragraph("前一段正文已经完整说明当前工作情况和阶段性成效。", "body", 0),
+        title2,
+        _paragraph("后一段正文继续说明下一阶段重点任务和具体实施安排。", "body", 2),
+    )
+
+    apply_recognition(
+        data,
+        RecognitionConfig(enable_core_candidates=False, enable_legacy_candidates=False),
+    )
+
+    assert title2.type_id == "title2"
+    assert "middle-body-position" in title2.meta["recognition_evidence"]
+    assert "report-mode-prior" not in title2.meta["recognition_evidence"]
+
+
+def test_complete_body_sentence_is_not_a_middle_body_title() -> None:
+    sentence = _paragraph("下一步我们将进一步做好有关工作。", "body", 1)
+    data = _document(
+        _paragraph("前一段正文已经完整说明当前工作情况和阶段性成效。", "body", 0),
+        sentence,
+        _paragraph("后一段正文继续说明下一阶段重点任务和具体实施安排。", "body", 2),
+    )
+
+    apply_recognition(
+        data,
+        RecognitionConfig(enable_core_candidates=False, enable_legacy_candidates=False),
+    )
+
+    assert sentence.type_id == "body"
+
+
+@pytest.mark.parametrize("punctuation", ["，", "、", "；", "：", "）", "”"])
+def test_short_text_ending_with_punctuation_is_not_title2(punctuation: str) -> None:
+    short_text = _paragraph(f"下一步工作安排{punctuation}", "body", 1)
+    data = _document(
+        _paragraph("前一段正文已经完整说明当前工作情况和阶段性成效。", "body", 0),
+        short_text,
+        _paragraph("后一段正文继续说明下一阶段重点任务和具体实施安排。", "body", 2),
+    )
+
+    apply_recognition(
+        data,
+        RecognitionConfig(enable_core_candidates=False, enable_legacy_candidates=False),
+    )
+
+    trace = data.recognition_diagnostics["candidate_trace"][1]
+    assert short_text.type_id == "body"
+    assert not any(candidate["type"] == "title2" for candidate in trace["candidates"])
+
+
+def test_short_text_without_following_body_is_not_a_middle_body_title() -> None:
+    short_text = _paragraph("下一步工作安排", "body", 1)
+    data = _document(
+        _paragraph("前一段正文已经完整说明当前工作情况和阶段性成效。", "body", 0),
+        short_text,
+        _paragraph("附件一", "body", 2),
+    )
+
+    apply_recognition(
+        data,
+        RecognitionConfig(enable_core_candidates=False, enable_legacy_candidates=False),
+    )
+
+    trace = data.recognition_diagnostics["candidate_trace"][1]
+    assert not any(candidate["type"] == "title2" for candidate in trace["candidates"])
+
+
+def test_legacy_heading_family_remains_diagnostic_without_semantic_upgrade() -> None:
+    first = _paragraph("阶段工作情况", "heading2", 1)
+    second = _paragraph("下一步工作安排", "heading2", 2)
+    data = _document(
+        _paragraph("普通材料", "body", 0),
+        first,
+        second,
+    )
+
+    apply_recognition(
+        data,
+        RecognitionConfig(enable_core_candidates=False, legacy_score=0.55),
+    )
+
+    for index in (1, 2):
+        trace = data.recognition_diagnostics["candidate_trace"][index]
+        assert not any(
+            candidate["source"] == "semantic" and candidate["score"] >= 0.9
+            for candidate in trace["candidates"]
+        )
+    families = data.recognition_diagnostics["document_context"]["heading_families"]
+    assert any(family.get("source_family") == "legacy-heading" for family in families)
+
+
+def test_fuzzy_glossary_marker_is_soft_and_does_not_clear_competitors() -> None:
+    marker = _paragraph("有关注释事项说明", "body", 1)
+    data = _document(
+        _paragraph("前一段正文已经完整说明有关工作情况。", "body", 0),
+        marker,
+        _paragraph("后续正文继续说明有关事项的具体办理要求。", "body", 2),
+    )
+
+    apply_recognition(data, RecognitionConfig(enable_legacy_candidates=False))
+
+    trace = data.recognition_diagnostics["candidate_trace"][1]
+    glossary = next(
+        candidate for candidate in trace["candidates"]
+        if candidate["type"] == "glossary_title"
+    )
+    assert glossary["hard"] is False
+    assert any(candidate["type"] != "glossary_title" for candidate in trace["candidates"])
 
 
 def test_production_recognition_keeps_report_short_title_over_core_body_candidate(tmp_path) -> None:

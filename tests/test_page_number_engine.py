@@ -16,7 +16,7 @@ from docxtool.security.docx_integrity import validate_docx_integrity
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 
 
-def _add_field(paragraph, instruction: str) -> None:
+def _add_field(paragraph, instruction: str, display_text: str = "1") -> None:
     begin = OxmlElement("w:fldChar")
     begin.set(qn("w:fldCharType"), "begin")
     paragraph.add_run()._r.append(begin)
@@ -27,10 +27,21 @@ def _add_field(paragraph, instruction: str) -> None:
     separate = OxmlElement("w:fldChar")
     separate.set(qn("w:fldCharType"), "separate")
     paragraph.add_run()._r.append(separate)
-    paragraph.add_run("1")
+    paragraph.add_run(display_text)
     end = OxmlElement("w:fldChar")
     end.set(qn("w:fldCharType"), "end")
     paragraph.add_run()._r.append(end)
+
+
+def _add_simple_field(paragraph, instruction: str, display_text: str = "1") -> None:
+    field = OxmlElement("w:fldSimple")
+    field.set(qn("w:instr"), instruction)
+    run = OxmlElement("w:r")
+    text = OxmlElement("w:t")
+    text.text = display_text
+    run.append(text)
+    field.append(run)
+    paragraph._element.append(field)
 
 
 def _footer_xml(path: Path) -> dict[str, str]:
@@ -265,6 +276,105 @@ def test_page_number_preserves_non_page_footer_content_when_replacing_old_field(
     assert "Prepared by office" in _visible_text(root)
     assert "Confidential —" not in _visible_text(root)
     _assert_complex_fields_are_paired(root)
+
+
+def test_page_number_preserves_complex_and_simple_non_page_fields(tmp_path: Path) -> None:
+    document = Document()
+    footer = document.sections[0].footer
+    footer.is_linked_to_previous = False
+    date_paragraph = footer.paragraphs[0]
+    date_paragraph.add_run("Prepared by office ")
+    _add_field(date_paragraph, "DATE \\@ yyyy-MM-dd")
+    style_paragraph = footer.add_paragraph("Section title: ")
+    _add_field(style_paragraph, 'STYLEREF "Heading 1"')
+    ref_paragraph = footer.add_paragraph("Reference: ")
+    _add_simple_field(ref_paragraph, "REF bookmark1", "Referenced text")
+    old_page = footer.add_paragraph("— ")
+    _add_simple_field(old_page, "PAGE", "7")
+    old_page.add_run(" —")
+
+    apply_page_number(document, {"style": "dash", "position": "center"})
+    output = tmp_path / "preserve-non-page-fields.docx"
+    document.save(output)
+
+    root = next(iter(_footer_roots(output).values()))
+    instructions = _field_instructions(root)
+    simple_instructions = [
+        field.get(qn("w:instr"), "").strip()
+        for field in root.findall(f".//{{{W_NS}}}fldSimple")
+    ]
+    assert any(instruction.startswith("DATE") for instruction in instructions)
+    assert any(instruction.startswith("STYLEREF") for instruction in instructions)
+    assert "REF bookmark1" in simple_instructions
+    assert simple_instructions.count("PAGE") == 0
+    assert instructions.count("PAGE") == 1
+    assert "Prepared by office" in _visible_text(root)
+    assert "Referenced text" in _visible_text(root)
+
+
+def test_pure_date_field_is_not_mistaken_for_a_page_number(tmp_path: Path) -> None:
+    document = Document()
+    footer = document.sections[0].footer
+    footer.is_linked_to_previous = False
+    date_paragraph = footer.paragraphs[0]
+    _add_field(date_paragraph, "DATE \\@ yyyy-MM-dd", "2026-08-19")
+
+    apply_page_number(document, {"style": "dash", "position": "center"})
+    output = tmp_path / "pure-date-field.docx"
+    document.save(output)
+
+    root = next(iter(_footer_roots(output).values()))
+    assert any(item.startswith("DATE") for item in _field_instructions(root))
+    assert _field_instructions(root).count("PAGE") == 1
+    assert "2026-08-19" in _visible_text(root)
+
+
+def test_linked_footer_materializes_inherited_content_before_page_replacement(tmp_path: Path) -> None:
+    document = Document()
+    first = document.sections[0]
+    first.footer.is_linked_to_previous = False
+    first.footer.paragraphs[0].text = "Confidential footer"
+    detail = first.footer.add_paragraph("Prepared by office ")
+    _add_field(detail, "DATE \\@ yyyy-MM-dd")
+    old_page = first.footer.add_paragraph("— ")
+    _add_field(old_page, "PAGE")
+    old_page.add_run(" —")
+    document.add_paragraph("section one")
+    second = document.add_section(WD_SECTION.NEW_PAGE)
+    assert second.footer.is_linked_to_previous is True
+    document.add_paragraph("section two")
+
+    apply_page_number(document, {"style": "dash", "position": "center"})
+    apply_page_number(document, {"style": "dash", "position": "center"})
+    output = tmp_path / "linked-footer.docx"
+    document.save(output)
+
+    reopened = Document(output)
+    assert reopened.sections[1].footer.is_linked_to_previous is False
+    second_root = reopened.sections[1].footer._element
+    assert "Confidential footer" in _visible_text(second_root)
+    assert "Prepared by office" in _visible_text(second_root)
+    assert any(item.startswith("DATE") for item in _field_instructions(second_root))
+    assert _field_instructions(second_root).count("PAGE") == 1
+
+
+def test_outside_page_numbers_preserve_default_and_even_headers(tmp_path: Path) -> None:
+    document = Document()
+    section = document.sections[0]
+    section.header.is_linked_to_previous = False
+    section.header.paragraphs[0].text = "Default header"
+    section.even_page_header.is_linked_to_previous = False
+    section.even_page_header.paragraphs[0].text = "Even header"
+
+    apply_page_number(document, {"style": "dash", "position": "outside"})
+    output = tmp_path / "outside-preserves-headers.docx"
+    document.save(output)
+
+    reopened = Document(output)
+    assert reopened.sections[0].header.paragraphs[0].text == "Default header"
+    assert reopened.sections[0].even_page_header.paragraphs[0].text == "Even header"
+    roots = _footer_roots(output)
+    assert sorted(_field_instructions(root) for root in roots.values()) == [["PAGE"], ["PAGE"]]
 
 
 def test_page_number_can_apply_first_and_even_centered_footers(tmp_path: Path) -> None:

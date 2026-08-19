@@ -27,7 +27,7 @@ class KeyValueCandidateProvider:
         if not str(features.key_value_value or "").strip() and label not in _EMPTY_KEY_VALUE_LABELS:
             return []
         if label in {"时间", "地点", "主持", "记录", "出席", "缺席", "列席", "参会", "参加", "议题", "议定事项", "会议名称", "会议时间", "会议地点"}:
-            return [Candidate(ParagraphType.MEETING_META, 0.99, self.name, ("meeting-label",), hard=True, section_hint=SectionKind.MEETING_META)]
+            return [Candidate(ParagraphType.MEETING_META, 0.99, self.name, ("meeting-label",), section_hint=SectionKind.MEETING_META)]
         if (
             any(char.isdigit() for char in label)
             or any(mark in label for mark in "。！？；;（）()[]〔〕")

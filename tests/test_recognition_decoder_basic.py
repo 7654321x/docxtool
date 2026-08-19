@@ -12,6 +12,10 @@ from docxtool.document.recognition import (
     extract_features,
 )
 from docxtool.document.recognition.features import BlockKind
+from docxtool.document.recognition.candidates import Candidate
+from docxtool.document.recognition.decoding.pipeline import (
+    apply_recognition as apply_recognition_with_providers,
+)
 
 
 
@@ -82,6 +86,49 @@ def test_unnumbered_meeting_metadata_keeps_existing_type():
 
     assert paragraph.type_id == "meeting_meta"
     assert paragraph.meta.get("numbered_heading2_colon_inline_body") is not True
+    trace = data.recognition_diagnostics["candidate_trace"][1]
+    meeting = next(item for item in trace["candidates"] if item["type"] == "meeting_meta")
+    assert meeting["hard"] is False
+
+
+def test_authoritative_recognition_fails_when_all_candidates_are_vetoed():
+    class InvalidProvider:
+        name = "invalid-provider"
+
+        def propose(self, block, features, context):
+            return [Candidate(ParagraphType.BODY, 0.9, self.name)]
+
+    data = _document(_paragraph("国发〔2026〕23号", "body", 0))
+
+    with pytest.raises(RuntimeError, match="RECOGNITION_ALL_CANDIDATES_VETOED"):
+        apply_recognition_with_providers(
+            data,
+            RecognitionConfig(mode="authoritative"),
+            providers=(InvalidProvider(),),
+        )
+
+
+def test_shadow_recognition_reports_all_veto_without_changing_legacy_type():
+    class InvalidProvider:
+        name = "invalid-provider"
+
+        def propose(self, block, features, context):
+            return [Candidate(ParagraphType.BODY, 0.9, self.name)]
+
+    paragraph = _paragraph("国发〔2026〕23号", "title_cont", 0)
+    data = _document(paragraph)
+
+    apply_recognition_with_providers(
+        data,
+        RecognitionConfig(mode="shadow"),
+        providers=(InvalidProvider(),),
+    )
+
+    assert paragraph.type_id == "title_cont"
+    diagnostic = data.recognition_diagnostics["paragraphs"][0]
+    assert diagnostic["review_level"] == "critical_review"
+    assert diagnostic["review_reasons"] == ["ALL_CANDIDATES_VETOED"]
+    assert diagnostic["provider"].startswith("candidate-conflict:")
 
 def test_embedded_document_title_after_signature_note():
     data = _document(

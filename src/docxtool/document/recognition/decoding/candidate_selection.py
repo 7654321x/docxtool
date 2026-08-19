@@ -114,21 +114,6 @@ def _extra_candidates(
                     section_hint=SectionKind.EMBEDDED_DOCUMENT,
                 )
             )
-    if (
-        context.mode == DocumentMode.MEETING_MINUTES
-        and features.key_value_label in _MEETING_LABELS
-        and not features.numbered_heading2_colon_inline_body
-    ):
-        result.append(
-            Candidate(
-                ParagraphType.MEETING_META,
-                1.0,
-                "meeting",
-                ("meeting-metadata",),
-                hard=True,
-                section_hint=SectionKind.MEETING_META,
-            )
-        )
     return result
 
 

@@ -58,6 +58,7 @@ def apply_recognition(
     mode = decision.mode
     beams = [_Beam(0.0, (), (), ())]
     candidate_trace: list[dict[str, Any]] = []
+    all_veto_positions: set[int] = set()
     for pos, (block, features) in enumerate(zip(paragraph_blocks, extracted)):
         previous_features = extracted[pos - 1] if pos else None
         next_beams: list[_Beam] = []
@@ -108,19 +109,24 @@ def apply_recognition(
                     )
                 )
         if not next_beams:
-            # A malformed candidate provider must not make import fail.
+            if execution_mode == "authoritative":
+                raise RuntimeError(
+                    "RECOGNITION_ALL_CANDIDATES_VETOED: "
+                    f"paragraph_index={features.paragraph_index}"
+                )
+            all_veto_positions.add(pos)
             fallback = Candidate(
                 ParagraphType.BODY,
                 0.0,
-                "fallback",
-                ("hard-veto",),
+                "candidate-conflict",
+                ("all-candidates-vetoed",),
                 section_hint=SectionKind.BODY,
             )
             next_beams = [
                 _Beam(
                     beam.score,
                     beam.types + (ParagraphType.BODY,),
-                    beam.reasons + ("fallback:hard-veto",),
+                    beam.reasons + ("candidate-conflict:all-candidates-vetoed",),
                     beam.sections + (SectionKind.BODY,),
                     beam.candidate_options + ((fallback,),),
                     beam.selected_candidates + (fallback,),
@@ -238,6 +244,11 @@ def apply_recognition(
                 execution_mode,
                 document_context.heading_reasons(position),
             )
+            if position in all_veto_positions:
+                review_confidence = 0.0
+                review_level = "critical_review"
+                review_reasons = ["ALL_CANDIDATES_VETOED"]
+                evidence_summary = ["all-candidates-vetoed"]
             meta.update(
                 {
                     "recognition_type": type_value.value,

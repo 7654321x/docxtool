@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 import copy
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from typing import Any
 
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -144,6 +144,7 @@ def _apply_to_footer(
     position: str,
     footer_kind: str,
 ) -> None:
+    _materialize_linked_footer(footer)
     footer.is_linked_to_previous = False
     _remove_existing_page_numbers(footer)
     paragraph = next(
@@ -157,6 +158,14 @@ def _apply_to_footer(
     paragraph.alignment = alignment
     _set_page_number_indent(paragraph, position, footer_kind, options)
     _write_page_number(paragraph, style, options)
+
+
+def _materialize_linked_footer(footer) -> None:
+    """Copy the effective inherited footer before breaking its section link."""
+    if not footer.is_linked_to_previous:
+        return
+    inherited = copy.deepcopy(footer._element)
+    _replace_footer_content(footer, inherited)
 
 
 def _set_page_number_indent(
@@ -377,11 +386,18 @@ def _remove_existing_page_numbers(footer) -> None:
 
 
 def _paragraph_has_page_number(paragraph) -> bool:
-    return bool(_field_instruction_text(paragraph))
+    return any(
+        _PAGE_INSTRUCTION_RE.search(instruction)
+        for instruction in _iter_field_instructions(paragraph)
+    )
 
 
-def _field_instruction_text(paragraph) -> str:
-    return " ".join(instr.text or "" for instr in paragraph._element.findall(".//" + qn("w:instrText")))
+def _iter_field_instructions(paragraph) -> Iterator[str]:
+    """Yield complex and simple Word field instructions from one paragraph."""
+    for instruction in paragraph._element.findall(".//" + qn("w:instrText")):
+        yield instruction.text or ""
+    for field in paragraph._element.findall(".//" + qn("w:fldSimple")):
+        yield field.get(qn("w:instr"), "")
 
 
 def _is_page_number_only_paragraph(paragraph) -> bool:

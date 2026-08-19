@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import unicodedata
+
 from ..model import DocumentMode, ParagraphType, SectionKind
 from .base import Candidate, _glossary_context_active
 
@@ -19,6 +21,11 @@ def _looks_like_glossary_heading(features) -> bool:
     )
 
 
+def _ends_with_punctuation(text: str) -> bool:
+    """Return whether the final visible character is Unicode punctuation."""
+    return bool(text and unicodedata.category(text[-1]).startswith("P"))
+
+
 class Title2CandidateProvider:
     """Recognize short, unnumbered body headings in every document mode."""
 
@@ -30,9 +37,8 @@ class Title2CandidateProvider:
             if context.following_features
             else None
         )
-        report_middle_body_title = bool(
-            context.mode is DocumentMode.REPORT
-            and context.previous_type == ParagraphType.BODY
+        middle_body_title = bool(
+            context.previous_type == ParagraphType.BODY
             and following is not None
             and following.compact_text
             and not following.heading_shape_level
@@ -75,11 +81,12 @@ class Title2CandidateProvider:
             or features.numbering_prefix
             or features.contains_colon
             or features.ends_with_sentence_punctuation
+            or _ends_with_punctuation(features.compact_text)
             or features.date_match
             or features.recipient_match
             or (
                 not front_title_candidate
-                and not report_middle_body_title
+                and not middle_body_title
                 and not (features.is_bold or features.is_docxtool_style)
             )
         ):
@@ -98,9 +105,9 @@ class Title2CandidateProvider:
         if context.mode is DocumentMode.REPORT:
             score += 0.08
             evidence.append("report-mode-prior")
-        if report_middle_body_title:
+        if middle_body_title:
             score += 0.10
-            evidence.append("report-middle-body-position")
+            evidence.append("middle-body-position")
         if features.is_bold or features.is_docxtool_style:
             score += 0.08
         return [Candidate(
@@ -137,12 +144,13 @@ class GlossaryCandidateProvider:
             ParagraphType.BODY,
             ParagraphType.TITLE2,
         } | ({ParagraphType.MAIN_TITLE, ParagraphType.TITLE_CONTINUATION} if front_title_candidate else set()):
+            exact_marker = features.compact_text in {"名词解释", "注释"}
             return [Candidate(
                 ParagraphType.GLOSSARY_TITLE,
                 0.96,
                 self.name,
-                ("glossary-heading",),
-                hard=True,
+                ("glossary-heading-exact" if exact_marker else "glossary-heading-fuzzy",),
+                hard=exact_marker,
                 section_hint=SectionKind.BODY,
             )]
         if not _glossary_context_active(context):
