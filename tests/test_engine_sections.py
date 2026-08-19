@@ -1,8 +1,14 @@
+from copy import deepcopy
+
+import pytest
 from docx import Document
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
+from docx.shared import Pt, RGBColor
+from lxml import etree
 
 from docxtool.document.engine.sections import (
+    OFFICIAL_GRID_FONT_SIZE_PT,
     apply_page_settings,
     copy_paragraph_sectPr,
     doc_grid_char_space,
@@ -18,6 +24,24 @@ from docxtool.document.style_config import PageSettings
 def _settings() -> PageSettings:
     """构造测试页面设置，返回带标准公文页边距和网格的 PageSettings。"""
     return PageSettings()
+
+
+def _style_element(document: Document, style_id: str):
+    return next(
+        style
+        for style in document.styles._element.findall(qn("w:style"))
+        if style.get(qn("w:styleId")) == style_id
+    )
+
+
+def _style_without_font_sizes_xml(style_element) -> str:
+    copied = deepcopy(style_element)
+    run_properties = copied.find(qn("w:rPr"))
+    if run_properties is not None:
+        for tag in ("w:sz", "w:szCs"):
+            for element in run_properties.findall(qn(tag)):
+                run_properties.remove(element)
+    return copied.xml
 
 
 def test_section_margins_rotate_physical_edges_for_landscape() -> None:
@@ -37,7 +61,14 @@ def test_doc_grid_char_space_uses_ooxml_point_delta_units() -> None:
         - int(round(settings.margin_right_cm * 567))
     )
 
-    assert doc_grid_char_space(content_width_twips, settings.chars_per_line) == -842
+    assert (
+        doc_grid_char_space(
+            content_width_twips,
+            settings.chars_per_line,
+            OFFICIAL_GRID_FONT_SIZE_PT,
+        )
+        == -842
+    )
     assert line_spacing_twips(settings) == 560
 
 
@@ -121,26 +152,126 @@ def test_apply_page_settings_writes_defaults_compat_and_grid() -> None:
     assert sect_pr.find(qn("w:docGrid")).get(qn("w:charsPerLine")) == "28"
 
 
-def test_wps_docxtool_page_settings_preserve_builtin_styles() -> None:
+def test_wps_docxtool_normalizes_only_normal_size_and_preserves_headings() -> None:
     document = Document()
-    builtin_style_ids = ("Normal", "Heading1", "Heading2", "Heading3", "Heading4")
-    before = {
-        style_id: next(
-            style.xml
-            for style in document.styles._element.findall(qn("w:style"))
-            if style.get(qn("w:styleId")) == style_id
-        )
-        for style_id in builtin_style_ids
+    normal = document.styles["Normal"]
+    normal.font.name = "Source Normal Font"
+    normal.font.size = Pt(11)
+    normal.font.color.rgb = RGBColor(0x12, 0x34, 0x56)
+    normal.paragraph_format.left_indent = Pt(12)
+    normal.paragraph_format.line_spacing = Pt(19)
+    heading1_properties = _style_element(document, "Heading1").get_or_add_rPr()
+    heading1_fonts = OxmlElement("w:rFonts")
+    heading1_fonts.set(qn("w:eastAsia"), "Source Heading One")
+    heading1_properties.append(heading1_fonts)
+    heading2_size = OxmlElement("w:sz")
+    heading2_size.set(qn("w:val"), "18")
+    _style_element(document, "Heading2").get_or_add_rPr().append(heading2_size)
+    heading3_color = OxmlElement("w:color")
+    heading3_color.set(qn("w:val"), "654321")
+    _style_element(document, "Heading3").get_or_add_rPr().append(heading3_color)
+    heading4_bold = OxmlElement("w:b")
+    heading4_bold.set(qn("w:val"), "1")
+    _style_element(document, "Heading4").get_or_add_rPr().append(heading4_bold)
+
+    normal_before = _style_without_font_sizes_xml(_style_element(document, "Normal"))
+    headings_before = {
+        style_id: _style_element(document, style_id).xml
+        for style_id in ("Heading1", "Heading2", "Heading3", "Heading4")
     }
 
     apply_page_settings(document, _settings(), style_profile="wps_docxtool")
 
-    after = {
-        style_id: next(
-            style.xml
-            for style in document.styles._element.findall(qn("w:style"))
-            if style.get(qn("w:styleId")) == style_id
-        )
-        for style_id in builtin_style_ids
+    normal_element = _style_element(document, "Normal")
+    normal_run_properties = normal_element.find(qn("w:rPr"))
+    headings_after = {
+        style_id: _style_element(document, style_id).xml
+        for style_id in ("Heading1", "Heading2", "Heading3", "Heading4")
     }
-    assert after == before
+    assert normal_run_properties.find(qn("w:sz")).get(qn("w:val")) == "32"
+    assert normal_run_properties.find(qn("w:szCs")).get(qn("w:val")) == "32"
+    assert _style_without_font_sizes_xml(normal_element) == normal_before
+    assert headings_after == headings_before
+
+
+@pytest.mark.parametrize("normal_font_size_pt", [10.5, 11.0, 12.0])
+def test_wps_docxtool_official_grid_uses_fixed_16pt_baseline(
+    normal_font_size_pt: float,
+) -> None:
+    document = Document()
+    document.styles["Normal"].font.size = Pt(normal_font_size_pt)
+    settings = _settings()
+
+    apply_page_settings(document, settings, style_profile="wps_docxtool")
+
+    normal_element = _style_element(document, "Normal")
+    normal_run_properties = normal_element.find(qn("w:rPr"))
+    grid = document.sections[0]._sectPr.find(qn("w:docGrid"))
+    char_space = int(grid.get(qn("w:charSpace")))
+    margins = document.sections[0]._sectPr.find(qn("w:pgMar"))
+    page_size = document.sections[0]._sectPr.find(qn("w:pgSz"))
+    content_width = (
+        int(page_size.get(qn("w:w")))
+        - int(margins.get(qn("w:left")))
+        - int(margins.get(qn("w:right")))
+    )
+    assert content_width == 8845
+    assert normal_run_properties.find(qn("w:sz")).get(qn("w:val")) == "32"
+    assert normal_run_properties.find(qn("w:szCs")).get(qn("w:val")) == "32"
+    assert grid.get(qn("w:type")) == "linesAndChars"
+    assert grid.get(qn("w:charsPerLine")) == "28"
+    assert grid.get(qn("w:linesPerPage")) == "22"
+    assert char_space == -842
+    assert char_space != 19638
+    assert grid.get(qn("w:linePitch")) == "560"
+
+
+def test_wps_docxtool_normalizes_missing_normal_size_over_11pt_doc_defaults() -> None:
+    document = Document()
+    normal = document.styles["Normal"]
+    normal.font.size = None
+    normal.base_style = None
+    defaults = document.styles._element.find(qn("w:docDefaults"))
+    default_properties = defaults.find(f"{qn('w:rPrDefault')}/{qn('w:rPr')}")
+    size = default_properties.find(qn("w:sz"))
+    size.set(qn("w:val"), "22")
+    size_cs = default_properties.find(qn("w:szCs"))
+    if size_cs is None:
+        size_cs = OxmlElement("w:szCs")
+        default_properties.append(size_cs)
+    size_cs.set(qn("w:val"), "22")
+    defaults_before = etree.tostring(defaults)
+
+    apply_page_settings(document, _settings(), style_profile="wps_docxtool")
+
+    normal_run_properties = _style_element(document, "Normal").find(qn("w:rPr"))
+    grid = document.sections[0]._sectPr.find(qn("w:docGrid"))
+    assert normal_run_properties.find(qn("w:sz")).get(qn("w:val")) == "32"
+    assert normal_run_properties.find(qn("w:szCs")).get(qn("w:val")) == "32"
+    assert etree.tostring(defaults) == defaults_before
+    assert grid.get(qn("w:charSpace")) == "-842"
+    assert grid.get(qn("w:linePitch")) == "560"
+
+@pytest.mark.parametrize(
+    ("settings", "doc_mode"),
+    [
+        (PageSettings(chars_per_line=0), ""),
+        (PageSettings(lines_per_page=0), ""),
+        (PageSettings(), "SCHEME"),
+    ],
+)
+def test_wps_docxtool_does_not_normalize_normal_without_official_grid(
+    settings: PageSettings,
+    doc_mode: str,
+) -> None:
+    document = Document()
+    document.styles["Normal"].font.size = Pt(11)
+
+    apply_page_settings(
+        document,
+        settings,
+        doc_mode,
+        style_profile="wps_docxtool",
+    )
+
+    assert document.styles["Normal"].font.size.pt == 11

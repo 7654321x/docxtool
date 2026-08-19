@@ -5,6 +5,7 @@
 
 from copy import deepcopy
 
+from docx.shared import Pt
 
 from apps.wps.tests.support.wps_app_support import *  # noqa: F401,F403,F405
 from docxtool.document.configuration.models import PageSettings
@@ -45,6 +46,7 @@ def test_wps_one_click_writes_official_grid_for_stale_source_and_profile(tmp_pat
     source = tmp_path / "stale-grid-source.docx"
     target = tmp_path / "stale-grid-output.docx"
     document = Document()
+    document.styles["Normal"].font.size = Pt(11)
     document.add_paragraph("普通正文内容")
     sect_pr = document.sections[0]._sectPr
     for old in sect_pr.findall(qn("w:docGrid")):
@@ -68,11 +70,30 @@ def test_wps_one_click_writes_official_grid_for_stale_source_and_profile(tmp_pat
         request_id="request-page-grid",
     )
 
-    output_grid = Document(target).sections[0]._sectPr.find(qn("w:docGrid"))
+    output_document = Document(target)
+    output_grid = output_document.sections[0]._sectPr.find(qn("w:docGrid"))
+    normal_run_properties = output_document.styles["Normal"].element.find(qn("w:rPr"))
     assert output_grid.get(qn("w:charsPerLine")) == "28"
     assert output_grid.get(qn("w:linesPerPage")) == "22"
     assert output_grid.get(qn("w:charSpace")) == "-842"
+    assert output_grid.get(qn("w:charSpace")) != "19638"
     assert output_grid.get(qn("w:linePitch")) == "560"
+    assert normal_run_properties.find(qn("w:sz")).get(qn("w:val")) == "32"
+    assert normal_run_properties.find(qn("w:szCs")).get(qn("w:val")) == "32"
+
+    body = next(
+        paragraph
+        for paragraph in output_document.paragraphs
+        if paragraph.style.style_id == "DCT-Body"
+    )
+    assert body._p.get_or_add_pPr().find(qn("w:snapToGrid")).get(qn("w:val")) == "1"
+    for run in body.runs:
+        if not run.text:
+            continue
+        run_properties = run._element.get_or_add_rPr()
+        assert run_properties.find(qn("w:sz")).get(qn("w:val")) == "32"
+        run_spacing = run_properties.find(qn("w:spacing"))
+        assert run_spacing is None or int(run_spacing.get(qn("w:val"), "0")) <= 0
 
 
 def test_preview_binding_marks_canonical_review_range_as_preview_eligible(

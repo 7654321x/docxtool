@@ -25,6 +25,9 @@ from docxtool.document.diagnostics.logging import logger
 from docxtool.document.errors import ExportError
 
 
+OFFICIAL_GRID_FONT_SIZE_PT = 16.0
+
+
 def sectPr_with_preserved_header_footer_refs(sectPr, doc_part, source_parts, part_copier):
     """复制分节属性并迁移页眉页脚关系。
 
@@ -106,18 +109,40 @@ def line_spacing_twips(settings: PageSettings) -> int:
     return int(round(value * 20))
 
 
-def doc_grid_char_space(content_width_twips: float, chars_per_line: int,
-                        normal_font_size_pt: float = 16.0) -> int:
+def doc_grid_char_space(
+    content_width_twips: float,
+    chars_per_line: int,
+    font_size_pt: float,
+) -> int:
     """计算 OOXML docGrid 字距。
 
-    传入版心宽度 twips、每行字数和 Normal 字号；返回 Word 要求的
+    传入版心宽度 twips、每行字数和网格基准字号；返回 Word 要求的
     charSpace 整数值，即“目标字距与字号差值（磅）×4096”。
     """
     desired_pitch_pt = content_width_twips / chars_per_line / 20
-    return math.floor((desired_pitch_pt - normal_font_size_pt) * 4096)
+    return math.floor((desired_pitch_pt - font_size_pt) * 4096)
 
 
-def set_sectPr_page_layout(sectPr, settings: PageSettings, doc_mode: str = "") -> None:
+def _set_normal_style_font_size(document, font_size_pt: float) -> None:
+    """Set only Normal's explicit Western and complex-script font size."""
+    normal = document.styles["Normal"]
+    run_properties = normal.element.get_or_add_rPr()
+    half_points = str(int(round(font_size_pt * 2)))
+    for tag in ("w:sz", "w:szCs"):
+        elements = run_properties.findall(qn(tag))
+        element = elements[0] if elements else OxmlElement(tag)
+        element.set(qn("w:val"), half_points)
+        if not elements:
+            run_properties.append(element)
+        for duplicate in elements[1:]:
+            run_properties.remove(duplicate)
+
+
+def set_sectPr_page_layout(
+    sectPr,
+    settings: PageSettings,
+    doc_mode: str = "",
+) -> None:
     """写入单个分节的页面尺寸、页边距和文档网格。
 
     传入 sectPr、页面设置和文档模式；返回 None，直接修改 sectPr XML。
@@ -172,7 +197,11 @@ def set_sectPr_page_layout(sectPr, settings: PageSettings, doc_mode: str = "") -
             - int(pg_mar.get(qn("w:left")))
             - int(pg_mar.get(qn("w:right")))
         )
-        char_space = doc_grid_char_space(content_width, settings.chars_per_line)
+        char_space = doc_grid_char_space(
+            content_width,
+            settings.chars_per_line,
+            OFFICIAL_GRID_FONT_SIZE_PT,
+        )
         doc_grid = OxmlElement("w:docGrid")
         doc_grid.set(qn("w:type"), "linesAndChars")
         doc_grid.set(qn("w:charsPerLine"), str(settings.chars_per_line))
@@ -208,19 +237,19 @@ def write_doc_grid(section, settings: PageSettings, doc_mode: str = "") -> bool:
         left = round(settings.margin_left_cm * twips_per_cm)
         right = round(settings.margin_right_cm * twips_per_cm)
     content_width = page_w - left - right
-    char_space = doc_grid_char_space(content_width, settings.chars_per_line)
+    char_space = doc_grid_char_space(
+        content_width,
+        settings.chars_per_line,
+        OFFICIAL_GRID_FONT_SIZE_PT,
+    )
     line_pitch = line_spacing_twips(settings)
 
     logger.info(
-        "[网格] charSpace=%s  版心=%.0ftwip  期望%s字/行",
-        char_space,
+        "[网格] 官方基准字号=%spt 版心=%stwip 每行=%s "
+        "charSpace=%s linePitch=%s",
+        OFFICIAL_GRID_FONT_SIZE_PT,
         content_width,
         settings.chars_per_line,
-    )
-    logger.info(
-        "[网格] XML: charsPerLine=%s linesPerPage=%s charSpace=%s linePitch=%s",
-        settings.chars_per_line,
-        settings.lines_per_page,
         char_space,
         line_pitch,
     )
@@ -305,8 +334,38 @@ def apply_page_settings(
         rFonts.set(qn("w:hAnsi"), "Times New Roman")
         rPr.insert(0, rFonts)
 
+    official_grid_enabled = (
+        settings.chars_per_line > 0
+        and settings.lines_per_page > 0
+        and doc_mode != "SCHEME"
+    )
+    if (
+        resolved_style_profile == STYLE_PROFILE_WPS_DOCXTOOL
+        and official_grid_enabled
+    ):
+        _set_normal_style_font_size(doc, OFFICIAL_GRID_FONT_SIZE_PT)
+
     for section in doc.sections:
         set_sectPr_page_layout(section._sectPr, settings, doc_mode)
+        grid = section._sectPr.find(qn("w:docGrid"))
+        margins = section._sectPr.find(qn("w:pgMar"))
+        page_size = section._sectPr.find(qn("w:pgSz"))
+        if grid is not None and margins is not None and page_size is not None:
+            content_width = (
+                int(page_size.get(qn("w:w")))
+                - int(margins.get(qn("w:left")))
+                - int(margins.get(qn("w:right")))
+            )
+            logger.info(
+                "[网格] profile=%s 官方基准字号=%spt 版心=%stwip "
+                "每行=%s charSpace=%s linePitch=%s",
+                resolved_style_profile,
+                OFFICIAL_GRID_FONT_SIZE_PT,
+                content_width,
+                settings.chars_per_line,
+                grid.get(qn("w:charSpace")),
+                grid.get(qn("w:linePitch")),
+            )
 
     logger.info(
         "[页面] 边距 上%s 下%s 左%s 右%s cm",
