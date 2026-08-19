@@ -53,6 +53,7 @@ def apply_page_numbers(document, options: Mapping[str, Any] | None = None):
     for section_index, section in enumerate(document.sections):
         _set_footer_distance(section, opts)
         _set_section_numbering(section, section_numbering, restart_at, opts, section_index)
+        _set_page_number_format(section, style)
         first_page_snapshot = None
         first_page_owned = False
         if first_page_policy in {"hide", "hidden", "no", "skip"}:
@@ -152,9 +153,32 @@ def _apply_to_footer(
         None,
     )
     if paragraph is None:
-        paragraph = footer.add_paragraph()
+        _append_canonical_page_number_paragraph(
+            footer,
+            alignment,
+            style,
+            options,
+            position=position,
+            footer_kind=footer_kind,
+        )
     else:
         paragraph.clear()
+        paragraph.alignment = alignment
+        _set_page_number_indent(paragraph, position, footer_kind, options)
+        _write_page_number(paragraph, style, options)
+
+
+def _append_canonical_page_number_paragraph(
+    footer,
+    alignment,
+    style: str,
+    options: Mapping[str, Any],
+    *,
+    position: str,
+    footer_kind: str,
+) -> None:
+    """Append one clean page-number paragraph with canonical formatting."""
+    paragraph = footer.add_paragraph()
     paragraph.alignment = alignment
     _set_page_number_indent(paragraph, position, footer_kind, options)
     _write_page_number(paragraph, style, options)
@@ -245,6 +269,11 @@ def _is_reusable_empty_paragraph(paragraph) -> bool:
     element = paragraph._element
     if paragraph.text.strip():
         return False
+    if element.find(qn("w:r")) is not None:
+        return False
+    for polluted_format in ("w:pBdr", "w:tabs", "w:shd"):
+        if element.find(".//" + qn(polluted_format)) is not None:
+            return False
     protected_content = (
         "w:fldSimple",
         "w:instrText",
@@ -257,7 +286,7 @@ def _is_reusable_empty_paragraph(paragraph) -> bool:
 
 
 def _write_page_number(paragraph, style: str, options: Mapping[str, Any]) -> None:
-    if style in {"plain", "number", "page"}:
+    if style in {"dash", "numberindash", "number_in_dash", "plain", "number", "page"}:
         _add_field(paragraph, "PAGE", options)
         return
     if style in {"cn", "chinese", "第page页"}:
@@ -272,9 +301,7 @@ def _write_page_number(paragraph, style: str, options: Mapping[str, Any]) -> Non
         _add_field(paragraph, "NUMPAGES", options)
         _add_text(paragraph, " 页", options)
         return
-    _add_text(paragraph, "— ", options)
     _add_field(paragraph, "PAGE", options)
-    _add_text(paragraph, " —", options)
 
 
 def _add_text(paragraph, text: str, options: Mapping[str, Any]):
@@ -388,6 +415,20 @@ def _set_section_numbering(section, mode: str, restart_at: int, options: Mapping
         _clear_pg_num_start(section)
 
 
+def _set_page_number_format(section, style: str) -> None:
+    """Set the native PAGE number format independently from restart state."""
+    pg_num_type = section._sectPr.find(qn("w:pgNumType"))
+    if pg_num_type is None:
+        pg_num_type = OxmlElement("w:pgNumType")
+        section._sectPr.append(pg_num_type)
+    native_format = (
+        "numberInDash"
+        if style in {"dash", "numberindash", "number_in_dash"}
+        else "decimal"
+    )
+    pg_num_type.set(qn("w:fmt"), native_format)
+
+
 def _set_pg_num_start(section, start: int) -> None:
     pg_num_type = section._sectPr.find(qn("w:pgNumType"))
     if pg_num_type is None:
@@ -476,6 +517,10 @@ def _remove_page_field_runs(paragraph) -> None:
     for start, end, instruction in _iter_complex_fields(paragraph):
         if not _PAGE_INSTRUCTION_RE.search(instruction):
             continue
+        if start > 0:
+            _trim_attached_dash_decoration(runs[start - 1], trailing=True)
+        if end < len(runs) - 1:
+            _trim_attached_dash_decoration(runs[end + 1], trailing=False)
         while start > 0 and _is_page_decoration_run(runs[start - 1]):
             start -= 1
         while end < len(runs) - 1 and _is_page_decoration_run(runs[end + 1]):
@@ -489,6 +534,19 @@ def _remove_page_field_runs(paragraph) -> None:
         paragraph._element.remove(runs[index])
 
 
+def _trim_attached_dash_decoration(run, *, trailing: bool) -> None:
+    """Remove dash decoration attached to business text beside a PAGE field."""
+    text_elements = run.findall(".//" + qn("w:t"))
+    if not text_elements:
+        return
+    target = text_elements[-1] if trailing else text_elements[0]
+    value = target.text or ""
+    if trailing:
+        target.text = re.sub(r"(?:\s*[—–-]\s*)+$", "", value)
+    else:
+        target.text = re.sub(r"^(?:\s*[—–-]\s*)+", "", value)
+
+
 def _has_field_char(run, field_char_type: str) -> bool:
     return any(
         field_char.get(qn("w:fldCharType")) == field_char_type
@@ -499,9 +557,10 @@ def _has_field_char(run, field_char_type: str) -> bool:
 def _is_page_decoration_run(run) -> bool:
     if run.find(".//" + qn("w:drawing")) is not None or run.find(".//" + qn("w:pict")) is not None:
         return False
-    text = "".join(text_element.text or "" for text_element in run.findall(".//" + qn("w:t")))
+    text_elements = run.findall(".//" + qn("w:t"))
+    text = "".join(text_element.text or "" for text_element in text_elements)
     if not text:
-        return False
+        return bool(text_elements)
     return not _PAGE_DECORATION_TEXT_RE.sub("", text).strip()
 
 

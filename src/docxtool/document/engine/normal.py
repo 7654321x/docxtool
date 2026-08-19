@@ -44,7 +44,9 @@ def resolve(pd, raw_rule, rules, meta=None):
     if pd.type_id in ("sign_org", "sign_date"):
         return _copy(r)
     if pd.type_id == "title2":
-        return _copy(r)
+        r = _copy(r)
+        r.first_line_indent = 0.0
+        return r
     if meta.get("numbered_bold"):
         r = _copy(r)
         r.bold = True

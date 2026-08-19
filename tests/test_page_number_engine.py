@@ -6,6 +6,7 @@ import zipfile
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
+import pytest
 from docx import Document
 from docx.enum.section import WD_SECTION
 from docx.oxml import OxmlElement
@@ -146,6 +147,28 @@ def _page_paragraph(root: ET.Element) -> ET.Element:
     )
 
 
+def _page_paragraphs(root: ET.Element) -> list[ET.Element]:
+    return [
+        paragraph
+        for paragraph in root.findall(f".//{{{W_NS}}}p")
+        if "PAGE" in "".join(_field_instructions(paragraph))
+    ]
+
+
+def _assert_native_dash_paragraph(paragraph: ET.Element) -> None:
+    assert _field_instructions(paragraph) == ["PAGE"]
+    texts = [
+        element.text or ""
+        for element in paragraph.findall(f".//{{{W_NS}}}t")
+    ]
+    assert texts == []
+    assert paragraph.find(".//" + qn("w:pBdr")) is None
+    assert paragraph.find(".//" + qn("w:tabs")) is None
+    assert paragraph.find(".//" + qn("w:u")) is None
+    assert paragraph.find(".//" + qn("w:bdr")) is None
+    assert paragraph.find(".//" + qn("w:shd")) is None
+
+
 def _paragraph_alignment_and_indent(paragraph: ET.Element) -> tuple[str, ET.Element | None]:
     properties = paragraph.find(qn("w:pPr"))
     alignment = properties.find(qn("w:jc")) if properties is not None else None
@@ -219,7 +242,12 @@ def test_page_number_fields_outside_position_and_first_page_hidden(tmp_path: Pat
     assert abs(first.footer_distance.cm - 2.8) < 0.02
     sections = _document_xml(output).findall(".//" + qn("w:sectPr"))
     assert any(section.find(qn("w:titlePg")) is not None for section in sections)
-    starts = [pg_num_type.get(qn("w:start")) for section in sections if (pg_num_type := section.find(qn("w:pgNumType"))) is not None]
+    starts = [
+        start
+        for section in sections
+        if (pg_num_type := section.find(qn("w:pgNumType"))) is not None
+        if (start := pg_num_type.get(qn("w:start"))) is not None
+    ]
     assert starts == ["1"]
 
 
@@ -235,14 +263,17 @@ def test_page_number_styles_and_section_restart_policy(tmp_path: Path) -> None:
 
     validate_docx_integrity(output)
     footer_xml = "\n".join(_footer_xml(output).values())
-    assert "— " in footer_xml
-    assert " —" in footer_xml
+    assert "—" not in footer_xml
     assert footer_xml.count("PAGE") == 2
     assert "NUMPAGES" not in footer_xml
     assert 'w:val="center"' in footer_xml
     sections = _document_xml(output).findall(".//" + qn("w:sectPr"))
     starts = [section.find(qn("w:pgNumType")).get(qn("w:start")) for section in sections]
     assert starts == ["1", "1"]
+    assert all(
+        section.find(qn("w:pgNumType")).get(qn("w:fmt")) == "numberInDash"
+        for section in sections
+    )
 
 
 def test_outside_page_numbers_reuse_empty_even_footer_paragraph(tmp_path: Path) -> None:
@@ -262,7 +293,7 @@ def test_outside_page_numbers_reuse_empty_even_footer_paragraph(tmp_path: Path) 
 
 def test_page_number_formats_create_standard_fields(tmp_path: Path) -> None:
     cases = [
-        ("dash", "— ", " —", ["PAGE"]),
+        ("dash", "", "", ["PAGE"]),
         ("plain", "", "", ["PAGE"]),
         ("cn", "第 ", " 页", ["PAGE"]),
         ("cn_total", "第 ", " 页 共 ", ["PAGE", "NUMPAGES"]),
@@ -285,10 +316,103 @@ def test_page_number_formats_create_standard_fields(tmp_path: Path) -> None:
         assert prefix in text
         assert suffix in text
         assert "1" not in text
+        pg_num_type = document.sections[0]._sectPr.find(qn("w:pgNumType"))
+        expected_format = "numberInDash" if style == "dash" else "decimal"
+        assert pg_num_type.get(qn("w:fmt")) == expected_format
+        if style == "dash":
+            _assert_native_dash_paragraph(_page_paragraph(root))
         footer_xml = next(iter(_footer_xml(output).values()))
         assert "AlternateContent" not in footer_xml
         assert "txbxContent" not in footer_xml
         assert "textbox" not in footer_xml
+
+
+def test_decimal_source_is_normalized_to_native_dash_without_footer_dashes(
+    tmp_path: Path,
+) -> None:
+    document = Document()
+    pg_num_type = OxmlElement("w:pgNumType")
+    pg_num_type.set(qn("w:fmt"), "decimal")
+    document.sections[0]._sectPr.append(pg_num_type)
+    _add_field(document.sections[0].footer.paragraphs[0], "PAGE", "7")
+
+    apply_page_number(document, {"style": "dash", "position": "center"})
+    output = tmp_path / "decimal-to-native-dash.docx"
+    document.save(output)
+
+    section = _document_xml(output).find(".//" + qn("w:sectPr"))
+    assert section.find(qn("w:pgNumType")).get(qn("w:fmt")) == "numberInDash"
+    root = next(iter(_footer_roots(output).values()))
+    _assert_native_dash_paragraph(_page_paragraph(root))
+    assert "—" not in _visible_text(root)
+    assert "-" not in _visible_text(root)
+
+
+@pytest.mark.parametrize(
+    ("style", "expected_instructions", "expected_text"),
+    [
+        ("plain", ["PAGE"], ""),
+        ("cn", ["PAGE"], "第  页"),
+        ("cn_total", ["PAGE", "NUMPAGES"], "第  页 共  页"),
+    ],
+)
+def test_non_dash_styles_clear_historical_number_in_dash(
+    tmp_path: Path,
+    style: str,
+    expected_instructions: list[str],
+    expected_text: str,
+) -> None:
+    document = Document()
+    pg_num_type = OxmlElement("w:pgNumType")
+    pg_num_type.set(qn("w:fmt"), "numberInDash")
+    document.sections[0]._sectPr.append(pg_num_type)
+
+    apply_page_number(document, {"style": style, "position": "center"})
+    output = tmp_path / f"number-in-dash-to-{style}.docx"
+    document.save(output)
+
+    section = _document_xml(output).find(".//" + qn("w:sectPr"))
+    assert section.find(qn("w:pgNumType")).get(qn("w:fmt")) == "decimal"
+    root = next(iter(_footer_roots(output).values()))
+    assert _field_instructions(root) == expected_instructions
+    assert _visible_text(root) == expected_text
+
+
+def test_native_dash_normalizes_all_sections_without_losing_start_values(
+    tmp_path: Path,
+) -> None:
+    document = Document()
+    document.add_paragraph("section one")
+    document.add_section(WD_SECTION.NEW_PAGE)
+    document.add_paragraph("section two")
+    document.add_section(WD_SECTION.NEW_PAGE)
+    document.add_paragraph("section three")
+    formats = ("decimal", "numberInDash", None)
+    for section, page_format in zip(document.sections, formats):
+        if page_format is None:
+            continue
+        pg_num_type = OxmlElement("w:pgNumType")
+        pg_num_type.set(qn("w:fmt"), page_format)
+        section._sectPr.append(pg_num_type)
+
+    apply_page_number(
+        document,
+        {
+            "style": "dash",
+            "position": "center",
+            "section_starts": [1, None, 5],
+        },
+    )
+    output = tmp_path / "multi-section-native-dash.docx"
+    document.save(output)
+
+    sections = _document_xml(output).findall(".//" + qn("w:sectPr"))
+    assert len(sections) == 3
+    page_number_types = [section.find(qn("w:pgNumType")) for section in sections]
+    assert all(item.get(qn("w:fmt")) == "numberInDash" for item in page_number_types)
+    assert [item.get(qn("w:start")) for item in page_number_types] == ["1", None, "5"]
+    for root in _footer_roots(output).values():
+        _assert_native_dash_paragraph(_page_paragraph(root))
 
 
 def test_page_number_preserves_non_page_footer_content_when_replacing_old_field(tmp_path: Path) -> None:
@@ -314,6 +438,120 @@ def test_page_number_preserves_non_page_footer_content_when_replacing_old_field(
     assert "Prepared by office" in _visible_text(root)
     assert "Confidential —" not in _visible_text(root)
     _assert_complex_fields_are_paired(root)
+
+
+def test_dirty_duplicate_dash_page_paragraph_is_canonically_rebuilt(tmp_path: Path) -> None:
+    document = Document()
+    pg_num_type = OxmlElement("w:pgNumType")
+    pg_num_type.set(qn("w:fmt"), "numberInDash")
+    document.sections[0]._sectPr.append(pg_num_type)
+    footer = document.sections[0].footer
+    footer.is_linked_to_previous = False
+    paragraph = footer.paragraphs[0]
+    paragraph.add_run("— ")
+    paragraph.add_run("— ")
+    _add_field(paragraph, "PAGE", "7")
+    paragraph.add_run(" —")
+
+    apply_page_number(document, {"style": "dash", "position": "center"})
+    output = tmp_path / "dirty-duplicate-dash.docx"
+    document.save(output)
+
+    root = next(iter(_footer_roots(output).values()))
+    page_paragraphs = _page_paragraphs(root)
+    assert len(page_paragraphs) == 1
+    _assert_native_dash_paragraph(page_paragraphs[0])
+    section = _document_xml(output).find(".//" + qn("w:sectPr"))
+    assert section.find(qn("w:pgNumType")).get(qn("w:fmt")) == "numberInDash"
+
+
+def test_mixed_business_run_drops_attached_old_dash_and_writes_separate_page_paragraph(
+    tmp_path: Path,
+) -> None:
+    document = Document()
+    footer = document.sections[0].footer
+    footer.is_linked_to_previous = False
+    paragraph = footer.paragraphs[0]
+    paragraph.add_run("Confidential — ")
+    _add_field(paragraph, "PAGE", "7")
+    paragraph.add_run(" —")
+
+    apply_page_number(document, {"style": "dash", "position": "center"})
+    output = tmp_path / "mixed-business-page.docx"
+    document.save(output)
+
+    root = next(iter(_footer_roots(output).values()))
+    page_paragraphs = _page_paragraphs(root)
+    assert len(page_paragraphs) == 1
+    _assert_native_dash_paragraph(page_paragraphs[0])
+    section = _document_xml(output).find(".//" + qn("w:sectPr"))
+    page_number_types = section.findall(qn("w:pgNumType"))
+    assert len(page_number_types) == 1
+    assert page_number_types[0].get(qn("w:fmt")) == "numberInDash"
+    assert "Confidential" in _visible_text(root)
+    assert "Confidential —" not in _visible_text(root)
+    assert page_paragraphs[0] not in [
+        paragraph
+        for paragraph in root.findall(f".//{{{W_NS}}}p")
+        if "Confidential" in _visible_text(paragraph)
+    ]
+
+
+def test_polluted_empty_footer_paragraph_is_not_reused_for_canonical_page_number(
+    tmp_path: Path,
+) -> None:
+    document = Document()
+    footer = document.sections[0].footer
+    footer.is_linked_to_previous = False
+    polluted = footer.paragraphs[0]
+    properties = polluted._element.get_or_add_pPr()
+    borders = OxmlElement("w:pBdr")
+    bottom = OxmlElement("w:bottom")
+    bottom.set(qn("w:val"), "single")
+    borders.append(bottom)
+    properties.append(borders)
+    tabs = OxmlElement("w:tabs")
+    tab = OxmlElement("w:tab")
+    tab.set(qn("w:val"), "right")
+    tab.set(qn("w:leader"), "hyphen")
+    tabs.append(tab)
+    properties.append(tabs)
+    _add_field(footer.add_paragraph(), "PAGE", "7")
+
+    apply_page_number(document, {"style": "dash", "position": "center"})
+    output = tmp_path / "polluted-empty-footer.docx"
+    document.save(output)
+
+    root = next(iter(_footer_roots(output).values()))
+    page_paragraphs = _page_paragraphs(root)
+    assert len(page_paragraphs) == 1
+    _assert_native_dash_paragraph(page_paragraphs[0])
+
+
+def test_dash_page_number_triple_apply_is_structurally_idempotent(tmp_path: Path) -> None:
+    document = Document()
+    footer = document.sections[0].footer
+    footer.is_linked_to_previous = False
+    footer.paragraphs[0].text = "Business footer"
+    _add_field(footer.add_paragraph("— "), "PAGE", "7")
+
+    paragraph_counts: list[int] = []
+    for _ in range(3):
+        apply_page_number(document, {"style": "dash", "position": "center"})
+        paragraph_counts.append(len(footer.paragraphs))
+
+    output = tmp_path / "triple-apply.docx"
+    document.save(output)
+    root = next(iter(_footer_roots(output).values()))
+
+    assert paragraph_counts[0] == paragraph_counts[1] == paragraph_counts[2]
+    page_paragraphs = _page_paragraphs(root)
+    assert len(page_paragraphs) == 1
+    _assert_native_dash_paragraph(page_paragraphs[0])
+    section = _document_xml(output).find(".//" + qn("w:sectPr"))
+    page_number_types = section.findall(qn("w:pgNumType"))
+    assert len(page_number_types) == 1
+    assert page_number_types[0].get(qn("w:fmt")) == "numberInDash"
 
 
 def test_page_number_preserves_complex_and_simple_non_page_fields(tmp_path: Path) -> None:
@@ -394,6 +632,7 @@ def test_linked_footer_materializes_inherited_content_before_page_replacement(tm
     assert "Prepared by office" in _visible_text(second_root)
     assert any(item.startswith("DATE") for item in _field_instructions(second_root))
     assert _field_instructions(second_root).count("PAGE") == 1
+    _assert_native_dash_paragraph(_page_paragraph(second_root))
 
 
 def test_linked_footer_preserves_image_relationship_when_materialized(tmp_path: Path) -> None:
@@ -426,6 +665,7 @@ def test_linked_footer_preserves_image_relationship_when_materialized(tmp_path: 
     assert relationship_id in second_footer.part.rels
     assert second_footer.part.rels[relationship_id].target_part.blob
     assert _field_instructions(second_footer._element).count("PAGE") == 1
+    _assert_native_dash_paragraph(_page_paragraph(second_footer._element))
 
 
 def test_linked_footer_preserves_hyperlink_relationship_when_materialized(
@@ -456,6 +696,7 @@ def test_linked_footer_preserves_hyperlink_relationship_when_materialized(
     relationship = second_footer.part.rels[relationship_id]
     assert relationship.is_external is True
     assert relationship.target_ref == "https://example.com/footer"
+    _assert_native_dash_paragraph(_page_paragraph(second_footer._element))
 
 
 def test_split_complex_page_field_is_replaced_without_removing_split_date(
@@ -565,6 +806,7 @@ def test_standard_page_number_has_explicit_font_size_and_outside_indents(tmp_pat
     for root in roots.values():
         assert _field_instructions(root) == ["PAGE"]
         paragraph = _page_paragraph(root)
+        _assert_native_dash_paragraph(paragraph)
         alignment, indent = _paragraph_alignment_and_indent(paragraph)
         alignments.append(alignment)
         assert indent is not None
@@ -580,7 +822,7 @@ def test_standard_page_number_has_explicit_font_size_and_outside_indents(tmp_pat
         assert indent.get(qn("w:firstLineChars")) == "0"
         assert indent.get(qn("w:firstLine")) == "0"
         runs = paragraph.findall(qn("w:r"))
-        assert len(runs) == 6
+        assert len(runs) == 4
         for run in runs:
             properties = run.find(qn("w:rPr"))
             fonts = properties.find(qn("w:rFonts"))

@@ -208,6 +208,8 @@ def render_document_items(
             if pd.type_id == "dispatch_number":
                 para.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 _apply_first_line_indent_chars(para, 0)
+            elif pd.type_id == "title2":
+                _apply_first_line_indent_chars(para, 0)
 
             # GB/T 9704 落款位置：发文机关右空 2 字，成文日期右空 4 字。
             # 直接格式固定最终位置，避免浏览器旧配置覆盖规范值。

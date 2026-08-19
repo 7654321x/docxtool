@@ -69,6 +69,23 @@ class EngineHeadingSpacingTest(unittest.TestCase):
         export_doc(doc_data, _rules(), PageSettings(), self.out)
         return Document(self.out)
 
+    def test_title2_has_explicit_zero_first_line_indent(self):
+        paragraph = ParagraphData(
+            text="今后五年工作建议",
+            type_id="title2",
+            original_text="今后五年工作建议",
+            features=ParagraphFeatures(),
+            meta={},
+        )
+
+        for strategy in ("structural", "normalize"):
+            document = self._export([paragraph], processing_strategy=strategy)
+            properties = document.paragraphs[0]._element.get_or_add_pPr()
+            indent = properties.find(qn("w:ind"))
+            self.assertIsNotNone(indent)
+            self.assertEqual(indent.get(qn("w:firstLineChars")), "0")
+            self.assertEqual(indent.get(qn("w:firstLine")), "0")
+
     def test_numbered_heading2_colon_inline_body_formats_editable_modes_only(self):
         def paragraph():
             return ParagraphData(
