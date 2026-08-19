@@ -13,11 +13,16 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.opc.constants import RELATIONSHIP_TYPE as RT
 from docx.shared import Cm
+from lxml import etree as LET
 
 from docxtool.document.engine.page_number import apply_page_number, apply_page_numbers
 from docxtool.security.docx_integrity import validate_docx_integrity
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+MC_NS = "http://schemas.openxmlformats.org/markup-compatibility/2006"
+WP_NS = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
+WPS_NS = "http://schemas.microsoft.com/office/word/2010/wordprocessingShape"
+V_NS = "urn:schemas-microsoft-com:vml"
 _TINY_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
 )
@@ -142,7 +147,7 @@ def _visible_text(root: ET.Element) -> str:
 def _page_paragraph(root: ET.Element) -> ET.Element:
     return next(
         paragraph
-        for paragraph in root.findall(f".//{{{W_NS}}}p")
+        for paragraph in root.findall(f"{{{W_NS}}}p")
         if "PAGE" in " ".join(_field_instructions(paragraph))
     )
 
@@ -150,23 +155,62 @@ def _page_paragraph(root: ET.Element) -> ET.Element:
 def _page_paragraphs(root: ET.Element) -> list[ET.Element]:
     return [
         paragraph
-        for paragraph in root.findall(f".//{{{W_NS}}}p")
+        for paragraph in root.findall(f"{{{W_NS}}}p")
         if "PAGE" in "".join(_field_instructions(paragraph))
     ]
 
 
-def _assert_native_dash_paragraph(paragraph: ET.Element) -> None:
-    assert _field_instructions(paragraph) == ["PAGE"]
-    texts = [
-        element.text or ""
-        for element in paragraph.findall(f".//{{{W_NS}}}t")
-    ]
-    assert texts == []
-    assert paragraph.find(".//" + qn("w:pBdr")) is None
-    assert paragraph.find(".//" + qn("w:tabs")) is None
-    assert paragraph.find(".//" + qn("w:u")) is None
-    assert paragraph.find(".//" + qn("w:bdr")) is None
-    assert paragraph.find(".//" + qn("w:shd")) is None
+def _assert_official_dash_shape(
+    root: ET.Element, expected_horizontal: str | None = None
+) -> tuple[ET.Element, ET.Element]:
+    alternate = root.findall(f".//{{{MC_NS}}}AlternateContent")
+    assert len(alternate) == 1
+    choice = alternate[0].find(f"{{{MC_NS}}}Choice")
+    fallback = alternate[0].find(f"{{{MC_NS}}}Fallback")
+    assert choice is not None
+    assert choice.get("Requires") == "wps"
+    assert fallback is not None
+    anchor = choice.find(f".//{{{WP_NS}}}anchor")
+    assert anchor is not None
+    horizontal = anchor.find(f"{{{WP_NS}}}positionH/{{{WP_NS}}}align").text
+    if expected_horizontal is not None:
+        assert horizontal == expected_horizontal
+    assert anchor.find(f"{{{WP_NS}}}positionV/{{{WP_NS}}}posOffset").text == "0"
+    extent = anchor.find(f"{{{WP_NS}}}extent")
+    assert extent.get("cx") == "1828800"
+    assert extent.get("cy") == "1828800"
+    assert anchor.find(f"{{{WP_NS}}}wrapNone") is not None
+    body = choice.find(f".//{{{WPS_NS}}}bodyPr")
+    assert body is not None
+    for attribute in ("lIns", "tIns", "rIns", "bIns"):
+        assert body.get(attribute) == "0"
+    assert body.get("wrap") == "none"
+    shape = fallback.find(f".//{{{V_NS}}}shape")
+    textbox = fallback.find(f".//{{{V_NS}}}textbox")
+    assert shape is not None
+    assert shape.get("filled") == "f"
+    assert shape.get("stroked") == "f"
+    for fragment in (
+        "position:absolute",
+        "height:144pt",
+        "width:144pt",
+        "mso-position-horizontal-relative:margin",
+        "mso-wrap-style:none",
+    ):
+        assert fragment in shape.get("style", "")
+    if expected_horizontal is not None:
+        assert f"mso-position-horizontal:{expected_horizontal}" in shape.get("style", "")
+    assert textbox is not None
+    assert textbox.get("inset") == "0mm,0mm,0mm,0mm"
+    branches = (
+        choice.find(f".//{{{W_NS}}}txbxContent"),
+        fallback.find(f".//{{{W_NS}}}txbxContent"),
+    )
+    for branch in branches:
+        assert branch is not None
+        assert _field_instructions(branch) == ["PAGE"]
+        assert _visible_text(branch) == "—  —"
+    return branches
 
 
 def _paragraph_alignment_and_indent(paragraph: ET.Element) -> tuple[str, ET.Element | None]:
@@ -263,15 +307,15 @@ def test_page_number_styles_and_section_restart_policy(tmp_path: Path) -> None:
 
     validate_docx_integrity(output)
     footer_xml = "\n".join(_footer_xml(output).values())
-    assert "—" not in footer_xml
-    assert footer_xml.count("PAGE") == 2
+    assert "—" in footer_xml
+    assert footer_xml.count("PAGE") == 4
     assert "NUMPAGES" not in footer_xml
     assert 'w:val="center"' in footer_xml
     sections = _document_xml(output).findall(".//" + qn("w:sectPr"))
     starts = [section.find(qn("w:pgNumType")).get(qn("w:start")) for section in sections]
     assert starts == ["1", "1"]
     assert all(
-        section.find(qn("w:pgNumType")).get(qn("w:fmt")) == "numberInDash"
+        section.find(qn("w:pgNumType")).get(qn("w:fmt")) == "decimal"
         for section in sections
     )
 
@@ -286,9 +330,8 @@ def test_outside_page_numbers_reuse_empty_even_footer_paragraph(tmp_path: Path) 
     roots = _footer_roots(output)
     assert len(roots) == 2
     for root in roots.values():
-        paragraphs = root.findall(f".//{{{W_NS}}}p")
-        assert len(paragraphs) == 1
-        assert _field_instructions(root) == ["PAGE"]
+        assert len(root.findall(f"{{{W_NS}}}p")) == 1
+        _assert_official_dash_shape(root)
 
 
 def test_page_number_formats_create_standard_fields(tmp_path: Path) -> None:
@@ -310,21 +353,24 @@ def test_page_number_formats_create_standard_fields(tmp_path: Path) -> None:
         roots = _footer_roots(output)
         assert len(roots) == 1
         root = next(iter(roots.values()))
-        assert _field_instructions(root) == instructions
+        expected_fields = ["PAGE", "PAGE"] if style == "dash" else instructions
+        assert _field_instructions(root) == expected_fields
         _assert_complex_fields_are_paired(root)
         text = _visible_text(root)
         assert prefix in text
         assert suffix in text
         assert "1" not in text
         pg_num_type = document.sections[0]._sectPr.find(qn("w:pgNumType"))
-        expected_format = "numberInDash" if style == "dash" else "decimal"
-        assert pg_num_type.get(qn("w:fmt")) == expected_format
+        assert pg_num_type.get(qn("w:fmt")) == "decimal"
         if style == "dash":
-            _assert_native_dash_paragraph(_page_paragraph(root))
+            _assert_official_dash_shape(root)
         footer_xml = next(iter(_footer_xml(output).values()))
-        assert "AlternateContent" not in footer_xml
-        assert "txbxContent" not in footer_xml
-        assert "textbox" not in footer_xml
+        if style == "dash":
+            assert "AlternateContent" in footer_xml
+            assert "txbxContent" in footer_xml
+            assert "textbox" in footer_xml
+        else:
+            assert "AlternateContent" not in footer_xml
 
 
 def test_decimal_source_is_normalized_to_native_dash_without_footer_dashes(
@@ -341,11 +387,9 @@ def test_decimal_source_is_normalized_to_native_dash_without_footer_dashes(
     document.save(output)
 
     section = _document_xml(output).find(".//" + qn("w:sectPr"))
-    assert section.find(qn("w:pgNumType")).get(qn("w:fmt")) == "numberInDash"
+    assert section.find(qn("w:pgNumType")).get(qn("w:fmt")) == "decimal"
     root = next(iter(_footer_roots(output).values()))
-    _assert_native_dash_paragraph(_page_paragraph(root))
-    assert "—" not in _visible_text(root)
-    assert "-" not in _visible_text(root)
+    _assert_official_dash_shape(root)
 
 
 @pytest.mark.parametrize(
@@ -409,10 +453,10 @@ def test_native_dash_normalizes_all_sections_without_losing_start_values(
     sections = _document_xml(output).findall(".//" + qn("w:sectPr"))
     assert len(sections) == 3
     page_number_types = [section.find(qn("w:pgNumType")) for section in sections]
-    assert all(item.get(qn("w:fmt")) == "numberInDash" for item in page_number_types)
+    assert all(item.get(qn("w:fmt")) == "decimal" for item in page_number_types)
     assert [item.get(qn("w:start")) for item in page_number_types] == ["1", None, "5"]
     for root in _footer_roots(output).values():
-        _assert_native_dash_paragraph(_page_paragraph(root))
+        _assert_official_dash_shape(root)
 
 
 def test_page_number_preserves_non_page_footer_content_when_replacing_old_field(tmp_path: Path) -> None:
@@ -460,9 +504,9 @@ def test_dirty_duplicate_dash_page_paragraph_is_canonically_rebuilt(tmp_path: Pa
     root = next(iter(_footer_roots(output).values()))
     page_paragraphs = _page_paragraphs(root)
     assert len(page_paragraphs) == 1
-    _assert_native_dash_paragraph(page_paragraphs[0])
+    _assert_official_dash_shape(root)
     section = _document_xml(output).find(".//" + qn("w:sectPr"))
-    assert section.find(qn("w:pgNumType")).get(qn("w:fmt")) == "numberInDash"
+    assert section.find(qn("w:pgNumType")).get(qn("w:fmt")) == "decimal"
 
 
 def test_mixed_business_run_drops_attached_old_dash_and_writes_separate_page_paragraph(
@@ -483,11 +527,11 @@ def test_mixed_business_run_drops_attached_old_dash_and_writes_separate_page_par
     root = next(iter(_footer_roots(output).values()))
     page_paragraphs = _page_paragraphs(root)
     assert len(page_paragraphs) == 1
-    _assert_native_dash_paragraph(page_paragraphs[0])
+    _assert_official_dash_shape(root)
     section = _document_xml(output).find(".//" + qn("w:sectPr"))
     page_number_types = section.findall(qn("w:pgNumType"))
     assert len(page_number_types) == 1
-    assert page_number_types[0].get(qn("w:fmt")) == "numberInDash"
+    assert page_number_types[0].get(qn("w:fmt")) == "decimal"
     assert "Confidential" in _visible_text(root)
     assert "Confidential —" not in _visible_text(root)
     assert page_paragraphs[0] not in [
@@ -525,7 +569,7 @@ def test_polluted_empty_footer_paragraph_is_not_reused_for_canonical_page_number
     root = next(iter(_footer_roots(output).values()))
     page_paragraphs = _page_paragraphs(root)
     assert len(page_paragraphs) == 1
-    _assert_native_dash_paragraph(page_paragraphs[0])
+    _assert_official_dash_shape(root)
 
 
 def test_dash_page_number_triple_apply_is_structurally_idempotent(tmp_path: Path) -> None:
@@ -547,11 +591,63 @@ def test_dash_page_number_triple_apply_is_structurally_idempotent(tmp_path: Path
     assert paragraph_counts[0] == paragraph_counts[1] == paragraph_counts[2]
     page_paragraphs = _page_paragraphs(root)
     assert len(page_paragraphs) == 1
-    _assert_native_dash_paragraph(page_paragraphs[0])
+    _assert_official_dash_shape(root)
     section = _document_xml(output).find(".//" + qn("w:sectPr"))
     page_number_types = section.findall(qn("w:pgNumType"))
     assert len(page_number_types) == 1
-    assert page_number_types[0].get(qn("w:fmt")) == "numberInDash"
+    assert page_number_types[0].get(qn("w:fmt")) == "decimal"
+
+
+def test_dash_page_number_removes_styled_legacy_anchor_residue(tmp_path: Path) -> None:
+    document = Document()
+    footer = document.sections[0].footer
+    footer.is_linked_to_previous = False
+    apply_page_number(document, {"style": "dash", "position": "outside"})
+
+    legacy = footer.paragraphs[0]
+    anchor_run = legacy._element.find(qn("w:r"))
+    run_properties = OxmlElement("w:rPr")
+    run_properties.append(OxmlElement("w:sz"))
+    anchor_run.insert(0, run_properties)
+    bookmark_start = OxmlElement("w:bookmarkStart")
+    bookmark_start.set(qn("w:id"), "91")
+    bookmark_start.set(qn("w:name"), "legacy-page")
+    bookmark_end = OxmlElement("w:bookmarkEnd")
+    bookmark_end.set(qn("w:id"), "91")
+    legacy._element.insert(1, bookmark_start)
+    legacy._element.append(bookmark_end)
+
+    apply_page_number(document, {"style": "dash", "position": "outside"})
+    output = tmp_path / "styled-legacy-anchor.docx"
+    document.save(output)
+
+    root = next(iter(_footer_roots(output).values()))
+    assert len(root.findall(qn("w:p"))) == 1
+    _assert_official_dash_shape(root, "outside")
+
+
+def test_dash_page_number_removes_page_paragraph_with_only_bookmarks(tmp_path: Path) -> None:
+    document = Document()
+    footer = document.sections[0].footer
+    footer.is_linked_to_previous = False
+    legacy = footer.paragraphs[0]
+    _add_field(legacy, "PAGE", "7")
+    bookmark_start = OxmlElement("w:bookmarkStart")
+    bookmark_start.set(qn("w:id"), "92")
+    bookmark_start.set(qn("w:name"), "legacy-direct-page")
+    bookmark_end = OxmlElement("w:bookmarkEnd")
+    bookmark_end.set(qn("w:id"), "92")
+    legacy._element.insert(1, bookmark_start)
+    legacy._element.append(bookmark_end)
+
+    apply_page_number(document, {"style": "dash", "position": "outside"})
+    output = tmp_path / "bookmark-page-paragraph.docx"
+    document.save(output)
+
+    root = next(iter(_footer_roots(output).values()))
+    assert len(root.findall(qn("w:p"))) == 1
+    assert root.find(".//" + qn("w:bookmarkStart")) is None
+    _assert_official_dash_shape(root, "outside")
 
 
 def test_page_number_preserves_complex_and_simple_non_page_fields(tmp_path: Path) -> None:
@@ -583,7 +679,7 @@ def test_page_number_preserves_complex_and_simple_non_page_fields(tmp_path: Path
     assert any(instruction.startswith("STYLEREF") for instruction in instructions)
     assert "REF bookmark1" in simple_instructions
     assert simple_instructions.count("PAGE") == 0
-    assert instructions.count("PAGE") == 1
+    assert instructions.count("PAGE") == 2
     assert "Prepared by office" in _visible_text(root)
     assert "Referenced text" in _visible_text(root)
 
@@ -601,7 +697,7 @@ def test_pure_date_field_is_not_mistaken_for_a_page_number(tmp_path: Path) -> No
 
     root = next(iter(_footer_roots(output).values()))
     assert any(item.startswith("DATE") for item in _field_instructions(root))
-    assert _field_instructions(root).count("PAGE") == 1
+    assert _field_instructions(root).count("PAGE") == 2
     assert "2026-08-19" in _visible_text(root)
 
 
@@ -631,8 +727,8 @@ def test_linked_footer_materializes_inherited_content_before_page_replacement(tm
     assert "Confidential footer" in _visible_text(second_root)
     assert "Prepared by office" in _visible_text(second_root)
     assert any(item.startswith("DATE") for item in _field_instructions(second_root))
-    assert _field_instructions(second_root).count("PAGE") == 1
-    _assert_native_dash_paragraph(_page_paragraph(second_root))
+    assert _field_instructions(second_root).count("PAGE") == 2
+    _assert_official_dash_shape(second_root)
 
 
 def test_linked_footer_preserves_image_relationship_when_materialized(tmp_path: Path) -> None:
@@ -664,8 +760,8 @@ def test_linked_footer_preserves_image_relationship_when_materialized(tmp_path: 
     relationship_id = blips[0].get(qn("r:embed"))
     assert relationship_id in second_footer.part.rels
     assert second_footer.part.rels[relationship_id].target_part.blob
-    assert _field_instructions(second_footer._element).count("PAGE") == 1
-    _assert_native_dash_paragraph(_page_paragraph(second_footer._element))
+    assert _field_instructions(second_footer._element).count("PAGE") == 2
+    _assert_official_dash_shape(second_footer._element)
 
 
 def test_linked_footer_preserves_hyperlink_relationship_when_materialized(
@@ -696,7 +792,7 @@ def test_linked_footer_preserves_hyperlink_relationship_when_materialized(
     relationship = second_footer.part.rels[relationship_id]
     assert relationship.is_external is True
     assert relationship.target_ref == "https://example.com/footer"
-    _assert_native_dash_paragraph(_page_paragraph(second_footer._element))
+    _assert_official_dash_shape(second_footer._element)
 
 
 def test_split_complex_page_field_is_replaced_without_removing_split_date(
@@ -740,7 +836,10 @@ def test_outside_page_numbers_preserve_default_and_even_headers(tmp_path: Path) 
     assert reopened.sections[0].header.paragraphs[0].text == "Default header"
     assert reopened.sections[0].even_page_header.paragraphs[0].text == "Even header"
     roots = _footer_roots(output)
-    assert sorted(_field_instructions(root) for root in roots.values()) == [["PAGE"], ["PAGE"]]
+    assert sorted(_field_instructions(root) for root in roots.values()) == [
+        ["PAGE", "PAGE"],
+        ["PAGE", "PAGE"],
+    ]
 
 
 def test_page_number_can_apply_first_and_even_centered_footers(tmp_path: Path) -> None:
@@ -800,37 +899,45 @@ def test_standard_page_number_has_explicit_font_size_and_outside_indents(tmp_pat
     assert validate_docx_integrity(output).ok is True
     reopened = Document(output)
     assert abs(reopened.sections[0].footer_distance.cm - 2.8) < 0.02
+    pg_num_type = reopened.sections[0]._sectPr.find(qn("w:pgNumType"))
+    assert pg_num_type.get(qn("w:fmt")) == "decimal"
+    page_margins = reopened.sections[0]._sectPr.find(qn("w:pgMar"))
+    assert page_margins.get(qn("w:bottom")) == "1984"
+    assert page_margins.get(qn("w:footer")) == "1587"
     roots = _footer_roots(output)
     assert len(roots) == 3
     alignments = []
     for root in roots.values():
-        assert _field_instructions(root) == ["PAGE"]
-        paragraph = _page_paragraph(root)
-        _assert_native_dash_paragraph(paragraph)
+        branches = _assert_official_dash_shape(root, "outside")
+        assert _field_instructions(root) == ["PAGE", "PAGE"]
+        paragraph = root.find(f"{{{W_NS}}}p")
         alignment, indent = _paragraph_alignment_and_indent(paragraph)
         alignments.append(alignment)
         assert indent is not None
         if alignment == "left":
-            assert indent.get(qn("w:left")) == "280"
+            assert indent.get(qn("w:leftChars")) == "100"
             assert indent.get(qn("w:right")) is None
-            assert indent.get(qn("w:leftChars")) is None
+            assert indent.get(qn("w:left")) is None
         else:
             assert alignment == "right"
-            assert indent.get(qn("w:right")) == "280"
+            assert indent.get(qn("w:rightChars")) == "100"
             assert indent.get(qn("w:left")) is None
-            assert indent.get(qn("w:rightChars")) is None
+            assert indent.get(qn("w:right")) is None
         assert indent.get(qn("w:firstLineChars")) == "0"
         assert indent.get(qn("w:firstLine")) == "0"
-        runs = paragraph.findall(qn("w:r"))
-        assert len(runs) == 4
-        for run in runs:
-            properties = run.find(qn("w:rPr"))
-            fonts = properties.find(qn("w:rFonts"))
-            assert fonts is not None
-            for attribute in ("w:ascii", "w:hAnsi", "w:eastAsia", "w:cs"):
-                assert fonts.get(qn(attribute)) == "宋体"
-            assert properties.find(qn("w:sz")).get(qn("w:val")) == "28"
-            assert properties.find(qn("w:szCs")).get(qn("w:val")) == "28"
+        for branch in branches:
+            inner = branch.find(qn("w:p"))
+            inner_alignment, inner_indent = _paragraph_alignment_and_indent(inner)
+            assert inner_alignment == alignment
+            assert inner_indent.attrib == indent.attrib
+            for run in inner.findall(qn("w:r")):
+                properties = run.find(qn("w:rPr"))
+                fonts = properties.find(qn("w:rFonts"))
+                for attribute in ("w:ascii", "w:hAnsi", "w:eastAsia", "w:cs"):
+                    assert fonts.get(qn(attribute)) == "宋体"
+                assert properties.find(qn("w:sz")).get(qn("w:val")) == "28"
+                assert properties.find(qn("w:szCs")).get(qn("w:val")) == "28"
+                assert properties.find(qn("w:b")).get(qn("w:val")) == "0"
     assert alignments.count("right") == 2
     assert alignments.count("left") == 1
 
@@ -848,11 +955,40 @@ def test_page_number_removes_static_page_number_paragraphs_before_relayout(tmp_p
     document.save(output)
 
     root = next(iter(_footer_roots(output).values()))
-    paragraphs = root.findall(f".//{{{W_NS}}}p")
+    paragraphs = root.findall(f"{{{W_NS}}}p")
     assert len(paragraphs) == 2
-    assert _field_instructions(root) == ["PAGE"]
+    assert _field_instructions(root) == ["PAGE", "PAGE"]
     assert _visible_text(root).count("1") == 0
     assert "Confidential footer" in _visible_text(root)
+
+
+def test_dash_page_number_preserves_unrelated_footer_textbox(tmp_path: Path) -> None:
+    document = Document()
+    footer = document.sections[0].footer
+    footer.is_linked_to_previous = False
+    business_shape = LET.fromstring(
+        f"""
+        <w:p xmlns:w="{W_NS}" xmlns:mc="{MC_NS}" xmlns:v="{V_NS}">
+          <w:r><mc:AlternateContent><mc:Fallback><w:pict>
+            <v:shape id="business-shape"><v:textbox><w:txbxContent>
+              <w:p><w:r><w:t>内部资料</w:t></w:r></w:p>
+            </w:txbxContent></v:textbox></v:shape>
+          </w:pict></mc:Fallback></mc:AlternateContent></w:r>
+        </w:p>
+        """
+    )
+    footer._element.append(business_shape)
+
+    apply_page_number(document, {"style": "dash", "position": "outside"})
+    output = tmp_path / "preserve-business-textbox.docx"
+    document.save(output)
+
+    root = next(iter(_footer_roots(output).values()))
+    assert "内部资料" in _visible_text(root)
+    alternates = root.findall(f".//{{{MC_NS}}}AlternateContent")
+    assert len(alternates) == 2
+    page_objects = [item for item in alternates if _field_instructions(item) == ["PAGE", "PAGE"]]
+    assert len(page_objects) == 1
 
 
 def test_non_outside_page_numbers_clear_character_indents(tmp_path: Path) -> None:

@@ -256,11 +256,12 @@ def test_page_margins_and_clean_footer_page_field(tmp_path: Path) -> None:
     footer_xmls = _footer_xmls(output)
     assert len(footer_xmls) == 3
     for footer_xml in footer_xmls:
-        assert footer_xml.count("PAGE") == 1
+        # DrawingML/WPS Choice and VML Fallback each carry one PAGE field.
+        assert footer_xml.count("PAGE") == 2
         assert "NUMPAGES" not in footer_xml
-        assert "AlternateContent" not in footer_xml
-        assert "txbxContent" not in footer_xml
-        assert "textbox" not in footer_xml
+        assert footer_xml.count("AlternateContent") == 2
+        assert footer_xml.count("txbxContent") == 4
+        assert "textbox" in footer_xml
 
 
 def test_document_grid_char_space_uses_ooxml_4096_point_units(tmp_path: Path) -> None:

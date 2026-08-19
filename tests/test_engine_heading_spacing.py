@@ -44,6 +44,11 @@ def _spacing_before_lines(paragraph):
     return spacing.get(qn("w:beforeLines")) if spacing is not None else None
 
 
+def _snap_to_grid(paragraph):
+    snap = paragraph._element.get_or_add_pPr().find(qn("w:snapToGrid"))
+    return snap.get(qn("w:val")) if snap is not None else None
+
+
 class EngineHeadingSpacingTest(unittest.TestCase):
     def setUp(self):
         logger.setLevel(logging.ERROR)
@@ -134,6 +139,57 @@ class EngineHeadingSpacingTest(unittest.TestCase):
             [run.text for run in strict.paragraphs[0].runs if run.text],
             ["（一）工作安排： 正文内容"],
         )
+
+    def test_heading2_inline_body_participates_in_document_grid(self):
+        paragraphs = [
+            ParagraphData(
+                text=f"标题{i}。这是需要继续按正文网格排列的较长正文内容",
+                type_id="heading2",
+                original_text=f"（{label}）标题{i}。这是需要继续按正文网格排列的较长正文内容",
+                features=ParagraphFeatures(),
+                meta={
+                    "numbered_heading2_period_inline_body": True,
+                    "numbering": f"（{label}）",
+                },
+            )
+            for i, label in enumerate(("一", "二", "三"), start=1)
+        ]
+
+        document = self._export(paragraphs, processing_strategy="structural")
+
+        self.assertEqual(len(document.paragraphs), 3)
+        self.assertEqual([_snap_to_grid(item) for item in document.paragraphs], ["1"] * 3)
+        for paragraph in document.paragraphs:
+            self.assertIn("。", paragraph.text)
+            period = paragraph.text.index("。")
+            cursor = 0
+            for run in paragraph.runs:
+                cursor += len(run.text)
+                expected_font = "楷体_GB2312" if cursor <= period + 1 else "仿宋_GB2312"
+                self.assertEqual(_body_font(run), expected_font)
+
+    def test_standalone_heading_and_body_keep_existing_grid_behavior(self):
+        document = self._export(
+            [
+                ParagraphData(
+                    "独立标题",
+                    "heading2",
+                    "（一）独立标题",
+                    ParagraphFeatures(),
+                    meta={"numbering": "（一）"},
+                ),
+                ParagraphData(
+                    "这是普通正文。",
+                    "body",
+                    "这是普通正文。",
+                    ParagraphFeatures(),
+                ),
+            ],
+            processing_strategy="structural",
+        )
+
+        self.assertEqual(_snap_to_grid(document.paragraphs[0]), "0")
+        self.assertEqual(_snap_to_grid(document.paragraphs[1]), "1")
 
     def test_numbered_heading2_colon_skips_competing_inline_effects(self):
         paragraph = ParagraphData(

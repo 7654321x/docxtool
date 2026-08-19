@@ -114,6 +114,7 @@ def render_document_items(
                 and len(stripped_text[first_period + 1:].strip())
                 >= _INLINE_HEADING_BODY_MIN_CHARS
             )
+            inline_body_remains_in_paragraph = has_inline_body
             if (
                 not strict_preservation
                 and pd.type_id in ("heading1", "heading2", "heading3", "heading4")
@@ -291,6 +292,7 @@ def render_document_items(
                     body_style_id=_style_id_for_type("body", style_profile),
                 )
                 if body_para is not None:
+                    inline_body_remains_in_paragraph = False
                     body_text = body_para.text
                     inline_heading_body_pairs.append((para, body_para, expected_body_text))
                     stats["body"] += 1
@@ -418,7 +420,12 @@ def render_document_items(
 
             # 最终强制 snapToGrid
             pPr_final = para._element.get_or_add_pPr()
-            snap_val = '0' if pd.type_id in ('title', 'heading1', 'heading2', 'heading3', 'heading4') else '1'
+            heading_type = pd.type_id in ('title', 'heading1', 'heading2', 'heading3', 'heading4')
+            inline_body_uses_same_paragraph = (
+                pd.type_id.startswith('heading')
+                and (inline_body_remains_in_paragraph or inline_heading2_body)
+            )
+            snap_val = '0' if heading_type and not inline_body_uses_same_paragraph else '1'
             snap = OxmlElement('w:snapToGrid')
             snap.set(qn('w:val'), snap_val)
             _set_unique(pPr_final, qn('w:snapToGrid'), snap)

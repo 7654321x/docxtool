@@ -247,7 +247,9 @@ class SectionHeaderFooterTest(unittest.TestCase):
                     if not name.startswith("word/footer") or not name.endswith(".xml"):
                         continue
                     instructions = _field_instructions_from_part(zf, name)
-                    self.assertLessEqual(instructions.count("PAGE"), 1)
+                    # The official dash page number has one PAGE field in each
+                    # mutually exclusive AlternateContent branch.
+                    self.assertLessEqual(instructions.count("PAGE"), 2)
                     self.assertNotIn("NUMPAGES", instructions)
 
                 image_header = next(
