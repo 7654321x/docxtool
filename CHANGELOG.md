@@ -1,5 +1,11 @@
 # Changelog
 
+## 5.6.3 - 2026-08-19
+
+- Finalized the v1.0 Recognition diagnostic contract by preserving legacy limited/pre-veto fields and adding explicit competitive metrics.
+- Removed the duplicated hard-coded current-version fact from AGENTS.md.
+- Added regression coverage for diagnostic stage semantics, confidence, margins, quality metrics, and schema serialization.
+
 ## 5.6.2 - 2026-08-19
 
 - Closed the Recognition candidate lifecycle so global veto precedes candidate limiting, hard priority, and beam expansion.

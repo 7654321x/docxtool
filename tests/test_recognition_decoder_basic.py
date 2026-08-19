@@ -193,9 +193,48 @@ def test_global_veto_runs_before_candidate_limit():
 
     assert paragraph.type_id == "dispatch_number"
     diagnostic = data.recognition_diagnostics["paragraphs"][0]
+    summary = data.recognition_diagnostics["summary"]
+    assert diagnostic["candidate_count"] == 2
+    assert diagnostic["raw_candidate_count"] == 3
     assert diagnostic["vetoed_candidate_count"] == 2
     assert diagnostic["eligible_candidate_types"] == ["dispatch_number"]
     assert diagnostic["competitive_candidate_types"] == ["dispatch_number"]
+    assert summary["candidate_count_total"] == 2
+    assert summary["competitive_candidate_count_total"] == 1
+
+
+def test_diagnostic_quality_keeps_legacy_and_competitive_metrics_separate():
+    class MixedProvider:
+        name = "mixed-provider"
+
+        def propose(self, block, features, context):
+            return [
+                Candidate(ParagraphType.BODY, 0.85, self.name),
+                Candidate(ParagraphType.TITLE2, 0.98, self.name, hard=True),
+            ]
+
+    paragraph = _paragraph(
+        "下一步工作安排；",
+        "body",
+        0,
+        classification_kind="title2",
+        classification_confidence=0.95,
+    )
+    data = _document(paragraph)
+    apply_recognition_with_providers(
+        data,
+        RecognitionConfig(mode="authoritative"),
+        providers=(MixedProvider(),),
+    )
+
+    diagnostics = data.recognition_diagnostics
+    quality = diagnostics["candidate_quality"]
+    competitive_quality = diagnostics["competitive_candidate_quality"]
+    assert quality["single_candidate_count"] == 0
+    assert quality["double_candidate_count"] == 1
+    assert competitive_quality["single_candidate_count"] == 1
+    assert diagnostics["summary"]["candidate_count_total"] == 2
+    assert diagnostics["summary"]["competitive_candidate_count_total"] == 1
 
 
 def test_vetoed_candidate_is_not_a_review_competitor_but_remains_raw_audit():
@@ -225,7 +264,11 @@ def test_vetoed_candidate_is_not_a_review_competitor_but_remains_raw_audit():
 
     diagnostic = data.recognition_diagnostics["paragraphs"][0]
     trace = data.recognition_diagnostics["candidate_trace"][0]
-    assert diagnostic["candidate_margin"] is None
+    assert diagnostic["candidate_count"] == 2
+    assert diagnostic["competitive_candidate_count"] == 1
+    assert diagnostic["candidate_margin"] < 0
+    assert diagnostic["competitive_candidate_margin"] is None
+    assert diagnostic["competitive_recognition_confidence"] == 1.0
     assert diagnostic["competitive_candidate_types"] == ["body"]
     assert {item["type"] for item in trace["candidates"]} == {"body", "title2"}
     assert trace["vetoed_candidates"] == [
@@ -257,7 +300,12 @@ def test_valid_hard_candidate_still_has_priority_over_soft_candidate():
         providers=(MixedProvider(),),
     )
 
+    diagnostic = data.recognition_diagnostics["paragraphs"][0]
     assert paragraph.type_id == "note"
+    assert diagnostic["candidate_types"] == ["source_note", "body"]
+    assert diagnostic["competitive_candidate_types"] == ["source_note"]
+    assert diagnostic["candidate_margin"] < 0
+    assert diagnostic["competitive_candidate_margin"] is None
 
 
 def test_authoritative_recognition_fails_when_all_candidates_are_vetoed():
@@ -376,6 +424,43 @@ def test_diagnostics_json_is_safe_and_configurable():
     assert "标题" not in serialized
     assert '"beam_width": 12' in serialized
     assert "structure_tree" not in data.recognition_diagnostics
+
+def test_diagnostic_contract_keeps_schema_and_stage_names_explicit():
+    class MixedProvider:
+        name = "mixed-provider"
+
+        def propose(self, block, features, context):
+            return [
+                Candidate(ParagraphType.BODY, 0.85, self.name),
+                Candidate(ParagraphType.TITLE2, 0.98, self.name, hard=True),
+            ]
+
+    data = _document(
+        _paragraph(
+            "下一步工作安排；",
+            "body",
+            0,
+            classification_kind="title2",
+            classification_confidence=0.95,
+        )
+    )
+    apply_recognition_with_providers(
+        data,
+        RecognitionConfig(mode="authoritative"),
+        providers=(MixedProvider(),),
+    )
+
+    report = data.recognition_diagnostics
+    summary = report["summary"]
+    assert report["schema_version"] == "1.0"
+    assert summary["candidate_count_total"] == 2
+    assert summary["competitive_candidate_count_total"] == 1
+    assert "competitive_candidate_quality" in report
+    assert "competitive_recognition_confidence" in report["paragraphs"][0]
+    assert "competitive_candidate_margin" in report["paragraphs"][0]
+    serialized = diagnostics_to_json(report)
+    assert "competitive_candidate_quality" in serialized
+
 
 def test_dispatch_has_multiple_candidates_before_hard_veto():
     data = _document(

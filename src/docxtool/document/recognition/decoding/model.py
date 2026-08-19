@@ -27,8 +27,11 @@ class _Beam:
     types: tuple[ParagraphType, ...]
     reasons: tuple[str, ...]
     sections: tuple[SectionKind, ...]
+    # Diagnostic v1.0 compatibility: limited candidates before global veto.
     candidate_options: tuple[tuple[Candidate, ...], ...] = ()
     selected_candidates: tuple[Candidate, ...] = ()
+    # Additive lifecycle audit and competitive-path histories.
+    raw_candidate_options: tuple[tuple[Candidate, ...], ...] = ()
     vetoed_candidate_options: tuple[tuple[Candidate, ...], ...] = ()
     eligible_candidate_options: tuple[tuple[Candidate, ...], ...] = ()
     competitive_candidate_options: tuple[tuple[Candidate, ...], ...] = ()
