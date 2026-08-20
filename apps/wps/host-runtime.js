@@ -36,7 +36,7 @@
     "headings", "host_instance_id_short", "host_paragraph_index", "http_status", "interval_ms", "method",
     "operation_id_short", "pane_instance_id_present", "paragraph_count", "paragraphs", "path", "plan_id_short",
     "plugin_storage_available", "poll_interval_ms", "raw_length", "raw_present", "reason", "request_id", "request_key", "response_ok", "review", "review_count",
-    "stage", "start_utf16", "end_utf16", "table_paragraph_count", "token_present", "queued_count",
+    "stage", "start_utf16", "end_utf16", "status_bar_visible", "table_paragraph_count", "token_present", "queued_count",
     "characters_count", "first_ordinal", "end_ordinal", "first_boundary_present", "last_boundary_present", "set_range_available",
     "total_duration_ms", "type_id", "unresolved", "unresolved_count", "validated_count", "skipped_count",
     "failed_count", "wait_attempts", "request_status",
@@ -678,6 +678,32 @@
   function activeDocumentName() {
     const document = app && app.ActiveDocument;
     return document && document.Name ? String(document.Name).replace(/[\r\n]/g, " ").slice(0, 120) : "";
+  }
+
+  function forceStatusBarVisible(command, requestContext) {
+    try {
+      if (!app || !("DisplayStatusBar" in app)) {
+        throw new Error("WPS_STATUS_BAR_UNSUPPORTED");
+      }
+      if (app.DisplayStatusBar !== true) {
+        app.DisplayStatusBar = true;
+      }
+      if (app.DisplayStatusBar !== true) {
+        throw new Error("WPS_STATUS_BAR_READBACK_FAILED");
+      }
+      log("INFO", "host.ui_state.status_bar.enabled", "WPS 状态栏已强制开启", {
+        ...contextDetails(requestContext), command,
+        status_bar_visible: true
+      });
+      return true;
+    } catch (error) {
+      log("ERROR", "host.ui_state.status_bar.enable_failed", "WPS 状态栏强制开启失败", {
+        ...contextDetails(requestContext), command,
+        error_code: stableErrorCode(error, "WPS_STATUS_BAR_ENABLE_FAILED"),
+        error_type: error && error.name ? error.name : "Error"
+      });
+      return false;
+    }
   }
 
   function normalizePath(value) {
@@ -2767,11 +2793,16 @@
       });
       throw new Error("WPS_COMMAND_BUSY");
     }
-    if (name === "panel") { openTaskpane(); return; }
+    if (name === "panel") {
+      if (!forceStatusBarVisible(name, requestContext)) throw new Error("WPS_STATUS_BAR_ENABLE_FAILED");
+      openTaskpane();
+      return;
+    }
     busy = true;
     const startedAt = Date.now();
     log("INFO", "host.command.start", "WPS 命令开始执行", Object.assign(contextDetails(requestContext), { command: name }));
     try {
+      if (!forceStatusBarVisible(name, requestContext)) throw new Error("WPS_STATUS_BAR_ENABLE_FAILED");
       let documentContext = null;
       if (name === "preview" || name === "apply" || name === "inspect_letterhead" || name === "add_letterhead") {
         try {
@@ -2862,6 +2893,7 @@
       throw new Error(code);
     } finally {
       let flushError = "";
+      forceStatusBarVisible(name, requestContext);
       try {
         await flushStatePublication();
       } catch (error) {
@@ -3076,6 +3108,7 @@
       log("INFO", "host.storage.initialize.start", "开始验证 PluginStorage", {});
       if (!app || !app.PluginStorage) throw new Error("WPS_PLUGIN_STORAGE_UNAVAILABLE");
       log("INFO", "host.storage.initialize.completed", "PluginStorage 验证完成", {});
+      if (!forceStatusBarVisible("startup", null)) throw new Error("WPS_STATUS_BAR_ENABLE_FAILED");
       started = true;
       stage = "bridge_start";
       void startBridgeSession();

@@ -686,6 +686,71 @@ test("Host keeps a bridge document open while replacing and reopening the source
   }
 });
 
+test("Host forces the status bar on at startup and after formatting reopens the source", async () => {
+  const harness = makeHostHarness();
+  harness.application.DisplayStatusBar = false;
+  const openDocument = harness.application.Documents.Open.bind(
+    harness.application.Documents,
+  );
+  harness.application.Documents.Open = (path) => {
+    harness.application.DisplayStatusBar = false;
+    return openDocument(path);
+  };
+  harness.runtime.start();
+
+  assert.equal(harness.application.DisplayStatusBar, true);
+  await harness.runtime.runCommand(
+    "apply",
+    requestContext("apply", "request-status-bar-force"),
+  );
+
+  assert.equal(harness.application.DisplayStatusBar, true);
+});
+
+test("Host forces the status bar on when formatting fails", async () => {
+  const harness = makeHostHarness({
+    routeOverride: async ({ path, application }) => {
+      if (path !== "/v1/format/prepare") return null;
+      application.DisplayStatusBar = false;
+      return {
+        ok: false,
+        status: 500,
+        payload: { ok: false, error_code: "WPS_TEST_FORMAT_FAILED" },
+      };
+    },
+  });
+  harness.application.DisplayStatusBar = false;
+  harness.runtime.start();
+
+  await assert.rejects(
+    harness.runtime.runCommand(
+      "apply",
+      requestContext("apply", "request-status-bar-failure"),
+    ),
+    /WPS_TEST_FORMAT_FAILED/,
+  );
+
+  assert.equal(harness.application.DisplayStatusBar, true);
+});
+
+test("Host forces the status bar on after preview changes the host state", async () => {
+  const harness = makeHostHarness({
+    routeOverride: async ({ path, application }) => {
+      if (path === "/v1/recognize") application.DisplayStatusBar = false;
+      return null;
+    },
+  });
+  harness.application.DisplayStatusBar = false;
+  harness.runtime.start();
+
+  await harness.runtime.runCommand(
+    "preview",
+    requestContext("preview", "request-preview-status-bar"),
+  );
+
+  assert.equal(harness.application.DisplayStatusBar, true);
+});
+
 test("Host sends only the authorization identity to the local Engine route", async () => {
   const harness = makeHostHarness();
   harness.runtime.start();

@@ -204,6 +204,7 @@ function makeHostHarness({
   const deletedPaths = [];
   const application = {
     ActiveDocument: document,
+    DisplayStatusBar: true,
     PluginStorage: storage,
     ribbonUI: { Invalidate() {} },
     CreateTaskPane(...args) {

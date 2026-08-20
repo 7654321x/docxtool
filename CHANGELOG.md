@@ -1,5 +1,9 @@
 # Changelog
 
+## 5.7.2 - 2026-08-21
+
+- Made the WPS Host enforce the user-visible status bar after startup and after preview, formatting, document reopen, or command failure, with readback confirmation and focused runtime coverage.
+
 ## 5.7.1 - 2026-08-20
 
 - Corrected WPS preview ranges when grouped host characters do not match JavaScript Unicode ordinals, while preserving fail-fast handling for invalid UTF-16 boundaries.
