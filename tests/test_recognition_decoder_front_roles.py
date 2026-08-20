@@ -1,10 +1,12 @@
 """Tests split from test_recognition_decoder.py by responsibility."""
 
 
+from docx import Document
 import pytest
 from docxtool.document.recognition import (
     apply_recognition,
 )
+from docxtool.sdk import recognize_docx
 
 
 
@@ -503,6 +505,7 @@ def test_weak_four_character_person_name_requires_complete_centered_byline_conte
         ("专题调研", "2026年8月3日", "date_line"),
         ("工作报告", "2026年8月3日", "date_line"),
         ("情况分析", "各位代表、同志们：", "addressing"),
+        ("工作安排", "各位代表、同志们：", "addressing"),
     ],
 )
 def test_bare_four_character_title_continuation_does_not_become_role_name(
@@ -545,7 +548,7 @@ def test_bare_four_character_title_continuation_does_not_become_role_name(
         ("甲乙丙丁", True, True),
         ("甲乙丙丁", False, False),
         ("欧阳甲乙", False, True),
-        ("甲·乙", False, True),
+        ("甲·乙", False, False),
         ("XXX", False, True),
     ],
 )
@@ -576,6 +579,153 @@ def test_bare_person_name_fallback_uses_shared_shape_strength(
         if item["kind"] == "role_name"
     }
     assert (1 in context_roles) is expected_role
+
+
+@pytest.mark.parametrize("value", ["甲乙", "甲乙丙", "甲乙丙丁"])
+def test_bare_person_name_uses_title_to_addressing_front_window(value: str) -> None:
+    candidate = _paragraph(value, "body", 1)
+    data = _document(
+        _paragraph("主标题", "title", 0, alignment="CENTER"),
+        candidate,
+        _paragraph("各位代表、同志们：", "addressing", 2),
+        _paragraph("现将有关事项说明如下，请认真抓好落实。", "body", 3),
+    )
+
+    apply_recognition(data)
+
+    assert candidate.type_id == "role_name"
+    assert any(
+        item["position"] == 1 and item["kind"] == "role_name"
+        for item in data.recognition_diagnostics["document_context"]["front_metadata"]
+    )
+
+
+@pytest.mark.parametrize("value", ["甲·乙", "甲，乙", "甲乙。", "甲/乙"])
+def test_title_to_addressing_bare_person_name_rejects_punctuation(value: str) -> None:
+    candidate = _paragraph(value, "body", 1)
+    data = _document(
+        _paragraph("主标题", "title", 0, alignment="CENTER"),
+        candidate,
+        _paragraph("各位代表、同志们：", "addressing", 2),
+        _paragraph("现将有关事项说明如下，请认真抓好落实。", "body", 3),
+    )
+
+    apply_recognition(data)
+
+    assert candidate.type_id != "role_name"
+
+
+@pytest.mark.parametrize("value", ["甲乙", "甲乙丙", "甲乙丙丁"])
+def test_bare_person_name_after_title_before_body_without_addressing(
+    value: str,
+) -> None:
+    candidate = _paragraph(value, "body", 2)
+    data = _document(
+        _paragraph("主标题", "title", 0, alignment="CENTER"),
+        _paragraph("2026年8月24日", "date_line", 1, alignment="CENTER"),
+        candidate,
+        _paragraph("现将有关事项说明如下，请认真抓好落实。", "body", 3),
+    )
+
+    apply_recognition(data)
+
+    assert candidate.type_id == "role_name"
+
+
+def test_body_closes_bare_person_name_window() -> None:
+    candidate = _paragraph("甲乙丙", "body", 2)
+    data = _document(
+        _paragraph("主标题", "title", 0, alignment="CENTER"),
+        _paragraph("这是普通正文说明，内容已经完整结束。", "body", 1),
+        candidate,
+        _paragraph("各位代表、同志们：", "addressing", 3),
+    )
+
+    apply_recognition(data)
+
+    assert candidate.type_id != "role_name"
+
+
+def test_production_recognition_promotes_name_after_title_before_body(
+    tmp_path,
+) -> None:
+    source = tmp_path / "title-date-name-body.docx"
+    document = Document()
+    document.add_paragraph("年度工作报告", style="Title")
+    document.add_paragraph("2026年8月24日")
+    document.add_paragraph("甲乙丙")
+    document.add_paragraph("现将有关事项说明如下，请认真抓好落实。")
+    document.save(source)
+
+    plan = recognize_docx(
+        source,
+        processing_mode="structural",
+        recognition_mode="authoritative",
+        include_text=True,
+    )
+
+    assert [block.type_id for block in plan.blocks] == [
+        "title",
+        "date_line",
+        "role_name",
+        "body",
+    ]
+
+
+def test_bare_short_line_after_addressing_is_not_role_name() -> None:
+    candidate = _paragraph("甲乙丙丁", "body", 2)
+    data = _document(
+        _paragraph("主标题", "title", 0, alignment="CENTER"),
+        _paragraph("各位代表、同志们：", "addressing", 1),
+        candidate,
+        _paragraph("现将有关事项说明如下，请认真抓好落实。", "body", 3),
+    )
+
+    apply_recognition(data)
+
+    assert candidate.type_id != "role_name"
+
+
+def test_later_addressing_does_not_reopen_person_name_window() -> None:
+    candidate = _paragraph("甲乙丙丁", "body", 2)
+    data = _document(
+        _paragraph("主标题", "title", 0, alignment="CENTER"),
+        _paragraph("各位代表、同志们：", "addressing", 1),
+        candidate,
+        _paragraph("同志们：", "addressing", 3),
+        _paragraph("现将有关事项说明如下，请认真抓好落实。", "body", 4),
+    )
+
+    apply_recognition(data)
+
+    assert candidate.type_id != "role_name"
+
+
+def test_production_recognition_uses_title_to_addressing_for_four_char_name(
+    tmp_path,
+) -> None:
+    source = tmp_path / "title-name-addressing.docx"
+    document = Document()
+    document.add_paragraph("年度工作报告", style="Title")
+    document.add_paragraph("甲乙丙丁")
+    document.add_paragraph("各位代表、同志们：")
+    document.add_paragraph("现将有关事项说明如下，请认真抓好落实。")
+    document.save(source)
+
+    plan = recognize_docx(
+        source,
+        processing_mode="structural",
+        recognition_mode="authoritative",
+        include_text=True,
+    )
+
+    assert [block.type_id for block in plan.blocks] == [
+        "title",
+        "role_name",
+        "addressing",
+        "body",
+    ]
+
 
 def test_compound_surname_four_character_name_remains_strong_with_title_anchor():
     candidate = _paragraph("办公室主任 欧阳测试", "body", 1, alignment="CENTER")

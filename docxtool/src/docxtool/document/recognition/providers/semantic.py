@@ -35,38 +35,6 @@ class SemanticCandidateProvider:
             and score >= 0.48
         ):
             result.append(Candidate(ParagraphType.TITLE_CONTINUATION, max(0.86, min(0.95, score + 0.20)), self.name, ("front-title-continuation",), section_hint=SectionKind.HEADER))
-        family = global_context.heading_family(context.index)
-        if (
-            family is not None
-            and family.source_family == "legacy-heading"
-            and family.count >= 2
-            and family.parent_scope
-        ):
-            parent_levels = [
-                level
-                for level, position in enumerate(family.parent_scope, start=1)
-                if position >= 0
-            ]
-            if parent_levels:
-                target_level = max(parent_levels) + 1
-                if target_level < family.level:
-                    target_type = {
-                        2: ParagraphType.HEADING_2,
-                        3: ParagraphType.HEADING_3,
-                        4: ParagraphType.HEADING_4,
-                    }[target_level]
-                    result.append(Candidate(
-                        target_type,
-                        0.91,
-                        self.name,
-                        (
-                            "uniform-heading-sibling-family",
-                            f"parent-heading-level-{target_level - 1}",
-                            f"observed-heading-level-{family.level}",
-                        ),
-                        section_hint=SectionKind.BODY,
-                        heading_level=target_level,
-                    ))
         return result
 
 

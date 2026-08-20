@@ -12,6 +12,8 @@ from docxtool.document.segmentation import (
     set_source_locator,
     source_line_spans,
     trim_source_span,
+    validate_source_span_partition,
+    visible_character_count,
 )
 from docxtool.document.segmentation.source_locator import build_physical_source_features
 from docxtool.document.source_tape import canonicalize_text
@@ -23,6 +25,15 @@ def test_importer_reexports_segmentation_source_helpers():
     assert _set_source_locator is set_source_locator
     assert _source_line_spans is source_line_spans
     assert _trim_source_span is trim_source_span
+
+
+def test_zero_width_characters_are_not_visible_segmentation_content() -> None:
+    source = "\u200c\u200c\n正文\n\u200b\ufeff"
+
+    assert source_line_spans(source) == [(3, 5)]
+    assert trim_source_span("\u200c 正文 \u200b", 0, 6) == (2, 4)
+    assert visible_character_count(" \u200c正文\u200b ") == 2
+    validate_source_span_partition("正文\u200c\u200c", [(0, 2)])
 
 
 def test_build_physical_source_features_preserves_initial_locator_contract():

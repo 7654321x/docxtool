@@ -134,6 +134,45 @@ test("Host writes canonical review bindings as explicit review comments", async 
   assert.equal(state.preview_review_count, 1);
 });
 
+test("Host preview comments use Chinese format names without internal type ids", async () => {
+  const expectedByType = {
+    title: "主标题", title_cont: "主标题续行", dispatch_number: "发文字号",
+    addressing: "称呼", body: "正文",
+    heading1: "一级标题", heading2: "二级标题", heading3: "三级标题", heading4: "四级标题",
+    responsibility_line: "责任单位", meeting_meta: "会议信息", meeting_title_meta: "会议标题信息",
+    sign_org: "落款单位", sign_date: "落款日期", note: "来源或注释",
+    embedded_document_title: "内嵌文档标题", attachment_note: "附件说明",
+    attachment_title: "附件正文标题", date_line: "日期", author_line: "作者",
+    role_name: "职务姓名", title2: "正文标题", glossary_title: "名词解释标题",
+    glossary_item: "名词解释条目", attachment_note_item: "附件说明续项",
+    attachment_page_mark: "附件正文标记", attachment_body: "附件正文",
+    list: "列表", list_item: "列表项", quote: "引文", annotation: "注释", closing: "结束语",
+    number: "数字", letter: "字母", page_number: "页码", superscript: "上标",
+    __object_caption__: "对象题注", __table__: "表格", __image__: "图片",
+    __letterhead__: "版头", internal_future_type: "未知格式",
+  };
+  const entries = Object.entries(expectedByType);
+  const rawText = "A".repeat(entries.length);
+  const items = entries.map(([typeId], index) => (
+    bindingItem(rawText, index, index + 1, index, { type_id: typeId })
+  ));
+  const harness = makeHostHarness({ rawText, bindingItems: items });
+  harness.runtime.start();
+
+  await harness.runtime.runCommand(
+    "preview",
+    requestContext("preview", "request-chinese-format-names"),
+  );
+
+  assert.deepEqual(
+    harness.comments.created.map((item) => item.Text.match(/^识别格式：([^；]+)/)?.[1]),
+    entries.map(([, roleName]) => roleName),
+  );
+  for (const comment of harness.comments.created) {
+    assert.doesNotMatch(comment.Text, /\b[a-z][a-z0-9_]*\b/i);
+  }
+});
+
 test("Host rejects a changed canonical review Range before Comments.Add", async () => {
   const reviewItem = bindingItem("ABCD", 0, 4, 0, {
     binding_status: "review",
@@ -155,6 +194,91 @@ test("Host rejects a changed canonical review Range before Comments.Add", async 
   assert.equal(harness.comments.created.length, 0);
   assert.ok(harness.events().includes("preview.range.fragment_mismatch"));
   assert.ok(!harness.events().includes("preview.comment.created"));
+});
+
+test("Host logs safe boundary diagnostics when the final preview character is unavailable", async () => {
+  const harness = makeHostHarness();
+  const characters = harness.document.Paragraphs.Item(1).Range.Characters;
+  const originalItem = characters.Item.bind(characters);
+  characters.Count = 4;
+  characters.Item = (index) => Number(index) === 4 ? null : originalItem(index);
+  harness.runtime.start();
+
+  await assert.rejects(
+    harness.runtime.runCommand(
+      "preview",
+      requestContext("preview", "request-boundary-diagnostics"),
+    ),
+    /PREVIEW_RANGE_BOUNDARY_INVALID/,
+  );
+
+  const failure = harness.logs.find((item) => item.event === "preview.range.boundary_invalid");
+  assert.ok(failure);
+  assert.deepEqual(
+    {
+      host_paragraph_index: failure.details.host_paragraph_index,
+      start_utf16: failure.details.start_utf16,
+      end_utf16: failure.details.end_utf16,
+      raw_length: failure.details.raw_length,
+      characters_count: failure.details.characters_count,
+      first_ordinal: failure.details.first_ordinal,
+      end_ordinal: failure.details.end_ordinal,
+      first_boundary_present: failure.details.first_boundary_present,
+      last_boundary_present: failure.details.last_boundary_present,
+      set_range_available: failure.details.set_range_available,
+    },
+    {
+      host_paragraph_index: 0,
+      start_utf16: 0,
+      end_utf16: 4,
+      raw_length: 4,
+      characters_count: 4,
+      first_ordinal: 0,
+      end_ordinal: 4,
+      first_boundary_present: true,
+      last_boundary_present: false,
+      set_range_available: true,
+    },
+  );
+  assert.equal(harness.comments.created.length, 0);
+});
+
+test("Host maps UTF-16 preview offsets through WPS grouped character ranges", async () => {
+  const rawText = "A\u0301B\u0301C\u0301D\u0301E\u0301F";
+  const groupedCharacters = ["A\u0301", "B\u0301", "C\u0301", "D\u0301", "E\u0301", "F"];
+  const startUtf16 = 2;
+  const endUtf16 = 10;
+  const harness = makeHostHarness({
+    rawText,
+    bindingItems: [bindingItem(rawText, startUtf16, endUtf16)],
+  });
+  const characters = harness.document.Paragraphs.Item(1).Range.Characters;
+  characters.Count = groupedCharacters.length;
+  characters.Item = (index) => {
+    const ordinal = Number(index) - 1;
+    if (ordinal < 0 || ordinal >= groupedCharacters.length) return null;
+    return {
+      Start: ordinal,
+      End: ordinal + 1,
+      Text: groupedCharacters[ordinal],
+      SetRange(nextStart, nextEnd) {
+        this.Start = nextStart;
+        this.End = nextEnd;
+        this.Text = groupedCharacters.slice(nextStart, nextEnd).join("");
+      },
+    };
+  };
+  harness.runtime.start();
+
+  await harness.runtime.runCommand(
+    "preview",
+    requestContext("preview", "request-grouped-character-range"),
+  );
+
+  assert.equal(harness.comments.created.length, 1);
+  assert.equal(harness.comments.created[0].Range.Text, rawText.slice(startUtf16, endUtf16));
+  assert.ok(harness.events().includes("preview.range.revalidate.completed"));
+  assert.ok(!harness.events().includes("preview.range.boundary_invalid"));
 });
 
 test("Host writes confirmed and review comments but skips unresolved blocks", async () => {

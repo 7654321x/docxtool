@@ -1,5 +1,13 @@
 # Changelog
 
+## 5.7.0 - 2026-08-20
+
+- Made the main-title lifecycle single-start, preserved later body subheadings, and strengthened front-matter role-name recognition across blank semantic neighbors.
+- Split standalone addressing after soft line breaks while preserving ordinary soft breaks, and prevented glossary explanations from splitting on remote historical bold formatting.
+- Corrected ordinary date and role-name layout, including bold KaiTi dates with zero paragraph spacing and the confirmed centered role-name spacing contract.
+- Added stable WPS preview diagnostics and Chinese structure labels for user-facing review, and documented the complete document structure, type mapping, and formatting specification.
+- Expanded focused Recognition, segmentation, rendering, WPS runtime, and source-locator regression coverage; synchronized the Ubuntu deployment package.
+
 ## 5.6.4 - 2026-08-19
 
 - Added the latest Recognition front-role and boundary refinements with focused regression coverage.

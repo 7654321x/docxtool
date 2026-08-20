@@ -164,6 +164,28 @@ def analyze_document_context(features: list[ParagraphFeatures]) -> DocumentConte
         if _document_type_title_suffix(features[position])
     }
     body_first_heading_title_positions = _front_titles_before_body_and_first_heading(features)
+    front_title_anchor_positions = {
+        position
+        for position in front_scan_positions
+        if (
+            features[position].legacy_type_id in {"title", "title_cont"}
+            or _style_name(features[position].style_name) in _TITLE_STYLE_NAMES
+            or features[position].title_shape_score >= 0.5
+            or _SPEECH_TITLE_RE.fullmatch(features[position].compact_text)
+        )
+    } | document_type_title_positions | body_first_heading_title_positions
+    first_front_addressing_position = next(
+        (
+            position
+            for position in front_scan_positions
+            if _front_recipient_line(features[position])
+        ),
+        None,
+    )
+    title_opening_window_has_closure = bool(
+        first_front_addressing_position is not None
+        or front_scan_reason == "body-boundary"
+    )
     title_scores: list[float] = [0.0] * count
     title_reasons: list[tuple[str, ...]] = [()] * count
     front_metadata_kinds: list[str | None] = [None] * count
@@ -175,6 +197,14 @@ def analyze_document_context(features: list[ParagraphFeatures]) -> DocumentConte
         following = features[following_position] if following_position is not None else None
         previous_position = _previous_semantic_position(features, position - 1)
         previous = features[previous_position] if previous_position is not None else None
+        within_title_opening_window = bool(
+            any(anchor < position for anchor in front_title_anchor_positions)
+            and title_opening_window_has_closure
+            and (
+                first_front_addressing_position is None
+                or position < first_front_addressing_position
+            )
+        )
         if not item.compact_text or item.dispatch_number_match or item.recipient_match:
             continue
         if _head_meeting_title_date(item, previous, following):
@@ -190,14 +220,24 @@ def analyze_document_context(features: list[ParagraphFeatures]) -> DocumentConte
         if _head_date_line(item):
             front_metadata_kinds[position] = "date_line"
             continue
-        if _head_role_name(item, previous, following):
+        if _head_role_name(
+            item,
+            previous,
+            following,
+            within_title_opening_window=within_title_opening_window,
+        ):
             front_metadata_kinds[position] = "role_name"
             continue
         # Existing role/name and date metadata is stronger than title-like
         # visual formatting.  These lines commonly inherit bold, centering and
         # a large font from a copied title block; scoring them as titles lets a
         # later decoder overwrite a reliable document-front structure.
-        if _title_metadata(item, previous, following):
+        if _title_metadata(
+            item,
+            previous,
+            following,
+            within_title_opening_window=within_title_opening_window,
+        ):
             continue
         if item.attachment_note_match or item.key_value_label or _body_like(item):
             continue

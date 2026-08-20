@@ -80,6 +80,7 @@ def should_split_structural_line_breaks(
     is_tail_signature_org_func: Callable[[str], bool],
     is_role_name_line_func: Callable[[str], bool],
     is_header_role_date_pair_func: Callable[[str, str], bool],
+    is_standalone_addressing_func: Callable[[str], bool],
 ) -> bool:
     """判断一个物理段内的软换行是否应拆成逻辑段。
 
@@ -117,6 +118,8 @@ def should_split_structural_line_breaks(
     if is_role_name_line_func(last_line):
         return True
     if len(nonempty) >= 2 and is_header_role_date_pair_func(nonempty[0], nonempty[1]):
+        return True
+    if any(is_standalone_addressing_func(part) for part in nonempty[1:]):
         return True
 
     next_visible_line = next(

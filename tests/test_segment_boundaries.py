@@ -43,6 +43,7 @@ def _soft_break_decision(parts: list[str], next_text: str = "") -> bool:
         is_tail_signature_org_func=lambda text: (text or "").strip() == "测试单位",
         is_role_name_line_func=lambda text: "  " in (text or ""),
         is_header_role_date_pair_func=lambda left, right: "主席" in (left or "") and (right or "").startswith("（"),
+        is_standalone_addressing_func=importer_module._is_standalone_addressing_text,
     )
 
 
@@ -193,6 +194,81 @@ def test_bold_glossary_prefix_does_not_split_later_sentences() -> None:
     ) == [(0, len(source))]
 
 
+def test_numbered_glossary_item_does_not_split_normal_explanation_sentences() -> None:
+    source = "21.人工林近自然化改造：普通解释第一句。普通解释第二句。普通解释第三句。"
+    features = _features_for_bold_prefix(source, source.index("：") + 1)
+
+    assert _segment_boundary_candidates(source, 0, len(source), features) == ()
+    assert _split_inline_heading_body_spans(
+        source,
+        0,
+        len(source),
+        features,
+    ) == [(0, len(source))]
+
+
+def test_numbered_explanatory_heading_still_splits_at_local_format_transition() -> None:
+    source = "1.强化组织领导：明确工作责任。各部门要结合实际认真执行。"
+    boundary = source.index("。") + 1
+    features = _features_for_visual_boundary(source, boundary)
+
+    assert [
+        source[start:end]
+        for start, end in _split_inline_heading_body_spans(
+            source,
+            0,
+            len(source),
+            features,
+        )
+    ] == ["1.强化组织领导：明确工作责任。", "各部门要结合实际认真执行。"]
+
+
+def test_sdk_drops_zero_width_glossary_tail_and_zero_width_only_paragraph(
+    tmp_path,
+) -> None:
+    source = tmp_path / "glossary-zero-width.docx"
+    first_text = "21.人工林近自然化改造：普通解释第一句。普通解释第二句。普通解释第三句。"
+    second_text = "22.山林季相和林相：这是下一条完整解释。"
+    document = Document()
+    title = document.add_paragraph("人民检察院工作报告")
+    title.alignment = 1
+    title.runs[0].bold = True
+    document.add_paragraph("正文已经开始并完整说明工作背景和基本情况。")
+    glossary_title = document.add_paragraph("名词解释")
+    glossary_title.paragraph_format.page_break_before = True
+    first = document.add_paragraph()
+    first.add_run("21.人工林近自然化改造：").bold = True
+    first.add_run("普通解释第一句。普通解释第二句。普通解释第三句。\u200c\u200c\u200c\u200c\u200c")
+    document.add_paragraph("\u200c\u200c")
+    second = document.add_paragraph()
+    second.add_run("22.山林季相和林相：").bold = True
+    second.add_run("这是下一条完整解释。")
+    document.save(source)
+
+    plan = recognize_docx(
+        source,
+        processing_mode="structural",
+        recognition_mode="authoritative",
+        include_text=True,
+    )
+    first_blocks = [
+        block for block in plan.blocks if block.physical_paragraph_index == 3
+    ]
+
+    assert [(block.type_id, block.recognized_text) for block in first_blocks] == [
+        ("glossary_item", first_text),
+    ]
+    assert first_blocks[0].segment_count_total == 1
+    assert not any(
+        block.physical_paragraph_index == 4 for block in plan.blocks
+    )
+    assert [
+        (block.type_id, block.recognized_text)
+        for block in plan.blocks
+        if block.physical_paragraph_index == 5
+    ] == [("glossary_item", second_text)]
+
+
 def test_heading_has_inline_body_shared_boundary_helper() -> None:
     """验证标题正文粘连边界 helper 与旧 importer 入口保持一致。"""
     assert heading_has_inline_body("一、标题。正文内容不少于五字")
@@ -214,6 +290,9 @@ def test_soft_break_decision_uses_structural_evidence_without_final_type() -> No
     assert _soft_break_decision(["责任单位：办公室", "责任单位：研究室"])
     assert _soft_break_decision(["测试单位", "2026年5月1日"])
     assert _soft_break_decision(["正文结束", "测试单位"], "2026年5月1日")
+    assert _soft_break_decision(["正文最后一段完整结束。", "各位委员、同志们！"])
+    assert _soft_break_decision(["正文最后一段完整结束。", "各位委员、同志们："])
+    assert _soft_break_decision(["正文最后一段完整结束。", "同志们！"])
     assert not _soft_break_decision(["普通正文第一行", "普通正文第二行"])
 
 
@@ -590,4 +669,43 @@ def test_sdk_locates_heading_body_and_later_salutation_without_gaps(tmp_path) ->
     assert [block.recognized_text for block in blocks] == [
         "一、总体要求。", "正文内容完整保留。", "各位委员、同志们！",
     ]
+    assert all(block.locator_verified for block in blocks)
+
+
+@pytest.mark.parametrize(
+    ("break_count", "addressing_text"),
+    [
+        (4, "各位委员、同志们！"),
+        (1, "各位委员、同志们："),
+    ],
+)
+def test_sdk_splits_body_tail_standalone_addressing_soft_lines(
+    tmp_path,
+    break_count: int,
+    addressing_text: str,
+) -> None:
+    source = tmp_path / f"body-tail-addressing-{break_count}.docx"
+    body_text = "正文最后一段完整结束。"
+    document = Document()
+    document.add_paragraph("年度工作报告", style="Title")
+    document.add_paragraph("现将有关工作情况报告如下，请认真审议。")
+    paragraph = document.add_paragraph()
+    paragraph.add_run(body_text)
+    for _unused in range(break_count):
+        paragraph.add_run().add_break(WD_BREAK.LINE)
+    paragraph.add_run(addressing_text)
+    document.save(source)
+
+    plan = recognize_docx(
+        source,
+        processing_mode="structural",
+        recognition_mode="authoritative",
+        include_text=True,
+    )
+    blocks = [block for block in plan.blocks if block.physical_paragraph_index == 2]
+
+    assert [block.type_id for block in blocks] == ["body", "addressing"]
+    assert [block.recognized_text for block in blocks] == [body_text, addressing_text]
+    assert [block.segment_index for block in blocks] == [0, 1]
+    assert {block.segment_count_total for block in blocks} == {2}
     assert all(block.locator_verified for block in blocks)

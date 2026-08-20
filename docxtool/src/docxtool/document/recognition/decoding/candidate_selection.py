@@ -114,21 +114,6 @@ def _extra_candidates(
                     section_hint=SectionKind.EMBEDDED_DOCUMENT,
                 )
             )
-    if (
-        context.mode == DocumentMode.MEETING_MINUTES
-        and features.key_value_label in _MEETING_LABELS
-        and not features.numbered_heading2_colon_inline_body
-    ):
-        result.append(
-            Candidate(
-                ParagraphType.MEETING_META,
-                1.0,
-                "meeting",
-                ("meeting-metadata",),
-                hard=True,
-                section_hint=SectionKind.MEETING_META,
-            )
-        )
     return result
 
 
@@ -170,6 +155,24 @@ def _candidates(
             ]
         result.extend(proposed)
     result.extend(_extra_candidates(block, features, context, previous_features, lookahead))
+    if (
+        context.main_title_started
+        and result
+        and all(
+            candidate.paragraph_type
+            in {ParagraphType.MAIN_TITLE, ParagraphType.TITLE_CONTINUATION}
+            for candidate in result
+        )
+    ):
+        result.append(
+            Candidate(
+                ParagraphType.BODY,
+                0.45,
+                "lifecycle",
+                ("main-title-already-started",),
+                section_hint=SectionKind.BODY,
+            )
+        )
     # One provider may emit the same type more than once. Keep its strongest,
     # deterministic candidate and retain the evidence from the strongest source.
     strongest: dict[ParagraphType, Candidate] = {}

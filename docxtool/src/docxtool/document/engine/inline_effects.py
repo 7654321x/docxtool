@@ -215,16 +215,21 @@ def apply_responsibility_line(paragraph, text: str) -> None:
 
 def apply_glossary_item(paragraph, text: str, rule) -> None:
     """渲染名词解释条目；传入段落、文本和规则，返回 None。"""
-    if len(paragraph.runs) < 2:
+    if not paragraph.runs:
         return
     colon_position = _first_colon(text)
     if colon_position <= 0:
         return
     keyword = text[:colon_position + 1]
     body = text[colon_position + 1:]
-    paragraph.runs[-1].text = ""
+    # ``Document.add_paragraph(text)`` creates one run for the whole line.
+    # Reuse that run for the glossary label and clear any additional direct
+    # runs before appending the body, so existing text is not duplicated.
+    keyword_run = paragraph.runs[0]
+    for run in paragraph.runs:
+        run.text = ""
+    keyword_run.text = keyword
 
-    keyword_run = paragraph.add_run(keyword)
     keyword_run.font.name = "黑体"
     set_run_fonts(keyword_run, cn_font="黑体", en_font="Times New Roman")
     keyword_run.font.size = Pt(rule.font_size_pt)

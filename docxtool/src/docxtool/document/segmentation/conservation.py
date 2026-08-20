@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import re
 from typing import Tuple
+
+from docxtool.document.segmentation.source_locator import visible_character_count
 
 
 def validate_source_span_partition(source: str, spans: list[Tuple[int, int]]) -> None:
@@ -18,8 +19,8 @@ def validate_source_span_partition(source: str, spans: list[Tuple[int, int]]) ->
     for start, end in spans:
         if start < previous_end or start >= end or end > len(source):
             raise ValueError("结构分段范围重叠或越界")
-        if re.sub(r"\s+", "", source[previous_end:start]):
+        if visible_character_count(source[previous_end:start]):
             raise ValueError("结构分段遗漏了原始可见文字")
         previous_end = end
-    if re.sub(r"\s+", "", source[previous_end:]):
+    if visible_character_count(source[previous_end:]):
         raise ValueError("结构分段遗漏了原始可见文字")

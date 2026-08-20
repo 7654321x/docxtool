@@ -99,6 +99,27 @@ class LegacyCandidateProvider:
 
     def propose(self, block, features, context):
         paragraph_type = _legacy_type(block.raw_reference)
+        if (
+            paragraph_type
+            in {ParagraphType.MAIN_TITLE, ParagraphType.TITLE_CONTINUATION}
+            and context.document_context is not None
+            and not context.document_context.before_body(context.index)
+        ):
+            return []
+        current_level = {
+            ParagraphType.HEADING_1,
+            ParagraphType.HEADING_2,
+            ParagraphType.HEADING_3,
+            ParagraphType.HEADING_4,
+        }
+        if (
+            paragraph_type in current_level
+            and features.heading_shape_level is None
+            and features.native_numbering_level is None
+            and not features.is_bold
+            and not features.is_docxtool_style
+        ):
+            return []
         weak = {
             ParagraphType.MAIN_TITLE,
             ParagraphType.TITLE_CONTINUATION,

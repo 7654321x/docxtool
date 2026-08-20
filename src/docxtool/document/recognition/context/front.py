@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 
 from ...role_shape import (
     PERSON_NAME_RE,
@@ -112,6 +113,8 @@ def _head_role_name(
     feature: ParagraphFeatures,
     previous: ParagraphFeatures | None = None,
     following: ParagraphFeatures | None = None,
+    *,
+    within_title_opening_window: bool = False,
 ) -> bool:
     """Recognize a front-matter role/name line without using a name list."""
     text = feature.raw_text.strip()
@@ -146,12 +149,18 @@ def _head_role_name(
             and feature.is_centered
         ):
             return True
+    bare_name_has_punctuation = any(
+        unicodedata.category(character).startswith("P")
+        for character in compact
+    )
+    strength = (
+        person_name_shape_strength(compact)
+        if not bare_name_has_punctuation and is_person_name_suffix(compact)
+        else None
+    )
+    if within_title_opening_window and strength is not None:
+        return True
     if previous is not None and following is not None:
-        strength = (
-            person_name_shape_strength(compact)
-            if is_person_name_suffix(compact)
-            else None
-        )
         if previous_front_metadata_anchor and following_metadata:
             if strength == "strong":
                 return True
@@ -161,7 +170,13 @@ def _head_role_name(
                 or style in _TITLE_STYLE_NAMES
                 or style in _HEADING_STYLE_NAMES
             )
-            if strength == "weak" and feature.is_centered and not weak_title_evidence:
+            if (
+                strength == "weak"
+                and (
+                    feature.is_centered
+                    and not weak_title_evidence
+                )
+            ):
                 return True
     return False
 
@@ -170,10 +185,17 @@ def _title_metadata(
     feature: ParagraphFeatures,
     previous: ParagraphFeatures | None = None,
     following: ParagraphFeatures | None = None,
+    *,
+    within_title_opening_window: bool = False,
 ) -> bool:
     if _head_date_line(feature):
         return True
-    return _head_role_name(feature, previous, following)
+    return _head_role_name(
+        feature,
+        previous,
+        following,
+        within_title_opening_window=within_title_opening_window,
+    )
 
 
 def _front_semantic_item(feature: ParagraphFeatures) -> bool:

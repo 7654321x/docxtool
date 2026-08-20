@@ -2,13 +2,28 @@
 
 from __future__ import annotations
 
-import re
 from collections import Counter
 from typing import Callable, Iterable, Optional, Tuple
 
 from docxtool.document.effective_format import FORMAT_COVERAGE_CONFIRMED
 from docxtool.document.models import ParagraphFeatures
 from docxtool.document.source_tape import SourceTape, canonicalize_text, utf16_length
+
+
+_STRUCTURALLY_INVISIBLE_CHARACTERS = frozenset(
+    "\u200b\u200c\u200d\u2060\ufeff"
+)
+
+
+def is_structurally_invisible_character(value: str) -> bool:
+    """返回单个字符在逻辑分段中是否不构成可见正文。"""
+    return bool(
+        value
+        and (
+            value.isspace()
+            or value in _STRUCTURALLY_INVISIBLE_CHARACTERS
+        )
+    )
 
 
 def utf16_length_of(value: str) -> int:
@@ -55,9 +70,9 @@ def trim_source_span(source: str, start: int, end: int) -> Tuple[int, int]:
     传入数据是源文本和 code-point 起止位置。返回值是修剪后的起止位置，
     供拆段和 locator 映射使用。
     """
-    while start < end and source[start].isspace():
+    while start < end and is_structurally_invisible_character(source[start]):
         start += 1
-    while end > start and source[end - 1].isspace():
+    while end > start and is_structurally_invisible_character(source[end - 1]):
         end -= 1
     return start, end
 
@@ -89,7 +104,11 @@ def visible_character_count(value: str) -> int:
     传入数据是一段文本。返回值是用于边界阈值、格式覆盖和加粗比例计算
     的可见字符数量。
     """
-    return len(re.sub(r"\s+", "", value or ""))
+    return sum(
+        1
+        for character in value or ""
+        if not is_structurally_invisible_character(character)
+    )
 
 
 def set_source_locator(
@@ -161,8 +180,7 @@ def apply_segment_format_features(
         overlap_end = min(end, run.end)
         if overlap_start >= overlap_end:
             continue
-        visible = re.sub(r"\s+", "", source[overlap_start:overlap_end])
-        count = len(visible)
+        count = visible_character_count(source[overlap_start:overlap_end])
         if not count:
             continue
         run_count += 1

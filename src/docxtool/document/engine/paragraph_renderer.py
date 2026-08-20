@@ -87,8 +87,8 @@ def render_document_items(
             # meta → 重写规则（按文种分派）
             resolved = _resolve_rule(pd, raw_rule, rules)
 
-            # 空行插入（三号 16pt 行距 28 磅）
-            # date_line 后的留白由段后间距控制，避免生成真实空段落。
+            # 空行插入（三号 16pt 行距 28 磅）。普通日期行不生成空段，
+            # 也不参与标题区到正文区的一行留白。
             need_gap = (prev_was_title and is_head_gap_follow_type(pd.type_id)
                         and prev_type_id not in ("date_line", "role_name")
                         and pd.text.strip())
@@ -240,7 +240,13 @@ def render_document_items(
                     line_twips=line_twips,
                 )
             elif pd.type_id == "date_line":
-                _set_para_spacing(para, before_lines=0, after_lines=1, line_twips=line_twips)
+                _set_para_spacing(
+                    para,
+                    before_lines=0,
+                    after_lines=0,
+                    line_twips=line_twips,
+                    explicit_zero=True,
+                )
             elif pd.type_id == "addressing" and body_flow_started:
                 # Opening salutations keep the configured one-line gap.  A
                 # repeated salutation inside or after the speech body is part

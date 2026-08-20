@@ -9,6 +9,7 @@ from docxtool.document.models import ParagraphFeatures, SegmentBoundaryCandidate
 from docxtool.document.recognition.model import DocumentMode
 from docxtool.document.segmentation import conservation as conservation_module
 from docxtool.document.segmentation.source_locator import (
+    is_structurally_invisible_character,
     source_line_spans,
     trim_source_span,
     visible_character_count,
@@ -16,7 +17,6 @@ from docxtool.document.segmentation.source_locator import (
 
 
 _ANNUAL_REVIEW_HEADING_PREFIXES = ("一年来", "五年来")
-_ZERO_WIDTH_RE = re.compile(r"[\u200b\u200c\u200d\u2060\ufeff]")
 
 
 def _is_annual_review_inline_heading(text: str, period_index: int, body_count: int) -> bool:
@@ -61,7 +61,7 @@ def has_format_transition(
             )
             for position in positions:
                 character = source[position] if position < len(source) else ""
-                if character.isspace() or _ZERO_WIDTH_RE.fullmatch(character):
+                if is_structurally_invisible_character(character):
                     continue
                 distance = boundary - position if left_side else position - boundary
                 if nearest_distance is None or distance < nearest_distance:
@@ -169,6 +169,13 @@ def segment_boundary_candidates(
         body_count = visible_character_count(source[body_start:body_end])
         literal_numbered = bool(detect_numbering_prefix_func(left))
         visual_transition = has_format_transition(features, start, boundary, end)
+        numbered_explanatory_body = bool(
+            literal_numbered
+            and colon.explanatory_body_candidate
+            and colon.separator_index is not None
+            and colon.separator_index < period_index
+            and not visual_transition
+        )
         source_numbering = str(
             getattr(features, "segment_numbering_features", "")
             or getattr(features, "numbering_prefix", "")
@@ -181,7 +188,9 @@ def segment_boundary_candidates(
             document_mode is DocumentMode.REPORT
             and _is_annual_review_inline_heading(text, period_index, body_count)
         )
-        numbered = literal_numbered or native_list_heading
+        numbered = (
+            literal_numbered and not numbered_explanatory_body
+        ) or native_list_heading
         if literal_numbered:
             boundary_evidence = "NUMBERED_HEADING_TERMINATOR"
         elif native_list_heading:

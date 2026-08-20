@@ -7,14 +7,14 @@ import re
 
 ROLE_HINT_RE = re.compile(
     r"(?:书记|主任|主席|部长|局长|处长|科长|司长|厅长|市长|县长|区长|"
-    r"镇长|乡长|院长|校长|政委|组长|队长|秘书长|委员|常委|负责人|"
+    r"镇长|乡长|院长|检察长|校长|政委|组长|队长|秘书长|委员|常委|负责人|"
     r"经理|总监|工程师|专员|督导员|顾问|总会计师|总经济师|同志|代表)"
 )
 _PERSON_NAME_PATTERN = r"(?:[\u4e00-\u9fff×X]{2,4}|[\u4e00-\u9fff×X]{1,2}·[\u4e00-\u9fff×X]{1,2})"
 PERSON_NAME_RE = re.compile(_PERSON_NAME_PATTERN + r"$")
 NON_PERSON_SUFFIX_RE = re.compile(
     r"(?:报告|总结|方案|计划|意见|通知|办法|材料|讲话|发言|纪要|决定|"
-    r"决议|规定|制度|会议|工作)$"
+    r"决议|规定|制度|会议|工作|调研|分析|安排|部署|说明|情况)$"
 )
 _ROLE_CONNECTION_SUFFIX_RE = re.compile(r"(?:[、，,/／&]|兼|及|和|与)+$")
 _SPACED_NAME_RE = re.compile(

@@ -4,6 +4,7 @@ from pathlib import Path
 
 from docx import Document
 from docx import Document as DocxDocument
+from docx.enum.text import WD_BREAK
 
 from docxtool.document.importing.features import extract_paragraph_features
 from docxtool.document.importing.numbering import detect_numbering_prefix
@@ -89,3 +90,58 @@ def test_segmenter_preserves_visible_text_and_source_anchor_after_reader(tmp_pat
     assert all(line[2].source_physical_paragraph_index == 0 for line in text_lines)
     assert text_lines[0][2].source_start_utf16 == 0
     assert text_lines[-1][2].source_end_utf16 == len(source_text)
+
+
+def test_segmenter_splits_body_tail_addressing_and_drops_soft_break_tokens(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "body-tail-addressing.docx"
+    body_text = "正文最后一段完整结束。"
+    addressing_text = "各位委员、同志们！"
+    document = Document()
+    paragraph = document.add_paragraph()
+    paragraph.add_run(body_text)
+    for _unused in range(4):
+        paragraph.add_run().add_break(WD_BREAK.LINE)
+    paragraph.add_run(addressing_text)
+    document.save(source)
+
+    data = DocumentData()
+    raw_blocks = read_body_blocks(
+        DocxDocument(source),
+        data,
+        strict_preservation=False,
+        protected_letterhead_indexes=set(),
+        extract_features_func=_features,
+    )
+    logical_lines = build_logical_lines(
+        raw_blocks,
+        strict_preservation=False,
+        structural_preservation=True,
+        split_inline_heading_body_enabled=True,
+        normalize_text_func=lambda text: text,
+        source_starts_body_region_func=importer_module._source_starts_body_region,
+        split_inline_heading_body_spans_func=(
+            importer_module._split_inline_heading_body_spans
+        ),
+        validate_numbered_heading_body_split_func=(
+            importer_module._validate_numbered_heading_body_split
+        ),
+        should_split_structural_line_breaks_func=(
+            importer_module._should_split_structural_line_breaks
+        ),
+        split_structural_tail_after_numbered_heading_func=(
+            importer_module._split_structural_tail_after_numbered_heading
+        ),
+        validate_source_span_partition_func=(
+            importer_module._validate_source_span_partition
+        ),
+        detect_numbering_prefix_func=importer_module._detect_numbering_prefix,
+        inline_lead_bold_func=importer_module._has_inline_lead_bold_transition,
+    )
+    text_lines = [line for line in logical_lines if line[0] == "text"]
+
+    assert [line[1] for line in text_lines] == [body_text, addressing_text]
+    assert [line[3] for line in text_lines] == [[], []]
+    assert [line[2].segment_index for line in text_lines] == [0, 1]
+    assert {line[2].segment_count for line in text_lines} == {2}

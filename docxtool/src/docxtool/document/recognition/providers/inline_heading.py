@@ -15,16 +15,16 @@ class InlineHeadingCandidateProvider:
     name = "inline-heading"
 
     def propose(self, block, features, context):
-        if (
-            context.mode is not DocumentMode.REPORT
-            or features.compact_text not in _ANNUAL_REVIEW_HEADINGS
-        ):
+        if features.compact_text not in _ANNUAL_REVIEW_HEADINGS:
             return []
+        if context.mode is not DocumentMode.REPORT:
+            return []
+        evidence = ["annual-review-heading", "report-mode-prior"]
         return [Candidate(
             ParagraphType.HEADING_1,
             0.94,
             self.name,
-            ("annual-review-heading",),
+            tuple(evidence),
             hard=True,
             section_hint=SectionKind.BODY,
             heading_level=1,

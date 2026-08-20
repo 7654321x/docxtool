@@ -87,8 +87,8 @@ def render_document_items(
             # meta → 重写规则（按文种分派）
             resolved = _resolve_rule(pd, raw_rule, rules)
 
-            # 空行插入（三号 16pt 行距 28 磅）
-            # date_line 后的留白由段后间距控制，避免生成真实空段落。
+            # 空行插入（三号 16pt 行距 28 磅）。普通日期行不生成空段，
+            # 也不参与标题区到正文区的一行留白。
             need_gap = (prev_was_title and is_head_gap_follow_type(pd.type_id)
                         and prev_type_id not in ("date_line", "role_name")
                         and pd.text.strip())
@@ -114,6 +114,7 @@ def render_document_items(
                 and len(stripped_text[first_period + 1:].strip())
                 >= _INLINE_HEADING_BODY_MIN_CHARS
             )
+            inline_body_remains_in_paragraph = has_inline_body
             if (
                 not strict_preservation
                 and pd.type_id in ("heading1", "heading2", "heading3", "heading4")
@@ -208,6 +209,8 @@ def render_document_items(
             if pd.type_id == "dispatch_number":
                 para.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 _apply_first_line_indent_chars(para, 0)
+            elif pd.type_id == "title2":
+                _apply_first_line_indent_chars(para, 0)
 
             # GB/T 9704 落款位置：发文机关右空 2 字，成文日期右空 4 字。
             # 直接格式固定最终位置，避免浏览器旧配置覆盖规范值。
@@ -237,7 +240,13 @@ def render_document_items(
                     line_twips=line_twips,
                 )
             elif pd.type_id == "date_line":
-                _set_para_spacing(para, before_lines=0, after_lines=1, line_twips=line_twips)
+                _set_para_spacing(
+                    para,
+                    before_lines=0,
+                    after_lines=0,
+                    line_twips=line_twips,
+                    explicit_zero=True,
+                )
             elif pd.type_id == "addressing" and body_flow_started:
                 # Opening salutations keep the configured one-line gap.  A
                 # repeated salutation inside or after the speech body is part
@@ -289,6 +298,7 @@ def render_document_items(
                     body_style_id=_style_id_for_type("body", style_profile),
                 )
                 if body_para is not None:
+                    inline_body_remains_in_paragraph = False
                     body_text = body_para.text
                     inline_heading_body_pairs.append((para, body_para, expected_body_text))
                     stats["body"] += 1
@@ -416,7 +426,12 @@ def render_document_items(
 
             # 最终强制 snapToGrid
             pPr_final = para._element.get_or_add_pPr()
-            snap_val = '0' if pd.type_id in ('title', 'heading1', 'heading2', 'heading3', 'heading4') else '1'
+            heading_type = pd.type_id in ('title', 'heading1', 'heading2', 'heading3', 'heading4')
+            inline_body_uses_same_paragraph = (
+                pd.type_id.startswith('heading')
+                and (inline_body_remains_in_paragraph or inline_heading2_body)
+            )
+            snap_val = '0' if heading_type and not inline_body_uses_same_paragraph else '1'
             snap = OxmlElement('w:snapToGrid')
             snap.set(qn('w:val'), snap_val)
             _set_unique(pPr_final, qn('w:snapToGrid'), snap)

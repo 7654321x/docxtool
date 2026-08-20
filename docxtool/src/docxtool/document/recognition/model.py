@@ -99,3 +99,5 @@ class RecognitionSummary:
     candidate_count_total: int
     max_candidate_count: int
     beam_width: int
+    competitive_candidate_count_total: int = 0
+    max_competitive_candidate_count: int = 0

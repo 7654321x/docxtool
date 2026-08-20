@@ -11,7 +11,7 @@
     { "name": "页码设置", "font": "宋体", "size": "四号", "bold": false, "pattern": "— 1 —", "lang": "阿拉伯数字", "indent": 0, "align": "奇右|偶左" },
     { "name": "正文上标", "font": "Times New Roman", "size": "三号", "bold": false, "pattern": "[n]", "lang": "阿拉伯数字", "indent": 0, "align": "左对齐" },
     { "name": "称呼", "font": "仿宋_GB2312", "size": "三号", "bold": false, "pattern": "", "lang": "", "indent": 0, "align": "左对齐", "spacing_before": 1, "spacing_after": 0, "left_indent": 0, "right_indent": 0, "page_break_before": false },
-    { "name": "日期行", "font": "楷体_GB2312", "size": "三号", "bold": false, "pattern": "", "lang": "", "indent": 0, "align": "居中", "spacing_before": 1, "spacing_after": 0, "left_indent": 0, "right_indent": 0, "page_break_before": false },
+    { "name": "日期行", "font": "楷体_GB2312", "size": "三号", "bold": true, "pattern": "", "lang": "", "indent": 0, "align": "居中", "spacing_before": 1, "spacing_after": 0, "left_indent": 0, "right_indent": 0, "page_break_before": false },
     { "name": "作者行", "font": "楷体_GB2312", "size": "三号", "bold": true, "pattern": "", "lang": "", "indent": 0, "align": "居中", "spacing_before": 0, "spacing_after": 0, "left_indent": 0, "right_indent": 0, "page_break_before": false },
     { "name": "职务名称", "font": "楷体_GB2312", "size": "三号", "bold": true, "pattern": "", "lang": "", "indent": 0, "align": "居中", "spacing_before": 0, "spacing_after": 0, "left_indent": 0, "right_indent": 0, "page_break_before": false },
     { "name": "居中小标题", "font": "黑体", "size": "三号", "bold": false, "pattern": "", "lang": "", "indent": 0, "align": "居中", "spacing_before": 1, "spacing_after": 1, "left_indent": 0, "right_indent": 0, "page_break_before": false },

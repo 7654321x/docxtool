@@ -534,6 +534,7 @@ def _should_split_structural_line_breaks(parts: list[str], next_text: str) -> bo
         is_tail_signature_org_func=_is_tail_signature_org_text,
         is_role_name_line_func=_is_role_name_line,
         is_header_role_date_pair_func=_is_header_role_date_pair,
+        is_standalone_addressing_func=_is_standalone_addressing_text,
     )
 
 

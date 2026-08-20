@@ -22,6 +22,14 @@ def test_system_default_profile_makes_heading3_bold():
     assert heading3["bold"] is True
 
 
+def test_system_default_profile_makes_front_date_bold_kaiti_gb2312():
+    styles = load_active_format_profile()["format_config"]["styles"]
+    date_line = next(style for style in styles if style["name"] == "日期行")
+
+    assert date_line["font"] == "楷体_GB2312"
+    assert date_line["bold"] is True
+
+
 def test_profiles_are_isolated_by_account_and_restore_after_relogin(tmp_path):
     store = FormatProfileStore(tmp_path / "format_profiles.db")
     first = store.create("wusr_a", "机关模板", _config())

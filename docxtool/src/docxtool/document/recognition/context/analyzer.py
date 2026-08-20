@@ -20,6 +20,7 @@ from .front import (
     _body_like,
     _front_scan_positions,
     _front_semantic_item,
+    _front_recipient_line,
     _head_date_line,
     _head_meeting_title_date,
     _head_role_name,
@@ -55,11 +56,10 @@ _BODY_FIRST_HEADING_LOOKAHEAD = 4
 
 
 def _context_heading_level(item: ParagraphFeatures) -> int | None:
-    """Return explicit numbering level or the observed legacy heading level."""
+    """Return the canonical heading level used by hierarchy analysis."""
     if item.heading_shape_level is not None:
         return item.heading_shape_level
-    match = re.fullmatch(r"heading([1-4])", str(item.legacy_type_id or ""))
-    return int(match.group(1)) if match else None
+    return item.native_numbering_level
 
 
 def _document_type_title_suffix(item: ParagraphFeatures) -> bool:
@@ -117,7 +117,7 @@ def _front_titles_before_body_and_first_heading(
         if 4 <= features[position].text_length <= 60
         and not features[position].dispatch_number_match
         and not features[position].date_match
-        and not features[position].recipient_match
+        and not _front_recipient_line(features[position])
         and not features[position].key_value_label
         and not features[position].attachment_note_match
         and not features[position].heading_shape_level
@@ -164,6 +164,28 @@ def analyze_document_context(features: list[ParagraphFeatures]) -> DocumentConte
         if _document_type_title_suffix(features[position])
     }
     body_first_heading_title_positions = _front_titles_before_body_and_first_heading(features)
+    front_title_anchor_positions = {
+        position
+        for position in front_scan_positions
+        if (
+            features[position].legacy_type_id in {"title", "title_cont"}
+            or _style_name(features[position].style_name) in _TITLE_STYLE_NAMES
+            or features[position].title_shape_score >= 0.5
+            or _SPEECH_TITLE_RE.fullmatch(features[position].compact_text)
+        )
+    } | document_type_title_positions | body_first_heading_title_positions
+    first_front_addressing_position = next(
+        (
+            position
+            for position in front_scan_positions
+            if _front_recipient_line(features[position])
+        ),
+        None,
+    )
+    title_opening_window_has_closure = bool(
+        first_front_addressing_position is not None
+        or front_scan_reason == "body-boundary"
+    )
     title_scores: list[float] = [0.0] * count
     title_reasons: list[tuple[str, ...]] = [()] * count
     front_metadata_kinds: list[str | None] = [None] * count
@@ -171,9 +193,18 @@ def analyze_document_context(features: list[ParagraphFeatures]) -> DocumentConte
 
     for position in front_scan_positions:
         item = features[position]
-        following = features[position + 1] if position + 1 < count else None
+        following_position = _next_semantic_position(features, position + 1)
+        following = features[following_position] if following_position is not None else None
         previous_position = _previous_semantic_position(features, position - 1)
         previous = features[previous_position] if previous_position is not None else None
+        within_title_opening_window = bool(
+            any(anchor < position for anchor in front_title_anchor_positions)
+            and title_opening_window_has_closure
+            and (
+                first_front_addressing_position is None
+                or position < first_front_addressing_position
+            )
+        )
         if not item.compact_text or item.dispatch_number_match or item.recipient_match:
             continue
         if _head_meeting_title_date(item, previous, following):
@@ -189,14 +220,24 @@ def analyze_document_context(features: list[ParagraphFeatures]) -> DocumentConte
         if _head_date_line(item):
             front_metadata_kinds[position] = "date_line"
             continue
-        if _head_role_name(item, previous, following):
+        if _head_role_name(
+            item,
+            previous,
+            following,
+            within_title_opening_window=within_title_opening_window,
+        ):
             front_metadata_kinds[position] = "role_name"
             continue
         # Existing role/name and date metadata is stronger than title-like
         # visual formatting.  These lines commonly inherit bold, centering and
         # a large font from a copied title block; scoring them as titles lets a
         # later decoder overwrite a reliable document-front structure.
-        if _title_metadata(item, previous, following):
+        if _title_metadata(
+            item,
+            previous,
+            following,
+            within_title_opening_window=within_title_opening_window,
+        ):
             continue
         if item.attachment_note_match or item.key_value_label or _body_like(item):
             continue
@@ -248,7 +289,12 @@ def analyze_document_context(features: list[ParagraphFeatures]) -> DocumentConte
         ][:4]
         for candidate in following_positions:
             following = features[candidate]
-            following_next = features[candidate + 1] if candidate + 1 < count else None
+            following_next_position = _next_semantic_position(features, candidate + 1)
+            following_next = (
+                features[following_next_position]
+                if following_next_position is not None
+                else None
+            )
             if following.dispatch_number_match:
                 score += 0.14
                 evidence.append("following-dispatch-number")
@@ -306,7 +352,8 @@ def analyze_document_context(features: list[ParagraphFeatures]) -> DocumentConte
         while cursor_index < len(following_front_positions):
             cursor = following_front_positions[cursor_index]
             item = features[cursor]
-            following = features[cursor + 1] if cursor + 1 < count else None
+            following_position = _next_semantic_position(features, cursor + 1)
+            following = features[following_position] if following_position is not None else None
             previous_position = _previous_semantic_position(features, cursor - 1)
             previous = features[previous_position] if previous_position is not None else None
             if _title_metadata(item, previous, following) or title_scores[cursor] >= 0.48:
@@ -364,8 +411,6 @@ def analyze_document_context(features: list[ParagraphFeatures]) -> DocumentConte
             active_heading_stack.get(parent_level, -1) for parent_level in range(1, level)
         )
         source_family = item.native_numbering_family
-        if item.heading_shape_level is None:
-            source_family = "legacy-heading"
         family_key = (level, parent_scope, source_family)
         by_family.setdefault(family_key, []).append(position)
         next_item = features[position + 1] if position + 1 < count else None

@@ -396,7 +396,7 @@ class EngineHeadingSpacingTest(unittest.TestCase):
                 else:
                     self.assertEqual(doc.paragraphs[1].text, "")
 
-    def test_date_line_uses_spacing_after_without_blank_paragraph(self):
+    def test_date_line_uses_zero_spacing_without_blank_paragraph(self):
         doc = self._export([
             ParagraphData(
                 text="（2026年7月  日）",
@@ -415,7 +415,8 @@ class EngineHeadingSpacingTest(unittest.TestCase):
         ])
 
         self.assertEqual([p.text for p in doc.paragraphs[:2]], ["（2026年7月  日）", "正文内容正文内容。"])
-        self.assertEqual(_spacing_after_lines(doc.paragraphs[0]), "100")
+        self.assertEqual(_spacing_before_lines(doc.paragraphs[0]), "0")
+        self.assertEqual(_spacing_after_lines(doc.paragraphs[0]), "0")
 
     def test_opening_addressing_keeps_configured_one_line_before_spacing(self):
         doc = self._export([
@@ -474,7 +475,8 @@ class EngineHeadingSpacingTest(unittest.TestCase):
             ["区政协副主席   杨明远", "（2026年7月  日）", "正文内容正文内容。"],
         )
         self.assertIn(_spacing_after_lines(doc.paragraphs[0]), (None, "0"))
-        self.assertEqual(_spacing_after_lines(doc.paragraphs[1]), "100")
+        self.assertEqual(_spacing_before_lines(doc.paragraphs[1]), "0")
+        self.assertEqual(_spacing_after_lines(doc.paragraphs[1]), "0")
 
     def test_role_name_after_multiline_title_has_one_line_before_spacing(self):
         doc = self._export([

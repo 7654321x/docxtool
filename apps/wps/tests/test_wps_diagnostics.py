@@ -392,6 +392,12 @@ def test_log_detail_contract_keeps_diagnostics_and_rejects_sensitive_fields():
             "document_id_short": "doc-1234",
             "operation_id_short": "operation-12",
             "plan_id_short": "plan-1234",
+            "characters_count": 85,
+            "first_ordinal": 0,
+            "end_ordinal": 86,
+            "first_boundary_present": True,
+            "last_boundary_present": False,
+            "set_range_available": True,
             "body": "private body",
             "source_path": "C:/private/document.docx",
             "raw_text": "private body",
@@ -418,6 +424,12 @@ def test_log_detail_contract_keeps_diagnostics_and_rejects_sensitive_fields():
         "document_id_short": "doc-1234",
         "operation_id_short": "operation-12",
         "plan_id_short": "plan-1234",
+        "characters_count": 85,
+        "first_ordinal": 0,
+        "end_ordinal": 86,
+        "first_boundary_present": True,
+        "last_boundary_present": False,
+        "set_range_available": True,
     }
     assert server_module._safe_log_details({"path": "/v1/health"}) == {
         "path": "/v1/health"

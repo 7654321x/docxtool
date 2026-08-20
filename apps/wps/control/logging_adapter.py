@@ -65,6 +65,7 @@ SAFE_WPS_LOG_FIELDS = frozenset(
         "physical_occurrence_index", "physical_paragraph_index", "physical_text_length_utf16",
         "poll_interval_ms", "port", "previous_state", "previous_status", "primary_error_code", "punctuation_safe_enabled",
         "process_count", "queued_count", "raw_length", "raw_present", "readback_present", "reader_client_height", "reader_scroll_height", "reader_scroll_top", "rendered_paragraph_count", "requested_start_offset",
+        "characters_count", "first_ordinal", "end_ordinal", "first_boundary_present", "last_boundary_present", "set_range_available",
         "navigation_mode", "overlap_px", "page_distance_px", "progress_offset", "progress_percent", "scroll_top_before", "scroll_top_after", "line_height_px", "speed", "previous_window_end_offset",
         "reason", "recognition_mode", "recommended_action", "replaced", "request_id", "request_id_match",
         "request_key", "request_status", "response_ok", "return_code", "review", "review_count",

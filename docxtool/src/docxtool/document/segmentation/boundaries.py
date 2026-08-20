@@ -9,6 +9,7 @@ from docxtool.document.models import ParagraphFeatures, SegmentBoundaryCandidate
 from docxtool.document.recognition.model import DocumentMode
 from docxtool.document.segmentation import conservation as conservation_module
 from docxtool.document.segmentation.source_locator import (
+    is_structurally_invisible_character,
     source_line_spans,
     trim_source_span,
     visible_character_count,
@@ -41,26 +42,49 @@ def has_format_transition(
     """
     if not features or not features.source_run_spans:
         return False
-    left = []
-    right = []
-    for run in features.source_run_spans:
-        if min(boundary, run.end) > max(start, run.start):
-            left.append(run)
-        if min(end, run.end) > max(boundary, run.start):
-            right.append(run)
-    if not left or not right:
+    source = str(getattr(features, "source_physical_text", "") or "")
+
+    def nearest_run(*, left_side: bool):
+        nearest = None
+        nearest_distance = None
+        for run in features.source_run_spans:
+            overlap_start = max(start, run.start)
+            overlap_end = min(boundary, run.end) if left_side else min(end, run.end)
+            if not left_side:
+                overlap_start = max(boundary, run.start)
+            if overlap_start >= overlap_end:
+                continue
+            positions = (
+                range(overlap_end - 1, overlap_start - 1, -1)
+                if left_side
+                else range(overlap_start, overlap_end)
+            )
+            for position in positions:
+                character = source[position] if position < len(source) else ""
+                if is_structurally_invisible_character(character):
+                    continue
+                distance = boundary - position if left_side else position - boundary
+                if nearest_distance is None or distance < nearest_distance:
+                    nearest = run
+                    nearest_distance = distance
+                break
+        return nearest
+
+    left = nearest_run(left_side=True)
+    right = nearest_run(left_side=False)
+    if left is None or right is None:
         return False
-    left_bold = any(run.bold is True for run in left)
-    right_bold = any(run.bold is True for run in right)
+    left_bold = left.bold is True
+    right_bold = right.bold is True
     if left_bold != right_bold:
         return True
-    left_sizes = [run.font_size_pt for run in left if run.font_size_pt is not None]
-    right_sizes = [run.font_size_pt for run in right if run.font_size_pt is not None]
-    if left_sizes and right_sizes and max(left_sizes) >= max(right_sizes) + 1.0:
+    if (
+        left.font_size_pt is not None
+        and right.font_size_pt is not None
+        and left.font_size_pt >= right.font_size_pt + 1.0
+    ):
         return True
-    left_fonts = {run.font_name for run in left if run.font_name}
-    right_fonts = {run.font_name for run in right if run.font_name}
-    return bool(left_fonts and right_fonts and left_fonts != right_fonts)
+    return bool(left.font_name and right.font_name and left.font_name != right.font_name)
 
 
 def heading_has_inline_body(text: str) -> bool:
@@ -145,6 +169,13 @@ def segment_boundary_candidates(
         body_count = visible_character_count(source[body_start:body_end])
         literal_numbered = bool(detect_numbering_prefix_func(left))
         visual_transition = has_format_transition(features, start, boundary, end)
+        numbered_explanatory_body = bool(
+            literal_numbered
+            and colon.explanatory_body_candidate
+            and colon.separator_index is not None
+            and colon.separator_index < period_index
+            and not visual_transition
+        )
         source_numbering = str(
             getattr(features, "segment_numbering_features", "")
             or getattr(features, "numbering_prefix", "")
@@ -157,7 +188,9 @@ def segment_boundary_candidates(
             document_mode is DocumentMode.REPORT
             and _is_annual_review_inline_heading(text, period_index, body_count)
         )
-        numbered = literal_numbered or native_list_heading
+        numbered = (
+            literal_numbered and not numbered_explanatory_body
+        ) or native_list_heading
         if literal_numbered:
             boundary_evidence = "NUMBERED_HEADING_TERMINATOR"
         elif native_list_heading:
@@ -165,16 +198,21 @@ def segment_boundary_candidates(
         else:
             boundary_evidence = "VISUAL_TITLE_TERMINATOR"
         if body_count >= 5 and (numbered or visual_transition or annual_review_heading):
+            evidence = [
+                "ANNUAL_REVIEW_HEADING_TERMINATOR"
+                if annual_review_heading
+                else boundary_evidence,
+                "VISIBLE_BODY_AFTER_TERMINATOR",
+            ]
+            if annual_review_heading and document_mode is DocumentMode.REPORT:
+                evidence.append("REPORT_MODE_PRIOR")
             candidates.append(SegmentBoundaryCandidate(
                 raw_start=start,
                 raw_end=boundary,
                 left_type_hint="heading" if numbered or annual_review_heading else "title_or_heading",
                 right_type_hint="body",
                 confidence=0.99 if numbered else 0.84,
-                evidence=(
-                    "ANNUAL_REVIEW_HEADING_TERMINATOR" if annual_review_heading else boundary_evidence,
-                    "VISIBLE_BODY_AFTER_TERMINATOR",
-                ),
+                evidence=tuple(evidence),
             ))
 
     return tuple(sorted(candidates, key=lambda item: (-item.confidence, item.raw_end)))

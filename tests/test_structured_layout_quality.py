@@ -120,6 +120,30 @@ def test_exported_nonempty_paragraphs_have_structural_pstyle_and_no_numpr(tmp_pa
     assert _pstyle(paragraphs[2]) == "DCT-Body"
 
 
+def test_front_date_line_uses_bold_kaiti_gb2312(tmp_path: Path) -> None:
+    output = tmp_path / "front-date.docx"
+    date_text = "（2026年8月24日在会议上）"
+    data = DocumentData(
+        paragraphs=[
+            ParagraphData(date_text, "date_line", date_text, ParagraphFeatures()),
+        ],
+        filepath="generated.docx",
+    )
+
+    export_doc(data, _rules(), PageSettings(), str(output))
+    assert validate_docx_integrity(output).ok is True
+    paragraph = _paragraphs(_document_xml(output))[0]
+    visible_runs = [run for run in paragraph.findall("w:r", NS) if _text(run)]
+
+    assert _pstyle(paragraph) == "DCT-Date"
+    assert _text(paragraph) == date_text
+    assert {
+        run.find("w:rPr/w:rFonts", NS).get(qn("w:eastAsia"))
+        for run in visible_runs
+    } == {"楷体_GB2312"}
+    assert all(bold for text, bold in _run_text_and_bold(paragraph) if text)
+
+
 def test_heading_body_responsibility_and_attachment_styles_are_applied(tmp_path: Path) -> None:
     output = tmp_path / "structured.docx"
     _export_sample(output)

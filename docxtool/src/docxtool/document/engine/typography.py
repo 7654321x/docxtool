@@ -56,6 +56,12 @@ def apply_superscript_split(paragraph) -> None:
             if not part:
                 continue
             new_run = paragraph.add_run(part)
+            source_rpr = run._element.find(qn("w:rPr"))
+            if source_rpr is not None:
+                destination_rpr = new_run._element.find(qn("w:rPr"))
+                if destination_rpr is not None:
+                    new_run._element.remove(destination_rpr)
+                new_run._element.insert(0, copy.deepcopy(source_rpr))
             if superscript_pattern.match(part):
                 number = re.search(r"\d+", part).group()
                 new_run.text = f"[{number}]"

@@ -37,6 +37,7 @@
     "operation_id_short", "pane_instance_id_present", "paragraph_count", "paragraphs", "path", "plan_id_short",
     "plugin_storage_available", "poll_interval_ms", "raw_length", "raw_present", "reason", "request_id", "request_key", "response_ok", "review", "review_count",
     "stage", "start_utf16", "end_utf16", "table_paragraph_count", "token_present", "queued_count",
+    "characters_count", "first_ordinal", "end_ordinal", "first_boundary_present", "last_boundary_present", "set_range_available",
     "total_duration_ms", "type_id", "unresolved", "unresolved_count", "validated_count", "skipped_count",
     "failed_count", "wait_attempts", "request_status",
     "deleted_count", "document_id_short", "event_sequence", "log_file", "pending_present", "slot_occupied",
@@ -59,15 +60,28 @@
   ]);
 
   const roleNames = {
-    main_title: "主标题", title_continuation: "主标题续行",
+    title: "主标题", main_title: "主标题",
+    title_cont: "主标题续行", title_continuation: "主标题续行",
+    dispatch_number: "发文字号",
     heading1: "一级标题", heading2: "二级标题", heading3: "三级标题", heading4: "四级标题",
-    body: "正文", recipient: "称呼", role_name: "职务姓名",
+    body: "正文", addressing: "称呼", recipient: "称呼",
+    responsibility_line: "责任单位", key_value: "责任单位",
+    meeting_meta: "会议信息", meeting_title_meta: "会议标题信息",
+    date_line: "日期", author_line: "作者", role_name: "职务姓名",
+    title2: "正文标题", glossary_title: "名词解释标题", glossary_item: "名词解释条目",
+    sign_org: "落款单位", signature_org: "落款单位",
+    sign_date: "落款日期", signature_date: "落款日期",
+    note: "来源或注释", source_note: "来源或注释",
+    embedded_document_title: "内嵌文档标题",
     attachment_note: "附件说明", attachment_note_item: "附件说明续项",
     attachment_title: "附件正文标题", attachment_page_mark: "附件正文标记", attachment_body: "附件正文",
-    signature_org: "落款署名", signature_date: "落款日期", caption: "对象题注", unknown: "未知"
+    list: "列表", list_item: "列表项", quote: "引文", annotation: "注释", closing: "结束语",
+    number: "数字", letter: "字母", page_number: "页码", superscript: "上标",
+    __table__: "表格", __image__: "图片", __letterhead__: "版头",
+    __object_caption__: "对象题注", caption: "对象题注", unknown: "未知格式"
   };
   function displayRole(item) {
-    const role = roleNames[item.type_id] || item.type_id || "未知";
+    const role = roleNames[item.type_id] || "未知格式";
     return item.inline_body ? `${role}+行内正文` : role;
   }
 
@@ -788,6 +802,52 @@
     throw new Error("HOST_RANGE_UTF16_BOUNDARY_INVALID");
   }
 
+  function mapWpsCharacterBoundaries(characters, startUtf16, endUtf16) {
+    let count;
+    try {
+      count = Number(characters.Count);
+    } catch (_) {
+      throw new Error("PREVIEW_RANGE_CHARACTER_LOOKUP_FAILED");
+    }
+    if (!Number.isInteger(count) || count < 1) {
+      return { first: null, last: null, firstOrdinal: null, endOrdinal: null };
+    }
+    let position = 0;
+    let first = null;
+    let last = null;
+    let firstOrdinal = null;
+    let endOrdinal = null;
+    for (let ordinal = 0; ordinal < count && position < endUtf16; ordinal += 1) {
+      let current;
+      let text;
+      try {
+        current = characters.Item(ordinal + 1);
+        if (!current) break;
+        text = stripWpsTerminator(current.Text);
+      } catch (_) {
+        throw new Error("PREVIEW_RANGE_CHARACTER_LOOKUP_FAILED");
+      }
+      const nextPosition = position + text.length;
+      if (!first && position === startUtf16 && nextPosition > position) {
+        first = current;
+        firstOrdinal = ordinal;
+      }
+      if (nextPosition === endUtf16 && nextPosition > position) {
+        last = current;
+        endOrdinal = ordinal + 1;
+      }
+      if (
+        nextPosition > endUtf16
+        || (position < startUtf16 && nextPosition > startUtf16)
+      ) {
+        throw new Error("HOST_RANGE_UTF16_BOUNDARY_INVALID");
+      }
+      position = nextPosition;
+      if (first && last) break;
+    }
+    return { first, last, firstOrdinal, endOrdinal };
+  }
+
   async function currentDocumentPathHash(requireDocx = true) {
     const path = requireDocx ? savedDocxPath() : savedDocumentPath();
     return sha256(normalizePath(path));
@@ -1065,17 +1125,54 @@
     if (!item.raw_fragment_sha256 || await sha256(fragment) !== item.raw_fragment_sha256) throw new Error("PREVIEW_RANGE_HASH_MISMATCH");
     const characters = paragraphRange.Characters;
     if (!characters || typeof characters.Item !== "function") throw new Error("PREVIEW_CHARACTERS_UNSUPPORTED");
-    const firstOrdinal = characterOrdinalAtUtf16Offset(raw, item.host_raw_start_utf16);
-    const endOrdinal = characterOrdinalAtUtf16Offset(raw, item.host_raw_end_utf16);
+    let firstOrdinal = characterOrdinalAtUtf16Offset(raw, item.host_raw_start_utf16);
+    let endOrdinal = characterOrdinalAtUtf16Offset(raw, item.host_raw_end_utf16);
     let first;
     let last;
     try {
       first = characters.Item(firstOrdinal + 1);
       last = characters.Item(endOrdinal);
     } catch (_) {
-      throw new Error("PREVIEW_RANGE_CHARACTER_LOOKUP_FAILED");
+      first = null;
+      last = null;
     }
-    if (!first || !last || typeof first.SetRange !== "function") throw new Error("PREVIEW_RANGE_BOUNDARY_INVALID");
+    if (!first || !last || typeof first.SetRange !== "function") {
+      const mapped = mapWpsCharacterBoundaries(
+        characters,
+        item.host_raw_start_utf16,
+        item.host_raw_end_utf16
+      );
+      first = mapped.first;
+      last = mapped.last;
+      if (Number.isInteger(mapped.firstOrdinal)) firstOrdinal = mapped.firstOrdinal;
+      if (Number.isInteger(mapped.endOrdinal)) endOrdinal = mapped.endOrdinal;
+    }
+    const firstBoundaryPresent = Boolean(first);
+    const lastBoundaryPresent = Boolean(last);
+    const setRangeAvailable = Boolean(first && typeof first.SetRange === "function");
+    if (!firstBoundaryPresent || !lastBoundaryPresent || !setRangeAvailable) {
+      let charactersCount = null;
+      try {
+        const count = Number(characters.Count);
+        if (Number.isFinite(count)) charactersCount = count;
+      } catch (_) {
+        charactersCount = null;
+      }
+      const error = new Error("PREVIEW_RANGE_BOUNDARY_INVALID");
+      error.previewBoundaryDetails = {
+        host_paragraph_index: item.host_paragraph_index,
+        start_utf16: item.host_raw_start_utf16,
+        end_utf16: item.host_raw_end_utf16,
+        raw_length: raw.length,
+        characters_count: charactersCount,
+        first_ordinal: firstOrdinal,
+        end_ordinal: endOrdinal,
+        first_boundary_present: firstBoundaryPresent,
+        last_boundary_present: lastBoundaryPresent,
+        set_range_available: setRangeAvailable
+      };
+      throw error;
+    }
     try {
       first.SetRange(Number(first.Start), Number(last.End));
     } catch (_) {
@@ -1255,7 +1352,11 @@
           range = await previewRange(document, item);
         } catch (error) {
           const errorCode = stableErrorCode(error, "WPS_PREVIEW_RANGE_VALIDATION_FAILED");
+          const boundaryDetails = error && error.previewBoundaryDetails && typeof error.previewBoundaryDetails === "object"
+            ? error.previewBoundaryDetails
+            : {};
           log("ERROR", previewRangeFailureEvent(errorCode), "预览范围校验失败", Object.assign(contextDetails(requestContext), {
+            ...boundaryDetails,
             block_index: item.block_index, error_code: errorCode,
             error_type: error && error.name ? error.name : "Error"
           }));

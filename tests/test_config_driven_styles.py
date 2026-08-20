@@ -308,6 +308,10 @@ class ConfigDrivenStylesTest(unittest.TestCase):
 
         self.assertTrue(canonical["styles"][3]["bold"])
         self.assertTrue(StyleRule.default_for_row(3).bold)
+        self.assertEqual(canonical["styles"][11]["font"], "楷体_GB2312")
+        self.assertTrue(canonical["styles"][11]["bold"])
+        self.assertEqual(StyleRule.default_for_row(11).font, "楷体_GB2312")
+        self.assertTrue(StyleRule.default_for_row(11).bold)
 
         for index, item in enumerate(canonical["styles"][:10]):
             self.assertEqual(rules[index].font, item["font"])
