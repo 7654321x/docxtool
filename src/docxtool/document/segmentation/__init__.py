@@ -33,7 +33,10 @@ from docxtool.document.segmentation.pipeline import (
     LogicalSpanPlan,
     build_logical_span_plan,
 )
-from docxtool.document.segmentation.soft_breaks import should_split_structural_line_breaks
+from docxtool.document.segmentation.soft_breaks import (
+    should_split_structural_line_breaks,
+    split_standalone_addressing_spans,
+)
 from docxtool.document.segmentation.soft_breaks import (
     is_header_role_date_pair,
     is_dispatch_number_line,
@@ -62,6 +65,7 @@ __all__ = [
     "segment_boundary_candidates",
     "set_source_locator",
     "should_split_structural_line_breaks",
+    "split_standalone_addressing_spans",
     "source_line_spans",
     "source_starts_body_region",
     "split_inline_heading_body_spans",

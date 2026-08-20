@@ -21,6 +21,7 @@ class LogicalSpanPlan:
     spans: list[Tuple[int, int]]
     preserve_inline_tokens: bool
     current_body_region: bool
+    partition_inline_tokens: bool = False
 
 
 def build_logical_span_plan(
@@ -41,6 +42,9 @@ def build_logical_span_plan(
     should_split_structural_line_breaks_func: Callable[[list[str], str], bool],
     split_structural_tail_after_numbered_heading_func: Callable[[str, list[Tuple[int, int]], str], list[Tuple[int, int]]],
     validate_source_span_partition_func: Callable[[str, list[Tuple[int, int]]], None],
+    split_standalone_addressing_spans_func: Optional[
+        Callable[[str, list[Tuple[int, int]]], list[Tuple[int, int]]]
+    ] = None,
 ) -> LogicalSpanPlan:
     """为一个物理段落生成逻辑 source span 计划。
 
@@ -78,7 +82,14 @@ def build_logical_span_plan(
         len(source_spans) > 1
         and should_split_structural_line_breaks_func(source_lines, following_text)
     )
+    localized_soft_spans = (
+        split_standalone_addressing_spans_func(source, source_spans)
+        if split_soft_lines and split_standalone_addressing_spans_func is not None
+        else source_spans
+    )
+    localized_addressing_split = localized_soft_spans != source_spans
     split_inline_heading = len(whole_heading_spans) > 1
+    partition_inline_tokens = False
     if split_inline_heading:
         spans = split_structural_tail_after_numbered_heading_func(
             source,
@@ -91,7 +102,10 @@ def build_logical_span_plan(
         preserve_inline_tokens = source[whole_start:whole_end] == source
     else:
         spans = []
-        for start, end in source_spans:
+        selected_source_spans = (
+            localized_soft_spans if localized_addressing_split else source_spans
+        )
+        for start, end in selected_source_spans:
             if should_split_inline_heading_body:
                 spans.extend(split_inline_heading_body_spans_func(
                     source,
@@ -104,6 +118,7 @@ def build_logical_span_plan(
             else:
                 spans.append((start, end))
         preserve_inline_tokens = False
+        partition_inline_tokens = localized_addressing_split
 
     if has_structural_inline and split_soft_lines:
         spans = split_structural_tail_after_numbered_heading_func(
@@ -117,4 +132,5 @@ def build_logical_span_plan(
         spans=spans,
         preserve_inline_tokens=preserve_inline_tokens,
         current_body_region=current_body_region,
+        partition_inline_tokens=partition_inline_tokens,
     )

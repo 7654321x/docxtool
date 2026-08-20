@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Callable
+from typing import Callable, Tuple
 
 from ..role_shape import has_compact_role_name_shape, has_role_hint
 from ..text.front_matter import is_front_title_date_meeting_profile
@@ -66,6 +66,48 @@ def is_structural_key_value_line(
     """
     value = text or ""
     return bool(is_responsibility_line_func(value) or colon_bold_match_func(value) >= 0)
+
+
+def split_standalone_addressing_spans(
+    source: str,
+    source_spans: list[Tuple[int, int]],
+    *,
+    is_standalone_addressing_func: Callable[[str], bool],
+) -> list[Tuple[int, int]]:
+    """只在独立称呼所在的软换行处建立局部 source 边界。
+
+    传入物理段原文、可见软行范围和已有称呼语义回调。返回合并普通相邻
+    软行后的范围；称呼行保持独立，范围之间只允许跳过不可见换行字符。
+    """
+    if len(source_spans) < 2:
+        return list(source_spans)
+
+    addressing_indexes = {
+        index
+        for index, (start, end) in enumerate(source_spans[1:], start=1)
+        if is_standalone_addressing_func(source[start:end].strip())
+    }
+    if not addressing_indexes:
+        return list(source_spans)
+
+    result: list[Tuple[int, int]] = []
+    group_start = source_spans[0][0]
+    group_end = source_spans[0][1]
+    for index, (start, end) in enumerate(source_spans[1:], start=1):
+        if index in addressing_indexes:
+            if group_start is not None:
+                result.append((group_start, group_end))
+            result.append((start, end))
+            group_start = None
+            group_end = end
+            continue
+        if group_start is None:
+            group_start = start
+        group_end = end
+
+    if group_start is not None:
+        result.append((group_start, group_end))
+    return result
 
 
 def should_split_structural_line_breaks(

@@ -185,6 +185,7 @@ from docxtool.document.segmentation.soft_breaks import (
     is_role_name_line as _seg_is_role_name_line,
     is_structural_key_value_line as _seg_is_structural_key_value_line,
     should_split_structural_line_breaks as _seg_should_split_structural_line_breaks,
+    split_standalone_addressing_spans as _seg_split_standalone_addressing_spans,
 )
 from docxtool.document.errors import DocumentImportError
 from docxtool.document.configuration.models import StyleRule
@@ -298,6 +299,18 @@ def _split_inline_heading_body_spans(
 
 def _is_standalone_addressing_text(text: str) -> bool:
     return is_standalone_addressing_text(text)
+
+
+def _split_standalone_addressing_spans(
+    source: str,
+    source_spans: List[Tuple[int, int]],
+) -> List[Tuple[int, int]]:
+    """兼容旧 importer 接线，只在独立称呼前建立局部软换行边界。"""
+    return _seg_split_standalone_addressing_spans(
+        source,
+        source_spans,
+        is_standalone_addressing_func=_is_standalone_addressing_text,
+    )
 
 
 def _is_strong_soft_line_structure(text: str) -> bool:

@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Callable, List, Optional, Tuple
 
 from docxtool.document.importing.inline_tokens import inline_tokens_text
-from docxtool.document.models import ParagraphFeatures
+from docxtool.document.models import InlineToken, ParagraphFeatures
 from docxtool.document.recognition.model import DocumentMode
 from docxtool.document.segmentation import partition as partition_module
 from docxtool.document.segmentation.source_locator import (
@@ -37,6 +37,9 @@ def build_logical_span_plan(
     should_split_structural_line_breaks_func: Callable[[list[str], str], bool],
     split_structural_tail_after_numbered_heading_func: Callable[[str, list[Tuple[int, int]], str], list[Tuple[int, int]]],
     validate_source_span_partition_func: Callable[[str, list[Tuple[int, int]]], None],
+    split_standalone_addressing_spans_func: Optional[
+        Callable[[str, list[Tuple[int, int]]], list[Tuple[int, int]]]
+    ] = None,
 ) -> LogicalSpanPlan:
     """兼容旧入口，转发 source span 与 token 保留计划构建。"""
     return partition_module.build_logical_span_plan(
@@ -62,7 +65,46 @@ def build_logical_span_plan(
             split_structural_tail_after_numbered_heading_func
         ),
         validate_source_span_partition_func=validate_source_span_partition_func,
+        split_standalone_addressing_spans_func=(
+            split_standalone_addressing_spans_func
+        ),
     )
+
+
+def _inline_tokens_for_source_span(
+    tokens: list[InlineToken],
+    source: str,
+    start: int,
+    end: int,
+) -> list[InlineToken]:
+    """按 source 坐标截取一个逻辑段的行内 token。"""
+    result: list[InlineToken] = []
+    position = 0
+    for token in tokens:
+        if token.kind == "text":
+            token_start = position
+            token_end = token_start + len(token.text)
+            overlap_start = max(start, token_start)
+            overlap_end = min(end, token_end)
+            if overlap_start < overlap_end:
+                result.append(InlineToken(
+                    "text",
+                    token.text[overlap_start - token_start:overlap_end - token_start],
+                ))
+            position = token_end
+            continue
+        if token.kind in {"tab", "line_break"}:
+            token_start = position
+            position += 1
+            if start <= token_start and position <= end:
+                result.append(InlineToken(token.kind))
+            continue
+        if token.kind == "page_break" and start <= position < end:
+            result.append(InlineToken(token.kind))
+
+    if inline_tokens_text(result) != source[start:end]:
+        raise ValueError("逻辑段行内 token 与 source span 不一致")
+    return result
 
 
 def build_logical_lines(
@@ -81,6 +123,9 @@ def build_logical_lines(
     validate_source_span_partition_func: Callable[[str, list[Tuple[int, int]]], None],
     detect_numbering_prefix_func: Callable[[str], str],
     inline_lead_bold_func: Callable[[str, int, int, ParagraphFeatures], bool],
+    split_standalone_addressing_spans_func: Optional[
+        Callable[[str, list[Tuple[int, int]]], list[Tuple[int, int]]]
+    ] = None,
 ) -> List[tuple]:
     """将物理 body 块原样转换为逻辑行元组。
 
@@ -153,6 +198,9 @@ def build_logical_lines(
                 split_structural_tail_after_numbered_heading_func
             ),
             validate_source_span_partition_func=validate_source_span_partition_func,
+            split_standalone_addressing_spans_func=(
+                split_standalone_addressing_spans_func
+            ),
         )
         spans = span_plan.spans
         preserve_tokens = list(inline_tokens) if span_plan.preserve_inline_tokens else []
@@ -182,11 +230,19 @@ def build_logical_lines(
             if line_index > 0:
                 sub_features.native_numbering = None
             sub_features.segment_numbering_features = sub_features.numbering_prefix
+            segment_tokens = (
+                preserve_tokens
+                if len(spans) == 1
+                else _inline_tokens_for_source_span(
+                    list(inline_tokens), source, start, end
+                ) if span_plan.partition_inline_tokens and "\n" in raw_fragment
+                else []
+            )
             flat_lines.append((
                 "text",
                 line,
                 sub_features,
-                preserve_tokens if len(spans) == 1 else [],
+                segment_tokens,
                 sect_pr if line_index == len(spans) - 1 else None,
             ))
         body_region_started = span_plan.current_body_region

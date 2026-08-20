@@ -2,7 +2,8 @@
 
 [CmdletBinding()]
 param(
-    [switch]$ListOnly
+    [switch]$ListOnly,
+    [switch]$SkipPublishDryRun
 )
 
 $ErrorActionPreference = "Stop"
@@ -42,13 +43,13 @@ function Add-Unique {
 Push-Location -LiteralPath $repoRoot
 try {
     $changed = @(
-        git diff --name-only
-        git diff --cached --name-only
-        git ls-files --others --exclude-standard
+        git -c core.quotePath=false diff --name-only
+        git -c core.quotePath=false diff --cached --name-only
+        git -c core.quotePath=false ls-files --others --exclude-standard
     ) | ForEach-Object { $_.Trim().Replace("\", "/") } |
         Where-Object { $_ } |
         Sort-Object -Unique
-    $stagedFiles = @(git diff --cached --name-only)
+    $stagedFiles = @(git -c core.quotePath=false diff --cached --name-only)
     $hasStagedFiles = $stagedFiles.Count -gt 0
 
     $selected = [System.Collections.Generic.List[string]]::new()
@@ -391,8 +392,9 @@ try {
     }
     if ($hasRelease) {
         Add-Unique -List $selected -Value "pytest tests/test_architecture_docs.py tests/test_pages_proxy_packaging.py -q"
-        if ($hasStagedFiles) {
-            Add-Unique -List $skipped -Value "publish_to_github.ps1 -DryRun (staged index is not empty)"
+        if ($hasStagedFiles -or $SkipPublishDryRun) {
+            $reason = if ($hasStagedFiles) { "staged index is not empty" } else { "invoked by publish workflow" }
+            Add-Unique -List $skipped -Value "publish_to_github.ps1 -DryRun ($reason)"
         }
         else {
             Add-Unique -List $selected -Value "publish_to_github.ps1 -DryRun"
@@ -450,7 +452,7 @@ try {
         Invoke-Checked $python @(
             "-m", "pytest", "tests/test_architecture_docs.py", "tests/test_pages_proxy_packaging.py", "-q"
         )
-        if (-not $hasStagedFiles) {
+        if (-not $hasStagedFiles -and -not $SkipPublishDryRun) {
             Invoke-Checked pwsh @(
                 "-NoProfile", "-File", ".\scripts\publish_to_github.ps1", "-DryRun"
             )

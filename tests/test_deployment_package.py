@@ -94,10 +94,10 @@ def test_formal_production_docs_name_the_single_tracked_deployment_package() -> 
     assert "docxtool.service" not in text
 
 
-def test_publish_script_allows_retired_server_deletions_and_new_package_files() -> None:
+def test_publish_script_requires_explicit_deployment_package_scope() -> None:
     script = (ROOT / "scripts" / "publish_to_github.ps1").read_text(encoding="utf-8")
 
-    assert '"server/"' in script
-    assert '"docxtool/"' in script
-    assert "Get-ChildItem -LiteralPath (Join-Path $SourceRoot \"docxtool\")" in script
+    assert "[switch]$IncludeDeploymentPackage" in script
+    assert "Deployment package changes require -IncludeDeploymentPackage" in script
+    assert "^docxtool/" in script
     assert '"update-index", "--chmod=+x"' in script

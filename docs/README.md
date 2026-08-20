@@ -37,7 +37,7 @@
 2. 当前架构只写入 `ARCHITECTURE.md`，不维护逐文件职责副本。
 3. HTTP 契约只写入 `API.md`；SDK JSON 协议只写入 `INTEGRATION_CONTRACT_V1.md`。
 4. 具体故障和验证命令写入对应 regression checklist。
-5. 发布范围和操作只写入 `RELEASE.md`，可执行允许清单由 `scripts/publish_to_github.ps1` 维护。
+5. 发布范围和操作只写入 `RELEASE.md`；`scripts/publish_to_github.ps1` 自动收集全部非忽略 Git 变更并执行禁止项扫描。
 6. 新增长期文档必须先确认现有主文档无法承载；专题设计放入 `design/`，不增加主目录文件。
 
 ## 文档验证

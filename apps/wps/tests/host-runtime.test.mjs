@@ -243,15 +243,7 @@ test("Host logs safe boundary diagnostics when the final preview character is un
   assert.equal(harness.comments.created.length, 0);
 });
 
-test("Host maps UTF-16 preview offsets through WPS grouped character ranges", async () => {
-  const rawText = "A\u0301B\u0301C\u0301D\u0301E\u0301F";
-  const groupedCharacters = ["A\u0301", "B\u0301", "C\u0301", "D\u0301", "E\u0301", "F"];
-  const startUtf16 = 2;
-  const endUtf16 = 10;
-  const harness = makeHostHarness({
-    rawText,
-    bindingItems: [bindingItem(rawText, startUtf16, endUtf16)],
-  });
+function installGroupedCharacters(harness, groupedCharacters) {
   const characters = harness.document.Paragraphs.Item(1).Range.Characters;
   characters.Count = groupedCharacters.length;
   characters.Item = (index) => {
@@ -268,6 +260,40 @@ test("Host maps UTF-16 preview offsets through WPS grouped character ranges", as
       },
     };
   };
+}
+
+test("Host maps in-range UTF-16 offsets through WPS grouped character ranges", async () => {
+  const rawText = "A\u0301B\u0301C\u0301D\u0301E\u0301F";
+  const groupedCharacters = ["A\u0301", "B\u0301", "C\u0301", "D\u0301", "E\u0301", "F"];
+  const startUtf16 = 2;
+  const endUtf16 = 4;
+  const harness = makeHostHarness({
+    rawText,
+    bindingItems: [bindingItem(rawText, startUtf16, endUtf16)],
+  });
+  installGroupedCharacters(harness, groupedCharacters);
+  harness.runtime.start();
+
+  await harness.runtime.runCommand(
+    "preview",
+    requestContext("preview", "request-grouped-in-range-character-range"),
+  );
+
+  assert.equal(harness.comments.created.length, 1);
+  assert.equal(harness.comments.created[0].Range.Text, "B\u0301");
+  assert.ok(!harness.events().includes("preview.range.readback_mismatch"));
+});
+
+test("Host maps UTF-16 preview offsets through WPS grouped character ranges", async () => {
+  const rawText = "A\u0301B\u0301C\u0301D\u0301E\u0301F";
+  const groupedCharacters = ["A\u0301", "B\u0301", "C\u0301", "D\u0301", "E\u0301", "F"];
+  const startUtf16 = 2;
+  const endUtf16 = 10;
+  const harness = makeHostHarness({
+    rawText,
+    bindingItems: [bindingItem(rawText, startUtf16, endUtf16)],
+  });
+  installGroupedCharacters(harness, groupedCharacters);
   harness.runtime.start();
 
   await harness.runtime.runCommand(
@@ -279,6 +305,28 @@ test("Host maps UTF-16 preview offsets through WPS grouped character ranges", as
   assert.equal(harness.comments.created[0].Range.Text, rawText.slice(startUtf16, endUtf16));
   assert.ok(harness.events().includes("preview.range.revalidate.completed"));
   assert.ok(!harness.events().includes("preview.range.boundary_invalid"));
+});
+
+test("Host rejects a UTF-16 offset inside a WPS grouped character", async () => {
+  const rawText = "A\u0301B\u0301";
+  const groupedCharacters = ["A\u0301", "B\u0301"];
+  const harness = makeHostHarness({
+    rawText,
+    bindingItems: [bindingItem(rawText, 1, 2)],
+  });
+  installGroupedCharacters(harness, groupedCharacters);
+  harness.runtime.start();
+
+  await assert.rejects(
+    harness.runtime.runCommand(
+      "preview",
+      requestContext("preview", "request-grouped-invalid-boundary"),
+    ),
+    /HOST_RANGE_UTF16_BOUNDARY_INVALID/,
+  );
+
+  assert.equal(harness.comments.created.length, 0);
+  assert.ok(harness.events().includes("preview.range.utf16_boundary_invalid"));
 });
 
 test("Host writes confirmed and review comments but skips unresolved blocks", async () => {

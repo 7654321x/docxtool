@@ -1127,26 +1127,15 @@
     if (!characters || typeof characters.Item !== "function") throw new Error("PREVIEW_CHARACTERS_UNSUPPORTED");
     let firstOrdinal = characterOrdinalAtUtf16Offset(raw, item.host_raw_start_utf16);
     let endOrdinal = characterOrdinalAtUtf16Offset(raw, item.host_raw_end_utf16);
-    let first;
-    let last;
-    try {
-      first = characters.Item(firstOrdinal + 1);
-      last = characters.Item(endOrdinal);
-    } catch (_) {
-      first = null;
-      last = null;
-    }
-    if (!first || !last || typeof first.SetRange !== "function") {
-      const mapped = mapWpsCharacterBoundaries(
-        characters,
-        item.host_raw_start_utf16,
-        item.host_raw_end_utf16
-      );
-      first = mapped.first;
-      last = mapped.last;
-      if (Number.isInteger(mapped.firstOrdinal)) firstOrdinal = mapped.firstOrdinal;
-      if (Number.isInteger(mapped.endOrdinal)) endOrdinal = mapped.endOrdinal;
-    }
+    const mapped = mapWpsCharacterBoundaries(
+      characters,
+      item.host_raw_start_utf16,
+      item.host_raw_end_utf16
+    );
+    const first = mapped.first;
+    const last = mapped.last;
+    if (Number.isInteger(mapped.firstOrdinal)) firstOrdinal = mapped.firstOrdinal;
+    if (Number.isInteger(mapped.endOrdinal)) endOrdinal = mapped.endOrdinal;
     const firstBoundaryPresent = Boolean(first);
     const lastBoundaryPresent = Boolean(last);
     const setRangeAvailable = Boolean(first && typeof first.SetRange === "function");

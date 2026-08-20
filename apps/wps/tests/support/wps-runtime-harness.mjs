@@ -60,6 +60,7 @@ function makeParagraphRange(rawText) {
     Tables: { Count: 0 },
   };
   range.Characters = {
+    Count: rawText.length,
     Item(index) {
       const start = Number(index) - 1;
       return {

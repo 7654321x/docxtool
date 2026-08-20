@@ -145,3 +145,71 @@ def test_segmenter_splits_body_tail_addressing_and_drops_soft_break_tokens(
     assert [line[3] for line in text_lines] == [[], []]
     assert [line[2].segment_index for line in text_lines] == [0, 1]
     assert {line[2].segment_count for line in text_lines} == {2}
+
+
+def test_segmenter_keeps_ordinary_soft_line_before_local_addressing_boundary(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "mixed-body-tail-addressing.docx"
+    first_body_line = "正文第一行"
+    second_body_line = "正文第二行"
+    addressing_text = "各位委员、同志们！"
+    document = Document()
+    paragraph = document.add_paragraph()
+    paragraph.add_run(first_body_line)
+    paragraph.add_run().add_break(WD_BREAK.LINE)
+    paragraph.add_run(second_body_line)
+    paragraph.add_run().add_break(WD_BREAK.LINE)
+    paragraph.add_run(addressing_text)
+    document.save(source)
+
+    data = DocumentData()
+    raw_blocks = read_body_blocks(
+        DocxDocument(source),
+        data,
+        strict_preservation=False,
+        protected_letterhead_indexes=set(),
+        extract_features_func=_features,
+    )
+    logical_lines = build_logical_lines(
+        raw_blocks,
+        strict_preservation=False,
+        structural_preservation=True,
+        split_inline_heading_body_enabled=True,
+        normalize_text_func=lambda text: text,
+        source_starts_body_region_func=importer_module._source_starts_body_region,
+        split_inline_heading_body_spans_func=(
+            importer_module._split_inline_heading_body_spans
+        ),
+        validate_numbered_heading_body_split_func=(
+            importer_module._validate_numbered_heading_body_split
+        ),
+        should_split_structural_line_breaks_func=(
+            importer_module._should_split_structural_line_breaks
+        ),
+        split_structural_tail_after_numbered_heading_func=(
+            importer_module._split_structural_tail_after_numbered_heading
+        ),
+        validate_source_span_partition_func=(
+            importer_module._validate_source_span_partition
+        ),
+        detect_numbering_prefix_func=importer_module._detect_numbering_prefix,
+        inline_lead_bold_func=importer_module._has_inline_lead_bold_transition,
+        split_standalone_addressing_spans_func=(
+            importer_module._split_standalone_addressing_spans
+        ),
+    )
+    text_lines = [line for line in logical_lines if line[0] == "text"]
+
+    assert [line[1] for line in text_lines] == [
+        f"{first_body_line}\n{second_body_line}",
+        addressing_text,
+    ]
+    assert [token.kind for token in text_lines[0][3]] == [
+        "text", "line_break", "text",
+    ]
+    assert text_lines[0][3][0].text == first_body_line
+    assert text_lines[0][3][2].text == second_body_line
+    assert text_lines[1][3] == []
+    assert [line[2].segment_index for line in text_lines] == [0, 1]
+    assert {line[2].segment_count for line in text_lines} == {2}

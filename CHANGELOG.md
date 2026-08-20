@@ -1,5 +1,11 @@
 # Changelog
 
+## 5.7.1 - 2026-08-20
+
+- Corrected WPS preview ranges when grouped host characters do not match JavaScript Unicode ordinals, while preserving fail-fast handling for invalid UTF-16 boundaries.
+- Limited standalone-addressing soft-break segmentation to the local structural boundary so adjacent ordinary body lines remain one logical paragraph with inline tokens preserved.
+- Simplified the local GitHub publishing workflow and changed-path validation while retaining scope, security, and deployment-package gates.
+
 ## 5.7.0 - 2026-08-20
 
 - Made the main-title lifecycle single-start, preserved later body subheadings, and strengthened front-matter role-name recognition across blank semantic neighbors.

@@ -149,6 +149,9 @@ def run_document_pipeline(
         validate_source_span_partition_func=compatibility._validate_source_span_partition,
         detect_numbering_prefix_func=compatibility._detect_numbering_prefix,
         inline_lead_bold_func=compatibility._has_inline_lead_bold_transition,
+        split_standalone_addressing_spans_func=(
+            compatibility._split_standalone_addressing_spans
+        ),
     )
 
     ctx = compatibility.DetectionContext()

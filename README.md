@@ -123,11 +123,11 @@ pwsh -NoProfile -Command "node --test tests/worker-routing.test.mjs"
 
 ## GitHub 发布
 
-发布前先阅读 [`docs/RELEASE.md`](docs/RELEASE.md)。安全发布脚本会按白名单扫描、提交、SSH 推送并核验远端：
+发布前先阅读 [`docs/RELEASE.md`](docs/RELEASE.md)。安全发布脚本会自动收集全部非忽略 Git 变更，运行变更范围验证，拒绝敏感或构建产物，完整暂存后提交、SSH 推送并核验远端：
 
 ```pwsh
 pwsh -NoProfile -File .\scripts\publish_to_github.ps1 -DryRun
-pwsh -NoProfile -File .\scripts\publish_to_github.ps1 -Quick -CommitMessage "说明本次修改"
+pwsh -NoProfile -File .\scripts\publish_to_github.ps1 -CommitMessage "说明本次修改"
 ```
 
-不要直接把当前工作树整仓库推送到 GitHub。
+普通发布默认就是 Quick，只需执行一条带提交说明的命令；保留 `-Quick` 参数仅用于兼容旧调用。不需要在提交后再运行 `git pull --rebase`。远端基线不一致或推送发生竞态时，脚本会停止并保留现场供人工处理。

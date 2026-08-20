@@ -9,7 +9,7 @@ from urllib.parse import unquote
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_documentation_ownership_entries_are_published_and_navigable() -> None:
+def test_documentation_ownership_entries_exist_and_release_collects_all_changes() -> None:
     required = {
         "docs/ARCHITECTURE.md",
         "docs/RELEASE.md",
@@ -27,7 +27,12 @@ def test_documentation_ownership_entries_are_published_and_navigable() -> None:
 
     for relative in required:
         assert (ROOT / relative).is_file()
-        assert relative in publish_script
+
+    assert "Get-ChangedFiles" in publish_script
+    assert "core.quotePath=false" in publish_script
+    assert "ls-files --others --exclude-standard" in publish_script
+    assert 'Invoke-Checked git @("add", "-A",' in publish_script
+    assert "Publish staging omitted working-tree changes" in publish_script
 
     assert "ARCHITECTURE.md" in navigation
     assert "RELEASE.md" in navigation
@@ -45,6 +50,8 @@ def test_changed_verification_entry_is_published_and_has_explicit_output_contrac
     assert "apps/wps/scripts/verify.ps1" in script
     assert "EXE build" in script
     assert '"scripts/verify_changed.ps1"' in publish
+    assert '"-SkipPublishDryRun"' in publish
+    assert "[switch]$SkipPublishDryRun" in script
 
 
 def test_changed_verification_routes_primary_python_and_frontend_domains() -> None:
@@ -103,9 +110,9 @@ def test_changed_verification_preserves_lightweight_defaults() -> None:
     ):
         assert f'Add-Unique -List $notRun -Value "{not_run}"' in script
 
-    assert "git diff --name-only" in script
-    assert "git diff --cached --name-only" in script
-    assert "git ls-files --others --exclude-standard" in script
+    assert "core.quotePath=false diff --name-only" in script
+    assert "core.quotePath=false diff --cached --name-only" in script
+    assert "core.quotePath=false ls-files --others --exclude-standard" in script
     assert "if ($ListOnly) { return }" in script
     assert 'Invoke-Checked $python @("-m", "pytest", "-q")' not in script
 

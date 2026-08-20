@@ -709,3 +709,42 @@ def test_sdk_splits_body_tail_standalone_addressing_soft_lines(
     assert [block.segment_index for block in blocks] == [0, 1]
     assert {block.segment_count_total for block in blocks} == {2}
     assert all(block.locator_verified for block in blocks)
+
+
+def test_sdk_splits_only_local_addressing_boundary_after_ordinary_soft_line(
+    tmp_path,
+) -> None:
+    source = tmp_path / "mixed-body-tail-addressing.docx"
+    first_body_line = "正文第一行"
+    second_body_line = "正文第二行"
+    addressing_text = "各位委员、同志们！"
+    document = Document()
+    document.add_paragraph("年度工作报告", style="Title")
+    document.add_paragraph("现将有关工作情况报告如下，请认真审议。")
+    paragraph = document.add_paragraph()
+    paragraph.add_run(first_body_line)
+    paragraph.add_run().add_break(WD_BREAK.LINE)
+    paragraph.add_run(second_body_line)
+    paragraph.add_run().add_break(WD_BREAK.LINE)
+    paragraph.add_run(addressing_text)
+    document.save(source)
+
+    plan = recognize_docx(
+        source,
+        processing_mode="structural",
+        recognition_mode="authoritative",
+        include_text=True,
+    )
+    blocks = [block for block in plan.blocks if block.physical_paragraph_index == 2]
+
+    assert [block.type_id for block in blocks] == ["body", "addressing"]
+    assert [block.recognized_text for block in blocks] == [
+        f"{first_body_line}\n{second_body_line}",
+        addressing_text,
+    ]
+    assert [block.segment_index for block in blocks] == [0, 1]
+    assert {block.segment_count_total for block in blocks} == {2}
+    assert all(block.locator_verified for block in blocks)
+    assert "".join(block.recognized_text.replace("\n", "") for block in blocks) == (
+        first_body_line + second_body_line + addressing_text
+    )

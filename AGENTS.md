@@ -5,7 +5,7 @@
 ## 项目技能路由
 
 1. DOCX 识别、规范化和排版使用 `docxtool-recognition-layout`。
-2. GitHub 发布使用 `scripts/publish_to_github.ps1` 的 Quick 流程；仅在用户明确要求完整验收时使用 `-Verify`。
+2. GitHub 发布使用 `scripts/publish_to_github.ps1`，默认即为 Quick 流程；仅在用户明确要求完整验收时使用 `-Verify`。
 
 ## 任务验证入口
 
@@ -46,10 +46,10 @@ pwsh -NoProfile -File .\scripts\verify_changed.ps1
 ## 本地回收站与发布
 
 1. `local_recycle/` 仅用于本机临时补丁、快照、备份和可重新生成产物，不得提交。
-2. 发布前阅读 `docs/RELEASE.md`，使用 `scripts/publish_to_github.ps1`，不得直接把整棵工作树推送到 GitHub。
-3. 发布必须先同步并核验本地分支基线，再在当前本地仓库按允许清单暂存并创建提交，最后通过 SSH 推送；禁止只在临时克隆中生成远端提交。
+2. 发布前阅读 `docs/RELEASE.md`，使用 `scripts/publish_to_github.ps1`，不得绕过脚本直接暂存、提交或推送。
+3. 发布必须先获取并核验本地分支基线，再在当前本地仓库收集全部非忽略 Git 变更、执行安全扫描和验证、完整暂存并创建提交，最后通过 SSH 推送；禁止只在临时克隆中生成远端提交。
 4. 普通发布使用脚本默认流程；只有用户明确要求时才使用 `-Verify` 完整验收。版本以 `src/docxtool/version.py`、`pyproject.toml` 和 `CHANGELOG.md` 为准。
-5. 新增或移动正式源码、资源、测试和文档时，第一时间同步写入 `scripts/publish_to_github.ps1` 的允许清单；新增长期文档还必须立即登记到 `docs/README.md`，不得等到发布前再补。
+5. 新增或移动正式源码、资源、测试和文档无需维护发布文件清单，发布脚本会自动纳入全部非忽略变更；新增长期文档仍必须立即登记到 `docs/README.md`。
 6. `src/docxtool/` 是日常开发与 GitHub 发布的唯一权威源码。`docxtool/` 是部署包镜像：日常修改、测试和普通发布均忽略该目录；只有用户明确下达“发布新版本”命令时，才同步并发布该部署包。
 
 ## 当前生产回源事实
@@ -80,7 +80,7 @@ pwsh -NoProfile -File .\scripts\verify_changed.ps1
 pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m pytest tests/test_architecture_docs.py -q"
 pwsh -NoProfile -Command ".\.venv\Scripts\python.exe -m ruff check src tests scripts"
 pwsh -NoProfile -Command "git diff --check"
-pwsh -NoProfile -File .\scripts\publish_to_github.ps1 -Quick -CommitMessage "说明本次修改"
+pwsh -NoProfile -File .\scripts\publish_to_github.ps1 -CommitMessage "说明本次修改"
 ```
 
 只有用户明确要求完整验收时，才使用：
