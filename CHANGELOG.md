@@ -1,5 +1,9 @@
 # Changelog
 
+## 5.7.3 - 2026-08-21
+
+- Release-only version increment; no runtime behavior changed.
+
 ## 5.7.2 - 2026-08-21
 
 - Made the WPS Host enforce the user-visible status bar after startup and after preview, formatting, document reopen, or command failure, with readback confirmation and focused runtime coverage.
