@@ -12,6 +12,8 @@ import inspect
 import time
 from typing import Any, Callable, Mapping, Sequence
 
+from docxtool.document.diagnostics import log_event
+
 
 def _call_exporter_compat(
     exporter: Callable[..., Any],
@@ -117,10 +119,22 @@ def process_uploaded_docx_task(
     log_path = make_document_log_path("document", log_dir=log_dir, suffix=task_id[:8])
     log_filename = os.path.basename(log_path)
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
-    with open(log_path, "a", encoding="utf-8") as f:
-        f.write(f"{localtime('%Y-%m-%d %H:%M:%S')} [INFO ] docx_tool | [Task] {task_id[:8]} log created file_id={file_id}\n")
+    with open(log_path, "a", encoding="utf-8"):
+        pass
     token = set_context_log_path(log_path)
     try:
+        log_event(
+            logger,
+            20,
+            "task.start",
+            "开始处理上传文档",
+            module="web",
+            component="task",
+            fields={
+                "task_id": task_id[:8],
+                "file_id": file_id,
+            },
+        )
         rules, settings, features = load_rules_and_settings(format_config)
         rules = rules or [style_rule_cls.default_for_row(i) for i in range(10)]
         settings = settings or page_settings_cls()
@@ -143,21 +157,6 @@ def process_uploaded_docx_task(
         recognition_options.setdefault("mode", "authoritative")
         for key, value in core_feature_defaults().items():
             features.setdefault(key, value)
-        body_rule = rules[5] if len(rules) > 5 else style_rule_cls.default_for_row(5)
-        letterhead_summary = features.get("letterhead", {})
-        letterhead_agencies = letterhead_summary.get("agencies", [])
-        logger.info(
-            f"[Task] {task_id[:8]} start file_id={file_id} log={log_filename} "
-            f"preset={request_meta.get('preset_name','')} mode={processing_options.get('strategy', 'structural')} "
-            f"frontend_config={bool(format_config)} body={body_rule.font}/{body_rule.font_size_label} "
-            f"margins=top{settings.margin_top_cm} bottom{settings.margin_bottom_cm} "
-            f"left{settings.margin_left_cm} right{settings.margin_right_cm} "
-            f"line_spacing={settings.line_spacing_value} numbered_bold_enabled={features['numbered_bold_enabled']} "
-            f"letterhead_enabled={bool(letterhead_summary.get('enabled', False))} "
-            f"letterhead_mode={letterhead_summary.get('issuance_mode', 'single')} "
-            f"letterhead_agencies={len(letterhead_agencies) if isinstance(letterhead_agencies, list) else 0} "
-            f"letterhead_scope={letterhead_summary.get('joint_mark_scope', 'all_agencies')}"
-        )
         importer = importer_factory()
         doc_data = importer.load(
             input_path,
@@ -192,11 +191,23 @@ def process_uploaded_docx_task(
         try:
             validate_docx_integrity(output_path)
         except integrity_error_cls as exc:
-            logger.error(
-                f"[Task] {task_id[:8]} generated DOCX integrity check failed "
-                f"code={exc.code} detail={exc.message}"
-            )
             duration = round(now() - t0, 2)
+            log_event(
+                logger,
+                40,
+                "task.output.integrity.failed",
+                "输出 DOCX 完整性校验失败",
+                module="web",
+                component="task",
+                fields={
+                    "task_id": task_id[:8],
+                    "file_id": file_id,
+                    "error_code": "OUTPUT_DOCX_INVALID",
+                    "error_type": type(exc).__name__,
+                    "duration_ms": int(duration * 1000),
+                },
+                exc_info=True,
+            )
             return {
                 "status": "error",
                 "log_filename": log_filename,
@@ -216,6 +227,20 @@ def process_uploaded_docx_task(
                 "recognition_summary": public_recognition_summary(doc_data),
             }
         duration = round(now() - t0, 2)
+        log_event(
+            logger,
+            20,
+            "task.complete",
+            "文档处理完成",
+            module="web",
+            component="task",
+            fields={
+                "task_id": task_id[:8],
+                "file_id": file_id,
+                "paragraph_count": len(doc_data.paragraphs),
+                "duration_ms": int(duration * 1000),
+            },
+        )
         return {
             "status": "done",
             "log_filename": log_filename,
@@ -236,11 +261,27 @@ def process_uploaded_docx_task(
             "compatibility_warnings": list(export_stats.get("compatibility_warnings", []) or []),
         }
     except Exception as exc:
-        logger.exception("[Task] %s internal failure type=%s", task_id[:8], type(exc).__name__)
+        duration = round(now() - t0, 2)
+        log_event(
+            logger,
+            40,
+            "task.failed",
+            "文档处理失败",
+            module="web",
+            component="task",
+            fields={
+                "task_id": task_id[:8],
+                "file_id": file_id,
+                "error_code": "TASK_PROCESSING_ERROR",
+                "error_type": type(exc).__name__,
+                "duration_ms": int(duration * 1000),
+            },
+            exc_info=True,
+        )
         return _task_error_result(
             log_filename=log_filename,
             log_path=log_path,
-            duration_s=round(now() - t0, 2),
+            duration_s=duration,
             error_message=sanitize_error(exc),
         )
     finally:

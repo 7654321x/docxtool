@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import logging
 import zipfile
 from pathlib import Path
@@ -179,14 +180,15 @@ def test_import_log_names_the_hashed_source_path_accurately(tmp_path: Path, capl
     caplog.set_level(logging.INFO, logger="docx_tool")
     DocxImporter().load(str(source), _rules())
 
-    messages = [
-        record.getMessage()
+    records = [
+        record
         for record in caplog.records
-        if record.getMessage().startswith("[导入] source_path_hash=")
+        if getattr(record, "event", "") == "document.import.complete"
     ]
-    assert len(messages) == 1
-    assert "file_sha256=" not in messages[0]
-    assert str(source) not in messages[0]
+    assert len(records) == 1
+    assert records[0].document_id == hashlib.sha256(str(source).encode("utf-8")).hexdigest()[:12]
+    assert "file_sha256=" not in records[0].getMessage()
+    assert str(source) not in records[0].getMessage()
 
 
 def test_non_strict_import_records_applied_changes(tmp_path: Path) -> None:

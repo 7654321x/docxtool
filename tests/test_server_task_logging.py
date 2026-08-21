@@ -1,4 +1,5 @@
 import os
+import logging
 import tempfile
 import unittest
 import uuid
@@ -19,6 +20,7 @@ class ServerTaskLoggingTest(unittest.TestCase):
             os.makedirs(server.LOG_DIR, exist_ok=True)
             os.makedirs(server.OUTPUT_DIR, exist_ok=True)
             server.TASKS.clear()
+            server.logger.setLevel(logging.DEBUG)
             server._sql_init()
 
             source = tmp / "source.docx"

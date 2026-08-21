@@ -487,37 +487,33 @@
   }
 
   function commandFailureMessage(errorCode) {
-    if (errorCode === "WPS_DOCUMENT_NOT_DOCX") {
-      return "当前文档未完成 DOCX 升级，请查看文档升级日志。";
-    }
-    if (errorCode === "WPS_LEGACY_UPGRADE_TARGET_EXISTS") {
-      return "同目录已存在同名 DOCX，未覆盖任何文件。";
-    }
-    if (errorCode === "WPS_FORMAT_PAGE_SPEC_INVALID") {
-      return "请输入有效页码范围。";
-    }
-    if (errorCode === "WPS_FORMAT_PAGE_OUT_OF_RANGE") {
-      return "页码超出当前文档范围。";
-    }
-    if (errorCode === "WPS_FORMAT_PAGE_API_UNAVAILABLE") {
-      return "当前 WPS 版本不支持按页码排版。";
-    }
-    if (errorCode === "WPS_LETTERHEAD_ALREADY_EXISTS") {
-      return "当前文档已存在版头，请确认后再替换。";
-    }
-    if (errorCode === "WPS_LETTERHEAD_EXISTING_AMBIGUOUS") {
-      return "无法确定现有版头边界，未修改文档。";
-    }
-    if (errorCode === "WPS_LETTERHEAD_MARK_TOO_LONG") {
-      return "发文机关标志过长，无法在版心内排下。";
-    }
-    if (errorCode === "WPS_LETTERHEAD_JOINT_SOURCE_UNSUPPORTED") {
-      return "当前只支持单机关发文版头，未修改文档。";
-    }
-    if (errorCode.startsWith("WPS_LETTERHEAD_")) {
-      return "版头添加失败。";
-    }
-    return `失败：${errorCode}`;
+    const messages = {
+      WPS_DOCUMENT_NOT_DOCX: "当前文档不是 DOCX，请先另存为 DOCX 后重试。",
+      WPS_LEGACY_UPGRADE_TARGET_EXISTS: "同目录已存在同名 DOCX，未覆盖任何文件。",
+      WPS_FORMAT_PAGE_SPEC_INVALID: "请输入有效页码范围。",
+      WPS_FORMAT_PAGE_OUT_OF_RANGE: "页码超出当前文档范围。",
+      WPS_FORMAT_PAGE_API_UNAVAILABLE: "当前 WPS 版本不支持按页码排版。",
+      WPS_PUBLIC_SERVER_UNAVAILABLE: "服务器暂时无法连接，请检查网络后重试。",
+      WPS_PUBLIC_CLIENT_BLOCKED: "客户端访问受限，请更新客户端或联系管理员。",
+      WPS_PUBLIC_RESPONSE_INVALID: "服务器响应异常，请稍后重试。",
+      WPS_PUBLIC_ACCOUNT_REQUIRED: "请从登录窗口登录或注册后重新打开 WPS。",
+      SESSION_INVALID: "登录已失效，请重新登录。",
+      SESSION_EXPIRED: "登录已失效，请重新登录。",
+      INVALID_CREDENTIALS: "登录信息无效，请重新登录。",
+      ACCOUNT_DISABLED: "当前账号已被停用，请联系管理员。",
+      DEVICE_DISABLED: "当前设备已被停用，请联系管理员。",
+      WPS_COMMAND_BUSY: "当前已有操作正在处理，请稍候。",
+      WPS_APPLY_AUTHORIZATION_REQUIRED: "本次排版授权已失效，请重新点击一键排版。",
+      WPS_APPLY_AUTHORIZATION_INVALID: "本次排版授权已失效，请重新点击一键排版。",
+      WPS_LETTERHEAD_ALREADY_EXISTS: "当前文档已存在版头，请确认后再替换。",
+      WPS_LETTERHEAD_EXISTING_AMBIGUOUS: "无法确定现有版头边界，未修改文档。",
+      WPS_LETTERHEAD_MARK_TOO_LONG: "发文机关标志过长，无法在版心内排下。",
+      WPS_LETTERHEAD_JOINT_SOURCE_UNSUPPORTED: "当前只支持单机关发文版头，未修改文档。"
+    };
+    if (messages[errorCode]) return messages[errorCode];
+    if (errorCode.startsWith("WPS_PUBLIC_")) return "服务器暂时无法连接，请检查网络后重试。";
+    if (errorCode.startsWith("WPS_LETTERHEAD_")) return "版头操作失败，请关闭 WPS 后重新打开。";
+    return "本地服务异常，请关闭 WPS 后重新打开。";
   }
 
   function log(level, event, message, details) {

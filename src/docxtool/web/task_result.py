@@ -7,6 +7,8 @@ import time
 from collections.abc import Callable, MutableMapping
 from threading import Lock
 
+from docxtool.document.diagnostics import log_event
+
 
 def record_task_result(
     task_id: str,
@@ -143,11 +145,21 @@ def _write_task_statistics(
             error_code=error_code,
             error_message=error_message,
         )
-    except Exception:
-        logger.exception(
-            "[Stats] failed to record task=%s file_id=%s",
-            task_id[:8],
-            safe_file_identifier(orig_name),
+    except Exception as exc:
+        log_event(
+            logger,
+            40,
+            "task.statistics.persist.failed",
+            "任务统计写入失败",
+            module="web",
+            component="statistics",
+            fields={
+                "task_id": task_id[:8],
+                "file_id": safe_file_identifier(orig_name),
+                "error_code": "TASK_STATISTICS_PERSIST_FAILED",
+                "error_type": type(exc).__name__,
+            },
+            exc_info=True,
         )
 
 
@@ -213,10 +225,54 @@ def _log_terminal_result(
 ) -> None:
     """传入终态任务字段和 logger，写入脱敏任务完成日志。"""
     file_id = safe_file_identifier(orig_name)
+    duration_ms = int(result.get("duration_ms", 0) or 0)
     if status == "done":
-        logger.info("[Stats] recorded task=%s status=done file_id=%s", task_id[:8], file_id)
-        logger.info("[Task] %s done %ss", task_id[:8], result.get("duration_s", 0))
+        log_event(
+            logger,
+            20,
+            "task.complete",
+            "任务处理完成",
+            module="web",
+            component="task",
+            fields={
+                "task_id": task_id[:8],
+                "file_id": file_id,
+                "status": status,
+                "paragraph_count": int(result.get("paragraphs", 0) or 0),
+                "duration_ms": duration_ms,
+            },
+        )
     elif status == "timeout":
-        logger.warning("[Task] %s timeout after %ss file_id=%s", task_id[:8], process_timeout, file_id)
+        log_event(
+            logger,
+            30,
+            "task.timeout",
+            "任务处理超时，已结束当前任务",
+            module="web",
+            component="task",
+            fields={
+                "task_id": task_id[:8],
+                "file_id": file_id,
+                "status": status,
+                "error_code": "TASK_TIMEOUT",
+                "error_type": "TimeoutError",
+                "duration_ms": duration_ms,
+            },
+        )
     else:
-        logger.warning("[Task] %s failed file_id=%s code=%s", task_id[:8], file_id, error_code)
+        log_event(
+            logger,
+            40,
+            "task.failed",
+            "任务处理失败",
+            module="web",
+            component="task",
+            fields={
+                "task_id": task_id[:8],
+                "file_id": file_id,
+                "status": status,
+                "error_code": error_code or "TASK_FAILED",
+                "error_type": result.get("error_type") or "TaskProcessingError",
+                "duration_ms": duration_ms,
+            },
+        )

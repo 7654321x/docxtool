@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, Optional
 
 from docxtool.document.diagnostics.logging import (
-    LOG_FORMAT,
+    DocxToolFormatter,
     configure_logging,
     get_logger,
     make_document_log_path,
@@ -114,7 +114,7 @@ def configure_wps_logging(app_root: Path) -> Path:
         encoding="utf-8",
     )
     handler.setLevel(logging.DEBUG)
-    handler.setFormatter(logging.Formatter(LOG_FORMAT))
+    handler.setFormatter(DocxToolFormatter())
     logger.addHandler(handler)
     _WPS_FILE_HANDLER = handler
     return log_dir

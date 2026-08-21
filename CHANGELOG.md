@@ -1,5 +1,11 @@
 # Changelog
 
+## 5.8.0 - 2026-08-21
+
+- Unified the production logging protocol across document processing, rendering, Web task results, Reader, and WPS Control boundaries, with structured lifecycle events, safe context, and actionable failures.
+- Replaced WPS TaskPane, Reader, format-settings, and Host user-facing internal error codes with Chinese guidance; local-service failures now instruct users to close and reopen WPS, while public-service failures direct users to check their network.
+- Kept stable error codes available to protocols, logs, and diagnostics, and added focused regression coverage for the revised WPS user messages.
+
 ## 5.7.3 - 2026-08-21
 
 - Release-only version increment; no runtime behavior changed.

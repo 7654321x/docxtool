@@ -42,9 +42,9 @@
       WPS_FORMAT_PROFILE_NOT_FOUND: "模板不存在或不属于当前账号。",
       WPS_FORMAT_PROFILE_SYSTEM_LOCKED: "系统默认模板不能直接修改，请先添加模板。",
       WPS_FORMAT_PROFILE_CONFIG_INVALID: "模板内容无效，未保存任何修改。",
-      WPS_FORMAT_PROFILE_DATABASE_FAILED: "本地模板数据库操作失败。",
-      WPS_FORMAT_PROFILE_MIGRATION_FAILED: "旧格式设置迁移失败。"
-    }[code] || "格式模板操作失败。";
+      WPS_FORMAT_PROFILE_DATABASE_FAILED: "本地模板数据库操作失败，请关闭 WPS 后重新打开。",
+      WPS_FORMAT_PROFILE_MIGRATION_FAILED: "旧格式设置迁移失败，请关闭 WPS 后重新打开。"
+    }[code] || "本地格式服务异常，请关闭 WPS 后重新打开。";
   }
 
   function log(level, event, message, details) {
@@ -424,7 +424,7 @@
 
   function showOperationFailure(error, fallback) {
     const code = stableErrorCode(error, fallback);
-    node("format_dialog_error").textContent = `${profileErrorMessage(code)} 错误代码：${code}`;
+    node("format_dialog_error").textContent = profileErrorMessage(code);
     log("ERROR", "wps.format_profile.operation.failed", "WPS 格式模板操作失败", {
       error_code: code,
       error_type: error && error.name ? error.name : "Error",
@@ -434,7 +434,7 @@
 
   function showFailure(error) {
     const code = stableErrorCode(error, "WPS_FORMAT_DIALOG_INITIALIZE_FAILED");
-    node("format_dialog_error").textContent = `格式设置初始化失败。错误代码：${code}`;
+    node("format_dialog_error").textContent = "本地格式服务异常，请关闭 WPS 后重新打开。";
     ["format_settings_restore", "format_settings_save", "format_profile_add", "format_profile_delete", "format_profile_select"].forEach((id) => {
       node(id).disabled = true;
     });

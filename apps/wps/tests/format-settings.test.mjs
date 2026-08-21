@@ -206,7 +206,7 @@ test("format settings page keeps the four sections, template manager, and six st
   }
   assert.match(htmlSource, /format-config\.js\?v=2/);
   assert.match(htmlSource, /format-settings\.css\?v=2/);
-  assert.match(htmlSource, /format-settings\.js\?v=3/);
+  assert.match(htmlSource, /format-settings\.js\?v=4/);
 });
 
 test("format config current, draft and revision storage use validated envelopes", () => {

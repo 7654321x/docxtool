@@ -191,10 +191,6 @@ def finalize_export(
     # 保存
     try:
         doc.save(output_path)
-        logger.info(
-            "[引擎] 排版完成 output_sha256=%s",
-            hashlib.sha256(str(output_path).encode("utf-8")).hexdigest()[:12],
-        )
     except Exception as e:
         raise ExportError(f"保存失败 {output_path}: {e}")
 

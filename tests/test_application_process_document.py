@@ -63,6 +63,18 @@ class _Logger:
         self.infos: list[str] = []
         self.errors: list[tuple] = []
         self.exceptions: list[tuple] = []
+        self.records: list[tuple] = []
+
+    def log(self, level: int, message: str, *args, **kwargs) -> None:
+        """传入结构化日志调用，记录级别、事件字段和异常标记。"""
+        extra = dict(kwargs.get("extra", {}) or {})
+        self.records.append((level, message, extra, bool(kwargs.get("exc_info"))))
+        if level >= 40:
+            self.errors.append((message, extra))
+            if kwargs.get("exc_info"):
+                self.exceptions.append((message, extra))
+        elif level >= 20:
+            self.infos.append(message)
 
     def info(self, message: str) -> None:
         """传入日志文本，记录 info 级别消息。"""
@@ -199,9 +211,12 @@ def test_process_uploaded_docx_task_returns_sanitized_internal_error(tmp_path: P
     assert result["duration_ms"] == 1250
     assert result["recognition_summary"] == {}
     assert state["reset_tokens"]
-    assert logger.exceptions == [
-        ("[Task] %s internal failure type=%s", "task-123", "RuntimeError")
-    ]
+    assert any(
+        record[2].get("event") == "task.failed"
+        and record[2].get("error_type") == "RuntimeError"
+        and record[3]
+        for record in logger.records
+    )
 
 
 def test_process_task_does_not_retry_exporter_internal_type_error(tmp_path: Path) -> None:

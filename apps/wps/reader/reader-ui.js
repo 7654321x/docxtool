@@ -148,7 +148,7 @@
       READER_CONTENT_NOT_FOUND: "未找到本地阅读内容。",
       READER_PROGRESS_INVALID: "阅读进度无效。",
     };
-    node("reader_error").textContent = `${messages[code] || "阅读操作失败。"} 错误代码：${code}`;
+    node("reader_error").textContent = messages[code] || "本地阅读服务异常，请关闭 WPS 后重新打开。";
     log("ERROR", "reader.ui.error", "Reader 操作失败", { error_code: code });
   }
 
@@ -210,7 +210,7 @@
       readerDetails({ rendered_paragraph_count: reader.children.length }),
     );
     if (!paragraphs.length) {
-      node("reader_error").textContent = "当前书籍没有可显示的正文。错误代码：READER_CONTENT_EMPTY";
+      node("reader_error").textContent = "当前书籍没有可显示的正文。";
     }
   }
 

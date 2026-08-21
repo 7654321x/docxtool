@@ -13,11 +13,11 @@ import re
 import sys
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
-from typing import Optional
+from typing import Any, Mapping, Optional
 
 
 LOGGER_NAME = "docx_tool"
-LOG_FORMAT = "%(asctime)s [%(levelname)-5s] %(name)s | %(message)s"
+LOG_FORMAT = "%(asctime)s [%(levelname)-5s] %(message)s"
 LOG_TO_FILE = True
 _LOG_DIR: Optional[str] = None
 _FILE_HANDLER: Optional[logging.Handler] = None
@@ -26,6 +26,128 @@ _CURRENT_LOG_PATH: Optional[str] = None
 _CONTEXT_LOG_PATH = contextvars.ContextVar("docx_tool_context_log_path", default="")
 _MAX_LOG_BYTES = 5 * 1024 * 1024
 _LOG_BACKUP_COUNT = 5
+
+_MODULE_LABELS = {
+    "core": "CORE",
+    "engine": "ENGINE",
+    "exporter": "EXPORT",
+    "importer": "IMPORT",
+    "normalization": "NORMALIZATION",
+    "reader": "READER",
+    "recognition": "RECOGNITION",
+    "security": "SECURITY",
+    "segmentation": "SEGMENTATION",
+    "web": "WEB",
+    "wps": "WPS",
+}
+_SAFE_EVENT_FIELDS = frozenset(
+    {
+        "book_id_short",
+        "candidate_count",
+        "component",
+        "document_id",
+        "document_mode",
+        "duration_ms",
+        "error_code",
+        "error_type",
+        "event",
+        "file_id",
+        "page_count",
+        "paragraph_count",
+        "processing_strategy",
+        "recognition_mode",
+        "recognized_count",
+        "request_id",
+        "section_count",
+        "segment_count",
+        "status",
+        "subcomponent",
+        "table_count",
+        "task_id",
+        "warning_count",
+    }
+)
+_SAFE_EVENT_VALUE_TYPES = (str, int, float, bool, type(None))
+
+
+def _safe_log_value(value: Any) -> str:
+    return str(value).replace("\r", " ").replace("\n", " ")[:240]
+
+
+def _logger_parts(record: logging.LogRecord) -> tuple[str, str]:
+    module = str(getattr(record, "docxtool_module", "") or "").strip().lower()
+    component = str(getattr(record, "component", "") or "").strip().lower()
+    subcomponent = str(getattr(record, "subcomponent", "") or "").strip()
+    if not module:
+        parts = record.name.split(".")
+        if len(parts) > 1 and parts[0] == LOGGER_NAME:
+            module = parts[1]
+            if not subcomponent and len(parts) > 2:
+                subcomponent = ".".join(parts[2:])
+    if not module:
+        module = "core"
+    if component and not subcomponent:
+        subcomponent = component
+    return _MODULE_LABELS.get(module, module.upper()), subcomponent
+
+
+class DocxToolFormatter(logging.Formatter):
+    """Render stable module/event logs without exposing Python logger names."""
+
+    def __init__(self) -> None:
+        super().__init__(LOG_FORMAT)
+
+    def format(self, record: logging.LogRecord) -> str:
+        message = record.getMessage()
+        if message.startswith("[WPS]["):
+            rendered = message
+        else:
+            module, subcomponent = _logger_parts(record)
+            prefix = f"[{module}]"
+            if subcomponent:
+                prefix += f"[{subcomponent}]"
+            event = str(getattr(record, "event", "") or "").strip()
+            rendered = f"{prefix} {event} | {message}" if event else f"{prefix} {message}"
+
+            context = []
+            for key in sorted(_SAFE_EVENT_FIELDS - {"component", "event", "subcomponent"}):
+                value = getattr(record, key, None)
+                if value is not None:
+                    context.append(f"{key}={_safe_log_value(value)}")
+            if context:
+                rendered += " | " + " ".join(context)
+
+        timestamp = self.formatTime(record, self.datefmt)
+        line = f"{timestamp} [{record.levelname:<5}] {rendered}"
+        if record.exc_info:
+            line += "\n" + self.formatException(record.exc_info)
+        if record.stack_info:
+            line += "\n" + self.formatStack(record.stack_info)
+        return line
+
+
+def log_event(
+    logger: logging.Logger,
+    level: int,
+    event: str,
+    message: str,
+    *,
+    module: str,
+    component: str = "",
+    fields: Optional[Mapping[str, Any]] = None,
+    exc_info: bool = False,
+) -> None:
+    """Emit one safe, structured lifecycle event through an existing logger."""
+    extra: dict[str, Any] = {
+        "event": str(event),
+        "docxtool_module": str(module),
+    }
+    if component:
+        extra["component"] = str(component)
+    for key, value in (fields or {}).items():
+        if key in _SAFE_EVENT_FIELDS and isinstance(value, _SAFE_EVENT_VALUE_TYPES):
+            extra[key] = value
+    logger.log(level, message, extra=extra, exc_info=exc_info)
 
 
 def _sanitize_log_stem(filepath: str) -> str:
@@ -64,7 +186,7 @@ class _ContextFileHandler(logging.Handler):
 
     def __init__(self):
         super().__init__(logging.DEBUG)
-        self.setFormatter(logging.Formatter(LOG_FORMAT))
+        self.setFormatter(DocxToolFormatter())
 
     def emit(self, record):
         log_path = _CONTEXT_LOG_PATH.get("")
@@ -92,7 +214,7 @@ def _ensure_console_handler(target: logging.Logger) -> None:
     ):
         return
     target.setLevel(logging.DEBUG)
-    formatter = logging.Formatter(LOG_FORMAT)
+    formatter = DocxToolFormatter()
     normal_handler = logging.StreamHandler(sys.stdout)
     normal_handler.setLevel(logging.DEBUG)
     normal_handler.addFilter(_BelowWarningFilter())
@@ -130,7 +252,7 @@ def _set_file_handler(log_path: str) -> str:
         encoding="utf-8",
     )
     handler.setLevel(logging.DEBUG)
-    handler.setFormatter(logging.Formatter(LOG_FORMAT))
+    handler.setFormatter(DocxToolFormatter())
     target.addHandler(handler)
     _FILE_HANDLER = handler
     _CURRENT_LOG_PATH = log_path
@@ -147,20 +269,23 @@ def configure_logging(log_dir: str, to_file: bool = True) -> None:
 def get_logger(name: str = LOGGER_NAME) -> logging.Logger:
     """获取统一 logger：控制台全级 + 文件 DEBUG（如果开关开启）。"""
     global _FILE_HANDLER
-    target = logging.getLogger(name)
-    _ensure_console_handler(target)
-    _ensure_context_file_handler(target)
+    target_name = str(name or LOGGER_NAME)
+    if target_name != LOGGER_NAME and not target_name.startswith(f"{LOGGER_NAME}."):
+        target_name = f"{LOGGER_NAME}.{target_name}"
+    root_logger = logging.getLogger(LOGGER_NAME)
+    _ensure_console_handler(root_logger)
+    _ensure_context_file_handler(root_logger)
     if LOG_TO_FILE and _LOG_DIR and _FILE_HANDLER is None:
         try:
             log_path = _os.path.join(_LOG_DIR, "公文排版工具.log")
             _set_file_handler(log_path)
-            target.info(f"日志文件: {log_path}")
+            root_logger.info(f"日志文件: {log_path}")
         except Exception as exc:
-            target.warning(f"无法创建日志文件: {exc}")
+            root_logger.warning(f"无法创建日志文件: {exc}")
     elif not LOG_TO_FILE and _FILE_HANDLER is not None:
-        target.removeHandler(_FILE_HANDLER)
+        root_logger.removeHandler(_FILE_HANDLER)
         _FILE_HANDLER = None
-    return target
+    return logging.getLogger(target_name)
 
 
 def start_document_log(filepath: str, suffix: str = "") -> str:
@@ -210,6 +335,7 @@ __all__ = [
     "close_file_log",
     "configure_logging",
     "get_logger",
+    "log_event",
     "logger",
     "make_document_log_path",
     "reset_context_log_path",

@@ -190,7 +190,10 @@ def test_delete_succeeds_when_pending_cleanup_fails(monkeypatch, tmp_path, caplo
         assert reader.delete_book(book.id) is None
 
     assert (reader.paths.temp_dir / (book.stored_filename + ".delete")).is_file()
-    assert "reader.book.delete.cleanup_failed" in caplog.text
+    assert any(
+        getattr(record, "event", "") == "reader.book.delete.cleanup_failed"
+        for record in caplog.records
+    )
 
 
 def test_deleting_a_non_current_book_preserves_the_current_selection(monkeypatch, tmp_path):

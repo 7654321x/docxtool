@@ -615,10 +615,10 @@
     }
     lastAccountStatusKey = statusKey;
     if (accountServiceRequired) {
-      node("message").textContent = "请从登录窗口登录或注册后重新启动 DocxTool WPS。";
+      node("message").textContent = "请从登录窗口登录或注册后重新打开 WPS。";
       node("error").textContent = displayError(account.error_code);
     } else if (account.network_available === false && account.error_code) {
-      node("message").textContent = "服务器无法连接。";
+      node("message").textContent = "服务器暂时无法连接，请检查网络后重试。";
       node("error").textContent = displayError(account.error_code);
     }
     void acknowledgeDisplayedNotifications(renderNotifications());
@@ -687,7 +687,7 @@
       return;
     }
     if (state.host_ready !== true || !hostGeneration) {
-      node("message").textContent = "WPS Host 尚未就绪，请重启 WPS。";
+      node("message").textContent = "WPS 主服务尚未就绪，请关闭 WPS 后重新打开。";
       node("error").textContent = displayError("WPS_HOST_NOT_READY");
       log("WARNING", "taskpane.request.blocked.host_not_ready", "任务窗格请求因 Host 未就绪被阻止", Object.assign(contextDetails(state), {
         command: commandName, reason: "host_not_ready", request_status: "BLOCKED",
@@ -770,10 +770,7 @@
       node("letterhead_mark").focus();
     }).catch((error) => {
       const code = stableErrorCode(error, "WPS_LETTERHEAD_INSPECT_FAILED");
-      const message = code === "WPS_LETTERHEAD_JOINT_SOURCE_UNSUPPORTED"
-        ? "当前只支持单机关发文版头，未修改文档。"
-        : "无法读取当前版头。";
-      node("letterhead_form_error").textContent = `${message} ${displayError(code)}`;
+      node("letterhead_form_error").textContent = displayError(code);
     });
   }
 
@@ -804,7 +801,7 @@
     if (!replaceExisting && inspection.exists === true) {
       if (inspection.replaceable !== true) {
         const error = new Error("WPS_LETTERHEAD_EXISTING_AMBIGUOUS");
-        node("letterhead_form_error").textContent = `无法确定现有版头边界，未修改文档。 ${displayError(error.message)}`;
+        node("letterhead_form_error").textContent = displayError(error.message);
         throw error;
       }
       if (!window.confirm("当前文档已存在版头，是否使用当前填写内容替换？")) {
@@ -824,14 +821,7 @@
         node("letterhead_form_error").textContent = "已取消替换，文档未修改。";
         return;
       }
-      const messages = {
-        WPS_LETTERHEAD_MARK_REQUIRED: "请输入发文机关标志。",
-        WPS_LETTERHEAD_DOCUMENT_NUMBER_INVALID: "发文字号格式应为：机关代字〔四位年份〕顺序号号。",
-        WPS_LETTERHEAD_EXISTING_AMBIGUOUS: "无法确定现有版头边界，未修改文档。",
-        WPS_LETTERHEAD_MARK_TOO_LONG: "发文机关标志过长，无法在版心内排下。",
-        WPS_LETTERHEAD_JOINT_SOURCE_UNSUPPORTED: "当前只支持单机关发文版头，未修改文档。"
-      };
-      node("letterhead_form_error").textContent = `${messages[code] || "版头添加失败。"}${displayError(code) ? ` ${displayError(code)}` : ""}`;
+      node("letterhead_form_error").textContent = displayError(code);
       throw error;
     }
   }
@@ -867,7 +857,7 @@
     } catch (error) {
       const errorCode = stableErrorCode(error, "WPS_PANEL_READY_SUBMIT_FAILED");
       setBusinessButtonsDisabled(true);
-      node("message").textContent = "任务窗格工作区重算失败，请重新打开状态面板。";
+      node("message").textContent = "WPS 工作区初始化失败，请关闭 WPS 后重新打开。";
       node("error").textContent = displayError(errorCode);
       log("ERROR", "taskpane.panel_ready.submit.failed", "WPS 工作区重算请求提交失败", {
         request_id: panelReadyRequestId, command: "panel_ready",
@@ -913,7 +903,44 @@
   }
 
   function displayError(code) {
-    return code ? `错误代码：${String(code)}` : "";
+    const errorCode = String(code || "");
+    if (!errorCode) return "";
+    const messages = {
+      WPS_PUBLIC_SERVER_UNAVAILABLE: "服务器暂时无法连接，请检查网络后重试。",
+      WPS_PUBLIC_CLIENT_BLOCKED: "客户端访问受限，请更新客户端或联系管理员。",
+      WPS_PUBLIC_RESPONSE_INVALID: "服务器响应异常，请稍后重试。",
+      WPS_PUBLIC_ACCOUNT_REQUIRED: "请从登录窗口登录或注册后重新打开 WPS。",
+      SESSION_INVALID: "登录已失效，请重新登录。",
+      SESSION_EXPIRED: "登录已失效，请重新登录。",
+      INVALID_CREDENTIALS: "登录信息无效，请重新登录。",
+      ACCOUNT_DISABLED: "当前账号已被停用，请联系管理员。",
+      DEVICE_DISABLED: "当前设备已被停用，请联系管理员。",
+      WPS_COMMAND_BUSY: "当前已有操作正在处理，请稍候。",
+      WPS_HOST_NOT_READY: "WPS 主服务尚未就绪，请关闭 WPS 后重新打开。",
+      WPS_REQUEST_ACK_TIMEOUT: "WPS 未能接收命令，请关闭 WPS 后重新打开。",
+      WPS_HOST_CONTEXT_REPLACED: "WPS 状态已更新，请关闭 WPS 后重新打开。",
+      WPS_PANEL_READY_TERMINAL_TIMEOUT: "WPS 工作区初始化超时，请关闭 WPS 后重新打开。",
+      WPS_BRIDGE_RESPONSE_INVALID: "本地服务响应异常，请关闭 WPS 后重新打开。",
+      WPS_ACCOUNT_PENDING_RESULT_COUNT_INVALID: "本地账号状态异常，请关闭 WPS 后重新打开。",
+      WPS_FORMAT_PAGE_SPEC_INVALID: "请输入有效页码范围。",
+      WPS_FORMAT_PAGE_OUT_OF_RANGE: "页码超出当前文档范围。",
+      WPS_FORMAT_PAGE_API_UNAVAILABLE: "当前 WPS 版本不支持按页码排版。",
+      WPS_DOCUMENT_NOT_DOCX: "当前文档不是 DOCX，请先另存为 DOCX 后重试。",
+      WPS_APPLY_AUTHORIZATION_REQUIRED: "本次排版授权已失效，请重新点击一键排版。",
+      WPS_APPLY_AUTHORIZATION_INVALID: "本次排版授权已失效，请重新点击一键排版。",
+      WPS_LETTERHEAD_MARK_REQUIRED: "请输入发文机关标志。",
+      WPS_LETTERHEAD_DOCUMENT_NUMBER_INVALID: "发文字号格式应为：机关代字〔四位年份〕顺序号号。",
+      WPS_LETTERHEAD_ALREADY_EXISTS: "当前文档已存在版头，请确认后再替换。",
+      WPS_LETTERHEAD_EXISTING_AMBIGUOUS: "无法确定现有版头边界，未修改文档。",
+      WPS_LETTERHEAD_MARK_TOO_LONG: "发文机关标志过长，无法在版心内排下。",
+      WPS_LETTERHEAD_JOINT_SOURCE_UNSUPPORTED: "当前只支持单机关发文版头，未修改文档。"
+    };
+    if (messages[errorCode]) return messages[errorCode];
+    if (errorCode.startsWith("WPS_PUBLIC_")) return "服务器暂时无法连接，请检查网络后重试。";
+    if (errorCode.startsWith("WPS_LETTERHEAD_")) return "版头操作失败，请关闭 WPS 后重新打开。";
+    if (errorCode.startsWith("WPS_FORMAT_")) return "本地格式服务异常，请关闭 WPS 后重新打开。";
+    if (errorCode.startsWith("WPS_READER_") || errorCode.startsWith("READER_")) return "本地阅读服务异常，请关闭 WPS 后重新打开。";
+    return "本地服务异常，请关闭 WPS 后重新打开。";
   }
 
   function displayDocumentMode(value) {
@@ -1001,7 +1028,7 @@
     pendingAckTimedOut = false;
     setBusinessButtonsDisabled(true);
     node("status").textContent = displayStatus("ERROR");
-    node("message").textContent = "工作区重算未返回最终状态，请重启 WPS 后重新打开状态面板。";
+    node("message").textContent = "WPS 工作区初始化超时，请关闭 WPS 后重新打开。";
     node("error").textContent = displayError(errorCode);
     log("ERROR", "taskpane.panel_ready.terminal_timeout", "任务窗格工作区重算终态等待超时", {
       request_id: requestId, command: "panel_ready", pane_instance_id: paneInstanceId,
@@ -1081,16 +1108,13 @@
       }
       if (active.command === "inspect_letterhead" && active.request_status === "FAIL") {
         const code = active.error_code || "WPS_LETTERHEAD_INSPECT_FAILED";
-        const message = code === "WPS_LETTERHEAD_JOINT_SOURCE_UNSUPPORTED"
-          ? "当前只支持单机关发文版头，未修改文档。"
-          : "无法读取当前版头。";
-        node("letterhead_form_error").textContent = `${message} ${displayError(code)}`;
+        node("letterhead_form_error").textContent = displayError(code);
       }
       if (active.command === "add_letterhead") {
         if (active.request_status === "FAIL") {
           const code = active.error_code || "WPS_LETTERHEAD_ADD_FAILED";
           node("letterhead_modal").hidden = false;
-          node("letterhead_form_error").textContent = `版头添加失败。 ${displayError(code)}`;
+          node("letterhead_form_error").textContent = displayError(code);
         } else {
           node("letterhead_modal").hidden = true;
           node("letterhead_form_error").textContent = "";
@@ -1146,7 +1170,7 @@
     if (updatePendingRequest(state)) return;
     if (state.host_ready !== true) {
       node("status").textContent = displayStatus("NOT_READY");
-      node("message").textContent = "WPS Host 尚未就绪，请重启 WPS。";
+      node("message").textContent = "WPS 主服务尚未就绪，请关闭 WPS 后重新打开。";
       node("error").textContent = displayError(state.error_code || "");
       node("summary").textContent = "尚未识别。";
       node("warnings").textContent = "";
@@ -1187,9 +1211,9 @@
     node("message").textContent = waitingForLatePanelReady
       ? "WPS 尚未领取工作区重算请求，继续等待最终状态…"
       : accountServiceRequired
-        ? "请从登录窗口登录或注册后重新启动 DocxTool WPS。"
+        ? "请从登录窗口登录或注册后重新打开 WPS。"
       : !accountNetworkAvailable && accountErrorCode
-        ? "服务器无法连接。"
+        ? "服务器暂时无法连接，请检查网络后重试。"
         : state.message || "就绪";
     node("error").textContent = displayError(
       waitingForLatePanelReady
@@ -1233,7 +1257,7 @@
     const errorCode = stableErrorCode(error, "WPS_BRIDGE_STATE_WAIT_FAILED");
     setBusinessButtonsDisabled(true);
     node("status").textContent = displayStatus("ERROR");
-    node("message").textContent = "任务窗格状态通道不可用，请重新打开状态面板。";
+    node("message").textContent = "本地服务异常，请关闭 WPS 后重新打开。";
     node("error").textContent = displayError(errorCode);
     prepareTaskpaneRecovery(errorCode);
     log("ERROR", "taskpane.bridge.state.wait.failed", "任务窗格状态长请求失败", {
@@ -1355,9 +1379,9 @@
     void request(id).catch((error) => {
       const code = stableErrorCode(error, "WPS_TASKPANE_REQUEST_FAILED");
       node("message").textContent = code === "WPS_PUBLIC_ACCOUNT_REQUIRED"
-        ? "请从登录窗口登录或注册后重新启动 DocxTool WPS。"
+        ? "请从登录窗口登录或注册后重新打开 WPS。"
         : code === "WPS_PUBLIC_SERVER_UNAVAILABLE"
-        ? "服务器无法连接。"
+        ? "服务器暂时无法连接，请检查网络后重试。"
         : code === "WPS_FORMAT_PAGE_SPEC_INVALID"
           ? "请输入有效页码范围。"
           : "命令发送失败。";
@@ -1382,12 +1406,8 @@
     node("letterhead_form_error").textContent = "";
     void submitLetterhead(false).catch((error) => {
       const code = stableErrorCode(error, "WPS_LETTERHEAD_ADD_FAILED");
-      const messages = {
-        WPS_LETTERHEAD_MARK_REQUIRED: "请输入发文机关标志。",
-        WPS_LETTERHEAD_DOCUMENT_NUMBER_INVALID: "发文字号格式应为：机关代字〔四位年份〕顺序号号。"
-      };
       if (!node("letterhead_form_error").textContent) {
-        node("letterhead_form_error").textContent = `${messages[code] || "版头添加失败。"} ${displayError(code)}`;
+        node("letterhead_form_error").textContent = displayError(code);
       }
       log("ERROR", "taskpane.letterhead.submit.failed", "任务窗格版头请求失败", {
         command: "add_letterhead",
@@ -1436,7 +1456,7 @@
     setBusinessButtonsDisabled(true);
     const errorCode = stableErrorCode(error, "WPS_TASKPANE_LOAD_FAILED");
     node("status").textContent = displayStatus("ERROR");
-    node("message").textContent = "任务窗格加载失败，请重新打开状态面板。";
+    node("message").textContent = "本地服务异常，请关闭 WPS 后重新打开。";
     node("error").textContent = displayError(errorCode);
     log("ERROR", "taskpane.load.failed", "任务窗格初始化失败", {
       pane_instance_id: paneInstanceId,

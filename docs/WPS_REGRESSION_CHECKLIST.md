@@ -23,7 +23,7 @@
 - [ ] 普通命令 ACK 超时仍按原有清理行为，不进入 `panel_ready` 30 秒观察流程。
 - [ ] Control 长请求遇到本机客户端断开只记录一次 `control.client.disconnected` 和 `WPS_CONTROL_CLIENT_DISCONNECTED`，不二次写响应、不打印 traceback、不访问公网。
 - [ ] 真实响应写入错误仍记录 `control.response.write_failed` 并保留原异常。
-- [ ] TaskPane 状态值在协议中保持大写稳定值，用户界面显示“就绪、处理中、成功、失败”等中文；错误码只能放在“错误代码：”之后。
+- [ ] TaskPane 状态值在协议中保持大写稳定值，用户界面显示“就绪、处理中、成功、失败”等中文；用户界面不展示英文错误码，稳定错误码仅保留在协议、日志和诊断中。本地 Control、Host 和通信桥异常提示“本地服务异常，请关闭 WPS 后重新打开。”；公网服务异常提示检查网络。
 - [ ] 登录首批和 heartbeat 增量通知按 `notification_id` 合并去重；通知只保留在 Runtime 内存摘要中，不写入账号库或格式结果 outbox。
 - [ ] TaskPane 以纯文本显示通知；已经展示后才经 Control 转发确认。确认失败时保持待确认状态，后续状态更新可重试；任一设备确认后按账号级语义不再重复展示。
 - [ ] TaskPane 页面自身不滚动，顶部操作区保持正常布局，只允许内容区滚动；初始化和 `load` 后均清理宿主恢复的根滚动位置。

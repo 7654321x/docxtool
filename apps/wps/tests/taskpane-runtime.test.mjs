@@ -284,7 +284,7 @@ test("TaskPane blocks not-ready and busy states with distinct events", async () 
   notReady.click("preview");
   await notReady.flushAsync();
   assert.ok(notReady.events().includes("taskpane.request.blocked.host_not_ready"));
-  assert.equal(notReady.elements.get("error").textContent, "错误代码：WPS_HOST_NOT_READY");
+  assert.equal(notReady.elements.get("error").textContent, "WPS 主服务尚未就绪，请关闭 WPS 后重新打开。");
 
   const busy = makeTaskpaneHarness({ host_ready: true, status: "READY", updated_at: "1" });
   await busy.flushAsync();
@@ -293,7 +293,7 @@ test("TaskPane blocks not-ready and busy states with distinct events", async () 
   busy.click("preview");
   await busy.flushAsync();
   assert.ok(busy.events().includes("taskpane.request.blocked.busy"));
-  assert.equal(busy.elements.get("error").textContent, "错误代码：WPS_COMMAND_BUSY");
+  assert.equal(busy.elements.get("error").textContent, "当前已有操作正在处理，请稍候。");
 });
 
 test("TaskPane submits through the bridge and observes claim and completion", async () => {
@@ -616,8 +616,8 @@ test("TaskPane stops a panel_ready wait at thirty seconds and prepares a fresh p
   assert.equal(harness.stateWaiterCount, 0);
   assert.equal(harness.values.get("docxtool_wps_taskpane_id_v1"), "");
   assert.equal(harness.values.get("docxtool_wps_taskpane_version_v1"), "");
-  assert.equal(harness.elements.get("error").textContent, "错误代码：WPS_PANEL_READY_TERMINAL_TIMEOUT");
-  assert.match(harness.elements.get("message").textContent, /重启 WPS/);
+  assert.equal(harness.elements.get("error").textContent, "WPS 工作区初始化超时，请关闭 WPS 后重新打开。");
+  assert.match(harness.elements.get("message").textContent, /关闭 WPS 后重新打开/);
   assert.equal(harness.elements.get("preview").disabled, true);
   assert.equal(harness.elements.get("apply").disabled, true);
 });
@@ -791,10 +791,10 @@ test("TaskPane restores apply availability from the bridge account state", async
   });
   await harness.flushAsync();
   assert.equal(harness.elements.get("apply").disabled, true);
-  assert.equal(harness.elements.get("message").textContent, "服务器无法连接。");
+  assert.equal(harness.elements.get("message").textContent, "服务器暂时无法连接，请检查网络后重试。");
   assert.equal(
     harness.elements.get("error").textContent,
-    "错误代码：WPS_PUBLIC_SERVER_UNAVAILABLE",
+    "服务器暂时无法连接，请检查网络后重试。",
   );
 
   harness.pushState(ready, {
@@ -826,14 +826,14 @@ test("TaskPane distinguishes a missing local account service from server offline
 
   assert.equal(
     harness.elements.get("message").textContent,
-    "请从登录窗口登录或注册后重新启动 DocxTool WPS。",
+    "请从登录窗口登录或注册后重新打开 WPS。",
   );
   assert.equal(
     harness.elements.get("error").textContent,
-    "错误代码：WPS_PUBLIC_ACCOUNT_REQUIRED",
+    "请从登录窗口登录或注册后重新打开 WPS。",
   );
   assert.equal(harness.elements.get("apply").disabled, true);
-  assert.notEqual(harness.elements.get("message").textContent, "服务器无法连接。");
+  assert.notEqual(harness.elements.get("message").textContent, "服务器暂时无法连接，请检查网络后重试。");
 });
 
 test("TaskPane renders account notifications as text and confirms display through Control", async () => {
@@ -894,7 +894,7 @@ test("TaskPane logs bridge command failure before request summary", async () => 
   const summary = harness.events().indexOf("taskpane.request.failed");
   assert.ok(specific >= 0);
   assert.ok(summary > specific);
-  assert.equal(harness.elements.get("error").textContent, "错误代码：WPS_COMMAND_BUSY");
+  assert.equal(harness.elements.get("error").textContent, "当前已有操作正在处理，请稍候。");
 });
 
 test("TaskPane distinguishes an invalid bridge command response", async () => {
@@ -909,7 +909,7 @@ test("TaskPane distinguishes an invalid bridge command response", async () => {
   const summary = harness.events().indexOf("taskpane.request.failed");
   assert.ok(specific >= 0);
   assert.ok(summary > specific);
-  assert.equal(harness.elements.get("error").textContent, "错误代码：WPS_BRIDGE_RESPONSE_INVALID");
+  assert.equal(harness.elements.get("error").textContent, "本地服务响应异常，请关闭 WPS 后重新打开。");
 });
 
 test("TaskPane stops when its initial state long request fails", async () => {
@@ -952,7 +952,7 @@ test("TaskPane stops with a specific error when bridge account state is invalid"
   );
   assert.equal(
     harness.elements.get("error").textContent,
-    "错误代码：WPS_ACCOUNT_PENDING_RESULT_COUNT_INVALID",
+    "本地账号状态异常，请关闭 WPS 后重新打开。",
   );
   assert.equal(harness.stateWaiterCount, 0);
 });
@@ -1003,7 +1003,7 @@ test("TaskPane terminates a pending command when Host generation changes", async
 
   assert.ok(harness.events().includes("taskpane.bridge.host_generation.changed"));
   assert.ok(harness.events().includes("taskpane.request.failed.host_replaced"));
-  assert.equal(harness.elements.get("error").textContent, "错误代码：WPS_HOST_CONTEXT_REPLACED");
+  assert.equal(harness.elements.get("error").textContent, "WPS 状态已更新，请关闭 WPS 后重新打开。");
   assert.ok(request.request_id);
 });
 

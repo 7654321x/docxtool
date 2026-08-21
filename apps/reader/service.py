@@ -138,9 +138,10 @@ class ReaderService:
                 error.primary_error = exc
                 error.rollback_error = rollback_exc
                 _LOGGER.error(
-                    "reader.book.delete.rollback_failed",
+                    "删除回滚失败，原始错误无法恢复",
                     extra={
                         "event": "reader.book.delete.rollback_failed",
+                        "component": "storage",
                         "error_code": error.code,
                         "error_type": type(rollback_exc).__name__,
                         "book_id_short": book.id[:12],
@@ -152,9 +153,10 @@ class ReaderService:
             pending_delete.unlink()
         except OSError as exc:
             _LOGGER.warning(
-                "reader.book.delete.cleanup_failed",
+                "正文删除已提交，但临时文件清理失败",
                 extra={
                     "event": "reader.book.delete.cleanup_failed",
+                    "component": "storage",
                     "error_code": "READER_STORAGE_CLEANUP_FAILED",
                     "error_type": type(exc).__name__,
                     "book_id_short": book.id[:12],

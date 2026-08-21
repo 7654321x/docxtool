@@ -15,6 +15,19 @@ class FakeLogger:
         self.info_calls = []
         self.warning_calls = []
         self.exception_calls = []
+        self.records = []
+
+    def log(self, level: int, message: str, *args, **kwargs) -> None:
+        """传入结构化日志调用，记录事件和字段。"""
+        extra = dict(kwargs.get("extra", {}) or {})
+        self.records.append((level, message, extra, bool(kwargs.get("exc_info"))))
+        if level >= 40:
+            if kwargs.get("exc_info"):
+                self.exception_calls.append((message, extra))
+        elif level >= 30:
+            self.warning_calls.append((message, extra))
+        else:
+            self.info_calls.append((message, extra))
 
     def info(self, *args) -> None:
         """传入日志参数，记录 info 调用并返回 None。"""
@@ -161,7 +174,11 @@ def test_record_task_result_cleans_output_and_records_error_for_failed_task(tmp_
     assert task["status"] == "error"
     assert task["error_code"] == "TASK_FAILED"
     assert task["output_path"] == ""
-    assert deps["_logger"].warning_calls
+    assert any(
+        record[2].get("event") == "task.failed"
+        and record[2].get("error_code") == "TASK_FAILED"
+        for record in deps["_logger"].records
+    )
 
 
 def test_record_task_result_keeps_memory_update_when_statistics_raise(tmp_path: Path) -> None:

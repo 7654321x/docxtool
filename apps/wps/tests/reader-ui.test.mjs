@@ -261,6 +261,24 @@ test("Reader import shows progress and completion feedback", async () => {
   assert.equal(harness.elements.get("reader_notice").textContent, "TXT 导入完成，内容已加载。");
 });
 
+test("Reader shows Chinese guidance without exposing internal error codes", async () => {
+  const harness = createHarness();
+  harness.context.DocxToolReader.initialize();
+  harness.context.DocxToolReaderClient.importBook = async () => {
+    throw new Error("READER_FILE_EMPTY");
+  };
+  harness.dispatch("reader_import", "change", { target: { files: [{ name: "fixture.txt" }], value: "fixture.txt" } });
+  await harness.flush();
+  assert.equal(harness.elements.get("reader_error").textContent, "TXT 文件为空。");
+
+  harness.context.DocxToolReaderClient.importBook = async () => {
+    throw new Error("READER_PROTOCOL_INVALID");
+  };
+  harness.dispatch("reader_import", "change", { target: { files: [{ name: "fixture.txt" }], value: "fixture.txt" } });
+  await harness.flush();
+  assert.equal(harness.elements.get("reader_error").textContent, "本地阅读服务异常，请关闭 WPS 后重新打开。");
+});
+
 test("Reader restores saved progress while keeping all earlier chapter text in the scroll area", async () => {
   const harness = createHarness({ progressOffset: 12000 });
   harness.context.DocxToolReader.initialize();
